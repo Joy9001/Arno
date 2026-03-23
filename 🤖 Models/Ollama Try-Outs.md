@@ -1,0 +1,4 @@
+- [ ] [ministral-3](https://ollama.com/library/ministral-3)
+- [x] [rnj-1](https://ollama.com/library/rnj-1)
+- [x] [qwen3.5](https://ollama.com/library/qwen3.5)
+- [ ] [deepseek-r1](https://ollama.com/library/deepseek-r1)
