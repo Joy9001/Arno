@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"J:\\\\Dev\\\\Obsidian\\\\Joy's Vault\\\\AI Finance Assistant\" -Recurse -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.letta.com)"
+    ]
+  }
+}
