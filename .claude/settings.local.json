@@ -5,7 +5,11 @@
       "Bash(Select-Object -ExpandProperty FullName)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:www.letta.com)"
+      "WebFetch(domain:www.letta.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:ollama.com)",
+      "WebFetch(domain:www.jdhodges.com)",
+      "PowerShell(llmfit search \"qwen3.5\" 2>&1)"
     ]
   }
 }
