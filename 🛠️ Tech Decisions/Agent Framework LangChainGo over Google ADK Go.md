@@ -1,8 +1,13 @@
 # Agent Framework Decision: LangChainGo over Google ADK Go
 
-> **Status:** Decided  
-> **Date:** April 2026  
-> **Decision:** Use [LangChainGo (`tmc/langchaingo`)](https://github.com/tmc/langchaingo) as the AI agent orchestration framework for V1.
+> ⚠️ **SUPERSEDED — May 17, 2026.** The language decision shifted from Go to Python; this Go-based framework choice no longer applies. Kept for historical reasoning context.  
+> **Current decisions:** [[Language Python over Go]] + [[Agent Framework PydanticAI]]
+
+---
+
+> **Status:** ~~Decided~~ Superseded  
+> **Date:** April 2026 (decided), May 17, 2026 (superseded)  
+> **Decision:** ~~Use [LangChainGo (`tmc/langchaingo`)](https://github.com/tmc/langchaingo) as the AI agent orchestration framework for V1.~~
 
 ---
 

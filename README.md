@@ -61,4 +61,4 @@ AI Finance Assistant/
 
 - **Hardware:** Asus TUF A15, AMD Ryzen 5 4600H, 24GB RAM, **GTX 1650 Mobile with only 4GB VRAM**. Local LLM choice is constrained — 8B models will need aggressive quantization or CPU offload.
 - **Privacy:** All inference and financial data stay on the local machine. Only encrypted backups leave it.
-- **Stack direction (tentative):** Go backend, PostgreSQL ledger, Ollama for inference, LangChainGo for agent loop, Cloudflare Tunnel for webhook exposure. None of this is written yet; revisit in implementation planning.
+- **Stack (decided May 17, 2026):** Python 3.12+ (FastAPI + PydanticAI + uv), PostgreSQL (SQLAlchemy 2.0 + pgvector when needed), Ollama for local inference (Qwen3 8B, Q4 quantized), mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements, pytesseract for receipts, aiogram for Telegram, APScheduler for briefings, Docker Compose for deploy, Cloudflare Tunnel for webhook exposure. See [[🛠️ Tech Decisions/Language Python over Go]] and [[🛠️ Tech Decisions/Agent Framework PydanticAI]] for rationale. No code written yet.

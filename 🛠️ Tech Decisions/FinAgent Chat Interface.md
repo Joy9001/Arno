@@ -1,6 +1,35 @@
 # FinAgent Chat Interface — Technical Design Specification
 
-> **Module:** `chat-ui` | **Stack:** Pure Go + Vanilla JS + SSE | **Version:** v1.0  
+> ⚠️ **PARTIALLY SUPERSEDED — May 17, 2026.** The stack has shifted from Go to Python (see [[Language Python over Go]] and [[Agent Framework PydanticAI]]).  
+>
+> **Still valid (language-agnostic patterns):**
+> - Modular separation / Ports-and-Adapters architecture (§2)
+> - API contract and endpoints (§3.1)
+> - PostgreSQL chat message schema (§3.2)
+> - SSE stream format (§3.3)
+> - UI layout and behaviors (§4)
+> - Security sanitizer model (§6 — regex patterns to be reimplemented in Python)
+> - File processing flow (§7 — libraries change, flow is identical)
+> - Modular replaceability (§9)
+>
+> **Superseded (Go-specific code):**
+> - Go handler implementations (§5) → reimplement in **FastAPI + PydanticAI**
+> - Go dependency list (§11) → see Python stack in [[🏭 Infrastructure]]
+>
+> **Python equivalents for the Go pieces:**
+> - `net/http` → **FastAPI** (with `sse-starlette` for SSE)
+> - `ledongthuc/pdf` → **pdfplumber** + **pymupdf4llm**
+> - `pdfcpu` → **pikepdf** (for password-protected PDFs)
+> - `gosseract` → **pytesseract**
+> - `lib/pq` → **SQLAlchemy 2.0** (async) + **asyncpg**
+> - LangChainGo → **PydanticAI**
+> - `tgbotapi` → **aiogram**
+>
+> A new Python-flavored implementation doc will replace this once V1 implementation planning starts.
+
+---
+
+> **Module:** `chat-ui` | **Stack:** ~~Pure Go + Vanilla JS + SSE~~ **FastAPI + Vanilla JS + SSE** | **Version:** v1.0  
 > **Constraint:** All processing local on Asus TUF A15. Zero raw financial data leaves the home network.
 
 ***

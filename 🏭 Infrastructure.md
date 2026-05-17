@@ -19,13 +19,37 @@ This document outlines the infrastructure and hardware strategy for a privacy-fi
 
 ## 3. Core Technology Stack
 
-The stack prioritizes local execution, strict data typing, and secure edge routing.
+The stack prioritizes local execution, strict data typing, secure edge routing, and velocity. See [[Language Python over Go]] for the language rationale and [[Agent Framework PydanticAI]] for the agent framework rationale.
 
-- **LLM Engine:** Ollama running an 8B class model (e.g., Llama 3 8B or Phi-3) locally on the Asus.
-- **Backend Application:** Go (Golang) compiled locally to handle webhook ingestion, prompt construction, and strict business logic.
-- **Database Ledger:** A local PostgreSQL instance. It serves as the single source of truth for all financial math and transaction history.
-- **ORM:** Prisma, mapping the Go application to the PostgreSQL ledger.
-- **Ingestion / Networking:** Cloudflare Tunnels (`cloudflared`). This securely exposes a local webhook endpoint to the internet (for chat interfaces like Telegram/WhatsApp) without opening home router ports or exposing the local network.
+**Application layer (Python 3.12+):**
+- **Packaging:** [`uv`](https://github.com/astral-sh/uv) — fast, modern Python package management (replaces pip/Poetry)
+- **Web framework:** **FastAPI** — async, OpenAPI-native, Pydantic-backed
+- **Agent framework:** **[PydanticAI](https://pydantic.dev/docs/ai/overview/)** v1.x — type-safe agents with native Ollama support
+- **Money math:** `decimal.Decimal` + Pydantic v2 validators (recovers most of Go's compile-time safety)
+
+**Data layer:**
+- **Database:** Local **PostgreSQL** — single source of truth for the ledger
+- **ORM:** **SQLAlchemy 2.0** (async) with Pydantic models at the boundary
+- **Vector storage (when needed):** **pgvector** extension on the same Postgres instance
+- **Memory layer (personalization):** **[mem0](https://mem0.ai/)** — low-lock-in fact-extraction memory bolted onto PydanticAI
+
+**LLM & inference:**
+- **LLM Engine:** **Ollama** running an 8B-class model (**Qwen3 8B** preferred in 2026) locally on the Asus
+- **Hardware reality:** 4GB VRAM on the GTX 1650 → Q4 quantization + CPU offload required. Expect ~5–15 tok/sec.
+
+**File processing:**
+- **PDF (digital):** **pdfplumber** (tables) + **pymupdf4llm** (narrative)
+- **PDF (password-protected):** **pikepdf**
+- **OCR:** **pytesseract** (calls system `tesseract-ocr`)
+
+**Interfaces:**
+- **Telegram:** **aiogram** — async-native, asyncio-first
+- **Web UI:** Vanilla HTML/JS over SSE (see [[FinAgent Chat Interface]] for architectural patterns)
+- **Scheduler (briefings):** **APScheduler** — in-process, fits FastAPI lifespan
+
+**Deploy & networking:**
+- **Deployment:** **Docker Compose** (app + Postgres + Ollama as separate services)
+- **Ingestion / Networking:** **Cloudflare Tunnels** (`cloudflared`) — securely exposes a local webhook endpoint to the internet (for Telegram) without opening home router ports or exposing the local network
 
 ## 4. Security & Backup Strategy
 
