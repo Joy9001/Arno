@@ -4,7 +4,7 @@
 > **Date:** May 17, 2026  
 > **Supersedes:** [[FinAgent Chat Interface]] (v1, Go-flavored)  
 > **Depends on:** [[Language Python over Go]], [[Agent Framework PydanticAI]]  
-> **Stack:** Python 3.12+ / FastAPI / PydanticAI / mem0 / aiogram / SSE  
+> **Stack:** Python 3.12+ / FastAPI / PydanticAI / mem0 / signalbot / SSE  
 > **Constraint:** All processing local on Asus TUF A15. Zero raw financial data leaves the home network.
 
 ---
@@ -19,7 +19,7 @@ v2 rebuilds the chat interface against the Python/PydanticAI stack while **prese
 |---|---|---|
 | Stack | Go + LangChainGo | FastAPI + PydanticAI |
 | Memory | Ad-hoc context from Postgres | Postgres (verbatim + structured) + mem0 (distilled facts) |
-| Upload UX | Sync wait, SSE progress | Background job + Telegram notify on completion |
+| Upload UX | Sync wait, SSE progress | Background job + Signal notify on completion |
 | `chat_messages` schema | text-only | + tool_calls, memory_refs, tokens_used, embedding |
 | Streaming | Token-only SSE | Hybrid: prose tokens stream; tool calls + status + memory hits as discrete events |
 | Multi-channel | Documented as future | Shared core processor + thin per-channel adapters from day 1 |
@@ -59,12 +59,12 @@ Same Ports & Adapters principle as v1 — chat UI is a **swappable adapter behin
             ┌──────────────────┼────────────────────┐
             │                  │                    │
      ┌──────▼──────┐    ┌──────▼──────┐    ┌──────▼──────┐
-     │  Web SSE    │    │  Telegram   │    │  Future:    │
-     │/api/v1/chat │    │  (aiogram)  │    │  Mobile, etc│
+     │  Web SSE    │    │  Signal     │    │  Future:    │
+     │/api/v1/chat │    │ (signalbot) │    │  Mobile, etc│
      └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-The web adapter wraps the event stream as SSE. The Telegram adapter consumes the same event stream and collapses tokens into a single message, drops status/memory_hit events (Telegram has no streaming UX), and surfaces tool_call events as part of the response only when relevant.
+The web adapter wraps the event stream as SSE. The Signal adapter consumes the same event stream and collapses tokens into a single message (Signal has no per-message streaming UX inside a chat), drops status/memory_hit events, and surfaces tool_call events as part of the response only when relevant. See [[🔒 Security/v1.0.0]] for the rationale behind choosing Signal over Telegram.
 
 ---
 
@@ -114,9 +114,26 @@ CREATE TABLE upload_jobs (
     completed_at    TIMESTAMPTZ
 );
 CREATE INDEX idx_upload_jobs_session ON upload_jobs(session_id, created_at DESC);
+
+-- Append-only audit log (per Security v1.0.0 §9)
+CREATE TABLE audit_log (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    kind            TEXT NOT NULL CHECK (kind IN ('tool_call', 'mem0_write', 'auth')),
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor           TEXT NOT NULL,            -- session_id or 'system'
+    payload         JSONB NOT NULL,           -- shape depends on kind
+    reason          TEXT
+);
+CREATE INDEX idx_audit_log_kind_ts ON audit_log(kind, timestamp DESC);
+
+-- Enforce append-only via trigger
+CREATE OR REPLACE FUNCTION prevent_audit_modification()
+    RETURNS TRIGGER AS $$ BEGIN RAISE EXCEPTION 'audit_log is append-only'; END; $$ LANGUAGE plpgsql;
+CREATE TRIGGER no_update_audit BEFORE UPDATE OR DELETE ON audit_log
+    FOR EACH ROW EXECUTE FUNCTION prevent_audit_modification();
 ```
 
-mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database.
+mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database. **Sensitive columns** (`chat_messages.content`, mem0 fact values) are encrypted via the `pgcrypto` extension; see [[🔒 Security/v1.0.0]] §6.
 
 ### 3.3 SSE Event Types (the wire protocol)
 
@@ -218,7 +235,7 @@ finagent/
 │   │   └── chat_search.py      # pgvector semantic search over chat_messages
 │   ├── channels/
 │   │   ├── web_sse.py          # SSE adapter — wraps event stream
-│   │   └── telegram.py         # aiogram adapter — collapses event stream
+│   │   └── signal.py           # signalbot adapter — collapses event stream
 │   ├── jobs/
 │   │   ├── scheduler.py        # APScheduler setup
 │   │   ├── reflection.py       # 6h batch + on-demand reflection
@@ -240,8 +257,8 @@ finagent/
 
 Walking through a single chat message end-to-end:
 
-1. **Ingress** — POST `/api/v1/chat` (web) or aiogram message handler (Telegram)
-2. **Auth** — env token (web) or Telegram user ID allowlist check (see §10)
+1. **Ingress** — POST `/api/v1/chat` (web) or signalbot message handler (Signal)
+2. **Auth** — env token (web) or Signal phone-number allowlist check (see §10)
 3. **Enqueue** — push onto per-session message queue; if agent is mid-response, wait (see §11)
 4. **Persist user message** — insert into `chat_messages` with computed embedding
 5. **Sanitize** — `Sanitizer.should_block()`; if blocked, emit `ErrorEvent(tier="validation")` and return
@@ -275,10 +292,10 @@ Walking through a bank-statement PDF upload:
    - Dedupe candidate transactions against existing rows (date + amount + merchant)
    - Insert non-duplicates into `transactions` table
    - `status='done'`, `result={"transactions_logged": 47, "duplicates_skipped": 3}`
-7. **Send Telegram message** to user: *"Parsed your May statement — 47 transactions logged (3 duplicates skipped). Want to review?"*
+7. **Send Signal message** to user: *"Parsed your May statement — 47 transactions logged (3 duplicates skipped). Want to review?"*
 8. **Client can poll** `/api/v1/jobs/{job_id}` for status if they want in-UI feedback
 
-Web UI behavior: upload form returns instantly with "queued"; chat shows a small "Job 12abc... queued" inline message. The user-visible result arrives via Telegram (or via polling if they're on the web tab).
+Web UI behavior: upload form returns instantly with "queued"; chat shows a small "Job 12abc... queued" inline message. The user-visible result arrives via Signal (or via polling if they're on the web tab).
 
 ---
 
@@ -372,13 +389,14 @@ class Sanitizer:
 
 ### Auth
 
-- **Web:** every request to `/api/v1/*` requires `X-Session-Token` header matching env `FINAGENT_WEB_TOKEN`. Single static value (single-user reality).
-- **Telegram:** aiogram middleware validates `update.message.from_user.id ∈ FINAGENT_TELEGRAM_ALLOWED_IDS` (comma-separated env). All other senders silently dropped.
+- **Web:** every request to `/api/v1/*` requires `X-Session-Token` header matching env `FINAGENT_WEB_TOKEN`. Bound to `127.0.0.1` so requests cannot reach the app from outside the host. Single static value (single-user reality).
+- **Signal:** `signal-cli` (running inside the `signal-cli-rest-api` sidecar) is registered to your phone number as a linked device. The signalbot middleware validates incoming sender phone numbers against `FINAGENT_SIGNAL_ALLOWED_NUMBERS` (comma-separated E.164 env). All other senders silently dropped.
+- **Admin endpoints** (`/admin/halt`, `/admin/undo`): separate `FINAGENT_ADMIN_TOKEN` required. Distinct from web token.
 
 ### Session model
 
 - **Web:** `session_id` = stable browser cookie set on first visit (`finagent_session=<uuid>`). One rolling thread per browser.
-- **Telegram:** `session_id = f"tg-{user_id}"`. One rolling thread per Telegram user.
+- **Signal:** `session_id = f"signal-{phone_number}"` (E.164 format). One rolling thread per allowed sender.
 - **Briefings/system messages:** `session_id = f"system-{kind}-{date}"` (e.g., `system-morning-brief-2026-05-18`).
 
 No auto-detected topic threads in v1 — cross-session recall via mem0 + chat history semantic search makes this unnecessary for the agent. Topic threads remain a v1.1 UI-only feature.
@@ -404,15 +422,15 @@ Set up in FastAPI's `lifespan` context manager. All schedules use `FINAGENT_TIME
 
 | Task | Schedule | What it does |
 |---|---|---|
-| Morning brief | Daily 08:00 | Compose brief: yesterday's spend, today's known outflows, anomalies; send via Telegram |
-| Sunday review | Sundays 09:00 | Compose weekly recap + 30-day forward look; send via Telegram |
+| Morning brief | Daily 08:00 | Compose brief: yesterday's spend, today's known outflows, anomalies; send via Signal |
+| Sunday review | Sundays 09:00 | Compose weekly recap + 30-day forward look; send via Signal |
 | Reflection batch | Every 6 hours | Read chat_messages with `id > last_reflection_watermark`; distill facts; write to mem0 |
-| Backfill check | Daily 21:00 | If user hasn't logged in N days, send TG nudge: "Walk me through this week?" |
-| Anomaly scan | Every 4 hours | Pattern checks over recent transactions; if anomaly, send TG alert |
+| Backfill check | Daily 21:00 | If user hasn't logged in N days, send Signal nudge: "Walk me through this week?" |
+| Anomaly scan | Every 4 hours | Pattern checks over recent transactions; if anomaly, send Signal alert |
 | Subscription detection | Weekly (Mon 10:00) | Detect recurring patterns; flag new ones for confirmation |
 | Upload worker tick | Every 30 seconds | Pick up queued upload_jobs, process them |
 
-Briefings and anomalies use the same `process_message()`-style flow but with `session_id="system-<kind>-<date>"` namespaces. The agent generates the briefing text; the Telegram channel adapter sends it.
+Briefings and anomalies use the same `process_message()`-style flow but with `session_id="system-<kind>-<date>"` namespaces. The agent generates the briefing text; the Signal channel adapter sends it.
 
 ---
 
@@ -422,7 +440,7 @@ Briefings and anomalies use the same `process_message()`-style flow but with `se
 |---|---|---|
 | **Validation** | upload too large, missing session_id, empty message, sanitizer block | `ErrorEvent(tier="validation")` emitted before agent invoked; frontend renders inline near input |
 | **Agent** | tool timeout, PydanticAI `ValidationError`, OCR returned garbage, simulation failed | Friendly text from agent persona — emitted as `TokenEvent`s so it feels like the agent speaking. *"I had trouble running the simulation — want me to try again?"* |
-| **Infra** | Ollama unreachable, DB connection lost, mem0 init failed | `ErrorEvent(tier="infra")` with detail; frontend renders as prominent banner; Telegram sends a "⚠️ Backend issue, see web" message |
+| **Infra** | Ollama unreachable, DB connection lost, mem0 init failed | `ErrorEvent(tier="infra")` with detail; frontend renders as prominent banner; Signal sends a "⚠️ Backend issue, see web" message |
 
 **Mitigation for PydanticAI's small-model brittleness** (see [[Agent Framework PydanticAI]]):
 
@@ -439,8 +457,12 @@ Briefings and anomalies use the same `process_message()`-style flow but with `se
 
 # Auth
 FINAGENT_WEB_TOKEN=<strong-random-string>
-FINAGENT_TELEGRAM_BOT_TOKEN=<from-BotFather>
-FINAGENT_TELEGRAM_ALLOWED_IDS=12345678          # comma-separated
+FINAGENT_ADMIN_TOKEN=<separate-strong-random-string>
+
+# Signal channel
+FINAGENT_SIGNAL_PHONE_NUMBER=+919999999999          # phone registered with signal-cli
+FINAGENT_SIGNAL_ALLOWED_NUMBERS=+919999999999       # comma-separated E.164 allowlist
+FINAGENT_SIGNAL_CLI_REST_URL=http://signal-cli:8080 # sidecar URL
 
 # Data
 FINAGENT_DB_URL=postgresql+asyncpg://localhost:5432/finagent
@@ -480,16 +502,18 @@ FINAGENT_CONTEXT_BUDGET_TOKENS=4500
 | `mem0ai` | Memory layer | Local Postgres |
 | `pdfplumber`, `pymupdf4llm`, `pikepdf` | PDF parsing (digital, narrative, password) | Never |
 | `pytesseract` | OCR (calls system tesseract) | Never |
-| `aiogram` | Telegram bot | api.telegram.org (only TG outbound) |
+| `signalbot` | Signal bot framework | localhost only (talks to signal-cli-rest-api sidecar) |
 | `apscheduler` | Scheduler | Never |
 | `python-multipart` | File uploads | Never |
 | `cryptography` | At-rest temp-file encryption | Never |
 | `pydantic-settings` | Env config | Never |
 | `alembic` | DB migrations | Never |
 
-System packages: `tesseract-ocr`, `tesseract-ocr-eng`, `postgresql-16`, `postgresql-16-pgvector`.
+System packages: `tesseract-ocr`, `tesseract-ocr-eng`, `postgresql-16`, `postgresql-16-pgvector`, `postgresql-16-pgcrypto`.
 
-All dependencies are local-compute except `aiogram` (Telegram outbound) and the backup bucket. No analytics. No telemetry.
+External Docker container: `bbernhard/signal-cli-rest-api` — Signal bridge; registered to your phone number as a linked device. Outbound long-poll to Signal servers; content is E2E encrypted.
+
+All dependencies are local-compute except `signal-cli-rest-api` (Signal outbound, E2E encrypted at protocol level) and the backup bucket (encrypted payload only). No analytics. No telemetry.
 
 ---
 
@@ -498,17 +522,17 @@ All dependencies are local-compute except `aiogram` (Telegram outbound) and the 
 ### V1 (build now)
 
 - Text chat with SSE streaming over hybrid protocol (tokens + status + memory_hit + tool_call + done + error)
-- PDF/CSV upload with background processing + Telegram completion notify
+- PDF/CSV upload with background processing + Signal completion notify
 - Image OCR upload
 - `chat_messages` schema with `tool_calls` / `memory_refs` / `tokens_used` / `embedding`
 - Postgres + pgvector + mem0 in-process
 - Sanitizer (block on chat, mask on extracted)
-- Auth: env token (web) + TG allowlist
+- Auth: env token (web) + Signal phone-number allowlist
 - APScheduler-driven briefings, reflection, backfill, anomaly scans
 - Per-session message queue (serial concurrency)
 - Tiered error model
 - Web frontend: single `chat.html`, vanilla JS, drag-drop file upload
-- Telegram adapter: shared core processor; collapses token stream for TG message UX
+- Signal adapter: shared core processor; collapses token stream for Signal message UX
 
 ### V1.1 (after v1 proves useful)
 
@@ -530,6 +554,7 @@ All dependencies are local-compute except `aiogram` (Telegram outbound) and the 
 
 ## 17. Open Questions for Implementation Phase
 
+- **Signal phone number strategy** — register `signal-cli` to your personal number, or get a dedicated number for the bot? (Trade-off documented in [[🔒 Security/v1.0.0]] §16.)
 - **Sanitizer rules** — do we need additional regex for any specific Indian bank format quirks discovered during real testing?
 - **Embedding model choice** — `nomic-embed-text` (Ollama-served) vs `sentence-transformers/all-MiniLM-L6-v2` (in-process) — measure latency on GTX 1650
 - **Reflection prompt template** — what's the exact LLM prompt that asks "what's worth remembering from this exchange?"
@@ -542,6 +567,7 @@ All dependencies are local-compute except `aiogram` (Telegram outbound) and the 
 
 ## 18. Related Documents
 
+- [[🔒 Security/v1.0.0]] — threat model, prompt injection defenses, audit log, channel decision (Signal over Telegram)
 - [[Language Python over Go]] — language-level decision
 - [[Agent Framework PydanticAI]] — framework-level decision
 - [[🎯 Product Picture/v1.0.0]] — the requirements this interface serves

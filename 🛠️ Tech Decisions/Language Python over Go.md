@@ -72,7 +72,7 @@ The initial architecture (April 2026) picked Go (Golang), primarily on the premi
 
 ## Architectural Safeguard (Preserved from Original Decision)
 
-The principle of wrapping framework calls behind a thin interface survives the language change. All agent calls go through an `AgentRunner`-style abstraction (now a Python `Protocol` or ABC) so that the framework can be swapped without touching the Telegram layer, PostgreSQL schema, financial logic, or tool implementations.
+The principle of wrapping framework calls behind a thin interface survives the language change. All agent calls go through an `AgentRunner`-style abstraction (now a Python `Protocol` or ABC) so that the framework can be swapped without touching the channel layer (Signal/web), PostgreSQL schema, financial logic, or tool implementations.
 
 ---
 

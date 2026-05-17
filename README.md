@@ -3,7 +3,7 @@
 > **For future AI agents landing here cold:** read this first. It tells you what this vault is, where to look for what, and what state the project is in.
 
 ## What this is
-An **Obsidian vault for planning** a private, self-hosted personal finance agent. The single user/owner is **Joy** (developer, based in Delhi). The agent will eventually be implemented in Go, run on a local machine (Asus TUF A15), use a local LLM via Ollama, and be reached through Telegram/WhatsApp plus a local web UI.
+An **Obsidian vault for planning** a private, self-hosted personal finance agent. The single user/owner is **Joy** (developer, based in Delhi). The agent is built in Python 3.12+ (FastAPI + PydanticAI), runs on a local machine (Asus TUF A15), uses a local LLM via Ollama, and is reached through **Signal** (E2E-encrypted bot) plus a local-only web UI bound to `127.0.0.1`.
 
 **Current phase: planning only. No code has been written.** Do not generate implementation code unless explicitly asked.
 
@@ -18,6 +18,7 @@ An **Obsidian vault for planning** a private, self-hosted personal finance agent
 | Tool & MCP server plans | [🧰 Tools and MCPs/v1.0.0.md](🧰%20Tools%20and%20MCPs/v1.0.0.md) |
 | Why specific tech was chosen | [🛠️ Tech Decisions/](🛠️%20Tech%20Decisions/) |
 | Local model selection notes | [🤖 Models/Ollama Try-Outs.md](🤖%20Models/Ollama%20Try-Outs.md) |
+| Threat model + security decisions | [🔒 Security/v1.0.0.md](🔒%20Security/v1.0.0.md) |
 
 **The Product Picture is the source of truth.** If anything in another file conflicts with it, the Product Picture wins until the conflict is resolved.
 
@@ -34,6 +35,8 @@ AI Finance Assistant/
 │   └── v1.0.0.md
 ├── 🛠️ Tech Decisions/           ← one file per significant decision + rationale
 ├── 🤖 Models/                   ← model selection notes (Ollama candidates etc.)
+├── 🔒 Security/                 ← threat model + security decisions per version
+│   └── v1.0.0.md
 ├── 🏭 Infrastructure.md         ← hardware, hosting, backup, networking
 └── 🗣️ Initial Conversation.md   ← original brainstorm transcript (the "why")
 ```
@@ -61,4 +64,4 @@ AI Finance Assistant/
 
 - **Hardware:** Asus TUF A15, AMD Ryzen 5 4600H, 24GB RAM, **GTX 1650 Mobile with only 4GB VRAM**. Local LLM choice is constrained — 8B models will need aggressive quantization or CPU offload.
 - **Privacy:** All inference and financial data stay on the local machine. Only encrypted backups leave it.
-- **Stack (decided May 17, 2026):** Python 3.12+ (FastAPI + PydanticAI + uv), PostgreSQL (SQLAlchemy 2.0 + pgvector when needed), Ollama for local inference (Qwen3 8B, Q4 quantized), mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements, pytesseract for receipts, aiogram for Telegram, APScheduler for briefings, Docker Compose for deploy, Cloudflare Tunnel for webhook exposure. See [[🛠️ Tech Decisions/Language Python over Go]] and [[🛠️ Tech Decisions/Agent Framework PydanticAI]] for rationale. No code written yet.
+- **Stack (decided May 17, 2026):** Python 3.12+ (FastAPI + PydanticAI + uv), PostgreSQL (SQLAlchemy 2.0 + pgvector + pgcrypto), Ollama for local inference (Qwen3 8B, Q4 quantized), mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements, pytesseract for receipts, **signalbot + signal-cli-rest-api for Signal** (replaces Telegram for E2E privacy), APScheduler for briefings, Docker Compose for deploy. **No Cloudflare Tunnel in v1** (Signal is outbound-only; web is `127.0.0.1`). See [[🛠️ Tech Decisions/Language Python over Go]], [[🛠️ Tech Decisions/Agent Framework PydanticAI]], and [[🔒 Security/v1.0.0]] for rationale. No code written yet.

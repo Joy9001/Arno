@@ -86,7 +86,7 @@ This is a known/solved problem in 2026 — not a blocker.
 
 ## Architectural Safeguard
 
-All agent calls go through a thin Python `Protocol` so the framework can be swapped without touching the Telegram layer, FastAPI handlers, PostgreSQL schema, financial logic, or tool implementations:
+All agent calls go through a thin Python `Protocol` so the framework can be swapped without touching the channel layer (Signal/web), FastAPI handlers, PostgreSQL schema, financial logic, or tool implementations:
 
 ```python
 from typing import Protocol

@@ -31,6 +31,7 @@ The stack prioritizes local execution, strict data typing, secure edge routing, 
 - **Database:** Local **PostgreSQL** — single source of truth for the ledger
 - **ORM:** **SQLAlchemy 2.0** (async) with Pydantic models at the boundary
 - **Vector storage (when needed):** **pgvector** extension on the same Postgres instance
+- **At-rest encryption:** **pgcrypto** extension for column-level encryption of `chat_messages.content` and mem0 facts. See [[🔒 Security/v1.0.0]].
 - **Memory layer (personalization):** **[mem0](https://mem0.ai/)** — low-lock-in fact-extraction memory bolted onto PydanticAI
 
 **LLM & inference:**
@@ -43,13 +44,14 @@ The stack prioritizes local execution, strict data typing, secure edge routing, 
 - **OCR:** **pytesseract** (calls system `tesseract-ocr`)
 
 **Interfaces:**
-- **Telegram:** **aiogram** — async-native, asyncio-first
+- **Signal:** **signalbot** v1.1.0+ — async; uses **signal-cli-rest-api** as a Docker sidecar (`signal-cli` registered to your phone number as a linked device). Outbound long-poll only; no public endpoint required. (Switched from Telegram for E2E encryption — see [[🔒 Security/v1.0.0]].)
 - **Web UI:** Vanilla HTML/JS over SSE (see [[FinAgent Chat Interface]] for architectural patterns)
 - **Scheduler (briefings):** **APScheduler** — in-process, fits FastAPI lifespan
 
 **Deploy & networking:**
-- **Deployment:** **Docker Compose** (app + Postgres + Ollama as separate services)
-- **Ingestion / Networking:** **Cloudflare Tunnels** (`cloudflared`) — securely exposes a local webhook endpoint to the internet (for Telegram) without opening home router ports or exposing the local network
+- **Deployment:** **Docker Compose** (app + Postgres + Ollama + `signal-cli-rest-api` as separate services)
+- **Web UI binding:** `127.0.0.1` only — no remote access in v1 (Signal is the on-the-go channel)
+- **No public endpoint required** — Signal is outbound-only; **Cloudflare Tunnel dropped from v1** (was originally needed for the Telegram webhook). See [[🔒 Security/v1.0.0]] for the full rationale.
 
 ## 4. Security & Backup Strategy
 
@@ -63,4 +65,4 @@ Because the cloud is treated as an untrusted environment, no plain-text data wil
 
 ## 5. Accepted V1 Trade-offs
 
-By choosing a strictly local setup without cloud-based queueing or tunneling, we accept the **Downtime Trade-off**. If the Asus TUF loses power, enters sleep mode, or disconnects from the home Wi-Fi, incoming webhook messages from the chat interface will fail to process. Logging will need to be retried manually once the server is back online.
+By choosing a strictly local setup, we accept the **Downtime Trade-off**. If the Asus TUF loses power, enters sleep mode, or disconnects from the home Wi-Fi, the bot is offline. With Signal as the chosen channel, `signal-cli` will fetch any backlogged messages once the bot reconnects — an improvement over a webhook-based design (no manual retry needed). Real-time responses are still impossible during the outage.
