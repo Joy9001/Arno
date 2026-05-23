@@ -16,7 +16,14 @@
       "WebFetch(domain:mem0.ai)",
       "WebFetch(domain:stevekinney.com)",
       "WebFetch(domain:arxiv.org)",
-      "Bash(ls \"J:\\\\Dev\\\\Obsidian\\\\Joy's Vault\\\\AI Finance Assistant\\\\\")"
+      "Bash(ls \"J:\\\\Dev\\\\Obsidian\\\\Joy's Vault\\\\AI Finance Assistant\\\\\")",
+      "WebFetch(domain:awesomeagents.ai)",
+      "WebFetch(domain:gorilla.cs.berkeley.edu)",
+      "WebFetch(domain:llm-stats.com)",
+      "WebFetch(domain:beancount.io)",
+      "WebFetch(domain:dev.to)",
+      "WebFetch(domain:www.vellum.ai)",
+      "WebFetch(domain:insiderllm.com)"
     ]
   }
 }
