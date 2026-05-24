@@ -3,6 +3,7 @@
 > **For future AI agents landing here cold:** read this first. It tells you what this vault is, where to look for what, and what state the project is in.
 
 ## What this is
+
 An **Obsidian vault for planning** a private, self-hosted personal finance agent. The single user/owner is **Joy** (developer, based in Delhi). The agent is built in Python 3.12+ (FastAPI + PydanticAI), runs on a local machine (Asus TUF A15), uses a local LLM via Ollama, and is reached through **Signal** (E2E-encrypted bot) plus a local-only web UI bound to `127.0.0.1`.
 
 **Current phase: planning only. No code has been written.** Do not generate implementation code unless explicitly asked.
@@ -42,6 +43,7 @@ AI Finance Assistant/
 ```
 
 **Conventions:**
+
 - Folder names use emoji + name. Keep the pattern when adding new folders.
 - Versioned specs use `vMAJOR.MINOR.PATCH.md` (e.g., `v1.0.0.md`). When the product picture evolves, create `v1.1.0.md` rather than overwriting.
 - One concern per file under `🛠️ Tech Decisions/` — title states the decision.

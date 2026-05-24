@@ -23,7 +23,10 @@
       "WebFetch(domain:beancount.io)",
       "WebFetch(domain:dev.to)",
       "WebFetch(domain:www.vellum.ai)",
-      "WebFetch(domain:insiderllm.com)"
+      "WebFetch(domain:insiderllm.com)",
+      "Bash(python -c \"import ast, sys; ast.parse\\(open\\(r'J:\\\\Dev\\\\Obsidian\\\\Joy\\\\'s Vault\\\\AI Finance Assistant\\\\🤖 Models\\\\eval_finagent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('AST OK'\\)\")",
+      "Bash(cd /d \"J:\\\\Dev\\\\Obsidian\\\\Joy's Vault\\\\AI Finance Assistant\\\\🤖 Models\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('eval_finagent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('AST OK'\\)\")"
     ]
   }
 }
