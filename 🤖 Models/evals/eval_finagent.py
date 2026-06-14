@@ -45,7 +45,40 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import os
+
 import ollama
+from urllib.parse import urlsplit
+
+
+def _client_host() -> str:
+    """Resolve a *connectable* Ollama host for the client.
+
+    Two Windows gotchas are handled here:
+      - `OLLAMA_HOST` is commonly set to `0.0.0.0` (or `::`) to make the
+        *server* bind all interfaces. That is a bind-all address, not a
+        connectable client address — connecting to it fails. Rewrite it to
+        loopback.
+      - The bare `ollama` client resolves `localhost` to IPv6 (`::1`) while
+        the server listens on IPv4, causing spurious "Failed to connect"
+        errors. Pin to 127.0.0.1.
+    Override with a fully-specified OLLAMA_HOST (e.g. http://host:port) if needed.
+    """
+    raw = (os.environ.get("OLLAMA_HOST") or "").strip()
+    if not raw:
+        return "http://127.0.0.1:11434"
+    host = raw if "://" in raw else f"http://{raw}"
+    parts = urlsplit(host)
+    hostname = (parts.hostname or "127.0.0.1").strip("[]")
+    if hostname in ("0.0.0.0", "::", "localhost"):
+        hostname = "127.0.0.1"
+    scheme = parts.scheme or "http"
+    port = parts.port or 11434
+    return f"{scheme}://{hostname}:{port}"
+
+
+_OLLAMA_HOST = _client_host()
+ollama = ollama.Client(host=_OLLAMA_HOST)
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
@@ -345,12 +378,43 @@ BENCH_PROMPT = (
 )
 
 
-def check_model_available(model: str) -> bool:
+def _model_name(m) -> str:
+    # Handle ollama client version differences (attr `model` or `name`, or dict).
+    for attr in ("model", "name"):
+        val = getattr(m, attr, None)
+        if val:
+            return val
+    if isinstance(m, dict):
+        return m.get("model") or m.get("name") or ""
+    return str(m)
+
+
+def check_model_available(model: str, console: Console | None = None) -> bool:
     try:
-        models = ollama.list()
-        names = [m.model for m in models.models]
+        resp = ollama.list()
+        raw = getattr(resp, "models", None)
+        if raw is None and isinstance(resp, dict):
+            raw = resp.get("models", [])
+        names = [_model_name(m) for m in (raw or [])]
+        names = [n for n in names if n]
+
+        line = f"Available models ({len(names)}):"
+        if console:
+            console.print(f"[bold]{line}[/]")
+            for n in sorted(names):
+                console.print(f"  - {n}")
+        else:
+            print(line)
+            for n in sorted(names):
+                print(f"  - {n}")
+
         return any(model in n for n in names)
-    except Exception:
+    except Exception as e:
+        msg = f"check_model_available error: {e}"
+        if console:
+            console.print(f"[red]{msg}[/]")
+        else:
+            print(msg)
         return False
 
 
@@ -867,7 +931,7 @@ def main() -> None:
                 console.print(f"[dim]Skipping {model} — results exist: {existing[0].name}[/]")
                 continue
 
-        if not check_model_available(model):
+        if not check_model_available(model, console):
             console.print(f"[yellow]Model '{model}' not found in Ollama.[/]")
             console.print(f"  Pull it with: [bold]ollama pull {model}[/]")
             if Prompt.ask(f"Skip {model}?", choices=["y", "n"], default="y") == "y":

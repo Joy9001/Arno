@@ -28,7 +28,11 @@
       "Bash(cd /d \"J:\\\\Dev\\\\Obsidian\\\\Joy's Vault\\\\AI Finance Assistant\\\\🤖 Models\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('eval_finagent.py', encoding='utf-8'\\).read\\(\\)\\); print\\('AST OK'\\)\")",
       "Bash(python -c ' *)",
-      "Bash(uv run --with rich --with ollama python -c ' *)"
+      "Bash(uv run --with rich --with ollama python -c ' *)",
+      "Bash(ollama list *)",
+      "Bash(echo \"---EXIT $?---\")",
+      "Bash(uv run *)",
+      "Bash(python -c \"import os; [print\\(k,'=',v\\) for k,v in os.environ.items\\(\\) if 'proxy' in k.lower\\(\\) or 'PROXY' in k]\")"
     ]
   }
 }
