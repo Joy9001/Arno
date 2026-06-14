@@ -43,11 +43,12 @@ import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import os
 
 import ollama
+from ollama import ChatResponse
 from urllib.parse import urlsplit
 
 
@@ -62,12 +63,13 @@ def _client_host() -> str:
       - The bare `ollama` client resolves `localhost` to IPv6 (`::1`) while
         the server listens on IPv4, causing spurious "Failed to connect"
         errors. Pin to 127.0.0.1.
-    Override with a fully-specified OLLAMA_HOST (e.g. http://host:port) if needed.
+    Override with a fully-specified OLLAMA_HOST (e.g. scheme://host:port) if needed.
     """
     raw = (os.environ.get("OLLAMA_HOST") or "").strip()
     if not raw:
         return "http://127.0.0.1:11434"
-    host = raw if "://" in raw else f"http://{raw}"
+    default_scheme = "http"
+    host = raw if "://" in raw else f"{default_scheme}://{raw}"
     parts = urlsplit(host)
     hostname = (parts.hostname or "127.0.0.1").strip("[]")
     if hostname in ("0.0.0.0", "::", "localhost"):
@@ -90,7 +92,6 @@ from eval_tasks import (
     LAST_THURSDAY,
     TASKS,
     TODAY,
-    YESTERDAY,
     Task,
     filter_tasks,
 )
@@ -383,7 +384,7 @@ def _model_name(m) -> str:
     for attr in ("model", "name"):
         val = getattr(m, attr, None)
         if val:
-            return val
+            return str(val)
     if isinstance(m, dict):
         return m.get("model") or m.get("name") or ""
     return str(m)
@@ -425,8 +426,11 @@ def run_bench(model: str, n_runs: int = 3, console: Console | None = None) -> Pr
             start = time.time()
             resp = ollama.generate(model=model, prompt=BENCH_PROMPT)
             elapsed = time.time() - start
-            tok_s = resp.eval_count / max(resp.eval_duration / 1e9, 0.001)
-            ttft_ms = resp.prompt_eval_duration / 1e6
+            eval_count = resp.eval_count or 0
+            eval_duration = resp.eval_duration or 0
+            prompt_eval_duration = resp.prompt_eval_duration or 0
+            tok_s = eval_count / max(eval_duration / 1e9, 0.001)
+            ttft_ms = prompt_eval_duration / 1e6
             results.append({"tok_s": round(tok_s, 1), "ttft_ms": round(ttft_ms, 1),
                             "elapsed_s": round(elapsed, 1)})
             if console:
@@ -453,12 +457,12 @@ def run_bench(model: str, n_runs: int = 3, console: Console | None = None) -> Pr
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_synthetic_ledger(needles: list[dict], n_transactions: int = 2000) -> str:
-    VENDORS = ["Swiggy", "Zomato", "BigBasket", "DMart", "IRCTC", "Ola", "Flipkart",
+    vendors = ["Swiggy", "Zomato", "BigBasket", "DMart", "IRCTC", "Ola", "Flipkart",
                "Amazon", "Jio Recharge", "BESCOM", "Spencer's", "Blinkit", "Rapido",
                "MakeMyTrip", "BookMyShow", "Myntra", "Nykaa", "Lenskart"]
-    CATEGORIES = ["food", "groceries", "transport", "shopping", "utilities",
+    categories = ["food", "groceries", "transport", "shopping", "utilities",
                   "subscriptions", "entertainment"]
-    NOTES = ["", "", "", "monthly", "auto-pay", "reimbursement pending", "shared with friend", ""]
+    notes = ["", "", "", "monthly", "auto-pay", "reimbursement pending", "shared with friend", ""]
 
     random.seed(42)
     transactions = []
@@ -470,12 +474,12 @@ def generate_synthetic_ledger(needles: list[dict], n_transactions: int = 2000) -
             "date": f"{yr}-{mo:02d}-{dy:02d}",
             "amount": random.randint(50, 8000),
             "currency": "INR",
-            "vendor": random.choice(VENDORS),
-            "category": random.choice(CATEGORIES),
-            "notes": random.choice(NOTES),
+            "vendor": random.choice(vendors),
+            "category": random.choice(categories),
+            "notes": random.choice(notes),
         })
 
-    positions = sorted(random.sample(range(len(transactions)), len(needles)))
+    positions: list[int] = sorted(random.sample(range(len(transactions)), len(needles)))
     for pos, needle in zip(positions, needles):
         transactions.insert(pos, needle)
 
@@ -559,7 +563,7 @@ def _drive_model_turn(model: str, messages: list[dict], use_tools: bool,
             kwargs["tools"] = TOOL_SCHEMAS
         if use_format:
             kwargs["format"] = INTENT_SCHEMA
-        resp = ollama.chat(**kwargs)
+        resp = cast(ChatResponse, ollama.chat(**kwargs))
         msg = resp.message
 
         _print_model_turn(console, msg)
@@ -706,6 +710,10 @@ def run_task(model: str, task: Task, console: Console) -> TaskResult:
                 scripted_queue.pop(0)  # user overrode the suggestion
             pending_user_msg = choice
             pending_user_display = choice
+
+    # The loop above only exits via an explicit return; this satisfies the
+    # type checker that run_task always yields a TaskResult.
+    return _record_result("SKIP")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
