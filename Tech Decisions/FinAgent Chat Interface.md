@@ -1,4 +1,4 @@
-# FinAgent Chat Interface — Technical Design Specification
+﻿# FinAgent Chat Interface — Technical Design Specification
 
 > ⚠️ **PARTIALLY SUPERSEDED — May 17, 2026.** The stack has shifted from Go to Python (see [[Language Python over Go]] and [[Agent Framework PydanticAI]]).  
 >
@@ -14,7 +14,7 @@
 >
 > **Superseded (Go-specific code):**
 > - Go handler implementations (§5) → reimplement in **FastAPI + PydanticAI**
-> - Go dependency list (§11) → see Python stack in [[🏭 Infrastructure]]
+> - Go dependency list (§11) → see Python stack in [[Infrastructure]]
 >
 > **Python equivalents for the Go pieces:**
 > - `net/http` → **FastAPI** (with `sse-starlette` for SSE)
@@ -640,9 +640,9 @@ All dependencies are pure local computation. No package phones home. No analytic
 
 | Document                 | Location                                                  | Relationship                                               |
 | ------------------------ | --------------------------------------------------------- | ---------------------------------------------------------- |
-| 🏭 Infrastructure        | [[🏭 Infrastructure]]                                     | Hardware, tunnel, backup — inherited assumptions           |
-| 🗣️ Initial Conversation | [[🗣️ Initial Conversation]]                              | Origin decisions: why local, why Telegram, why self-hosted |
-| 💪🏻 Capabilities v1.0.0 | [[AI Finance Assistant/💪🏻 Capabilities/v1.0.0\|v1.0.0]] | Agent features the UI must expose                          |
-| 🧰 Tools and MCPs v1.0.0 | [[AI Finance Assistant/🧰 Tools and MCPs/v1.0.0\|v1.0.0]] | MCP tool calls that affect SSE stream length               |
-| 🛠️ Tech: LangChainGo    | [[Agent Framework LangChainGo over Google ADK Go]]        | LLM bridge implementation choice                           |
-| 🤖 Ollama Try-Outs       | [[Ollama Try-Outs]]                                       | Model selection for streaming speed                        |
+| Infrastructure        | [[Infrastructure]]                                     | Hardware, tunnel, backup — inherited assumptions           |
+| Initial Conversation | [[Initial Conversation]]                              | Origin decisions: why local, why Telegram, why self-hosted |
+| Capabilities v1.0.0 | [[AI Finance Assistant/Capabilities/v1.0.0\|v1.0.0]] | Agent features the UI must expose                          |
+| Tools and MCPs v1.0.0 | [[AI Finance Assistant/Tools and MCPs/v1.0.0\|v1.0.0]] | MCP tool calls that affect SSE stream length               |
+| Tech: LangChainGo    | [[Agent Framework LangChainGo over Google ADK Go]]        | LLM bridge implementation choice                           |
+| Ollama Try-Outs       | [[Ollama Try-Outs]]                                       | Model selection for streaming speed                        |

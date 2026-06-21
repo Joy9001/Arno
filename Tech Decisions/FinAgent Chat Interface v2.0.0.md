@@ -1,4 +1,4 @@
-# FinAgent Chat Interface — Technical Design Specification (v2)
+﻿# FinAgent Chat Interface — Technical Design Specification (v2)
 
 > **Version:** v2.0.0  
 > **Date:** May 17, 2026  
@@ -64,7 +64,7 @@ Same Ports & Adapters principle as v1 — chat UI is a **swappable adapter behin
      └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-The web adapter wraps the event stream as SSE. The Signal adapter consumes the same event stream and collapses tokens into a single message (Signal has no per-message streaming UX inside a chat), drops status/memory_hit events, and surfaces tool_call events as part of the response only when relevant. See [[🔒 Security/v1.0.0]] for the rationale behind choosing Signal over Telegram.
+The web adapter wraps the event stream as SSE. The Signal adapter consumes the same event stream and collapses tokens into a single message (Signal has no per-message streaming UX inside a chat), drops status/memory_hit events, and surfaces tool_call events as part of the response only when relevant. See [[Security/v1.0.0]] for the rationale behind choosing Signal over Telegram.
 
 ---
 
@@ -133,7 +133,7 @@ CREATE TRIGGER no_update_audit BEFORE UPDATE OR DELETE ON audit_log
     FOR EACH ROW EXECUTE FUNCTION prevent_audit_modification();
 ```
 
-mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database. **Sensitive columns** (`chat_messages.content`, mem0 fact values) are encrypted via the `pgcrypto` extension; see [[🔒 Security/v1.0.0]] §6.
+mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database. **Sensitive columns** (`chat_messages.content`, mem0 fact values) are encrypted via the `pgcrypto` extension; see [[Security/v1.0.0]] §6.
 
 ### 3.3 SSE Event Types (the wire protocol)
 
@@ -554,7 +554,7 @@ All dependencies are local-compute except `signal-cli-rest-api` (Signal outbound
 
 ## 17. Open Questions for Implementation Phase
 
-- **Signal phone number strategy** — register `signal-cli` to your personal number, or get a dedicated number for the bot? (Trade-off documented in [[🔒 Security/v1.0.0]] §16.)
+- **Signal phone number strategy** — register `signal-cli` to your personal number, or get a dedicated number for the bot? (Trade-off documented in [[Security/v1.0.0]] §16.)
 - **Sanitizer rules** — do we need additional regex for any specific Indian bank format quirks discovered during real testing?
 - **Embedding model choice** — `nomic-embed-text` (Ollama-served) vs `sentence-transformers/all-MiniLM-L6-v2` (in-process) — measure latency on GTX 1650
 - **Reflection prompt template** — what's the exact LLM prompt that asks "what's worth remembering from this exchange?"
@@ -567,12 +567,12 @@ All dependencies are local-compute except `signal-cli-rest-api` (Signal outbound
 
 ## 18. Related Documents
 
-- [[🔒 Security/v1.0.0]] — threat model, prompt injection defenses, audit log, channel decision (Signal over Telegram)
+- [[Security/v1.0.0]] — threat model, prompt injection defenses, audit log, channel decision (Signal over Telegram)
 - [[Language Python over Go]] — language-level decision
 - [[Agent Framework PydanticAI]] — framework-level decision
-- [[🎯 Product Picture/v1.0.0]] — the requirements this interface serves
-- [[🏭 Infrastructure]] — hardware, deploy, backup
+- [[Product Picture/v1.0.0]] — the requirements this interface serves
+- [[Infrastructure]] — hardware, deploy, backup
 - [[FinAgent Chat Interface]] — v1 (superseded, kept for historical reasoning)
-- [[💪🏻 Capabilities/v1.0.0]] — feature list the UI must expose
-- [[🧰 Tools and MCPs/v1.0.0]] — tool servers the agent will call
-- [[🗣️ Initial Conversation]] — origin decisions
+- [[Capabilities/v1.0.0]] — feature list the UI must expose
+- [[Tools and MCPs/v1.0.0]] — tool servers the agent will call
+- [[Initial Conversation]] — origin decisions

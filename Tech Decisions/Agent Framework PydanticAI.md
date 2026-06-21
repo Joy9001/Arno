@@ -1,4 +1,4 @@
-# Agent Framework Decision: PydanticAI
+﻿# Agent Framework Decision: PydanticAI
 
 > **Status:** Decided  
 > **Date:** May 17, 2026  
@@ -10,7 +10,7 @@
 
 ## Context
 
-Following the [[Language Python over Go|switch to Python]], the next decision is which agent framework to build on. The May 2026 Python agent framework landscape was researched against the [[🎯 Product Picture/v1.0.0|Product Picture v1.0.0]] requirements.
+Following the [[Language Python over Go|switch to Python]], the next decision is which agent framework to build on. The May 2026 Python agent framework landscape was researched against the [[Product Picture/v1.0.0|Product Picture v1.0.0]] requirements.
 
 **Candidates evaluated:**
 - **PydanticAI** (v1, shipped September 2025) — type-safe, Pydantic-native
@@ -118,5 +118,5 @@ A `PydanticAIRunner` implementation satisfies this. A future `LangGraphRunner` c
 
 - [[Language Python over Go]] — language-level decision this depends on
 - [[Agent Framework LangChainGo over Google ADK Go]] — superseded historical decision
-- [[🎯 Product Picture/v1.0.0]] — requirements this framework must serve
-- [[🏭 Infrastructure]] — hardware constraints (4GB VRAM, 8B local model)
+- [[Product Picture/v1.0.0]] — requirements this framework must serve
+- [[Infrastructure]] — hardware constraints (4GB VRAM, 8B local model)
