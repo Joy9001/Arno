@@ -1,8 +1,44 @@
 [project]
-name = "ai-finance-assistant"
+name = "fin-agent"
 version = "0.1.0"
+description = "Private, self-hosted personal finance agent"
 requires-python = ">=3.14"
 dependencies = [
+    "fastapi>=0.118.0",
+    "pydantic-ai>=1.0.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "pgvector>=0.3.0",
+    "mem0ai>=0.1.0",
+    "pdfplumber>=0.11.0",
+    "pymupdf4llm>=0.0.17",
+    "pikepdf>=9.0.0",
+    "pytesseract>=0.3.13",
+    "signalbot>=0.2.0",
+    "apscheduler>=3.11.0",
     "ollama>=0.6.2",
     "rich>=15.0.0",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.0",
+    "pytest>=8.4.0",
+    "pytest-asyncio>=1.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Pre-existing eval scripts: long prompt strings, host-detection imports before
+# third-party ones, and legacy zip() usage. Revisit when these are next touched.
+"Models/evals/*.py" = ["E501", "E402", "B905"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

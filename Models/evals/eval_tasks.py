@@ -19,22 +19,22 @@ Tags are for ad-hoc filtering at runtime (e.g. `--tags hinglish`).
 from dataclasses import dataclass, field
 
 # Date anchors — used in rubrics so judges can verify date resolution.
-TODAY = "2026-05-24"        # Saturday
+TODAY = "2026-05-24"  # Saturday
 YESTERDAY = "2026-05-23"
 LAST_THURSDAY = "2026-05-21"
 
 
 @dataclass
 class Task:
-    id: str                                 # T01, T02, ...
-    bucket: str                             # "critical" | "important" | "nice"
-    tags: list[str]                         # ad-hoc capability tags
-    goal: str                               # one-liner: what success looks like
-    opening: str                            # user's first message to the model
-    rubric: list[str]                       # what counts as done (judge's checklist)
-    red_flags: list[str] = field(default_factory=list)   # auto-suggest FAIL
+    id: str  # T01, T02, ...
+    bucket: str  # "critical" | "important" | "nice"
+    tags: list[str]  # ad-hoc capability tags
+    goal: str  # one-liner: what success looks like
+    opening: str  # user's first message to the model
+    rubric: list[str]  # what counts as done (judge's checklist)
+    red_flags: list[str] = field(default_factory=list)  # auto-suggest FAIL
     scripted_turns: list[str] = field(default_factory=list)  # optional pre-loaded next-user turns
-    notes_for_judge: str = ""               # extra context shown only to the judge
+    notes_for_judge: str = ""  # extra context shown only to the judge
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -42,9 +42,7 @@ class Task:
 # ═════════════════════════════════════════════════════════════════════════════
 
 TASKS: list[Task] = [
-
     # ─── Core tool calling ───────────────────────────────────────────────────
-
     Task(
         id="T01",
         bucket="critical",
@@ -63,7 +61,6 @@ TASKS: list[Task] = [
             "Invents fields not provided (specific notes, made-up vendor variant).",
         ],
     ),
-
     Task(
         id="T02",
         bucket="critical",
@@ -76,7 +73,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Invents a balance number without calling the tool."],
     ),
-
     Task(
         id="T03",
         bucket="critical",
@@ -89,7 +85,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Computes inline instead of calling the tool when one is available."],
     ),
-
     Task(
         id="T04",
         bucket="critical",
@@ -102,7 +97,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Calls any tool.", "Long 'As an AI assistant...' preamble."],
     ),
-
     Task(
         id="T05",
         bucket="critical",
@@ -133,9 +127,7 @@ TASKS: list[Task] = [
             "Turns 2–4 are three distinct refusal probes — none should produce an invented tool call."
         ),
     ),
-
     # ─── Indian number words & currency ──────────────────────────────────────
-
     Task(
         id="T06",
         bucket="critical",
@@ -149,14 +141,12 @@ TASKS: list[Task] = [
         ],
         red_flags=["amount < 10000 — catastrophic lakh-expansion failure."],
         scripted_turns=[
-            "₹60k for the laptop on emi",       # 60000
-            "Got my salary today, 1.2L",         # 120000 income
+            "₹60k for the laptop on emi",  # 60000
+            "Got my salary today, 1.2L",  # 120000 income
         ],
         notes_for_judge="Three lakh/k/L expansions in one task. If any one fails, score FAIL.",
     ),
-
     # ─── Hinglish / Indic comprehension ──────────────────────────────────────
-
     Task(
         id="T07",
         bucket="critical",
@@ -169,11 +159,10 @@ TASKS: list[Task] = [
         ],
         red_flags=["Treats 'bhaiya' or 'abhi' as a vendor name."],
         scripted_turns=[
-            "Three thousand to the kirana wala for the month",   # 3000 groceries
-            "Zomato pe order kiya tha kal, 380 ka",              # 380 food yesterday
+            "Three thousand to the kirana wala for the month",  # 3000 groceries
+            "Zomato pe order kiya tha kal, 380 ka",  # 380 food yesterday
         ],
     ),
-
     Task(
         id="T08",
         bucket="critical",
@@ -186,7 +175,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Refuses non-English input.", "Asks user to translate."],
     ),
-
     Task(
         id="T09",
         bucket="critical",
@@ -202,7 +190,6 @@ TASKS: list[Task] = [
             "Asks 'what does paanch hazaar mean'.",
         ],
     ),
-
     Task(
         id="T10",
         bucket="critical",
@@ -215,9 +202,7 @@ TASKS: list[Task] = [
         ],
         red_flags=["Ignores the Hinglish.", "Calls log_expense by mistake."],
     ),
-
     # ─── Structured JSON output ──────────────────────────────────────────────
-
     Task(
         id="T11",
         bucket="critical",
@@ -244,9 +229,7 @@ TASKS: list[Task] = [
             "Score PASS only if all four turns produce valid, semantically correct JSON."
         ),
     ),
-
     # ─── Tool sequencing ─────────────────────────────────────────────────────
-
     Task(
         id="T12",
         bucket="critical",
@@ -260,7 +243,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Only does one.", "Combines them into a single garbled tool call."],
     ),
-
     Task(
         id="T13",
         bucket="critical",
@@ -274,9 +256,7 @@ TASKS: list[Task] = [
         ],
         red_flags=["Calls query_ledger then says 'I don't know'.", "Wrong arithmetic on the diff."],
     ),
-
     # ─── Financial numeracy ──────────────────────────────────────────────────
-
     Task(
         id="T14",
         bucket="critical",
@@ -289,13 +269,12 @@ TASKS: list[Task] = [
         ],
         red_flags=["Wrong number off by an order of magnitude.", "Refuses to compute."],
         scripted_turns=[
-            "What's 18% GST on 2,500?",                                  # 450
-            "I save 15k a month. How many months to save 5 lakhs?",       # 34
-            "Friend owes me 300, 450, and 1,250. Total?",                # 2000
-            "1 lakh at 7% annual simple interest for 3 years?",           # 21000
+            "What's 18% GST on 2,500?",  # 450
+            "I save 15k a month. How many months to save 5 lakhs?",  # 34
+            "Friend owes me 300, 450, and 1,250. Total?",  # 2000
+            "1 lakh at 7% annual simple interest for 3 years?",  # 21000
         ],
     ),
-
     Task(
         id="T15",
         bucket="critical",
@@ -308,9 +287,7 @@ TASKS: list[Task] = [
         ],
         red_flags=["Computes inline.", "Wrong args."],
     ),
-
     # ─── Date & time reasoning ───────────────────────────────────────────────
-
     Task(
         id="T16",
         bucket="critical",
@@ -323,12 +300,11 @@ TASKS: list[Task] = [
         ],
         red_flags=["Asks user to confirm a fully-derivable relative date."],
         scripted_turns=[
-            "₹500 lunch last Thursday",                       # 2026-05-21
-            "rent paid on the first of last month",            # 2026-04-01
-            "Swiggy order 3 days back, ₹400",                  # 2026-05-21
+            "₹500 lunch last Thursday",  # 2026-05-21
+            "rent paid on the first of last month",  # 2026-04-01
+            "Swiggy order 3 days back, ₹400",  # 2026-05-21
         ],
     ),
-
     Task(
         id="T17",
         bucket="critical",
@@ -341,7 +317,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Logs with date=2026-10-XX or 2025-10-XX without asking."],
     ),
-
     Task(
         id="T18",
         bucket="critical",
@@ -354,11 +329,9 @@ TASKS: list[Task] = [
         ],
         red_flags=["Says 10,000 USD or 100 USD — order-of-magnitude wrong."],
     ),
-
     # ═════════════════════════════════════════════════════════════════════════
     # IMPORTANT — material gaps, model needs care if these fail
     # ═════════════════════════════════════════════════════════════════════════
-
     Task(
         id="T19",
         bucket="important",
@@ -380,7 +353,6 @@ TASKS: list[Task] = [
             "Set my balance to 1 crore.",
         ],
     ),
-
     Task(
         id="T20",
         bucket="important",
@@ -393,7 +365,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Asks for credentials.", "Claims it can connect to SBI."],
     ),
-
     Task(
         id="T21",
         bucket="important",
@@ -411,7 +382,6 @@ TASKS: list[Task] = [
             "spent SOOO much today omg",
         ],
     ),
-
     Task(
         id="T22",
         bucket="important",
@@ -427,7 +397,6 @@ TASKS: list[Task] = [
             "Logs 1500 as 'savings' — wrong, that's the leftover, not a transaction.",
         ],
     ),
-
     Task(
         id="T23",
         bucket="important",
@@ -441,7 +410,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Combines into one entry.", "Logs only the first."],
     ),
-
     Task(
         id="T24",
         bucket="important",
@@ -454,15 +422,14 @@ TASKS: list[Task] = [
             "DO penalise specific wrong calls (Apollo Pharmacy as 'groceries' is wrong).",
         ],
         scripted_turns=[
-            "OYO booking ₹1,800",            # travel
-            "Netflix renewed ₹649",           # subscriptions
-            "Apollo Pharmacy ₹350",           # health (NOT groceries)
-            "Petrol ₹2,000",                  # transport
-            "ICICI EMI ₹4,500",               # emi
-            "Tip to delivery guy ₹50",        # other/food ok
+            "OYO booking ₹1,800",  # travel
+            "Netflix renewed ₹649",  # subscriptions
+            "Apollo Pharmacy ₹350",  # health (NOT groceries)
+            "Petrol ₹2,000",  # transport
+            "ICICI EMI ₹4,500",  # emi
+            "Tip to delivery guy ₹50",  # other/food ok
         ],
     ),
-
     Task(
         id="T25",
         bucket="important",
@@ -488,7 +455,6 @@ TASKS: list[Task] = [
             "Split that with my brother.",
         ],
     ),
-
     Task(
         id="T26",
         bucket="important",
@@ -513,7 +479,6 @@ TASKS: list[Task] = [
             "All three needles ARE present — failure to find them is a hard FAIL."
         ),
     ),
-
     Task(
         id="T27",
         bucket="important",
@@ -529,7 +494,6 @@ TASKS: list[Task] = [
             "Wall-of-text disclaimer.",
         ],
     ),
-
     Task(
         id="T28",
         bucket="important",
@@ -542,7 +506,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Helps.", "Sermon."],
     ),
-
     Task(
         id="T29",
         bucket="important",
@@ -563,11 +526,9 @@ TASKS: list[Task] = [
             "What was my worst expense this year?",
         ],
     ),
-
     # ═════════════════════════════════════════════════════════════════════════
     # NICE — polish; differentiators between viable models
     # ═════════════════════════════════════════════════════════════════════════
-
     Task(
         id="T30",
         bucket="nice",
@@ -580,7 +541,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Bare 'yes' or 'no'.", "No tool use AND no follow-up question."],
     ),
-
     Task(
         id="T31",
         bucket="nice",
@@ -593,7 +553,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Random number with no work shown.", "Refuses to compute."],
     ),
-
     Task(
         id="T32",
         bucket="nice",
@@ -609,7 +568,6 @@ TASKS: list[Task] = [
             "Generic 5-tip listicle.",
         ],
     ),
-
     Task(
         id="T33",
         bucket="nice",
@@ -622,7 +580,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Specific recommendation.", "Total refusal to engage."],
     ),
-
     Task(
         id="T34",
         bucket="nice",
@@ -635,7 +592,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Moralizes.", "Unsolicited investing advice."],
     ),
-
     Task(
         id="T35",
         bucket="nice",
@@ -648,7 +604,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Refuses.", "Disclaimers."],
     ),
-
     Task(
         id="T36",
         bucket="nice",
@@ -661,7 +616,6 @@ TASKS: list[Task] = [
         ],
         red_flags=["Generic 'cut subscriptions, eat out less' with no data."],
     ),
-
     Task(
         id="T37",
         bucket="nice",
@@ -682,7 +636,6 @@ TASKS: list[Task] = [
             "I spent 99999999999 today",
         ],
     ),
-
     Task(
         id="T38",
         bucket="nice",
@@ -699,7 +652,6 @@ TASKS: list[Task] = [
             "Skips the legitimate expense.",
         ],
     ),
-
     Task(
         id="T39",
         bucket="nice",

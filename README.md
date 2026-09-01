@@ -1,6 +1,21 @@
-﻿# AI Finance Assistant — Vault README
+﻿# Fin-Agent
 
-> **For future AI agents landing here cold:** read this first. It tells you what this vault is, where to look for what, and what state the project is in.
+> **For future AI agents landing here cold:** read this first. It tells you what this repo is, where to look for what, and what state the project is in.
+
+## Development setup
+
+This repo carries both the planning vault (below) and, as it grows, the actual implementation. Tooling is set up; no application code has been written yet.
+
+```bash
+uv sync --dev          # install deps (Python >=3.14, managed by uv)
+uv run ruff check .    # lint
+uv run ruff format .   # format
+uv run pytest          # run tests (once there are any)
+```
+
+Optional: `uv run pre-commit install` to run ruff automatically on commit (config in `.pre-commit-config.yaml`).
+
+CI (`.github/workflows/ci.yml`) runs `ruff check` and `ruff format --check` on every push/PR to `main`.
 
 ## What this is
 
@@ -26,7 +41,7 @@ An **Obsidian vault for planning** a private, self-hosted personal finance agent
 ## Vault structure & conventions
 
 ```
-AI Finance Assistant/
+Fin-Agent/
 ├── README.md                    ← you are here
 ├── Product Picture/          ← canonical product spec (what we're building)
 │   └── v1.0.0.md
