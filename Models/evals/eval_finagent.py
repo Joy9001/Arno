@@ -48,7 +48,20 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 import ollama
+from eval_tasks import (
+    BUCKET_WEIGHTS,
+    LAST_THURSDAY,
+    TASKS,
+    TODAY,
+    Task,
+    filter_tasks,
+)
 from ollama import ChatResponse
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
+from rich.table import Table
 
 
 def _client_host() -> str:
@@ -80,19 +93,6 @@ def _client_host() -> str:
 
 _OLLAMA_HOST = _client_host()
 ollama = ollama.Client(host=_OLLAMA_HOST)
-from eval_tasks import (
-    BUCKET_WEIGHTS,
-    LAST_THURSDAY,
-    TASKS,
-    TODAY,
-    Task,
-    filter_tasks,
-)
-from rich import box
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.table import Table
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants — system prompt, tool schemas, mock results
@@ -564,7 +564,7 @@ def generate_synthetic_ledger(needles: list[dict], n_transactions: int = 2000) -
         )
 
     positions: list[int] = sorted(random.sample(range(len(transactions)), len(needles)))
-    for pos, needle in zip(positions, needles):
+    for pos, needle in zip(positions, needles, strict=True):
         transactions.insert(pos, needle)
 
     lines = ["# Transaction ledger — Jan 2025 to May 2026"] + [json.dumps(t) for t in transactions]

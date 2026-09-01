@@ -35,10 +35,5 @@ extend-exclude = ["*.md"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
-[tool.ruff.lint.per-file-ignores]
-# Pre-existing eval scripts: long prompt strings, host-detection imports before
-# third-party ones, and legacy zip() usage. Revisit when these are next touched.
-"Models/evals/*.py" = ["E501", "E402", "B905"]
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
