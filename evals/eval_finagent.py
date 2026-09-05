@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.12"
+# requires-python = ">=3.14"
 # dependencies = [
 #   "ollama>=0.4.0",
 #   "rich>=13.0",
@@ -17,16 +17,16 @@ Each task from eval_tasks.py is driven as a multi-turn conversation:
   - Soft cap at 6 user turns — a reminder fires; you can keep going.
 
 Usage:
-    uv run eval_finagent.py                                # all models, all tasks
-    uv run eval_finagent.py --models granite4.1:3b
-    uv run eval_finagent.py --buckets critical             # one bucket
-    uv run eval_finagent.py --buckets critical important
-    uv run eval_finagent.py --tags hinglish                # filter by tag
-    uv run eval_finagent.py --tasks T01 T05                # specific tasks
-    uv run eval_finagent.py --resume                       # skip models with existing results
-    uv run eval_finagent.py --no-bench                     # skip preflight (e.g. re-runs)
+    uv run evals/eval_finagent.py                                # all models, all tasks
+    uv run evals/eval_finagent.py --models granite4.1:3b
+    uv run evals/eval_finagent.py --buckets critical             # one bucket
+    uv run evals/eval_finagent.py --buckets critical important
+    uv run evals/eval_finagent.py --tags hinglish                # filter by tag
+    uv run evals/eval_finagent.py --tasks T01 T05                # specific tasks
+    uv run evals/eval_finagent.py --resume                       # skip models with existing results
+    uv run evals/eval_finagent.py --no-bench                     # skip preflight (e.g. re-runs)
 
-Outputs (written to ./eval_results/):
+Outputs (written to ./results/):
     results_<model>_<ts>.json     full transcripts + scores
     scorecard_<model>_<ts>.md     Obsidian-ready scorecard
     eval_summary_<ts>.md          cross-model comparison
@@ -98,7 +98,7 @@ ollama = ollama.Client(host=_OLLAMA_HOST)
 # Constants — system prompt, tool schemas, mock results
 # ─────────────────────────────────────────────────────────────────────────────
 
-RESULTS_DIR = Path(__file__).parent / "eval_results"
+RESULTS_DIR = Path(__file__).parent / "results"
 
 SYSTEM_PROMPT = f"""You are FinAgent, a private personal-finance assistant running locally on \
 Joy's hardware. You are warm, terse, and competent. You speak the way a \

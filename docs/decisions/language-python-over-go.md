@@ -3,13 +3,13 @@
 > **Status:** Decided  
 > **Date:** May 17, 2026  
 > **Decision:** Use **Python 3.12+** as the primary implementation language.  
-> **Supersedes:** [[Agent Framework LangChainGo over Google ADK Go]] (the Go-based framework choice no longer applies)
+> **Supersedes:** [Agent Framework LangChainGo over Google ADK Go](agent-framework-langchaingo-over-google-adk-go.md) (the Go-based framework choice no longer applies)
 
 ---
 
 ## Context
 
-The initial architecture (April 2026) picked Go (Golang), primarily on the premise that Go is "fast and lightweight." After locking the [[Product Picture/v1.0.0|Product Picture v1.0.0]] in May 2026, we revisited the language decision because:
+The initial architecture (April 2026) picked Go (Golang), primarily on the premise that Go is "fast and lightweight." After locking the [Product Picture v1.0.0](../product-picture/v1.0.0.md) in May 2026, we revisited the language decision because:
 
 1. The original "fast and lightweight" premise didn't account for the actual performance bottleneck (local LLM inference on a 4GB VRAM card)
 2. The Product Picture revealed Python-leaning needs: pre-built agent loops, mature PDF parsing for Indian bank statements, mem0-style memory frameworks
@@ -78,7 +78,7 @@ The principle of wrapping framework calls behind a thin interface survives the l
 
 ## Related Documents
 
-- [[Agent Framework PydanticAI]] — framework choice within Python
-- [[Agent Framework LangChainGo over Google ADK Go]] — superseded historical decision (kept for context)
-- [[Product Picture/v1.0.0]] — the spec this stack must implement
-- [[Infrastructure]] — hardware constraints (4GB VRAM remains binding)
+- [Agent Framework PydanticAI](agent-framework-pydanticai.md) — framework choice within Python
+- [Agent Framework LangChainGo over Google ADK Go](agent-framework-langchaingo-over-google-adk-go.md) — superseded historical decision (kept for context)
+- [Product Picture v1.0.0](../product-picture/v1.0.0.md) — the spec this stack must implement
+- [Infrastructure](../infrastructure.md) — hardware constraints (4GB VRAM remains binding)

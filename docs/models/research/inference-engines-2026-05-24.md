@@ -1,6 +1,6 @@
 # Inference Engines — FinAgent on the Fortress (2026-05-24)
 
-Companion note to [[Research Notes 2026-05-24]] and [[Research Notes 2026-05-18]]. The May-18 session bench-killed `qwen3.5:9b` and named MoE-on-Ollama as the open question. The May-24 model pass closed the model question (Granite 4.1 3B primary, Gemma 4 E2B for Hinglish, Cogito v1 3B wildcard) and concluded: **the next real lever is the inference engine, not the model.** This note answers that.
+Companion note to [Research Notes 2026-05-24](research-notes-2026-05-24.md) and [Research Notes 2026-05-18](research-notes-2026-05-18.md). The May-18 session bench-killed `qwen3.5:9b` and named MoE-on-Ollama as the open question. The May-24 model pass closed the model question (Granite 4.1 3B primary, Gemma 4 E2B for Hinglish, Cogito v1 3B wildcard) and concluded: **the next real lever is the inference engine, not the model.** This note answers that.
 
 ## How I framed the problem
 

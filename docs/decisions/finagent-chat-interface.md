@@ -1,6 +1,6 @@
 ﻿# FinAgent Chat Interface — Technical Design Specification
 
-> ⚠️ **PARTIALLY SUPERSEDED — May 17, 2026.** The stack has shifted from Go to Python (see [[Language Python over Go]] and [[Agent Framework PydanticAI]]).  
+> ⚠️ **PARTIALLY SUPERSEDED — May 17, 2026.** The stack has shifted from Go to Python (see [Language Python over Go](language-python-over-go.md) and [Agent Framework PydanticAI](agent-framework-pydanticai.md)).  
 >
 > **Still valid (language-agnostic patterns):**
 > - Modular separation / Ports-and-Adapters architecture (§2)
@@ -14,7 +14,7 @@
 >
 > **Superseded (Go-specific code):**
 > - Go handler implementations (§5) → reimplement in **FastAPI + PydanticAI**
-> - Go dependency list (§11) → see Python stack in [[Infrastructure]]
+> - Go dependency list (§11) → see Python stack in [Infrastructure](../infrastructure.md)
 >
 > **Python equivalents for the Go pieces:**
 > - `net/http` → **FastAPI** (with `sse-starlette` for SSE)
@@ -640,9 +640,9 @@ All dependencies are pure local computation. No package phones home. No analytic
 
 | Document                 | Location                                                  | Relationship                                               |
 | ------------------------ | --------------------------------------------------------- | ---------------------------------------------------------- |
-| Infrastructure        | [[Infrastructure]]                                     | Hardware, tunnel, backup — inherited assumptions           |
-| Initial Conversation | [[Initial Conversation]]                              | Origin decisions: why local, why Telegram, why self-hosted |
-| Capabilities v1.0.0 | [[AI Finance Assistant/Capabilities/v1.0.0\|v1.0.0]] | Agent features the UI must expose                          |
-| Tools and MCPs v1.0.0 | [[AI Finance Assistant/Tools and MCPs/v1.0.0\|v1.0.0]] | MCP tool calls that affect SSE stream length               |
-| Tech: LangChainGo    | [[Agent Framework LangChainGo over Google ADK Go]]        | LLM bridge implementation choice                           |
-| Ollama Try-Outs       | [[Ollama Try-Outs]]                                       | Model selection for streaming speed                        |
+| Infrastructure        | [Infrastructure](../infrastructure.md)                                     | Hardware, tunnel, backup — inherited assumptions           |
+| Initial Conversation | [Initial Conversation](../initial-conversation.md)                              | Origin decisions: why local, why Telegram, why self-hosted |
+| Capabilities v1.0.0 | [Capabilities v1.0.0](../capabilities/v1.0.0.md) | Agent features the UI must expose                          |
+| Tools and MCPs v1.0.0 | [Tools and MCPs v1.0.0](../tools-and-mcps/v1.0.0.md) | MCP tool calls that affect SSE stream length               |
+| Tech: LangChainGo    | [Agent Framework LangChainGo over Google ADK Go](agent-framework-langchaingo-over-google-adk-go.md)        | LLM bridge implementation choice                           |
+| Ollama Try-Outs       | [Ollama Try-Outs](../models/ollama-try-outs.md)                                       | Model selection for streaming speed                        |

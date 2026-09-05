@@ -1,7 +1,7 @@
 ﻿# Agent Framework Decision: LangChainGo over Google ADK Go
 
 > ⚠️ **SUPERSEDED — May 17, 2026.** The language decision shifted from Go to Python; this Go-based framework choice no longer applies. Kept for historical reasoning context.  
-> **Current decisions:** [[Language Python over Go]] + [[Agent Framework PydanticAI]]
+> **Current decisions:** [Language Python over Go](language-python-over-go.md) + [Agent Framework PydanticAI](agent-framework-pydanticai.md)
 
 ---
 
@@ -94,6 +94,6 @@ The LangChainGo implementation satisfies this interface. If Google ADK Go mature
 
 ## Related Documents
 
-- [[Infrastructure]] — Hardware and stack architecture
-- [[Capabilities/v1.0.0]] — V1 feature set (Safe-to-Spend Oracle, Tax Engine, etc.)
-- [[Tools and MCPs/v1.0.0]] — MCP tool servers the agent will call
+- [Infrastructure](../infrastructure.md) — Hardware and stack architecture
+- [Capabilities v1.0.0](../capabilities/v1.0.0.md) — V1 feature set (Safe-to-Spend Oracle, Tax Engine, etc.)
+- [Tools and MCPs v1.0.0](../tools-and-mcps/v1.0.0.md) — MCP tool servers the agent will call

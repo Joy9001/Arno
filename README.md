@@ -1,84 +1,113 @@
-﻿# Fin-Agent
+# Fin-Agent
 
-> **For future AI agents landing here cold:** read this first. It tells you what this repo is, where to look for what, and what state the project is in.
+A private, self-hosted personal finance agent. All inference and financial data stay on one
+local machine; only encrypted backups leave it. Reached through Signal (E2E-encrypted bot)
+plus a local-only web UI bound to `127.0.0.1`.
 
-## Development setup
+> **Status: research / design phase.** The design is largely settled and written down under
+> [`docs/`](docs/). The only code that exists is the local-model eval harness in
+> [`evals/`](evals/) — the application itself has not been started. Nothing here is a
+> placeholder waiting to be filled in; if a module isn't present, it hasn't been designed
+> into existence yet.
 
-This repo carries both the planning vault (below) and, as it grows, the actual implementation. Tooling is set up; no application code has been written yet.
+## Layout
 
-```bash
-uv sync --dev          # install deps (Python >=3.14, managed by uv)
-uv run ruff check .    # lint
-uv run ruff format .   # format
-uv run pytest          # run tests (once there are any)
+```
+.
+├── docs/          design docs and research notes — currently the bulk of the project
+│   ├── product-picture/   canonical product spec (source of truth)
+│   ├── capabilities/      feature list, per version
+│   ├── tools-and-mcps/    tool servers / MCP integrations, per version
+│   ├── security/          threat model + security decisions
+│   ├── memory/            agent memory design + research
+│   ├── models/            local model selection, eval battery, research notes
+│   ├── decisions/         one file per significant tech decision + rationale
+│   ├── prior-art/         landscape research
+│   ├── infrastructure.md  hardware, hosting, backup, networking
+│   └── initial-conversation.md   original brainstorm transcript (the "why")
+└── evals/         human-judged eval harness for candidate local models
+    └── results/   recorded eval runs (JSON transcripts + markdown scorecards)
 ```
 
-Optional: `uv run pre-commit install` to run ruff automatically on commit (config in `.pre-commit-config.yaml`).
+Application code will land in `src/fin_agent/` with tests in `tests/`. Neither directory
+exists yet, deliberately.
 
-CI (`.github/workflows/ci.yml`) runs `ruff check` and `ruff format --check` on every push/PR to `main`.
+## Development
 
-## What this is
+Python 3.14, managed by [uv](https://docs.astral.sh/uv/).
 
-An **Obsidian vault for planning** a private, self-hosted personal finance agent. The single user/owner is **Joy** (developer, based in Delhi). The agent is built in Python 3.12+ (FastAPI + PydanticAI), runs on a local machine (Asus TUF A15), uses a local LLM via Ollama, and is reached through **Signal** (E2E-encrypted bot) plus a local-only web UI bound to `127.0.0.1`.
+```bash
+uv sync --dev
+```
 
-**Current phase: planning only. No code has been written.** Do not generate implementation code unless explicitly asked.
+```bash
+uv run ruff check . && uv run ruff format --check .
+```
+
+Optional: `uv run pre-commit install` to run ruff on commit
+(config in [`.pre-commit-config.yaml`](.pre-commit-config.yaml)).
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same two ruff commands
+on every push and PR to `main`.
+
+### Running the eval harness
+
+Drives each task in [`evals/eval_tasks.py`](evals/eval_tasks.py) as a multi-turn
+conversation against a local Ollama model, with you as the judge. Requires Ollama running.
+
+```bash
+uv run evals/eval_finagent.py --models granite4.1:3b --buckets critical
+```
+
+Results are written to `evals/results/`. See the module docstring for all flags, and
+[docs/models/evaluation-battery-2026-05-24.md](docs/models/evaluation-battery-2026-05-24.md)
+for what the battery is testing and why.
 
 ## Where to start reading
 
-| If you need… | Read this first |
+| If you need… | Read |
 |---|---|
-| The canonical product vision | [Product Picture/v1.0.0.md](Product%20Picture/v1.0.0.md) |
-| The full backstory and reasoning behind decisions | [Initial Conversation.md](Initial%20Conversation.md) |
-| Hardware, deployment, backup strategy | [Infrastructure.md](Infrastructure.md) |
-| What the agent can do (feature list) | [Capabilities/v1.0.0.md](Capabilities/v1.0.0.md) |
-| Tool & MCP server plans | [Tools and MCPs/v1.0.0.md](Tools%20and%20MCPs/v1.0.0.md) |
-| Why specific tech was chosen | [Tech Decisions/](Tech%20Decisions/) |
-| Local model selection notes | [Models/Ollama Try-Outs.md](Models/Ollama%20Try-Outs.md) |
-| Threat model + security decisions | [Security/v1.0.0.md](Security/v1.0.0.md) |
+| The canonical product vision | [docs/product-picture/v1.0.0.md](docs/product-picture/v1.0.0.md) |
+| The backstory and reasoning behind decisions | [docs/initial-conversation.md](docs/initial-conversation.md) |
+| Hardware, deployment, backup strategy | [docs/infrastructure.md](docs/infrastructure.md) |
+| What the agent can do (feature list) | [docs/capabilities/v1.0.0.md](docs/capabilities/v1.0.0.md) |
+| Tool & MCP server plans | [docs/tools-and-mcps/v1.0.0.md](docs/tools-and-mcps/v1.0.0.md) |
+| Why specific tech was chosen | [docs/decisions/](docs/decisions/) |
+| Local model selection notes | [docs/models/ollama-try-outs.md](docs/models/ollama-try-outs.md) |
+| Threat model + security decisions | [docs/security/v1.0.0.md](docs/security/v1.0.0.md) |
+| How memory works | [docs/memory/v1.0.0.md](docs/memory/v1.0.0.md) |
 
-**The Product Picture is the source of truth.** If anything in another file conflicts with it, the Product Picture wins until the conflict is resolved.
+**The Product Picture is the source of truth.** If another document conflicts with it, the
+Product Picture wins until the conflict is resolved.
 
-## Vault structure & conventions
+## Conventions
 
-```
-Fin-Agent/
-├── README.md                    ← you are here
-├── Product Picture/          ← canonical product spec (what we're building)
-│   └── v1.0.0.md
-├── Capabilities/             ← feature list per version
-│   └── v1.0.0.md
-├── Tools and MCPs/           ← tool servers / MCP integrations per version
-│   └── v1.0.0.md
-├── Tech Decisions/           ← one file per significant decision + rationale
-├── Models/                   ← model selection notes (Ollama candidates etc.)
-├── Security/                 ← threat model + security decisions per version
-│   └── v1.0.0.md
-├── Infrastructure.md         ← hardware, hosting, backup, networking
-└── Initial Conversation.md   ← original brainstorm transcript (the "why")
-```
+- Versioned specs are `vMAJOR.MINOR.PATCH.md`. When a spec evolves, add `v1.1.0.md` rather
+  than overwriting — superseded versions stay as history.
+- One concern per file under `docs/decisions/`; the filename states the decision.
+- Paths and filenames are lowercase and hyphenated.
+- Docs cross-reference with ordinary relative Markdown links (this was an Obsidian vault;
+  the wikilinks are gone).
 
-**Conventions:**
+## Stack (decided 2026-05-17)
 
-- Folder names use plain descriptive names (no emoji prefix).
-- Versioned specs use `vMAJOR.MINOR.PATCH.md` (e.g., `v1.0.0.md`). When the product picture evolves, create `v1.1.0.md` rather than overwriting.
-- One concern per file under `Tech Decisions/` — title states the decision.
+FastAPI + PydanticAI, PostgreSQL (SQLAlchemy 2.0 + pgvector + pgcrypto), Ollama for local
+inference, mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements,
+pytesseract for receipts, signalbot + signal-cli-rest-api for Signal, APScheduler for
+briefings, Docker Compose for deploy. No Cloudflare Tunnel in v1 — Signal is outbound-only
+and the web UI is `127.0.0.1`. Rationale in
+[docs/decisions/language-python-over-go.md](docs/decisions/language-python-over-go.md),
+[docs/decisions/agent-framework-pydanticai.md](docs/decisions/agent-framework-pydanticai.md),
+and [docs/security/v1.0.0.md](docs/security/v1.0.0.md).
 
-## Project state snapshot
+## Constraints worth knowing before proposing anything
 
-- **Phase:** product picture locked at v1.0.0; implementation planning is the next step.
-- **Scope discipline:** Joy initially considered a multi-skill personal-assistant platform, then **explicitly scoped down to a Finance Agent only**. Do not re-expand scope without Joy's direction. (Other skills like journaling, calendar, research, health were discussed but are out of scope until finance is built and stable.)
-- **Open questions** waiting for the next planning session are listed at the bottom of [Product Picture/v1.0.0.md](Product%20Picture/v1.0.0.md).
-
-## How to be useful here
-
-1. **Default to planning, not coding.** Joy is deliberately in a "build the picture before building the thing" phase.
-2. **Ask before fanning out.** Joy has already pulled back conversations that drifted into platform/multi-skill territory. If a question opens up scope, surface it explicitly rather than just expanding.
-3. **Update specs in place, version on real change.** Small edits to v1.0.0.md are fine while drafting. Once the picture is referenced by other documents, bump the version for any breaking change.
-4. **Use the current date** when reasoning about anything time-bound — research, tech landscape, model availability, etc.
-5. **Respect the no-list in the Product Picture.** Boundaries (no investment advice, no moralizing, no autonomous actions) are product decisions, not implementation suggestions to revisit.
-
-## Known constraints worth re-reading before suggesting anything
-
-- **Hardware:** Asus TUF A15, AMD Ryzen 5 4600H, 24GB RAM, **GTX 1650 Mobile with only 4GB VRAM**. Local LLM choice is constrained — 8B models will need aggressive quantization or CPU offload.
-- **Privacy:** All inference and financial data stay on the local machine. Only encrypted backups leave it.
-- **Stack (decided May 17, 2026):** Python 3.12+ (FastAPI + PydanticAI + uv), PostgreSQL (SQLAlchemy 2.0 + pgvector + pgcrypto), Ollama for local inference (Qwen3 8B, Q4 quantized), mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements, pytesseract for receipts, **signalbot + signal-cli-rest-api for Signal** (replaces Telegram for E2E privacy), APScheduler for briefings, Docker Compose for deploy. **No Cloudflare Tunnel in v1** (Signal is outbound-only; web is `127.0.0.1`). See [[Tech Decisions/Language Python over Go]], [[Tech Decisions/Agent Framework PydanticAI]], and [[Security/v1.0.0]] for rationale. No code written yet.
+- **Hardware:** Asus TUF A15, Ryzen 5 4600H, 24 GB RAM, GTX 1650 Mobile with **4 GB VRAM**.
+  Model choice is tightly constrained; 8B models need aggressive quantization or CPU offload.
+  The eval battery exists because of this.
+- **Privacy:** inference and financial data never leave the machine.
+- **Scope:** finance only. A broader multi-skill assistant was considered and explicitly
+  scoped out. Don't re-expand it — journaling, calendar, research and health are out until
+  finance is built and stable.
+- **Product boundaries** (no investment advice, no moralizing, no autonomous actions) are
+  decisions, not implementation details to revisit. See the no-list in the Product Picture.
+- Open questions for the next planning session are at the bottom of the Product Picture.

@@ -1,6 +1,6 @@
 ﻿# Evaluation Battery — Primary LLM ("Brain") for FinAgent
 
-> Companion to [Ollama Try-Outs.md](Ollama%20Try-Outs.md) (lightweight checklist) and [Research Notes 2026-05-24.md](%F0%9F%97%92%EF%B8%8F%20Research/Research%20Notes%202026-05-24.md) (independent 2026 market research).
+> Companion to [Ollama Try-Outs.md](ollama-try-outs.md) (lightweight checklist) and [Research Notes 2026-05-24.md](research/research-notes-2026-05-24.md) (independent 2026 market research).
 >
 > **Purpose.** Decide which local model gets to be the *primary brain* of the FinAgent. Not the warmest, not the smartest on benchmarks — the one that survives every angle that matters to a tool-using, JSON-emitting, Hinglish-speaking, financially-numerate, 24/7 personal assistant on a 4 GB VRAM box.
 >
@@ -838,7 +838,7 @@ Stop the moment a model passes all gates + the critical tier with speed ≥ 12 t
 
 - **Write the winner into `Infrastructure.md`** (replacing "Qwen3 8B" baseline).
 - **Note the second-place** as the documented fallback if the primary regresses on a future Ollama / PydanticAI update.
-- **Open a tech decision doc** at `Tech Decisions/Local Model — <winner>.md` recording the score sheet, the date, and the runner-up. Future-you needs to know what you tested against.
+- **Open a tech decision doc** at `docs/decisions/local-model-<winner>.md` recording the score sheet, the date, and the runner-up. Future-you needs to know what you tested against.
 - **Save 2–3 representative bad answers** per losing model into a snippets file. When you re-evaluate in 6 months, these are the regression tests.
 
 ---

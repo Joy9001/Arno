@@ -19,7 +19,7 @@ This document outlines the infrastructure and hardware strategy for a privacy-fi
 
 ## 3. Core Technology Stack
 
-The stack prioritizes local execution, strict data typing, secure edge routing, and velocity. See [[Language Python over Go]] for the language rationale and [[Agent Framework PydanticAI]] for the agent framework rationale.
+The stack prioritizes local execution, strict data typing, secure edge routing, and velocity. See [Language Python over Go](decisions/language-python-over-go.md) for the language rationale and [Agent Framework PydanticAI](decisions/agent-framework-pydanticai.md) for the agent framework rationale.
 
 **Application layer (Python 3.12+):**
 - **Packaging:** [`uv`](https://github.com/astral-sh/uv) — fast, modern Python package management (replaces pip/Poetry)
@@ -31,7 +31,7 @@ The stack prioritizes local execution, strict data typing, secure edge routing, 
 - **Database:** Local **PostgreSQL** — single source of truth for the ledger
 - **ORM:** **SQLAlchemy 2.0** (async) with Pydantic models at the boundary
 - **Vector storage (when needed):** **pgvector** extension on the same Postgres instance
-- **At-rest encryption:** **pgcrypto** extension for column-level encryption of `chat_messages.content` and mem0 facts. See [[Security/v1.0.0]].
+- **At-rest encryption:** **pgcrypto** extension for column-level encryption of `chat_messages.content` and mem0 facts. See [Security v1.0.0](security/v1.0.0.md).
 - **Memory layer (personalization):** **[mem0](https://mem0.ai/)** — low-lock-in fact-extraction memory bolted onto PydanticAI
 
 **LLM & inference:**
@@ -44,14 +44,14 @@ The stack prioritizes local execution, strict data typing, secure edge routing, 
 - **OCR:** **pytesseract** (calls system `tesseract-ocr`)
 
 **Interfaces:**
-- **Signal:** **signalbot** v1.1.0+ — async; uses **signal-cli-rest-api** as a Docker sidecar (`signal-cli` registered to your phone number as a linked device). Outbound long-poll only; no public endpoint required. (Switched from Telegram for E2E encryption — see [[Security/v1.0.0]].)
-- **Web UI:** Vanilla HTML/JS over SSE (see [[FinAgent Chat Interface]] for architectural patterns)
+- **Signal:** **signalbot** v1.1.0+ — async; uses **signal-cli-rest-api** as a Docker sidecar (`signal-cli` registered to your phone number as a linked device). Outbound long-poll only; no public endpoint required. (Switched from Telegram for E2E encryption — see [Security v1.0.0](security/v1.0.0.md).)
+- **Web UI:** Vanilla HTML/JS over SSE (see [FinAgent Chat Interface](decisions/finagent-chat-interface.md) for architectural patterns)
 - **Scheduler (briefings):** **APScheduler** — in-process, fits FastAPI lifespan
 
 **Deploy & networking:**
 - **Deployment:** **Docker Compose** (app + Postgres + Ollama + `signal-cli-rest-api` as separate services)
 - **Web UI binding:** `127.0.0.1` only — no remote access in v1 (Signal is the on-the-go channel)
-- **No public endpoint required** — Signal is outbound-only; **Cloudflare Tunnel dropped from v1** (was originally needed for the Telegram webhook). See [[Security/v1.0.0]] for the full rationale.
+- **No public endpoint required** — Signal is outbound-only; **Cloudflare Tunnel dropped from v1** (was originally needed for the Telegram webhook). See [Security v1.0.0](security/v1.0.0.md) for the full rationale.
 
 ## 4. Security & Backup Strategy
 

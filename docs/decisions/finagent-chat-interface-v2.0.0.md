@@ -2,8 +2,8 @@
 
 > **Version:** v2.0.0  
 > **Date:** May 17, 2026  
-> **Supersedes:** [[FinAgent Chat Interface]] (v1, Go-flavored)  
-> **Depends on:** [[Language Python over Go]], [[Agent Framework PydanticAI]]  
+> **Supersedes:** [FinAgent Chat Interface](finagent-chat-interface.md) (v1, Go-flavored)  
+> **Depends on:** [Language Python over Go](language-python-over-go.md), [Agent Framework PydanticAI](agent-framework-pydanticai.md)  
 > **Stack:** Python 3.12+ / FastAPI / PydanticAI / mem0 / signalbot / SSE  
 > **Constraint:** All processing local on Asus TUF A15. Zero raw financial data leaves the home network.
 
@@ -64,7 +64,7 @@ Same Ports & Adapters principle as v1 — chat UI is a **swappable adapter behin
      └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
-The web adapter wraps the event stream as SSE. The Signal adapter consumes the same event stream and collapses tokens into a single message (Signal has no per-message streaming UX inside a chat), drops status/memory_hit events, and surfaces tool_call events as part of the response only when relevant. See [[Security/v1.0.0]] for the rationale behind choosing Signal over Telegram.
+The web adapter wraps the event stream as SSE. The Signal adapter consumes the same event stream and collapses tokens into a single message (Signal has no per-message streaming UX inside a chat), drops status/memory_hit events, and surfaces tool_call events as part of the response only when relevant. See [Security v1.0.0](../security/v1.0.0.md) for the rationale behind choosing Signal over Telegram.
 
 ---
 
@@ -133,7 +133,7 @@ CREATE TRIGGER no_update_audit BEFORE UPDATE OR DELETE ON audit_log
     FOR EACH ROW EXECUTE FUNCTION prevent_audit_modification();
 ```
 
-mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database. **Sensitive columns** (`chat_messages.content`, mem0 fact values) are encrypted via the `pgcrypto` extension; see [[Security/v1.0.0]] §6.
+mem0 owns its own tables in the same Postgres instance via its pgvector backend — no separate database. **Sensitive columns** (`chat_messages.content`, mem0 fact values) are encrypted via the `pgcrypto` extension; see [Security v1.0.0](../security/v1.0.0.md) §6.
 
 ### 3.3 SSE Event Types (the wire protocol)
 
@@ -442,7 +442,7 @@ Briefings and anomalies use the same `process_message()`-style flow but with `se
 | **Agent** | tool timeout, PydanticAI `ValidationError`, OCR returned garbage, simulation failed | Friendly text from agent persona — emitted as `TokenEvent`s so it feels like the agent speaking. *"I had trouble running the simulation — want me to try again?"* |
 | **Infra** | Ollama unreachable, DB connection lost, mem0 init failed | `ErrorEvent(tier="infra")` with detail; frontend renders as prominent banner; Signal sends a "⚠️ Backend issue, see web" message |
 
-**Mitigation for PydanticAI's small-model brittleness** (see [[Agent Framework PydanticAI]]):
+**Mitigation for PydanticAI's small-model brittleness** (see [Agent Framework PydanticAI](agent-framework-pydanticai.md)):
 
 - All structured-output tool calls wrapped in PydanticAI's retry mechanism (default 2 retries, configurable)
 - Ollama v0.5+ structured outputs enabled at the model level
@@ -554,7 +554,7 @@ All dependencies are local-compute except `signal-cli-rest-api` (Signal outbound
 
 ## 17. Open Questions for Implementation Phase
 
-- **Signal phone number strategy** — register `signal-cli` to your personal number, or get a dedicated number for the bot? (Trade-off documented in [[Security/v1.0.0]] §16.)
+- **Signal phone number strategy** — register `signal-cli` to your personal number, or get a dedicated number for the bot? (Trade-off documented in [Security v1.0.0](../security/v1.0.0.md) §16.)
 - **Sanitizer rules** — do we need additional regex for any specific Indian bank format quirks discovered during real testing?
 - **Embedding model choice** — `nomic-embed-text` (Ollama-served) vs `sentence-transformers/all-MiniLM-L6-v2` (in-process) — measure latency on GTX 1650
 - **Reflection prompt template** — what's the exact LLM prompt that asks "what's worth remembering from this exchange?"
@@ -567,12 +567,12 @@ All dependencies are local-compute except `signal-cli-rest-api` (Signal outbound
 
 ## 18. Related Documents
 
-- [[Security/v1.0.0]] — threat model, prompt injection defenses, audit log, channel decision (Signal over Telegram)
-- [[Language Python over Go]] — language-level decision
-- [[Agent Framework PydanticAI]] — framework-level decision
-- [[Product Picture/v1.0.0]] — the requirements this interface serves
-- [[Infrastructure]] — hardware, deploy, backup
-- [[FinAgent Chat Interface]] — v1 (superseded, kept for historical reasoning)
-- [[Capabilities/v1.0.0]] — feature list the UI must expose
-- [[Tools and MCPs/v1.0.0]] — tool servers the agent will call
-- [[Initial Conversation]] — origin decisions
+- [Security v1.0.0](../security/v1.0.0.md) — threat model, prompt injection defenses, audit log, channel decision (Signal over Telegram)
+- [Language Python over Go](language-python-over-go.md) — language-level decision
+- [Agent Framework PydanticAI](agent-framework-pydanticai.md) — framework-level decision
+- [Product Picture v1.0.0](../product-picture/v1.0.0.md) — the requirements this interface serves
+- [Infrastructure](../infrastructure.md) — hardware, deploy, backup
+- [FinAgent Chat Interface](finagent-chat-interface.md) — v1 (superseded, kept for historical reasoning)
+- [Capabilities v1.0.0](../capabilities/v1.0.0.md) — feature list the UI must expose
+- [Tools and MCPs v1.0.0](../tools-and-mcps/v1.0.0.md) — tool servers the agent will call
+- [Initial Conversation](../initial-conversation.md) — origin decisions

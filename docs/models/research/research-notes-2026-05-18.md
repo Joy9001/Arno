@@ -1,10 +1,10 @@
 ﻿# Model Research — Session Notes (2026-05-18)
 
-> Companion to [Ollama Try-Outs.md](Ollama%20Try-Outs.md) (the checklist). This document captures the *reasoning* and *evidence* that produced the checklist, plus dead ends, open questions, and mistakes worth knowing.
+> Companion to [Ollama Try-Outs.md](../ollama-try-outs.md) (the checklist). This document captures the *reasoning* and *evidence* that produced the checklist, plus dead ends, open questions, and mistakes worth knowing.
 
 ## Session goal
 
-Find the right local LLM for the FinAgent (per [Product Picture v1.0.0](Product%20Picture/v1.0.0.md), [Agent Framework PydanticAI](Tech%20Decisions/Agent%20Framework%20PydanticAI.md), [Infrastructure.md](Infrastructure.md)) given the actual hardware. Infrastructure.md currently names "Qwen3 8B" as the default; this session's job was to validate or replace that choice.
+Find the right local LLM for the FinAgent (per [Product Picture v1.0.0](../../product-picture/v1.0.0.md), [Agent Framework PydanticAI](../../decisions/agent-framework-pydanticai.md), [Infrastructure.md](../../infrastructure.md)) given the actual hardware. Infrastructure.md currently names "Qwen3 8B" as the default; this session's job was to validate or replace that choice.
 
 ## What was used
 
@@ -153,7 +153,7 @@ llmfit bench <ollama-tag> --provider ollama --json     # for parsing
 
 [Ollama 0.5+ supports JSON-schema-enforced output via `format: <json-schema>`](https://docs.ollama.com/capabilities/structured-outputs). This is **constrained decoding at the token level** — the model literally cannot emit tokens that produce invalid JSON. Fundamentally more reliable than prompt-based "please return JSON" approaches.
 
-**Critical for PydanticAI.** The [tech decision doc](Tech%20Decisions/Agent%20Framework%20PydanticAI.md) flags small-model `ValidationError` as a known risk. Constrained decoding is the documented fix. There is a known [PydanticAI issue #242](https://github.com/pydantic/pydantic-ai/issues/242) noting that PydanticAI was using tool-use invocations rather than the structured outputs feature directly — verify this is resolved before serious work.
+**Critical for PydanticAI.** The [tech decision doc](../../decisions/agent-framework-pydanticai.md) flags small-model `ValidationError` as a known risk. Constrained decoding is the documented fix. There is a known [PydanticAI issue #242](https://github.com/pydantic/pydantic-ai/issues/242) noting that PydanticAI was using tool-use invocations rather than the structured outputs feature directly — verify this is resolved before serious work.
 
 ---
 

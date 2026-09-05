@@ -3,14 +3,14 @@
 > **Status:** Decided  
 > **Date:** May 17, 2026  
 > **Decision:** Use [PydanticAI](https://pydantic.dev/docs/ai/overview/) (v1.x, currently 1.85.1) as the agent framework.  
-> **Supersedes:** [[Agent Framework LangChainGo over Google ADK Go]]  
-> **Depends on:** [[Language Python over Go]]
+> **Supersedes:** [Agent Framework LangChainGo over Google ADK Go](agent-framework-langchaingo-over-google-adk-go.md)  
+> **Depends on:** [Language Python over Go](language-python-over-go.md)
 
 ---
 
 ## Context
 
-Following the [[Language Python over Go|switch to Python]], the next decision is which agent framework to build on. The May 2026 Python agent framework landscape was researched against the [[Product Picture/v1.0.0|Product Picture v1.0.0]] requirements.
+Following the [switch to Python](language-python-over-go.md), the next decision is which agent framework to build on. The May 2026 Python agent framework landscape was researched against the [Product Picture v1.0.0](../product-picture/v1.0.0.md) requirements.
 
 **Candidates evaluated:**
 - **PydanticAI** (v1, shipped September 2025) — type-safe, Pydantic-native
@@ -116,7 +116,7 @@ A `PydanticAIRunner` implementation satisfies this. A future `LangGraphRunner` c
 
 ## Related Documents
 
-- [[Language Python over Go]] — language-level decision this depends on
-- [[Agent Framework LangChainGo over Google ADK Go]] — superseded historical decision
-- [[Product Picture/v1.0.0]] — requirements this framework must serve
-- [[Infrastructure]] — hardware constraints (4GB VRAM, 8B local model)
+- [Language Python over Go](language-python-over-go.md) — language-level decision this depends on
+- [Agent Framework LangChainGo over Google ADK Go](agent-framework-langchaingo-over-google-adk-go.md) — superseded historical decision
+- [Product Picture v1.0.0](../product-picture/v1.0.0.md) — requirements this framework must serve
+- [Infrastructure](../infrastructure.md) — hardware constraints (4GB VRAM, 8B local model)
