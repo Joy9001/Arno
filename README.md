@@ -1,36 +1,26 @@
 # Fin-Agent
 
-A private, self-hosted personal finance agent. All inference and financial data stay on one
-local machine; only encrypted backups leave it. Reached through Signal (E2E-encrypted bot)
-plus a local-only web UI bound to `127.0.0.1`.
+A chat agent that tracks what I spend and tells me whether I can afford something.
 
-> **Status: research / design phase.** The design is largely settled and written down under
-> [`docs/`](docs/). The only code that exists is the local-model eval harness in
-> [`evals/`](evals/) — the application itself has not been started. Nothing here is a
-> placeholder waiting to be filled in; if a module isn't present, it hasn't been designed
-> into existence yet.
+> **Status: planning restarted 2026-09-07.** The plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md) —
+> read that first, it's the only authoritative document. The May 2026 design docs are in
+> [`docs/archive/`](docs/archive/) and are not authoritative. No application code exists yet.
 
 ## Layout
 
 ```
 .
-├── docs/          design docs and research notes — currently the bulk of the project
-│   ├── product-picture/   canonical product spec (source of truth)
-│   ├── capabilities/      feature list, per version
-│   ├── tools-and-mcps/    tool servers / MCP integrations, per version
-│   ├── security/          threat model + security decisions
-│   ├── memory/            agent memory design + research
-│   ├── models/            local model selection, eval battery, research notes
-│   ├── decisions/         one file per significant tech decision + rationale
-│   ├── prior-art/         landscape research
-│   ├── infrastructure.md  hardware, hosting, backup, networking
-│   └── initial-conversation.md   original brainstorm transcript (the "why")
-└── evals/         human-judged eval harness for candidate local models
-    └── results/   recorded eval runs (JSON transcripts + markdown scorecards)
+├── docs/            all documentation — see docs/README.md
+│   ├── fin-agent/   the project: plan, design, import, parked
+│   ├── research/    independent surveys (agent-harness-engineering)
+│   └── archive/     superseded May 2026 design docs — historical only
+└── evals/           human-judged eval harness for local models (+ recorded runs)
 ```
 
-Application code will land in `src/fin_agent/` with tests in `tests/`. Neither directory
-exists yet, deliberately.
+[`docs/README.md`](docs/README.md) indexes everything. `docs/fin-agent/plan.md` owns decisions;
+other project docs own detail. If they disagree, the plan wins.
+
+Application code will land in `src/fin_agent/`, tests in `tests/`.
 
 ## Development
 
@@ -44,70 +34,34 @@ uv sync --dev
 uv run ruff check . && uv run ruff format --check .
 ```
 
-Optional: `uv run pre-commit install` to run ruff on commit
-(config in [`.pre-commit-config.yaml`](.pre-commit-config.yaml)).
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same two ruff commands
-on every push and PR to `main`.
+Optional: `uv run pre-commit install` to run ruff on commit.
+CI runs the same two ruff commands on every push and PR to `main`.
 
-### Running the eval harness
+## Configuration
+
+The LLM provider is three env vars. Local and cloud are the same code path — Ollama serves
+an OpenAI-compatible API.
+
+```bash
+LLM_BASE_URL=http://localhost:11434/v1   # or a cloud provider's /v1
+LLM_API_KEY=ollama                       # or a real key
+LLM_MODEL=qwen2.5:3b                     # or a cloud model id
+```
+
+## Eval harness
 
 Drives each task in [`evals/eval_tasks.py`](evals/eval_tasks.py) as a multi-turn
-conversation against a local Ollama model, with you as the judge. Requires Ollama running.
+conversation against a local Ollama model, with you as the judge.
 
 ```bash
 uv run evals/eval_finagent.py --models granite4.1:3b --buckets critical
 ```
 
-Results are written to `evals/results/`. See the module docstring for all flags, and
-[docs/models/evaluation-battery-2026-05-24.md](docs/models/evaluation-battery-2026-05-24.md)
-for what the battery is testing and why.
+Results land in `evals/results/`. Predates the current plan but is stack-independent and
+still useful for checking whether a given local model can hold a tool-calling conversation.
 
-## Where to start reading
+## The one rule
 
-| If you need… | Read |
-|---|---|
-| The canonical product vision | [docs/product-picture/v1.0.0.md](docs/product-picture/v1.0.0.md) |
-| The backstory and reasoning behind decisions | [docs/initial-conversation.md](docs/initial-conversation.md) |
-| Hardware, deployment, backup strategy | [docs/infrastructure.md](docs/infrastructure.md) |
-| What the agent can do (feature list) | [docs/capabilities/v1.0.0.md](docs/capabilities/v1.0.0.md) |
-| Tool & MCP server plans | [docs/tools-and-mcps/v1.0.0.md](docs/tools-and-mcps/v1.0.0.md) |
-| Why specific tech was chosen | [docs/decisions/](docs/decisions/) |
-| Local model selection notes | [docs/models/ollama-try-outs.md](docs/models/ollama-try-outs.md) |
-| Threat model + security decisions | [docs/security/v1.0.0.md](docs/security/v1.0.0.md) |
-| How memory works | [docs/memory/v1.0.0.md](docs/memory/v1.0.0.md) |
-
-**The Product Picture is the source of truth.** If another document conflicts with it, the
-Product Picture wins until the conflict is resolved.
-
-## Conventions
-
-- Versioned specs are `vMAJOR.MINOR.PATCH.md`. When a spec evolves, add `v1.1.0.md` rather
-  than overwriting — superseded versions stay as history.
-- One concern per file under `docs/decisions/`; the filename states the decision.
-- Paths and filenames are lowercase and hyphenated.
-- Docs cross-reference with ordinary relative Markdown links (this was an Obsidian vault;
-  the wikilinks are gone).
-
-## Stack (decided 2026-05-17)
-
-FastAPI + PydanticAI, PostgreSQL (SQLAlchemy 2.0 + pgvector + pgcrypto), Ollama for local
-inference, mem0 for personalization memory, pdfplumber + pymupdf4llm for bank statements,
-pytesseract for receipts, signalbot + signal-cli-rest-api for Signal, APScheduler for
-briefings, Docker Compose for deploy. No Cloudflare Tunnel in v1 — Signal is outbound-only
-and the web UI is `127.0.0.1`. Rationale in
-[docs/decisions/language-python-over-go.md](docs/decisions/language-python-over-go.md),
-[docs/decisions/agent-framework-pydanticai.md](docs/decisions/agent-framework-pydanticai.md),
-and [docs/security/v1.0.0.md](docs/security/v1.0.0.md).
-
-## Constraints worth knowing before proposing anything
-
-- **Hardware:** Asus TUF A15, Ryzen 5 4600H, 24 GB RAM, GTX 1650 Mobile with **4 GB VRAM**.
-  Model choice is tightly constrained; 8B models need aggressive quantization or CPU offload.
-  The eval battery exists because of this.
-- **Privacy:** inference and financial data never leave the machine.
-- **Scope:** finance only. A broader multi-skill assistant was considered and explicitly
-  scoped out. Don't re-expand it — journaling, calendar, research and health are out until
-  finance is built and stable.
-- **Product boundaries** (no investment advice, no moralizing, no autonomous actions) are
-  decisions, not implementation details to revisit. See the no-list in the Product Picture.
-- Open questions for the next planning session are at the bottom of the Product Picture.
+**The LLM never does arithmetic.** Every number is computed by a Python function. The model
+parses language and picks tools; it does not add, subtract, or project. Rationale in
+[`docs/fin-agent/plan.md`](docs/fin-agent/plan.md#4-architecture).
