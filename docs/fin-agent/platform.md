@@ -76,8 +76,7 @@ server output.
 - **PWA:** manifest + service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
-- Hinglish and English UI copy are not translated—the UI is English, and the chat mirrors the
-  user.
+- Hinglish and English UI copy are not translated—the UI is English, and the chat mirrors the user.
 
 ---
 
