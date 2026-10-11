@@ -98,8 +98,10 @@ departs from it. Where they differ from the guide, the house rules win.
 - **Line length:** wrap prose at 100 columns. Table rows, code blocks, and long URLs can run
   longer.
 
-To check a doc, use the
-[google-developer-style plugin](https://github.com/Brisket1994/google-developer-style-skill): its
-`/style-check` command or its `style_check.py` checker. The checker flags a few known false
+The `google-developer-style` plugin is enabled for this repository in `.claude/settings.json`. To
+check a whole doc, run `/google-developer-style:style-check FILE`, or add `--report-only` to see
+the findings without edits. The reviewer it runs looks only for files such as `CLAUDE.md` and
+`STYLE.md`, so tell it that the house rules are in this section. For a single style question, use
+the `/google-developer-style:google-developer-style` skill. The check flags a few known false
 positives in these docs: _holiday_ (bank holidays), _off the internet_, and _allowlist_ (used as a
 noun).
