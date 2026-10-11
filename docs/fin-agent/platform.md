@@ -1,9 +1,11 @@
 # Platform
 
-Detail behind [`plan.md`](plan.md) §3 and §4: everything around the agent that makes it a
-self-hostable product—API, web app, auth, notifications, scheduler, deployment, backups, security.
+This file holds the detail behind [`plan.md`](plan.md) §3 and §4: everything around the agent
+that makes it a self-hostable product—API, web app, auth, notifications, scheduler, deployment,
+backups, and security.
 
-`plan.md` owns decisions. This file owns their shape. If the two disagree, `plan.md` wins.
+The `plan.md` file owns decisions, and this file owns their shape. If the two disagree, the plan
+wins and this file is stale.
 
 ---
 
@@ -64,11 +66,11 @@ Next.js with `output: 'export'`—a static bundle the API serves. No Node server
 all data and auth live in the API. If server rendering is ever needed, switch to the standalone
 server output.
 
-- **Chat** (home): Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
+- **Chat (home):** Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary. Citations open the
   rows behind a number. Voice-note recording and photo upload live in the composer.
-- **Panels**, read-only: Ledger, Accounts & cards, Schedules, Goals, People, Projection, Inbox.
+- **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
 - **Editable screens:** Imports (upload, review, history) and Settings
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory),
@@ -92,7 +94,7 @@ The following table lists the choice for each piece of auth:
 | First run | Setup token printed in the API log (or `fin-agent setup` on the host) creates the one user and registers a passkey. Setup closes after that |
 | Login | Passkeys through `py_webauthn`. They need HTTPS and a stable hostname; the tailnet `*.ts.net` name gives both |
 | Recovery | `fin-agent passkeys reset` on the host. Anyone who has a shell on the host already has the data, so this opens no new door |
-| Sessions | Opaque token, hashed in DB. Browser: `HttpOnly; Secure; SameSite=Strict` cookie. Future Android app: same token as a bearer header |
+| Sessions | Opaque token, hashed in the database. Browser: `HttpOnly; Secure; SameSite=Strict` cookie. Future Android app: same token as a bearer header |
 
 Same-origin (the API serves the web app), so no CORS. Password + TOTP fallback and login lockout
 are parked with public-internet access ([`parked.md`](parked.md)).
@@ -151,7 +153,7 @@ services:
    and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent of
    the API process.
 2. Backups exist from L1—before real money goes in at L2.
-3. **A restore drill is a milestone** (L8): a fresh machine, the backup, the restic password, and
+3. **A restore drill is a milestone (L8):** a fresh machine, the backup, the restic password, and
    the ledger comes back.
 
 The restic password is the one secret that has to live somewhere other than this machine. Losing
@@ -170,9 +172,9 @@ The following table is the threat model, refreshed at L8:
 | Leaked backup | restic encryption; the password isn't stored with the backups |
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
 | Live host compromise | _Not defended._ Stated in the docs |
-| Prompt injection through statements or photos | Rule 2 (`plan.md` §4): untrusted text goes through an isolated, tool-less extraction call into a typed schema. Eval cases test it |
+| Prompt injection through statements or photos | Rule 2 in `plan.md` §4: untrusted text goes through an isolated, tool-less extraction call into a typed schema. Eval cases test it |
 | Agent-written SQL | The `agent_ro` role: read-only, no auth tables, statement timeout |
-| LLM provider sees data | The self-hoster's choice per role. Docs state plainly what each role sends |
+| LLM provider sees data | The self-hoster's choice for each role. Docs state plainly what each role sends |
 | Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI |
 
 Logs never contain amounts, merchants, or message content—only IDs and timings. Traces that
@@ -190,7 +192,7 @@ The following table lists the India-specific pieces:
 | Piece | India |
 |---|---|
 | Default categories | Indian spending categories, such as UPI, rent, groceries, and family transfer |
-| Statement parsers | Registered per bank. See [`import.md`](import.md) |
+| Statement parsers | Registered for each bank. See [`import.md`](import.md) |
 | Calendar | Holidays for "last working day" schedules (`holidays` package) |
 | Formatting | ₹, lakh and crore grouping |
 | Prompt notes | Hinglish examples for the system prompt |

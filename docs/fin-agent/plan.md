@@ -1,7 +1,7 @@
 # Fin-Agent plan
 
-The core plan: what the product is, what it does, what it's built on, and the order it gets built.
-**This file owns decisions.** Detail lives in the following docs:
+This file is the core plan: what the product is, what it does, what it's built on, and the order
+it gets built. _This file owns decisions._ Detail lives in the following docs:
 
 | Doc | Holds |
 |---|---|
@@ -18,10 +18,11 @@ and gets a link. If this file grows by accretion, split it—that's what happene
 
 If a satellite disagrees with this file, this file wins and the satellite is stale.
 
-**2026-10-07 re-plan.** The MVP framing is dropped. This plan aims for the final product from the
-start: every layer is built to its final shape, in dependency order, so nothing is written twice.
+**Replan on October 7, 2026.** The MVP framing is dropped. This plan aims for the final product
+from the start: every layer is built to its final shape, in dependency order, so nothing is
+written twice.
 
-**2026-10-08 complexity review.** Breadth that slows a solo build without making the product
+**Complexity review on October 8, 2026.** Breadth that slows a solo build without making the product
 better is parked with triggers: public-internet hosting, net worth from investment statements,
 extra briefings, anomaly detection, editable panels. Depth goes where it can be measured and
 shown: a probabilistic projection, a backtest of its accuracy, citations, and published eval
@@ -31,7 +32,7 @@ scores. Database decided: Postgres, plain SQL.
 
 ## 1. The product
 
-**One sentence:** A self-hosted, open-source finance agent that holds your whole financial
+**One sentence:** a self-hosted, open-source finance agent that holds your whole financial
 picture—accounts, cards, obligations, goals, people you owe—and answers any question about it,
 including whether you can afford something and what it costs you.
 
@@ -40,9 +41,9 @@ anything the data supports. The following table answers the basic questions:
 
 | Question | Answer |
 |---|---|
-| Who uses it? | **One person per instance.** Others self-host their own copy |
-| Where does it run? | Anywhere Docker runs—laptop, mini PC, VPS. Reached over a **private Tailscale network**, never the open internet |
-| Main face | **Web app (PWA):** chat first, with read-only live panels. CLI for admin and dev |
+| Who uses it? | One person for each instance. Others self-host their own copy |
+| Where does it run? | Anywhere Docker runs—laptop, mini PC, VPS. Reached over a private Tailscale network, never the open internet |
+| Main face | Web app (PWA): chat first, with read-only live panels. CLI for administration and development |
 | Who is it for first? | Me. India-first; everything India-specific lives in one folder |
 | License | Open source, permissive (MIT or Apache-2.0). No GPL or AGPL in the shipped image |
 
@@ -71,16 +72,16 @@ The following table sets what the agent knows, by area:
 | Area | Decision |
 |---|---|
 | Accounts | Multiple bank accounts, credit cards (with statement and due cycles), cash, wallets, loans, asset accounts |
-| Currency | One base currency per instance, configurable. Foreign spends logged at the charged amount |
+| Currency | One base currency for each instance, configurable. Foreign spends logged at the charged amount |
 | Income | Fixed salary, variable or freelance (expected versus confirmed), bonuses, and one-offs |
-| Obligations | Rent, EMIs, subscriptions, insurance, **family transfers** as a type of their own; card installment plans (no-cost EMI, "slice in 3") |
-| Goals | **Goals with deadlines.** Target, date, fenced savings, contribution plan |
-| Floor | **A fixed amount** the projection must never cross |
-| People | **Splits, lending, borrowing, reimbursements**—one counterparty ledger |
-| Investments | **Asset accounts with hand-updated balances** (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
-| Categories | Editable defaults, **merchant→category rules learned from corrections**. Rules always win; the LLM only categorizes unknown merchants |
-| Memory | **Agent-managed typed preferences.** The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
-| Conversations | **Kept and searchable.** Every ledger write links to the message that caused it |
+| Obligations | Rent, EMIs, subscriptions, insurance, family transfers as a type of their own; card installment plans (no-cost EMI, "slice in 3") |
+| Goals | Goals with deadlines. Target, date, fenced savings, contribution plan |
+| Floor | A fixed amount the projection must never cross |
+| People | Splits, lending, borrowing, reimbursements—one counterparty ledger |
+| Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
+| Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants |
+| Memory | Agent-managed typed preferences. The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
+| Conversations | Kept and searchable. Every ledger write links to the message that caused it |
 
 ### How data gets in
 
@@ -91,7 +92,7 @@ daily capture missed.
    walks through accounts, income, obligations, goals, and the floor.
 2. **Voice notes:** push-to-talk, speech-to-text, then the same chat path.
 3. **Photos:** a receipt or a UPI payment screenshot becomes one transaction, image kept as an
-   attachment. On Android the installed app is a share target, so a screenshot goes straight from
+   attachment. On Android, the installed app is a share target, so a screenshot goes straight from
    the UPI app to Fin-Agent.
 4. **Statement import:** PDF, CSV, or XLS; password-protected PDFs; 12-month backfill at setup.
    Reconciles against rows already logged. See [`import.md`](import.md).
@@ -106,13 +107,13 @@ nags for a balance; it always states how old its numbers are.
 - **Any question about the ledger:** read tools plus a read-only `run_query(sql)` escape hatch.
 - **Affordability:** yes, yes-but, or no, from a projection computed in code. Scheduled events are
   exact; day-to-day spending is simulated from my own history, so the verdict carries a
-  probability ("94% chance you stay above the floor"). "Yes-but" may propose any of: **wait until
-  date X, pay by card or EMI, delay a goal, cut a reducible category**.
+  probability ("94% chance you stay above the floor"). "Yes-but" may propose any of the
+  following: wait until date X, pay by card or EMI, delay a goal, or cut a reducible category.
 - **Citations:** every number in an answer links to the rows and schedules behind it.
 - **Proactive:** bill, EMI, and card-due reminders; risk warnings when the projection turns; a
-  **weekly briefing**; and detection of recurring charges and new or missed subscriptions.
-  Delivered to an in-app inbox plus **web push**.
-- **Writes:** chat writes and memory saves land immediately with an inline card and **undo**.
+  weekly briefing; and detection of recurring charges and new or missed subscriptions.
+  Delivered to an in-app inbox plus web push.
+- **Writes:** chat writes and memory saves land immediately with an inline card and undo.
   Imports and photos go through a review step before commit.
 - **Advice boundary: facts and tradeoffs only.** It never recommends what to do with investments
   or which product to buy.
@@ -121,13 +122,15 @@ nags for a balance; it always states how old its numbers are.
 ### Deliberately out
 
 Chat-app integrations (Signal, Telegram, WhatsApp), native Android app, real-time voice
-conversation, SMS and email auto-capture, net worth from investment statements, extra briefings
-(daily, monthly, payday), anomaly detection, editable panels, public-internet access, tax engine,
-category budgets, multi-currency, multi-user households, broker APIs, Code Mode, hidden memory
-extraction. Each has a trigger in [`parked.md`](parked.md).
+conversation, editable panels, SMS and email autocapture, balance nudges, receipt line items, net
+worth from investment statements, broker APIs, tax engine, category budgets, multicurrency,
+multiuser households, a projection for each account, extra briefings (daily, monthly, payday),
+anomaly detection, public-internet access, encryption inside the database, a locale-pack
+interface, arm64 images, Code Mode, and hidden memory extraction. Each has a trigger in
+[`parked.md`](parked.md).
 
-Test for anything wanting in: *does the agent answer questions about my money incorrectly, or
-fail to warn me, without it?* If not, it stays parked.
+Test for anything wanting in: _does the agent answer questions about my money incorrectly, or
+fail to warn me, without it?_ If not, it stays parked.
 
 ### Non-functional requirements
 
@@ -135,14 +138,14 @@ The following table states what each requirement demands:
 
 | Requirement | Target |
 |---|---|
-| Scale | One user per instance |
+| Scale | One user for each instance |
 | Latency | Under ~5 s per chat reply on a cloud model; local models are allowed to be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
-| Durability | **Do not lose the ledger.** Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
-| Security | **Private network only** (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in env |
-| Privacy | Inference provider is switchable per role; nothing else leaves the box except encrypted backups and contentless push pings |
-| Honesty | Tools distinguish *zero* from *unknown*, and every number carries its age and source |
-| Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` per model) are measured and published, not claimed |
+| Durability | Do not lose the ledger. Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
+| Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
+| Privacy | Inference provider is switchable for each role; nothing else leaves the box except encrypted backups and contentless push pings |
+| Honesty | Tools distinguish _zero_ from _unknown_, and every number carries its age and source |
+| Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` for each model) are measured and published, not claimed |
 
 Honesty is a real requirement, not a nicety: a general query surface over incomplete data
 otherwise answers confidently with no basis.
@@ -155,21 +158,21 @@ The following sections cover build-versus-buy decisions, the chosen stack, and t
 
 ### Build versus buy
 
-The playbook's rule: **buy, unless the piece is core to the product.** The following table applies
+The playbook's rule: _buy, unless the piece is core to the product_. The following table applies
 it to each piece:
 
 | Piece | Decision | Why |
 |---|---|---|
-| Agent loop, tool calling, UI streaming | **Buy:** PydanticAI | Harness library, Vercel-AI-protocol adapter, provider switching. [`harness.md`](harness.md) |
-| Statement parsing | **Buy where it exists**, generic fallback otherwise | `xfina`, `bankstatementparser`. [`import.md`](import.md) |
-| Speech-to-text | **Buy:** any OpenAI-compatible STT endpoint | `speaches` (faster-whisper) locally, or a cloud API |
-| Photo extraction | **Buy:** any OpenAI-compatible vision model | The `VISION_*` role, local or cloud |
-| Passkeys, web push | **Buy:** `py_webauthn`, `pywebpush` | Security code is not ours to invent |
-| Private access + HTTPS | **Buy:** Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
-| Off-site backup | **Buy:** restic | Encrypts, dedupes, any S3-compatible target, zero app code |
-| Mapping extracted rows → our schema | **Build** | No library knows our data model |
-| Projection and affordability engine | **Build** | This *is* the product |
-| Pattern detection | **Build** | Small, rule-based, needs our schedules and categories |
+| Agent loop, tool calling, UI streaming | Buy: PydanticAI | Harness library, Vercel-AI-protocol adapter, provider switching. [`harness.md`](harness.md) |
+| Statement parsing | Buy where it exists, generic fallback otherwise | `xfina`, `bankstatementparser`. [`import.md`](import.md) |
+| Speech-to-text | Buy: any OpenAI-compatible STT endpoint | `speaches` (faster-whisper) locally, or a cloud API |
+| Photo extraction | Buy: any OpenAI-compatible vision model | The `VISION_*` role, local or cloud |
+| Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Fin-Agent doesn't invent its own security code |
+| Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
+| Off-site backup | Buy: restic | Encrypts, dedupes, any S3-compatible target, zero app code |
+| Mapping extracted rows → the Fin-Agent schema | Build | No library knows the Fin-Agent data model |
+| Projection and affordability engine | Build | This _is_ the product |
+| Pattern detection | Build | Small, rule-based, needs Fin-Agent's schedules and categories |
 
 Anything not listed: search PyPI or npm first, write code only if nothing fits.
 
@@ -182,17 +185,17 @@ The following table records the choice for each layer:
 | Backend language | Python 3.14 | Already set up; the whole agent ecosystem is here |
 | Agent | PydanticAI + `pydantic-ai-harness` | [`harness.md`](harness.md) |
 | API | FastAPI | Built on Pydantic; OpenAPI is the contract every client shares. Also serves the static web build |
-| LLM | **Switchable, per role** | Chat, vision, and STT each take `*_BASE_URL`, `*_API_KEY`, and `*_MODEL`. Any OpenAI-compatible endpoint, local (Ollama) or cloud. Cost is not a constraint; Spend Limits still meter it |
-| Database | **PostgreSQL**, one pinned major version | Chosen 2026-10-08 over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
-| Data access | **Plain SQL through psycopg 3**, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
+| LLM | Switchable for each role | Chat, vision, and STT each take `*_BASE_URL`, `*_API_KEY`, and `*_MODEL`. Any OpenAI-compatible endpoint, local (Ollama) or cloud. Cost is not a constraint; Spend Limits still meter it |
+| Database | PostgreSQL, one pinned major version | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
+| Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
-| Web app | **React and Next.js, static export**, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
-| Distribution | **Docker Compose:** API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command |
-| License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen deps are permissive |
+| Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
+| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command |
+| License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive |
 
 ### Provider switch
 
-One code path for local and cloud, per role:
+Each role uses one code path for local and cloud:
 
 ```
 CHAT_BASE_URL=http://ollama:11434/v1      # or https://api.<provider>.com/v1
@@ -240,19 +243,19 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
 ## 5. Build order
 
 Every layer is built to its final shape—no throwaway versions. Order is by dependency.
-**Real money goes into it from L2 onwards**, so backups land in L1, before it holds anything worth
+_Real money goes into it from L2 onwards_, so backups land in L1, before it holds anything worth
 losing. Settings sections land with the layer that needs them. Milestones are binary. No dates.
 
-**L0: Foundations**
+### L0: Foundations
 
-1. Repository reset: `pyproject.toml` deps match this plan; `src/fin_agent/`, `web/`, `compose.yaml`.
-2. Postgres in compose for dev and prod; numbered SQL migrations with `schema_version`; the `app` and read-only `agent_ro` roles.
+1. Repository reset: `pyproject.toml` dependencies match this plan; `src/fin_agent/`, `web/`, `compose.yaml`.
+2. Postgres in compose for development and production; numbered SQL migrations with `schema_version`; the `app` and read-only `agent_ro` roles.
 3. Schema v1: every table in [`design.md`](design.md), money as `BIGINT` paise.
 4. `docker compose up` serves the web shell and an API health check, reached over HTTPS through `tailscale serve`.
 5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
 6. CI: ruff, pytest against a Postgres service container, web lint and build.
 
-**L1: Ledger**
+### L1: Ledger
 
 7. Accounts—bank, card (cycle, limit), cash, wallet, loan, asset—through the API and read-only panels.
 8. Transactions: record, edit, delete; transfers as linked pairs; splits, lending, and reimbursements through counterparties.
@@ -262,29 +265,29 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 12. Backup sidecar: nightly `pg_dump` shipped off-site by restic; a restore tested locally.
 13. Demo persona: a seeded synthetic ledger—the demo instance, the test fixtures, and the template database every eval trial clones.
 
-**L2: Agent** *(dogfooding starts)*
+### L2: Agent (dogfooding starts)
 
 14. Web chat streams from the PydanticAI agent; conversations stored and full-text searchable.
-15. Same build runs against Ollama and a cloud endpoint by env alone; Spend Limits; per-run trace log.
-16. Read tools including `run_query` on `agent_ro` with a statement timeout; zero versus unknown, data age, and source ids (for citations) in every return.
+15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend Limits; a trace log for each run.
+16. Read tools including `run_query` on `agent_ro` with a statement timeout; zero versus unknown, data age, and source IDs (for citations) in every return.
 17. Write tools with inline write-show-undo cards; corrections learn rules.
 18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible and editable in settings.
 19. Setup conversation lands accounts, income, obligations, goals, floor, and estimated baselines.
-20. CLI: chat plus admin (setup, migrate, export, passkey reset).
+20. CLI: chat plus administration (setup, migrate, export, passkey reset).
 
-**L3: Import**
+### L3: Import
 
-21. **Spike:** my real SBI, Union Bank, and Slice statements through the candidate parsers. Output is a decision per bank. Protocol in [`import.md`](import.md).
+21. **Spike:** my real SBI, Union Bank, and Slice statements through the candidate parsers. Output is a decision for each bank. Protocol in [`import.md`](import.md).
 22. Pipeline: upload → parse → invariant → dedupe and reconcile against logged rows → review screen → commit.
 23. Generic fallback for banks with no parser, invariant-gated.
 24. 12-month backfill done for my accounts; baselines recomputed from real rows.
 
-**L4: Evals** *(gate: engine work starts when this exists)*
+### L4: Evals (gate: engine work starts when this exists)
 
-25. 50+ agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish, prompt-injection cases, a fresh database per trial cloned from the demo template, `pass^k`, run per configured model. Shape in [`harness.md`](harness.md).
-26. Model scorecard: `pass^k` per local model, published in the README.
+25. 50+ agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish, prompt-injection cases, a fresh database for each trial cloned from the demo template, `pass^k`, run against every configured model. Shape in [`harness.md`](harness.md).
+26. Model scorecard: `pass^k` for each local model, published in the README.
 
-**L5: Engine**
+### L5: Engine
 
 27. `project()`: day-by-day curve over income, obligations, installments, card cycles, fenced goals, and simulated variable spend, against the floor (median, band, and floor probability). Seeded; unit and property tests.
 28. Affordability: verdict plus the four tradeoffs, all computed in code.
@@ -292,18 +295,18 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 30. **HackerRank "Buy or Wait":** the engine scored on the 25 labeled samples, score published (the data stays local).
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
-**L6: Watch**
+### L6: Watch
 
 32. Scheduler, notification inbox, web push from the installed PWA.
 33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
 34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never silent writes.
 
-**L7: Capture**
+### L7: Capture
 
 35. Voice notes: push-to-talk in the web app → STT → chat. Hinglish eval cases pass.
 36. Photos: receipt or UPI screenshot → isolated vision extraction → review card → one transaction with the image attached; Android share target.
 
-**L8: Ship**
+### L8: Ship
 
 37. Restore drill on a fresh machine: the backup, the restic password, and the ledger comes back.
 38. Security pass: threat model, dependency audit, security headers.
@@ -311,7 +314,7 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 40. Someone else installs it from the docs alone.
 41. Four weeks of daily use without falling back to mental math or a spreadsheet.
 
-**Estimate:** at 15-20 hours a week, roughly **7-9 months**. L3 (import) is the one genuinely
+**Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
 unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
 something has crept in—check it against [`parked.md`](parked.md).
 
@@ -322,15 +325,15 @@ something has crept in—check it against [`parked.md`](parked.md).
 Answer each when its layer arrives, not before.
 
 - **L0:** Tailscale on the host, or as a sidecar container in compose?
-- **L2:** One discriminated-union `update_setup` tool, or split per entity? Evals decide. Which
-  local chat model clears the bar? Evals decide.
-- **L3:** What does Slice export, and in what format? Does any parser read Union Bank, or is it
+- **L2:** one discriminated-union `update_setup` tool, or one tool for each entity? Evals decide.
+  Which local chat model clears the bar? Evals decide.
+- **L3:** what does Slice export, and in what format? Does any parser read Union Bank, or is it
   the generic path?
-- **L5:** Resample single days of spend, or whole weeks (weekend spend clusters)? What floor
+- **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor
   probability makes a "yes"—90% or 95%? Card share of variable spend—learned from history or set
-  per account?
-- **L6:** Briefing time, reminder lead days, and recurring-charge thresholds—tune on real data.
-- **L7:** Which STT endpoint passes the Hinglish evals—cloud or local?
+  for each account?
+- **L6:** briefing time, reminder lead days, and recurring-charge thresholds—tune on real data.
+- **L7:** which STT endpoint passes the Hinglish evals—cloud or local?
 - **L8:** MIT or Apache-2.0?
 
 ---

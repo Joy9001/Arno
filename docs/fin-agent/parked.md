@@ -1,8 +1,8 @@
 # Parked
 
-Deliberately out of the final product as planned on October 7, 2026, and revised October 8, 2026,
-each with a reason and a trigger. _Not rejected_—each has a stated condition under which it comes
-back.
+This file lists what is deliberately out of the final product as planned on October 7, 2026, and
+revised October 8, 2026, each with a reason and a trigger. _Not rejected_—each has a stated
+condition under which it comes back.
 
 If something moves out of this file, it goes into [`plan.md`](plan.md) §5 as a numbered
 milestone. Nothing gets built straight from here.
@@ -16,7 +16,7 @@ milestone. Nothing gets built straight from here.
 **Why parked:** the web app is the main face. A bridge is a client of the same chat API, so it
 adds nothing the architecture has to anticipate.
 
-**Shape when it comes:** a thin adapter per app that forwards to `/api/chat` and collapses the
+**Shape when it comes:** a thin adapter for each app that forwards to `/api/chat` and collapses the
 stream into one message—or expose the tools over MCP and let Hermes or OpenClaw be the bridge
 ([personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#5-could-hermes-or-openclaw-be-fin-agent)).
 Signal is the privacy-preserving choice; Telegram bot chats are not end-to-end encrypted.
@@ -65,7 +65,7 @@ age.
 
 ### Receipt line items
 
-**Why parked:** one transaction per photo was chosen.
+**Why parked:** one transaction for each photo was chosen.
 
 **Trigger:** questions like "how much did I spend on household items inside grocery runs" come up
 and can't be answered.
@@ -111,18 +111,18 @@ caps.
 
 ### Multicurrency
 
-**Why parked:** one base currency per instance.
+**Why parked:** one base currency for each instance.
 
 **Trigger:** a foreign-currency account or foreign income.
 
 ### Multiuser households
 
-**Why parked:** one person per instance.
+**Why parked:** one person for each instance.
 
 **Trigger:** a self-hoster wants partner-shared money in one instance. This one is a schema
 change (owner on every row), so it's the costliest to bring back.
 
-### Per-account projection
+### Projection for each account
 
 **Why parked:** the projection pools liquid accounts.
 
@@ -186,8 +186,9 @@ India code lives in one folder, so extracting an interface later is mechanical.
 
 ### Code Mode: Sandboxed code execution
 
-`pydantic-ai-harness` ships _Code Mode_: the model writes one Python script calling many tools
-inside a Monty sandbox. The read-only `run_query(sql)` half of this idea is already in the product.
+The `pydantic-ai-harness` library ships _Code Mode_: the model writes one Python script calling
+many tools inside a Monty sandbox. The read-only `run_query(sql)` half of this idea is already in
+the product.
 
 **What argues against it:**
 
