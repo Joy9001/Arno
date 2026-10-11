@@ -16,10 +16,12 @@ Start with the plan. It owns decisions; the others own detail. If they disagree,
 
 | Doc | Holds |
 |---|---|
-| [`plan.md`](fin-agent/plan.md) | **Start here.** Scope, stack, architecture, milestones, definition of done |
-| [`design.md`](fin-agent/design.md) | Data model, tool surface, projection engine |
-| [`import.md`](fin-agent/import.md) | Document extraction: library choice, the invariant, the M7 spike |
-| [`parked.md`](fin-agent/parked.md) | Deferred ideas, each with a trigger to revisit |
+| [`plan.md`](fin-agent/plan.md) | **Start here.** The final product: scope, stack, architecture, build order, definition of done |
+| [`design.md`](fin-agent/design.md) | Data model, tool surface, projection & affordability engine, pattern detection |
+| [`platform.md`](fin-agent/platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
+| [`harness.md`](fin-agent/harness.md) | Framework choice, harness capabilities and triggers, eval discipline |
+| [`import.md`](fin-agent/import.md) | Statements, photos, voice: parsers, the invariant, reconciliation |
+| [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
 
 **Rule for keeping these readable:** a decision plus a one-line rationale goes in `plan.md`.
 Anything needing a table, a schema, or three paragraphs of justification gets its own file and a
@@ -34,6 +36,7 @@ what this project should do. Applying them is a separate exercise.
 | Survey | Covers |
 |---|---|
 | [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, ~1,800 lines, annotated sources with a gap log |
+| [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw/Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. *Applied to this project on purpose, unlike the rest of this tree* |
 
 ## `archive/` — superseded
 
