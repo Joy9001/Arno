@@ -37,7 +37,7 @@ holds the following surveys:
 
 | Survey | Covers |
 |---|---|
-| [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, ~1,800 lines, annotated sources with a gap log |
+| [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, about 1,800 lines, annotated sources with a gap log |
 | [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
 
 ## Superseded work in the `archive/` directory
@@ -99,9 +99,9 @@ departs from it. Where they differ from the guide, the house rules win.
   longer.
 
 The `google-developer-style` plugin is enabled for this repository in `.claude/settings.json`. To
-check a whole doc, run `/google-developer-style:style-check FILE`, or add `--report-only` to see
-the findings without edits. The reviewer it runs looks only for files such as `CLAUDE.md` and
-`STYLE.md`, so tell it that the house rules are in this section. For a single style question, use
-the `/google-developer-style:google-developer-style` skill. The check flags a few known false
-positives in these docs: _holiday_ (bank holidays), _off the internet_, and _allowlist_ (used as a
-noun).
+check a whole doc, run `/google-developer-style:style-check FILE`, replacing `FILE` with the doc's
+path. To see the findings without edits, add `--report-only`. The reviewer it runs looks only for
+files such as `CLAUDE.md` and `STYLE.md`, so tell it that the house rules are in this section. For
+a single style question, use the `/google-developer-style:google-developer-style` skill. The check
+flags a few known false positives in these docs: _holiday_ (bank holidays), _off the internet_, and
+_allowlist_ (used as a noun).

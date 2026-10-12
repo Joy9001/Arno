@@ -11,6 +11,8 @@ wins and this file is stale.
 
 ## Repository layout
 
+The repository has the following layout:
+
 ```
 src/fin_agent/
   db/          connection, migrations/*.sql, roles
@@ -66,25 +68,28 @@ Next.js with `output: 'export'`—a static bundle the API serves. No Node server
 all data and auth live in the API. If server rendering is ever needed, switch to the standalone
 server output.
 
+The web app has the following parts:
+
 - **Chat (home):** Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary. Citations open the
   rows behind a number. Voice-note recording and photo upload live in the composer.
 - **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
-- **Editable screens:** Imports (upload, review, history) and Settings
+- **Editable screens:** Imports (upload, review, history) and Settings.
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory),
   notification times, passkeys and sessions, backup status. Each section lands with its layer.
 - **PWA:** manifest + service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
-- Hinglish and English UI copy are not translated—the UI is English, and the chat mirrors the user.
+- **Language:** the UI is English only and isn't translated. The chat mirrors the user's language
+  mix.
 
 ---
 
 ## Auth
 
-Single user. The instance is only reachable on a private Tailscale network, so auth guards
+Single user. The instance is reachable only on a private Tailscale network, so auth guards
 against other devices on the tailnet and a borrowed laptop—not the open internet.
 
 The following table lists the choice for each piece of auth:
@@ -116,7 +121,7 @@ An in-process scheduler (APScheduler) in the API process runs the following jobs
 Backups are not a scheduler job. They run in their own sidecar, so they keep running when the
 app is broken.
 
-Numbers in briefings come from the engine; the LLM only writes the prose. If the LLM endpoint is
+Numbers in briefings come from the engine; the LLM writes only the prose. If the LLM endpoint is
 down, the briefing goes out as a plain template—the numbers still arrive.
 
 **Delivery:** every item lands in the in-app inbox. Web push (`pywebpush`, VAPID keys generated
@@ -126,6 +131,8 @@ passes through the browser vendor's push service.
 ---
 
 ## Deployment
+
+The `compose.yaml` file defines the following services:
 
 ```yaml
 # compose.yaml — shape, not final
@@ -137,10 +144,13 @@ services:
   speaches:   # profile: local-stt  (OpenAI-compatible faster-whisper)
 ```
 
-- `docker compose up` with the default profile needs a cloud LLM API key; `--profile local-llm`
-  brings Ollama alongside. Each role's endpoint is set by an environment variable.
-- **Access:** Tailscale, with `tailscale serve` proxying HTTPS on the tailnet to the API. Host
-  install versus sidecar container is an open question (`plan.md` §6, L0).
+A deployment works as follows:
+
+- Running `docker compose up` with the default profile needs a cloud LLM API key, and the
+  `--profile local-llm` flag also starts Ollama. Each role's endpoint is set by an environment
+  variable.
+- Access is through Tailscale, with `tailscale serve` proxying HTTPS on the tailnet to the API.
+  Host install versus sidecar container is an open question (`plan.md` §6, L0).
 - Host disk encryption (BitLocker, LUKS, FileVault) is an install requirement, stated in the
   docs—it's what protects the database at rest.
 - Images are amd64; arm64 is parked.
@@ -149,12 +159,12 @@ services:
 
 ## Backups
 
-1. The `backup` sidecar runs `pg_dump` nightly and hands it to restic, which encrypts, dedupes,
-   and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent of
-   the API process.
-2. Backups exist from L1—before real money goes in at L2.
-3. **A restore drill is a milestone (L8):** a fresh machine, the backup, the restic password, and
-   the ledger comes back.
+- The `backup` sidecar runs `pg_dump` nightly and hands it to restic, which encrypts, dedupes,
+  and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent of
+  the API process.
+- Backups exist from L1—before real money goes in at L2.
+- A restore drill is a milestone (L8). On a fresh machine, given the backup and the restic
+  password, the ledger comes back.
 
 The restic password is the one secret that has to live somewhere other than this machine. Losing
 it makes the off-site copies unreadable—the install docs say so in bold.
@@ -178,7 +188,7 @@ The following table is the threat model, refreshed at L8:
 | Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI |
 
 Logs never contain amounts, merchants, or message content—only IDs and timings. Traces that
-include content live in `agent_runs` in the database.
+include content live in the `agent_runs` table in the database.
 
 ---
 

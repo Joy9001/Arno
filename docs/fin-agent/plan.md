@@ -43,9 +43,9 @@ anything the data supports. The following table answers the basic questions:
 |---|---|
 | Who uses it? | One person for each instance. Others self-host their own copy |
 | Where does it run? | Anywhere Docker runs—laptop, mini PC, VPS. Reached over a private Tailscale network, never the open internet |
-| Main face | Web app (PWA): chat first, with read-only live panels. CLI for administration and development |
+| What's its main face? | Web app (PWA): chat first, with read-only live panels. CLI for administration and development |
 | Who is it for first? | Me. India-first; everything India-specific lives in one folder |
-| License | Open source, permissive (MIT or Apache-2.0). No GPL or AGPL in the shipped image |
+| What license does it use? | Open source, permissive (MIT or Apache-2.0). No GPL or AGPL in the shipped image |
 
 **Done is:** it knows my complete financial situation, I can ask it anything about my money and
 get a correct answer with real tradeoffs, it warns me before things go wrong, its forecasts are
@@ -72,7 +72,7 @@ The following table sets what the agent knows, by area:
 | Area | Decision |
 |---|---|
 | Accounts | Multiple bank accounts, credit cards (with statement and due cycles), cash, wallets, loans, asset accounts |
-| Currency | One base currency for each instance, configurable. Foreign spends logged at the charged amount |
+| Currency | One base currency for each instance, configurable. Foreign purchases logged at the charged amount |
 | Income | Fixed salary, variable or freelance (expected versus confirmed), bonuses, and one-offs |
 | Obligations | Rent, EMIs, subscriptions, insurance, family transfers as a type of their own; card installment plans (no-cost EMI, "slice in 3") |
 | Goals | Goals with deadlines. Target, date, fenced savings, contribution plan |
@@ -115,7 +115,7 @@ nags for a balance; it always states how old its numbers are.
   Delivered to an in-app inbox plus web push.
 - **Writes:** chat writes and memory saves land immediately with an inline card and undo.
   Imports and photos go through a review step before commit.
-- **Advice boundary: facts and tradeoffs only.** It never recommends what to do with investments
+- **Advice boundary:** facts and tradeoffs only. It never recommends what to do with investments
   or which product to buy.
 - **Language:** mirrors the user's language mix.
 
@@ -129,8 +129,8 @@ anomaly detection, public-internet access, encryption inside the database, a loc
 interface, arm64 images, Code Mode, and hidden memory extraction. Each has a trigger in
 [`parked.md`](parked.md).
 
-Test for anything wanting in: _does the agent answer questions about my money incorrectly, or
-fail to warn me, without it?_ If not, it stays parked.
+To decide whether something comes back in, ask: _does the agent answer questions about my money
+incorrectly, or fail to warn me, without it?_ If not, it stays parked.
 
 ### Non-functional requirements
 
@@ -174,7 +174,7 @@ it to each piece:
 | Projection and affordability engine | Build | This _is_ the product |
 | Pattern detection | Build | Small, rule-based, needs Fin-Agent's schedules and categories |
 
-Anything not listed: search PyPI or npm first, write code only if nothing fits.
+Anything not listed: search PyPI or npm first, and write code only if nothing fits.
 
 ### Choices
 
@@ -211,6 +211,8 @@ choice. Develop against cloud; the eval suite decides which local models are goo
 
 ## 4. Architecture
 
+The following diagram shows the processes and how requests flow between them:
+
 ```
  Browser / PWA ──┐                          [API process] ────────────> LLM endpoints (chat, vision, STT)
  (future Android)├── HTTPS over tailnet ──>   FastAPI: static web app, auth,      local or cloud
@@ -235,82 +237,104 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
    transcripts are the user's own words and take the normal chat path.
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, the REST API,
    and any future MCP server wrap the same functions.
-4. **The database is the whole state.** Photos live in it; a `pg_dump` is a complete backup and
-   export.
+4. **The database is the whole state.** Photos live in it; a dump from `pg_dump` is a complete
+   backup and export.
 
 ---
 
 ## 5. Build order
 
 Every layer is built to its final shape—no throwaway versions. Order is by dependency.
-_Real money goes into it from L2 onwards_, so backups land in L1, before it holds anything worth
+_Real money goes into it from L2 onward_, so backups land in L1, before it holds anything worth
 losing. Settings sections land with the layer that needs them. Milestones are binary. No dates.
 
 ### L0: Foundations
 
-1. Repository reset: `pyproject.toml` dependencies match this plan; `src/fin_agent/`, `web/`, `compose.yaml`.
-2. Postgres in compose for development and production; numbered SQL migrations with `schema_version`; the `app` and read-only `agent_ro` roles.
+1. Repository reset: `pyproject.toml` dependencies match this plan; `src/fin_agent/`, `web/`,
+   `compose.yaml`.
+2. Postgres in compose for development and production; numbered SQL migrations with
+   `schema_version`; the `app` and read-only `agent_ro` roles.
 3. Schema v1: every table in [`design.md`](design.md), money as `BIGINT` paise.
-4. `docker compose up` serves the web shell and an API health check, reached over HTTPS through `tailscale serve`.
+4. The `docker compose up` command serves the web shell and an API health check, reached over
+   HTTPS through `tailscale serve`.
 5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
 6. CI: ruff, pytest against a Postgres service container, web lint and build.
 
 ### L1: Ledger
 
-7. Accounts—bank, card (cycle, limit), cash, wallet, loan, asset—through the API and read-only panels.
-8. Transactions: record, edit, delete; transfers as linked pairs; splits, lending, and reimbursements through counterparties.
-9. Schedules: income (fixed, variable, one-off), obligations, family transfers, installment plans—recurrence rules, holiday-aware "last working day."
+7. Accounts—bank, card (cycle, limit), cash, wallet, loan, asset—through the API and read-only
+   panels.
+8. Transactions: record, edit, delete; transfers as linked pairs; splits, lending, and
+   reimbursements through counterparties.
+9. Schedules: income (fixed, variable, one-off), obligations, family transfers, installment
+   plans—recurrence rules, holiday-aware "last working day."
 10. Goals with fenced savings; categories with a reducible flag; learned categorization rules.
 11. Audit log with undo for every write; full export (CSV, JSON, and `pg_dump`).
 12. Backup sidecar: nightly `pg_dump` shipped off-site by restic; a restore tested locally.
-13. Demo persona: a seeded synthetic ledger—the demo instance, the test fixtures, and the template database every eval trial clones.
+13. Demo persona: a seeded synthetic ledger—the demo instance, the test fixtures, and the
+    template database every eval trial clones.
 
 ### L2: Agent (dogfooding starts)
 
 14. Web chat streams from the PydanticAI agent; conversations stored and full-text searchable.
-15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend Limits; a trace log for each run.
-16. Read tools including `run_query` on `agent_ro` with a statement timeout; zero versus unknown, data age, and source IDs (for citations) in every return.
+15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
+    Limits; a trace log for each run.
+16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout; zero
+    versus unknown, data age, and source IDs (for citations) in every return.
 17. Write tools with inline write-show-undo cards; corrections learn rules.
-18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible and editable in settings.
+18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible
+    and editable in settings.
 19. Setup conversation lands accounts, income, obligations, goals, floor, and estimated baselines.
 20. CLI: chat plus administration (setup, migrate, export, passkey reset).
 
 ### L3: Import
 
-21. **Spike:** my real SBI, Union Bank, and Slice statements through the candidate parsers. Output is a decision for each bank. Protocol in [`import.md`](import.md).
-22. Pipeline: upload → parse → invariant → dedupe and reconcile against logged rows → review screen → commit.
+21. **Spike:** my real SBI, Union Bank, and Slice statements through the candidate parsers.
+    Output is a decision for each bank. Protocol in [`import.md`](import.md).
+22. Pipeline: upload → parse → invariant → dedupe and reconcile against logged rows → review
+    screen → commit.
 23. Generic fallback for banks with no parser, invariant-gated.
-24. 12-month backfill done for my accounts; baselines recomputed from real rows.
+24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)
 
-25. 50+ agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish, prompt-injection cases, a fresh database for each trial cloned from the demo template, `pass^k`, run against every configured model. Shape in [`harness.md`](harness.md).
+25. At least 50 agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish,
+    prompt-injection cases, a fresh database for each trial cloned from the demo template,
+    `pass^k`, run against every configured model. Shape in [`harness.md`](harness.md).
 26. Model scorecard: `pass^k` for each local model, published in the README.
 
 ### L5: Engine
 
-27. `project()`: day-by-day curve over income, obligations, installments, card cycles, fenced goals, and simulated variable spend, against the floor (median, band, and floor probability). Seeded; unit and property tests.
+27. `project()`: day-by-day curve over income, obligations, installments, card cycles, fenced
+    goals, and simulated variable spend, against the floor (median, band, and floor
+    probability). Seeded; unit and property tests.
 28. Affordability: verdict plus the four tradeoffs, all computed in code.
-29. **Backtest:** `project()` run as of past dates over the backfill; median 30-day error and band calibration published.
-30. **HackerRank "Buy or Wait":** the engine scored on the 25 labeled samples, score published (the data stays local).
+29. **Backtest:** the `project()` function run as of past dates over the backfill; median 30-day
+    error and band calibration published.
+30. **HackerRank "Buy or Wait":** the engine scored on the 25 labeled samples, score published
+    (the data stays local).
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
 ### L6: Watch
 
 32. Scheduler, notification inbox, web push from the installed PWA.
 33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
-34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never silent writes.
+34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never
+    silent writes.
 
 ### L7: Capture
 
 35. Voice notes: push-to-talk in the web app → STT → chat. Hinglish eval cases pass.
-36. Photos: receipt or UPI screenshot → isolated vision extraction → review card → one transaction with the image attached; Android share target.
+36. Photos: receipt or UPI screenshot → isolated vision extraction → review card → one
+    transaction with the image attached; Android share target.
 
 ### L8: Ship
 
-37. Restore drill on a fresh machine: the backup, the restic password, and the ledger comes back.
+37. Restore drill on a fresh machine: given the backup and the restic password, the ledger comes
+    back.
 38. Security pass: threat model, dependency audit, security headers.
-39. Docs: install (Docker + Tailscale), configure LLMs, add a bank parser. License file, versioned image.
+39. Docs: install (Docker + Tailscale), configure LLMs, add a bank parser. License file,
+    versioned image.
 40. Someone else installs it from the docs alone.
 41. Four weeks of daily use without falling back to mental math or a spreadsheet.
 

@@ -40,13 +40,13 @@ Provider switching is core: `OllamaProvider(base_url=...)` and
 `OpenAIProvider(base_url=..., api_key=...)` are both fully supported, so the one-code-path
 requirement for local and cloud in `plan.md` §3 holds exactly as written.
 
-**Second reason, since the web app became the main face:** PydanticAI ships `VercelAIAdapter`,
-which turns an agent run into the Vercel AI UI stream that `useChat` consumes—text, tool calls,
+**Second reason, since the web app became the main face:** PydanticAI ships `VercelAIAdapter`, which
+turns an agent run into the Vercel AI UI stream that the `useChat` hook consumes—text, tool calls,
 custom data parts for cards, and tool-approval requests. The chat endpoint is one call
-(`VercelAIAdapter.dispatch_request(request, agent=agent)`), not a streaming protocol that
-Fin-Agent has to write.
+(`VercelAIAdapter.dispatch_request(request, agent=agent)`), not a streaming protocol that Fin-Agent
+has to write.
 
-**Why not host the tools in Hermes or OpenClaw instead.** Considered in the
+**Why the tools aren't hosted in Hermes or OpenClaw.** Considered in the
 [personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#5-could-hermes-or-openclaw-be-fin-agent):
 they'd replace this harness, need 64k tokens of context, and ship shell and browser toolsets
 beside the ledger. Rule 3 in `plan.md` §4 keeps the tools framework-free, so exposing them to such
@@ -54,7 +54,7 @@ a host later (through MCP) stays a thin adapter—see [`parked.md`](parked.md).
 
 ## What Fin-Agent adopts, and when
 
-**The menu is a trap.** The survey's headline finding is Microsoft cutting 100+ tools to 5.
+**The menu is a trap.** The survey's headline finding is Microsoft cutting more than 100 tools to 5.
 Adopting 10 capabilities because they exist is the same mistake in a different costume. Each row
 that follows stays off until its trigger fires.
 
@@ -87,9 +87,9 @@ The following capabilities wait for their triggers:
 ## The tool surface is deliberately wide
 
 The survey's strongest single result: fewer, wider tools beat many narrow ones. Microsoft's
-100-plus to 5 consolidation moved "Intent Met" from 45% to 75%, and Anthropic explicitly warns
-against bloated tool sets and offers a sharp test—_if an engineer cannot say which tool applies,
-the agent cannot either._
+consolidation from more than 100 tools to 5 moved "Intent Met" from 45% to 75%, and Anthropic
+explicitly warns against bloated tool sets and offers a sharp test—_if an engineer cannot say which
+tool applies, the agent cannot either._
 
 Two consequences are already in the design:
 
@@ -101,17 +101,18 @@ Two consequences are already in the design:
   timeout) means the database does the arithmetic deterministically, so rule 1 in `plan.md` §4
   holds. The agent shows the SQL it ran, so a wrong filter is visible rather than silent.
 
-**The counter-argument, kept on the record:** the
-[archived prior-art research](../archive/prior-art/research-2026-05-24.md) says _"do not give the
-LLM raw SQL access."_ That warning was about SQL as the _primary_ interface. As a read-only
+**The counterargument, kept on the record:** the
+[archived prior-art research](../archive/prior-art/research-2026-05-24.md) says "do not give the
+LLM raw SQL access." That warning was about SQL as the _primary_ interface. As a read-only
 escape hatch beside 10 tested tools, it is a different risk—a wrong query, not wrong
-arithmetic. Different, not zero. If `run_query` starts getting chosen over the typed tools for
-questions the typed tools already handle, that is the signal the tool descriptions are wrong.
+arithmetic. Different, not zero. If the `run_query` tool starts getting chosen over the typed
+tools for questions the typed tools already handle, that is the signal the tool descriptions are
+wrong.
 
 ## Instructions as a map, not a manual
 
-OpenAI tried one large `AGENTS.md` and documented four failure modes—it crowds out context,
-dilutes priority, rots, and resists verification. They settled on ~100 lines pointing into a
+OpenAI tried one large `AGENTS.md` file and documented four failure modes—it crowds out context,
+dilutes priority, rots, and resists verification. They settled on about 100 lines pointing into a
 structured store; HumanLayer independently landed under 60.
 
 This applies to the Fin-Agent system prompt as follows:
@@ -135,14 +136,14 @@ The most repeated claim in the survey: adding evaluation infrastructure early is
 highest-leverage change after a working loop. Without it, you catch problems only in
 production—and here, "production" means wrong answers about your own money.
 
-**Note the naming collision.** `evals/` in this repository is a _model-selection_ harness: can a
-given local model hold a tool-calling conversation. That is not an _agent eval_, which asks
-whether _this agent_ picks the right tool and refuses when data is missing. Both are useful; they
-measure different things.
+**Note the naming collision.** The `evals/` directory in this repository is a _model-selection_
+harness: it tests whether a given local model can hold a tool-calling conversation. That is not an
+_agent eval_, which asks whether _this agent_ picks the right tool and refuses when data is missing.
+Both are useful; they measure different things.
 
 The suite takes its shape from the survey:
 
-- **Use 50+ tasks.** Draw them from real usage and real failures rather than imagined ones,
+- **Use at least 50 tasks.** Draw them from real usage and real failures rather than imagined ones,
   including Hinglish, voice-transcript, and prompt-injection inputs (a statement row or
   screenshot whose text tries to instruct the agent). Run them against _every_ configured model,
   so the suite is also how a self-hoster learns whether their local model is good enough.
@@ -156,9 +157,9 @@ The suite takes its shape from the survey:
   self-hoster reads to pick a local model.
 - **Prefer `pass^k` over `pass@k`.** This answers questions about money; it needs to be right
   every time, not once in five.
-- **Read 0% pass@100 as a diagnostic.** It almost always means a broken task spec, not an
+- **Read a 0% `pass@100` score as a diagnostic.** It almost always means a broken task spec, not an
   incapable model.
 
 The cautionary tale worth remembering: Opus 4.5 scored 42% on CORE-Bench until researchers found
-the _grader_ rejecting `96.12` when it expected `96.124991...`. After fixing the eval, 95%. A bad
+the _grader_ rejecting `96.12` when it expected `96.124991...`. After the fix, it scored 95%. A bad
 eval measures eval quality, confidently.

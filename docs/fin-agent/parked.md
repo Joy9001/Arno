@@ -1,7 +1,7 @@
 # Parked
 
 This file lists what is deliberately out of the final product as planned on October 7, 2026, and
-revised October 8, 2026, each with a reason and a trigger. _Not rejected_—each has a stated
+revised on October 8, 2026, each with a reason and a trigger. _Not rejected_—each has a stated
 condition under which it comes back.
 
 If something moves out of this file, it goes into [`plan.md`](plan.md) §5 as a numbered
@@ -107,7 +107,7 @@ implement the Income-tax Act, 2025 (in force from April 1, 2026; new-regime slab
 **Why parked:** chosen against—the projection and baselines answer "am I overspending" without
 caps.
 
-**Trigger:** I keep asking "how much is left for dining this month".
+**Trigger:** I keep asking "how much is left for dining this month."
 
 ### Multicurrency
 
@@ -139,7 +139,7 @@ More briefings are more noise.
 
 **Trigger:** I keep asking the same question between weekly briefings.
 
-### Anomaly detection: Large transactions, category spikes
+### Anomaly detection: Large transactions and category spikes
 
 **Why parked:** needs thresholds tuned on months of real data, and recurring-charge detection
 covers the common case.
@@ -190,17 +190,18 @@ The `pydantic-ai-harness` library ships _Code Mode_: the model writes one Python
 many tools inside a Monty sandbox. The read-only `run_query(sql)` half of this idea is already in
 the product.
 
-**What argues against it:**
+The following points argue against it:
 
-- **Generated code has no tested semantics.** The model chooses the filter and the join;
-  `run_query` has the same property in weaker form, which is why it ships first and gets watched.
+- **Generated code has no tested semantics.** The model chooses the filter and the join; the
+  `run_query` tool has the same property in weaker form, which is why it ships first and gets
+  watched.
 - **Small models can't write correct code against a half-remembered schema.** It would push the
   product toward cloud-only models.
-- **The product may not need it.** `run_query` covers aggregation, which is most of what a ledger
-  is asked.
+- **The product may not need it.** The `run_query` tool covers aggregation, which is most of what a
+  ledger is asked.
 
-**Trigger:** the eval suite and real use show questions `run_query` can't answer that are genuinely
-computational—regressions, multistep modeling. If they're aggregations, fix the tool
+**Trigger:** the eval suite and real use show questions the `run_query` tool can't answer that are
+genuinely computational—regressions, multistep modeling. If they're aggregations, fix the tool
 descriptions instead.
 
 ### Hidden memory extraction and semantic search (mem0-style)
@@ -219,6 +220,6 @@ repeating a fact that never becomes a preference.
 
 ## The May 2026 spec
 
-The [archive](../archive/) holds the original feature specs. Most of that list is now in the
-product; the rest is in the preceding sections. Treat the archive as evidence of past intent, not
+The [archive](../archive/) holds the original feature specs. Most of those features are now in the
+product; the rest are in the preceding sections. Treat the archive as evidence of past intent, not
 as designs—it was written against a different stack and contradicts itself.

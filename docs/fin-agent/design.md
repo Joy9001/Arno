@@ -15,8 +15,10 @@ at L0 (milestone 3).
 
 ### Conventions
 
-- Money is `BIGINT` minor units (paise). `Decimal` at the Python boundary, never `float`.
-- Signed amounts: negative = money leaves that account. A card purchase is negative on the card.
+- Money is stored as `BIGINT` minor units (paise) and handled as a `Decimal` value at the Python
+  boundary, never as a `float` value.
+- Signed amounts: a negative amount means money leaves that account. A card purchase is negative
+  on the card.
 - Dates are `date`; moments are `timestamptz`.
 - Kinds are `text` columns that have a `CHECK` constraint, not Postgres enums—enums are awkward
   to change.
@@ -83,7 +85,7 @@ table lists its fields:
 | `kind` | `income_fixed`, `income_variable`, `income_oneoff`, `obligation`, `instalment`, `goal_contribution` |
 | `subtype` | For obligations: `rent`, `emi`, `subscription`, `insurance`, `family_transfer`, `other` |
 | `name`, `amount`, `account_id`, `category_id` | |
-| `rule` | iCalendar RRULE, handled by `python-dateutil`—"monthly on the 5th", "last weekday", "yearly 14 Mar", `COUNT=3` for "slice in 3". Holiday adjustment from the India calendar |
+| `rule` | iCalendar RRULE, handled by `python-dateutil`—"monthly on the 5th", "last weekday", "yearly on Mar 14", `COUNT=3` for "slice in 3". Holiday adjustment from the India calendar |
 | `confirmed` | For variable income: confirmed amounts count toward verdicts, expected ones only show as an optimistic case |
 | `starts`, `ends`, `active` | |
 
@@ -98,7 +100,7 @@ table lists its fields:
 
 | Field | Notes |
 |---|---|
-| `counterparty_id`, `amount` | Positive = they owe me |
+| `counterparty_id`, `amount` | A positive amount means they owe me |
 | `kind` | `split`, `lend`, `borrow`, `reimbursement` |
 | `source_txn_id`, `settled_txn_id` | A ₹1,200 dinner split 3 ways is one −1,200 transaction plus two +400 `split` claims. My spend is the remainder |
 | `expected_date` | Only claims that have a date enter the projection |
@@ -116,7 +118,7 @@ Three tables handle categorization:
 Baselines are recomputed nightly after a category has enough real rows. The `source` flag exists
 so the agent can say which it's using—an estimate presented as fact is the failure mode.
 
-### Memory, conversations, provenance
+### Memory, conversations, and provenance
 
 The following tables hold memory, conversations, and provenance:
 
@@ -155,9 +157,9 @@ The agent has six write tools:
 
 | Tool | Does |
 |---|---|
-| `record_transaction(...)` | Expense, income, transfer, split or loan in one call. Returns an inline card with undo |
+| `record_transaction(...)` | Expense, income, transfer, split, or loan in one call. Returns an inline card with undo |
 | `edit_transaction(id, changes \| delete)` | Conversational repair. A category change creates or updates a rule |
-| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, counterparties. Discriminated union—or one tool for each entity if evals say small models choke (`plan.md` §6, L2) |
+| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, counterparties. Discriminated union—or one tool for each entity if evals show that small models struggle (`plan.md` §6, L2) |
 | `preference(action, text \| id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
 | `import_document(attachment_id, password=None)` | Parses into an import in `review` state. Committing is a separate, explicit step |
 | `undo(audit_id=None)` | Reverts the last (or a given) write |
@@ -176,8 +178,8 @@ metadata becomes a custom data part in the Vercel AI stream ([`platform.md`](pla
 **There is no `can_i_afford` tool.** It's the `project` tool with a hypothetical. Likewise,
 there is no `compare_periods` tool: it's two `summarize_spending` calls the model composes.
 
-**Every read tool distinguishes zero from unknown.** Outside an account's data coverage the
-answer is "no data", not ₹0. Every balance carries its `as_of`.
+**Every read tool distinguishes zero from unknown.** Outside an account's data coverage, the
+answer is "no data," not ₹0. Every balance carries its `as_of` date.
 
 ---
 
@@ -188,17 +190,17 @@ involvement—this is where "the LLM never does arithmetic" is actually enforced
 
 ### Inputs
 
-- Liquid balance: sum of `liquid` accounts at their `balance_as_of`, plus logged transactions
-  since.
+- Liquid balance: sum of `liquid` accounts at their `balance_as_of` dates, plus logged
+  transactions since.
 - Horizon: max(90 days, furthest goal deadline, the asked horizon).
-- Scheduled events expanded from `schedules` over the horizon. Unconfirmed variable income is
-  shown as an optimistic case only, never counted toward a verdict.
+- Scheduled events expanded from the `schedules` table over the horizon. Unconfirmed variable
+  income is shown as an optimistic case only, never counted toward a verdict.
 - Card cycles: card outstanding plus projected card spend, paid in full from a bank account on each
   card's due date.
-- **Variable spend, simulated.** Each run fills the horizon by resampling real past days of spend
-  for each category, excluding categories already covered by obligations. A thousand runs give the
-  spread. Until a category has enough real days, its setup estimate is used as a flat rate and
-  `data_quality` says so. Days versus whole weeks is an open question (`plan.md` §6, L5).
+- Variable spend, simulated: each run fills the horizon by resampling real past days of spend for
+  each category, excluding categories already covered by obligations. A thousand runs give the
+  spread. Until a category has enough real days, its setup estimate is used as a flat rate and the
+  `data_quality` field says so. Days versus whole weeks is an open question (`plan.md` §6, L5).
 - Goal contributions move money into fenced savings; fenced savings are not spendable.
 - Claims count only when they have an `expected_date`.
 
@@ -236,7 +238,7 @@ The engine computes each tradeoff by rerunning the projection:
 |---|---|
 | Wait until date X | Earliest purchase date within the horizon that meets the threshold |
 | Pay by card or EMI | Card float to the next due date, or `n` installments, within the card's available limit |
-| Delay a goal | Goal completion dates before versus after—"Goa slips 3 weeks" |
+| Delay a goal | Goal completion dates before versus after—"Goa slips three weeks" |
 | Cut a category | Shortfall spread over `reducible` categories' baselines until next payday; feasible only below a sensible cut ratio |
 
 The agent phrases the verdict and picks which tradeoffs to mention. The numbers come from the
@@ -250,7 +252,7 @@ results are published in the README:
 | Measure | How |
 |---|---|
 | Backtest | For each month in the 12-month backfill, run `project()` as of its first day using only what was known then, and compare with the real statement balance 30 days later. Report the median error, and how often the real balance landed inside the P10-P90 band—close to 80% means the band is honest |
-| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Used locally, never committed—the repository has no license |
+| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Used locally, never committed—its source repository has no license |
 
 ### Why it's built, not bought
 

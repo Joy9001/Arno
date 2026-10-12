@@ -16,7 +16,7 @@ The following table shows who does each half of an import:
 | Half | Who does it |
 |---|---|
 | Get structured rows out of a document | A library for each bank where one exists; a generic fallback otherwise |
-| Map rows onto the Fin-Agent schema, check them, reconcile them | Fin-Agent's own code. No library knows its data model |
+| Map rows onto the Fin-Agent schema, check them, and reconcile them | Fin-Agent's own code. No library knows its data model |
 
 **The interface is generic.** "We only accept CSV" is never a thing the user is told. An
 unsupported file gets a straight answer about what isn't wired up—and the generic path tries.
@@ -25,12 +25,16 @@ unsupported file gets a straight answer about what isn't wired up—and the gene
 
 ## The pipeline
 
+Every import goes through the following pipeline:
+
 ```
 upload ─> detect ─> parse ─> invariant ─> dedupe ─> reconcile ─> review screen ─> commit
            │         │                                                   │
    password needed?  per-bank parser, else generic fallback        nothing is written
    → ask, retry                                                     before this step
 ```
+
+Each stage works as follows:
 
 1. **Detect.** Find which parser claims the file. The `pypdfium2` library opens
    password-protected PDFs; on a password error, the agent asks, the user answers, and the agent
@@ -49,8 +53,8 @@ upload ─> detect ─> parse ─> invariant ─> dedupe ─> reconcile ─> rev
 The generic fallback covers any bank without a parser—Union Bank, very likely, and every bank a
 self-hoster brings. It runs in three steps:
 
-1. Use a permissive library to extract tables or text (`pypdfium2` text, or `docling` if a spike
-   shows it's needed and its size is acceptable in the image).
+1. A permissive library extracts tables or text (`pypdfium2` text, or `docling` if a spike shows
+   it's needed and its size is acceptable in the image).
 2. An _isolated, tool-less_ model call maps columns to a typed schema
    (`date, description, debit, credit, balance`)—rule 2 in `plan.md` §4.
 3. The invariant decides whether the result is trusted. It almost always catches a bad mapping
@@ -83,11 +87,15 @@ Slice credit card (export format unknown).
 
 Timeboxed to one or two evenings. _The output is a decision for each bank, not code._
 
-1. Download 12 months of real statements: SBI, Union Bank, Slice.
-2. SBI through `xfina`. Amounts, dates, balances right?
-3. Union Bank and Slice through `xfina` and `bankstatementparser`; if neither, the generic fallback
-   by hand (text extraction + one model call) to see if the invariant passes.
-4. Record for each bank: parser, format to download, password pattern, quirks.
+To run the spike, follow these steps:
+
+1. Download 12 months of real statements for SBI, Union Bank, and Slice.
+2. Run the SBI statements through `xfina`, and check that amounts, dates, and balances are right.
+3. Run the Union Bank and Slice statements through `xfina` and `bankstatementparser`. If neither
+   parser reads them, run the generic fallback by hand (text extraction plus one model call) to
+   see whether the invariant passes.
+4. For each bank, record the parser, the format to download, the password pattern, and any
+   quirks.
 
 Real statements never enter the repository. Parser tests use synthetic fixtures; a git-ignored
 local folder holds real files for manual runs.
@@ -142,8 +150,8 @@ in chat → one transaction, image kept as an attachment. On Android, the instal
 target, so a screenshot goes straight from the UPI app to Fin-Agent. The UPI reference number is
 what later matches the row to its statement line. Line items are not extracted.
 
-**Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API) →
-text → the normal chat path. Hinglish accuracy is an eval category (L7).
+**Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
+→ text → the normal chat path. Hinglish accuracy is an eval category (L7).
 
 ---
 
