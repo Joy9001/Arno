@@ -1,113 +1,161 @@
-# Document import
+# Import
 
-Detail behind [`plan.md`](plan.md) §2. How arbitrary documents become ledger rows.
+This file holds the detail behind [`plan.md`](plan.md) §2: how statements, photos, and voice
+notes become ledger rows—and how imported rows reconcile with what was already logged by chat,
+voice, or photo.
 
-`plan.md` owns decisions. This file owns their shape. If the two disagree, `plan.md` wins.
+The `plan.md` file owns decisions, and this file owns their shape. If the two disagree, the plan
+wins and this file is stale.
 
 ---
 
-## The split — buy the extraction, build the mapping
+## The split: Buy the extraction, build the mapping
 
-Two halves, and only one is ours:
+The following table shows who does each half of an import:
 
 | Half | Who does it |
 |---|---|
-| Get structured rows out of an arbitrary document | **A library.** Never write this |
-| Map those rows onto *our* schema — our categories, our dedupe key | **Us.** ~50 lines. No library knows our data model |
+| Get structured rows out of a document | A library for each bank where one exists; a generic fallback otherwise |
+| Map rows onto the Fin-Agent schema, check them, and reconcile them | Fin-Agent's own code. No library knows its data model |
 
-`import_document(path, password=None)` is a thin adapter: hand the file to the extractor,
-map what comes back, run the invariant, commit or explain.
-
-**The interface is generic from day one.** "We only accept CSV" is never a thing the user is
-told. An unsupported type gets a straight answer about what isn't wired up yet.
+**The interface is generic.** "We only accept CSV" is never a thing the user is told. An
+unsupported file gets a straight answer about what isn't wired up—and the generic path tries.
 
 ---
 
-## Candidate extractors
+## The pipeline
 
-Verified against the PyPI JSON API on 2026-09-07. All Python 3.14-compatible.
+Every import goes through the following pipeline:
 
-| Package | Version | Licence | Fit |
+```
+upload ─> detect ─> parse ─> invariant ─> dedupe ─> reconcile ─> review screen ─> commit
+           │         │                                                   │
+   password needed?  per-bank parser, else generic fallback        nothing is written
+   → ask, retry                                                     before this step
+```
+
+Each stage works as follows:
+
+1. **Detect.** Find which parser claims the file. The `pypdfium2` library opens
+   password-protected PDFs; on a password error, the agent asks, the user answers, and the agent
+   retries. Passwords are not stored—statements arrive monthly, so asking is cheap.
+2. **Parse.** Use the registered parser for that bank, or the generic fallback.
+3. **Invariant.** Check the balances (described later). A failure writes nothing and says why.
+4. **Dedupe.** Match against earlier imports by `content_hash`.
+5. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
+6. **Review screen.** The web app shows new rows, merged rows, ambiguous matches, and categories.
+   The user commits, edits, or rejects.
+7. **Commit.** Write the rows, update the account's `balance` and `balance_as_of` fields from the
+   closing balance, and recompute baselines.
+
+### The generic fallback
+
+The generic fallback covers any bank without a parser—Union Bank, very likely, and every bank a
+self-hoster brings. It runs in three steps:
+
+1. A permissive library extracts tables or text (`pypdfium2` text, or `docling` if a spike shows
+   it's needed and its size is acceptable in the image).
+2. An _isolated, tool-less_ model call maps columns to a typed schema
+   (`date, description, debit, credit, balance`)—rule 2 in `plan.md` §4.
+3. The invariant decides whether the result is trusted. It almost always catches a bad mapping
+   because running balances don't add up.
+
+A generic-path success can be saved as a column mapping for that bank, so the next import of the
+same layout skips the LLM.
+
+---
+
+## Parser candidates
+
+The following table lists the parser candidates, checked against PyPI on October 7, 2026:
+
+| Package | Version | License | What it covers |
 |---|---|---|---|
-| `bankstatementparser` | 0.0.19 | Apache-2.0 OR MIT | Purpose-built. CSV, OFX/QFX, MT940, CAMT, digital + scanned PDF, LLM/vision fallback. **Ships the Golden Rule check and page provenance already** |
-| `docling` | 2.126.0 | MIT (IBM) | General document→structure. Mature, strong on tables. Banking-agnostic — we'd map more |
-| `monopoly-core` | 0.23.1 | **AGPL-3.0** | Bank-statement PDF→CSV. Viral licence: fine private, a problem if this is ever published or hosted |
-| `markitdown` | 0.1.7 | MIT (Microsoft) | Fast and shallow. Clean digital PDFs only |
+| `xfina` | 0.8.1 (Oct 2, 2026) | Apache-2.0 | Written in Rust (PyO3). Indian: SBI (PDF, password), HDFC, ICICI, Axis, Bank of Baroda (XLS); HDFC, ICICI, Axis cards; CAMS. ReBIT-shaped output. Three GitHub stars; classifiers stop at 3.13—check for a 3.14 wheel |
+| `bankstatementparser` | 0.0.20 (Sep 25, 2026) | Apache-2.0 OR MIT | CSV, OFX and QFX, MT940, CAMT, PDF with an LLM and vision fallback, Golden Rule check built in. No Indian banks named. Pulls LiteLLM |
+| `casparser` | 1.4.1 | MIT | CAMS, KFintech, NSDL, and CDSL _Consolidated Account Statement_ (_CAS_) PDFs. Built on `pypdfium2`, no GPL dependencies. Parked with statement-driven net worth ([`parked.md`](parked.md)) |
+| `docling` | 2.x | MIT | General document → tables. Strong but heavy (ML models)—fallback candidate only |
+| `monopoly-core` | Not recorded | AGPL-3.0 | Excluded by the license decision in `plan.md` §1 |
 
-### Preferred: `bankstatementparser`
-
-It is, almost exactly, the import pipeline this project previously planned to build by hand
-— including the invariant below. The
-[archived prior-art research](../archive/prior-art/research-2026-05-24.md) already
-identified it as best-in-class and said to adopt its *shape*. Adopting the package is
-strictly less work.
-
-### Two risks, neither a reason to hand-roll
-
-**Version 0.0.19.** Early. Expect API churn, possibly breaking. Mitigated by the mapping
-layer being thin — swapping extractors later costs ~50 lines, not a rewrite. This is the
-main argument for keeping the adapter boundary clean.
-
-**Indian banks unverified.** Its named formats — CAMT, MT940, OFX, QFX — are European and US
-banking standards. Whether it reads an HDFC, SBI or ICICI PDF is genuinely unknown, and the
-answer comes from one real file, not from more reading. `docling` is the fallback: extract
-tables, map them ourselves.
-
-### Indian-bank wrinkle
-
-Statement PDFs are usually password-protected — typically PAN plus date of birth. Whichever
-extractor wins must accept a password, and the agent asks for it rather than failing with a
-parse error.
+My banks: SBI (the `xfina` parser claims it), Union Bank of India (no parser found; PDFs are
+password protected—typically the first four letters of the name plus DDMM of birth), and the
+Slice credit card (export format unknown).
 
 ---
 
-## The spike — `plan.md` M7
+## The spike: Milestone 21 in the plan
 
-Timeboxed to one evening. **The output is a decision, not code.**
+Timeboxed to one or two evenings. _The output is a decision for each bank, not code._
 
-1. Download one real CSV export and one real password-protected PDF statement from my own
-   bank
-2. Feed both to `bankstatementparser`. Does it read them? Are the amounts and dates right?
-3. If not, same two files through `docling`
-4. If neither works, search for an India-specific parser before writing anything
+To run the spike, follow these steps:
 
-Record the answer here, then build M8 against the winner. Do not write mapping code before
-this is settled — the mapping shape depends on what the extractor returns.
+1. Download 12 months of real statements for SBI, Union Bank, and Slice.
+2. Run the SBI statements through `xfina`, and check that amounts, dates, and balances are right.
+3. Run the Union Bank and Slice statements through `xfina` and `bankstatementparser`. If neither
+   parser reads them, run the generic fallback by hand (text extraction plus one model call) to
+   see whether the invariant passes.
+4. For each bank, record the parser, the format to download, the password pattern, and any
+   quirks.
 
-**Result:** _(unfilled — run the spike)_
+Real statements never enter the repository. Parser tests use synthetic fixtures; a git-ignored
+local folder holds real files for manual runs.
+
+**Result:** _(unfilled—run the spike)_
 
 ---
 
-## The invariant — non-negotiable
+## The invariant: Non-negotiable
 
 Extraction can be wrong, especially anything LLM- or OCR-assisted. Every import is checked
-structurally **before a single row is committed**:
+_before a single row is committed_:
 
 ```
 opening_balance + credits − debits == closing_balance
 ```
 
-Result is `VERIFIED` / `DISCREPANCY` / `FAILED`. A failed check writes nothing and the agent
-says why.
+Plus, where the statement has a running balance, every row's balance must follow from the
+previous one. The result is `VERIFIED`, `DISCREPANCY`, or `FAILED`. Only a `VERIFIED` import can
+be committed.
 
-Every row carries:
-
-- `source_method` — which extractor produced it
-- `confidence` — extractor-reported, or 1.0 for user-typed rows
-- `content_hash` — dedupe key, so re-importing an overlapping statement is safe
-
-### Why it's not optional
-
-Without it, a mis-parsed statement silently corrupts the ledger, and every projection
-downstream is wrong with no signal. A wrong balance the user trusts is worse than no answer.
-
-`bankstatementparser` implements this as its "Golden Rule" — if it wins the spike, this
-comes free. If `docling` wins, it's ours to write. Either way it ships.
+A wrong balance the user trusts is worse than no answer: a mis-parsed statement silently corrupts
+the ledger, and every projection downstream is wrong with no signal.
 
 ---
 
-## Deferred handlers
+## Reconciliation: Logged rows versus statement rows
 
-Scanned PDF and photo/receipt import are parked — see [`parked.md`](parked.md). The
-dispatcher has the slot; the handler lands when real usage produces a document the shipped
-path can't read.
+Logging "spent 450 on swiggy" by chat, or sharing its UPI screenshot, and later importing the
+statement must not double-count.
+
+The following table shows the three match outcomes for a statement row:
+
+| Match | Rule |
+|---|---|
+| Certain | Same UPI reference number. Otherwise: same account (or the logged row had none), same amount, date within ±3 days, one candidate |
+| Ambiguous | Several candidates, or amount within a small tolerance—shown on the review screen |
+| None | New row from the statement |
+
+On a merge, the _statement wins on amount, date, and account_; the logged row keeps its
+category, notes, claims (splits), photo, and link to the conversation. Logged rows still unmatched
+after a statement covering their date appear on the review screen as "logged but not on the
+statement"—wrong account, cash, or a mistake.
+
+---
+
+## Photos and voice
+
+**Photos.** A receipt photo or a UPI payment screenshot (GPay, PhonePe, Paytm) → isolated vision
+call (the `VISION_*` endpoint) → typed `{merchant, amount, date, method, upi_ref}` → a review card
+in chat → one transaction, image kept as an attachment. On Android, the installed app is a share
+target, so a screenshot goes straight from the UPI app to Fin-Agent. The UPI reference number is
+what later matches the row to its statement line. Line items are not extracted.
+
+**Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
+→ text → the normal chat path. Hinglish accuracy is an eval category (L7).
+
+---
+
+## Investments
+
+Parked. Asset accounts take hand-updated balances; CAS import and _net asset value_ (_NAV_)
+refresh come back with statement-driven net worth ([`parked.md`](parked.md)).

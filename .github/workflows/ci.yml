@@ -8,6 +8,10 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    env:
+      # requires-python is ">=3.14", so without a pin uv picks the newest CPython, and some
+      # locked wheels (onnxruntime) don't exist for 3.15 yet.
+      UV_PYTHON: "3.14"
     steps:
       - uses: actions/checkout@v4
 

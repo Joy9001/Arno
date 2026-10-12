@@ -1,95 +1,228 @@
 # Parked
 
-Ideas deferred with a reason and a trigger. **Not rejected** — each has a stated condition
-under which it comes back.
+This file holds the detail behind [`plan.md`](plan.md) §2: what is deliberately out of the final
+product as planned on October 7, 2026, and revised on October 8, 2026, each with a reason and a
+trigger. _Not rejected_—each has a stated condition under which it comes back.
 
-The rule: anything here is decided *after* two weeks of real use, because every item is an
-answer to "the shipped thing has a gap" and nobody knows yet whether it does. Adding them
-before that is guessing.
+The `plan.md` file owns decisions, and this file owns their shape. If the two disagree, the plan
+wins and this file is stale.
 
-If something moves out of this file, it goes into [`plan.md`](plan.md) §5 as a numbered
-milestone. Nothing gets built straight from here.
-
----
-
-## Code execution sandbox
-
-Let the agent write and run Python or bash against the ledger, for analysis the eight tools
-in [`design.md`](design.md) don't cover.
-
-### The case for
-
-A fixed tool surface has edges. "Plot my food spend against last year", "run a regression on
-my weekend spending" — real questions that composition of the eight tools may not reach. It
-is the "answer any question" ambition taken to its logical end.
-[Prior art](../archive/prior-art/research-2026-05-24.md) noted `yorkeccak/finance`
-using a Daytona sandbox for exactly this.
-
-### The case against
-
-**It's in tension with the one rule.** `plan.md` §4 says the LLM never does arithmetic.
-Generated pandas *executes* deterministically, but the model still chose the filter and the
-join — a wrong `WHERE` returns a confidently wrong number with no tested semantics behind
-it. The eight tools have tests; generated code has none.
-
-**"Sandbox" on Windows without containers isn't one.** Doing it properly means Docker or
-gVisor — a subsystem explicitly cut in `plan.md` §2.
-
-**Small models can't write correct pandas against a half-remembered schema.** This pushes
-toward cloud-only and undermines the local/cloud parity in `plan.md` §3.
-
-**It's a remote-code-execution surface if a messaging channel ever lands.** A crafted
-merchant string in an imported statement becomes an injection vector. Not a concern for a
-local CLI; a serious one the day Signal appears.
-
-### The 90% alternative — read-only SQL
-
-A `run_query(sql)` tool against a read-only SQLite connection. SQLite has a genuine
-read-only mode, SQLite does the arithmetic deterministically, and it's ~10 lines instead of
-a subsystem. This is a ledger — most "arbitrary analysis" is aggregation, which SQL already
-is. The agent shows the SQL it ran, so a wrong filter is visible rather than silent.
-
-**Caveat worth re-reading first:** the
-[archived prior-art research](../archive/prior-art/research-2026-05-24.md) says *"do
-not give the LLM raw SQL access."* That warning was about SQL as the **primary** interface.
-As a read-only escape hatch beside tested tools it's a different risk — a wrong query, not
-wrong arithmetic. Different, not zero.
-
-### Trigger
-
-After two weeks of use, write down the questions the eight tools couldn't answer.
-
-| Finding | Action |
-|---|---|
-| No list | Nothing. The surface was sufficient |
-| Short list, mostly aggregation | `run_query(sql)`, read-only |
-| Long list of genuinely computational questions | Revisit the sandbox, with containers |
+If something moves out of this file, it goes into `plan.md` §5 as a numbered milestone. Nothing
+gets built straight from here.
 
 ---
 
-## Scanned PDF and photo import
+## Surfaces
 
-The two deferred handlers from [`import.md`](import.md).
+### Chat-app integrations: Signal, Telegram, WhatsApp
 
-**Why deferred:** OCR errors land on digits, in a ledger. Photos need a vision model, which
-4 GB of VRAM can't run locally — breaking the local/cloud parity that `plan.md` §3 is built
-on. Receipts are the likely driver and were already cut from the MVP.
+**Why parked:** the web app is the main face. A bridge is a client of the same chat API, so it
+adds nothing the architecture has to anticipate.
 
-**Trigger:** real usage produces a document the shipped extractor can't read. The dispatcher
-already has the slot; adding a handler is additive, not a redesign.
+**Shape when it comes:** a thin adapter for each app that forwards to `/api/chat` and collapses the
+stream into one message—or expose the tools over MCP and let Hermes or OpenClaw be the bridge
+([personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#5-could-hermes-or-openclaw-be-fin-agent)).
+Signal is the privacy-preserving choice; Telegram bot chats are not end-to-end encrypted.
+
+**Trigger:** L8 done, and logging in the PWA is measurably slower than texting.
+
+### Native Android app
+
+**Why parked:** the PWA covers chat, voice, camera, push, and the share sheet.
+
+**Trigger:** something the PWA can't do is needed—SMS access, home-screen widgets. The API and
+chat stream are already the contract.
+
+### Real-time voice conversation
+
+**Why parked:** voice notes (push-to-talk → text) cover capture. A spoken back-and-forth means
+streaming audio, text-to-speech, and latency work—a project of its own.
+
+**Trigger:** voice notes become my main way of logging.
+
+### Editable panels
+
+**Why parked:** chat edits have undo and go through the same functions; one editing path is less
+code. Imports and settings stay editable.
+
+**Trigger:** a recurring edit is clearly slower in chat than in a form.
 
 ---
 
-## Everything from the May 2026 spec
+## Capture
 
-The full NOT-list in `plan.md` §2 — Signal bot, web UI, receipt OCR, voice notes, memory
-layer, briefings, scheduler, anomaly detection, subscription detection, tax shadow engine,
-goals with deadlines, multi-account, split and reimbursable tracking, cash-float
-attribution, learned categorisation rules.
+### SMS and email autocapture
 
-These aren't parked pending a decision; they're **post-ship features**, and the trigger for
-all of them is the same: the sixteen milestones are done and the thing has been used.
+**Why parked:** chosen against on October 7, 2026. Chat, voice, photos, and statements are the
+inputs. Android SMS → webhook forwarders exist (open source) if this returns.
 
-Original specs are in [`docs/archive/`](../archive/) for whoever picks one up. Treat
-them as evidence of past intent, not as designs — they were written against a different
-stack and are known to contradict each other.
+**Trigger:** statement reconciliation keeps showing a large share of transactions that were never
+logged, and the stale balances make verdicts wrong.
+
+### Balance nudges
+
+**Why parked:** chosen against—balances update from statements only, and the agent states their
+age.
+
+**Trigger:** a verdict turns out wrong because a balance was stale and nobody noticed the age.
+
+### Receipt line items
+
+**Why parked:** one transaction for each photo was chosen.
+
+**Trigger:** questions like "how much did I spend on household items inside grocery runs" come up
+and can't be answered.
+
+---
+
+## Money features
+
+### Net worth from investment statements
+
+A _Consolidated Account Statement_ (_CAS_) lists every mutual fund and demat holding you own in
+one PDF. _Net asset value_ (_NAV_) is a mutual fund's price per unit, published daily.
+
+**Why parked:** I hold no investments yet, so there's no real data to build or test it against.
+Asset accounts that have hand-updated balances stay in the product.
+
+**Shape when it comes:** CAS PDF → `casparser` → `holdings` rows on asset accounts; AMFI's free
+daily NAV file revalues fund units nightly; daily `net_worth_snapshots`; net worth in the
+financial context and a briefing.
+
+**Trigger:** I've held investments for about three months.
+
+### Broker APIs such as Zerodha Kite Personal
+
+**Why parked:** CAS covers holdings across every broker; NAV covers fund values. Kite Personal is
+free but Zerodha-only and needs a daily login token.
+
+**Trigger:** net worth is back, and holdings need to be fresher than the monthly CAS.
+
+### Tax engine
+
+**Why parked:** chosen against. Salary TDS covers today's situation. The India code would
+implement the Income-tax Act, 2025 (in force from April 1, 2026; new-regime slabs unchanged).
+
+**Trigger:** freelance income appears (advance-tax dates matter), or self-hosters ask.
+
+### Category budgets
+
+**Why parked:** chosen against—the projection and baselines answer "am I overspending" without
+caps.
+
+**Trigger:** I keep asking "how much is left for dining this month."
+
+### Multicurrency
+
+**Why parked:** one base currency for each instance.
+
+**Trigger:** a foreign-currency account or foreign income.
+
+### Multiuser households
+
+**Why parked:** one person for each instance.
+
+**Trigger:** a self-hoster wants partner-shared money in one instance. This one is a schema
+change (owner on every row), so it's the costliest to bring back.
+
+### Projection for each account
+
+**Why parked:** the projection pools liquid accounts.
+
+**Trigger:** an autodebit fails because money was in the wrong account.
+
+---
+
+## Proactive
+
+### Daily, monthly, and payday briefings
+
+**Why parked:** the weekly briefing, due reminders, and risk warnings cover what needs saying.
+More briefings are more noise.
+
+**Trigger:** I keep asking the same question between weekly briefings.
+
+### Anomaly detection: Large transactions and category spikes
+
+**Why parked:** needs thresholds tuned on months of real data, and recurring-charge detection
+covers the common case.
+
+**Trigger:** a large or unusual charge slips past unnoticed.
+
+---
+
+## Platform
+
+### Public-internet access
+
+**Why parked:** Tailscale keeps the instance off the internet, which removes the password + TOTP
+fallback, recovery codes, login lockout, CSP hardening, and most of the threat model.
+
+**Shape when it comes:** Caddy for automatic HTTPS, password (argon2) + TOTP fallback using
+`pyotp`, hashed recovery codes, login rate limiting, CSP.
+
+**Trigger:** someone needs access without Tailscale.
+
+### Encryption inside the database
+
+**Why parked:** host disk encryption covers a stolen disk, and restic covers a leaked backup.
+Community Postgres has no built-in encryption at rest.
+
+**Trigger:** running on a VPS, where the provider can read the disk. Evaluate the options then.
+
+### Locale-pack interface
+
+**Why parked:** India is the only country; an interface that has one implementation is guesswork.
+India code lives in one folder, so extracting an interface later is mechanical.
+
+**Trigger:** someone writes a second country's pack.
+
+### arm64 images
+
+**Why parked:** amd64 covers my machines.
+
+**Trigger:** someone asks to run it on a Raspberry Pi or an ARM VPS.
+
+---
+
+## Agent
+
+### Code Mode: Sandboxed code execution
+
+The `pydantic-ai-harness` library ships _Code Mode_: the model writes one Python script calling
+many tools inside a Monty sandbox. The read-only `run_query(sql)` half of this idea is already in
+the product.
+
+The following points argue against it:
+
+- **Generated code has no tested semantics.** The model chooses the filter and the join; the
+  `run_query` tool has the same property in weaker form, which is why it ships first and gets
+  watched.
+- **Small models can't write correct code against a half-remembered schema.** It would push the
+  product toward cloud-only models.
+- **The product may not need it.** The `run_query` tool covers aggregation, which is most of what a
+  ledger is asked.
+
+**Trigger:** the eval suite and real use show questions the `run_query` tool can't answer that are
+genuinely computational—regressions, multistep modeling. If they're aggregations, fix the tool
+descriptions instead.
+
+### Hidden memory extraction and semantic search (mem0-style)
+
+**Why parked:** memory is agent-managed typed preferences—saved unprompted, but visible and
+undoable. A hidden store that extracts facts from every turn risks a second source of truth beside
+the ledger.
+
+**Shape when it comes:** embeddings over conversations and preferences using `pgvector`, in the
+same database.
+
+**Trigger:** keyword search over past conversations keeps missing things I said, or I keep
+repeating a fact that never becomes a preference.
+
+---
+
+## The May 2026 spec
+
+The [archive](../archive/) holds the original feature specs. Most of those features are now in the
+product; the rest are in the preceding sections. Treat the archive as evidence of past intent, not
+as designs—it was written against a different stack and contradicts itself.
