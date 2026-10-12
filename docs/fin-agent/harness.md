@@ -66,7 +66,7 @@ The following capabilities are on from the start:
 |---|---|
 | Core agent + tools + structured output | The product |
 | Spend Limits | Development runs against a cloud API. A runaway loop costing real money is the one failure that bites immediately, and this is a few lines |
-| Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the encrypted database. Costs nothing and is the precondition for evals |
+| Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
 
 ### Later, with triggers
 
