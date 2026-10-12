@@ -1,11 +1,14 @@
 # Parked
 
-This file lists what is deliberately out of the final product as planned on October 7, 2026, and
-revised on October 8, 2026, each with a reason and a trigger. _Not rejected_—each has a stated
-condition under which it comes back.
+This file holds the detail behind [`plan.md`](plan.md) §2: what is deliberately out of the final
+product as planned on October 7, 2026, and revised on October 8, 2026, each with a reason and a
+trigger. _Not rejected_—each has a stated condition under which it comes back.
 
-If something moves out of this file, it goes into [`plan.md`](plan.md) §5 as a numbered
-milestone. Nothing gets built straight from here.
+The `plan.md` file owns decisions, and this file owns their shape. If the two disagree, the plan
+wins and this file is stale.
+
+If something moves out of this file, it goes into `plan.md` §5 as a numbered milestone. Nothing
+gets built straight from here.
 
 ---
 
