@@ -19,7 +19,7 @@ good argument for three other frameworks.
 
 The actual reason: _Pydantic ships an official harness capability library_
 (`pydantic-ai-harness`) implementing most of the survey's checklist as supported code. Building a
-custom loop, or picking a framework without this, means hand-building that list.
+custom loop means hand-building that list. The harness is still on 0.x releases, so pin it.
 
 The following table maps each survey finding to the capability that implements it:
 
@@ -45,6 +45,18 @@ turns an agent run into the Vercel AI UI stream that the `useChat` hook consumes
 custom data parts for cards, and tool-approval requests. The chat endpoint is one call
 (`VercelAIAdapter.dispatch_request(request, agent=agent)`), not a streaming protocol that Fin-Agent
 has to write.
+
+**Why not LangChain (rechecked October 15, 2026).** LangChain v1's `create_agent` is the right
+LangChain layer for one tool loop. Deep Agents puts file tools beside the ledger, and a raw
+LangGraph graph would have one node. Its middleware covers compaction, tool approval, tool
+selection, and guardrails, but it leaves three gaps that PydanticAI fills:
+
+- Spend limits in USD: LangChain caps the number of calls, not their cost.
+- A Vercel AI stream from Python: `@ai-sdk/langchain` is TypeScript only, and its browser
+  transport needs the licensed LangGraph Agent Server.
+- Cache-bust warnings.
+
+Rule 3 keeps the switch a thin rewrite if this changes.
 
 **Why the tools aren't hosted in Hermes or OpenClaw.** Considered in the
 [personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#5-could-hermes-or-openclaw-be-fin-agent):
