@@ -160,6 +160,19 @@ optimisation, arXiv 2603.28052), **HarnessBridge** (learnable bidirectional cont
 **AutoHarness** (synthesis from schemas). The harness is becoming something optimised rather than
 hand-written.
 
+*Added 2026-10-18:* **Harness²** (Google Research, arXiv 2610.14224, Apache-2.0) is the first of
+this cluster to ship as runnable code. It works at two levels. *Task-level* recursion runs
+Propose–Probe–Compose: propose harness edits, probe them on the same task, and compose a refined
+harness from the behavioural contrasts — **without ground-truth feedback**. *Harnessing-level*
+recursion keeps a persistent "improvement harness" of adopted harnesses and evidence-backed lessons
+that guides later refinement. The editable surface is eight components: system prompt, guardrails,
+memory, tool guidance, subagents, skills, scripts, and plugins. It reports gains of **up to 11.5
+points** on WorkBuddy-Bench, **4.5** on JobBench, and **11.8 pp** partial pass rate on LAB, for
+GLM-5 and Gemini 3.5 Flash. As released it is a research rig, not a library: the only documented
+interface is a CLI over those three benchmarks, each with its own adapter. The executors are
+OpenCode and Codex, the models run on Vertex AI, executor network access is unrestricted, and
+Codex runs with its sandbox disabled. "Not an officially supported Google product."
+
 **Harness as a trainable dimension.** *The Interplay of Harness Design and Post-Training* (arXiv
 2606.25447) treats harness design as an optimisation target rather than fixed engineering. Using an
 extended ALFWorld where the harness is a controllable variable, it finds harness-aware

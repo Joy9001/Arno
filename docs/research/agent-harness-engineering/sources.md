@@ -87,6 +87,16 @@ Second-pass additions. All abstract-only unless noted.
 - **[indexed]** arXiv 2603.28052 *Meta-Harness*; arXiv 2606.12882 *HarnessBridge*; arXiv 2603.03329
   *AutoHarness* — the automated-harness cluster, not read.
 
+## Later additions
+
+Added after the survey date. Each is labelled with the date it was added.
+
+- **[read]** 2026-10-18 · [google-research/harness2](https://github.com/google-research/harness2)
+  — the README plus `docs/SETUP.md` and `docs/BENCHMARKS.md`. The source code was not read.
+  Benchmark figures are as the authors report them. The repository had 3 commits when it was
+  fetched.
+- **[indexed]** 2026-10-18 · arXiv 2610.14224 — the paper behind Harness². Not read.
+
 ## Indexes and taxonomies
 
 - **[read]** [ai-boost/awesome-harness-engineering](https://github.com/ai-boost/awesome-harness-engineering)
