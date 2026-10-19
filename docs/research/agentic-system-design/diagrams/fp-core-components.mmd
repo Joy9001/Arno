@@ -5,7 +5,6 @@ flowchart TD
     instr["<b>Instructions / policy</b><br/>prompt, goals, scope, guardrails"]
 
     subgraph orch["Orchestration: run loop, workflow code, exit conditions (final output, no tool calls, error, max turns)"]
-        direction TB
         model["<b>Model</b><br/>reasoning + planning"]
         tools["<b>Tools / actions</b><br/>data and retrieval, action,<br/>orchestration (agents as tools)"]
         model -->|tool call| tools

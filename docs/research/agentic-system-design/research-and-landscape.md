@@ -12,6 +12,10 @@ Field survey conducted **2026-10-18**. One slice of a wider "Agentic / GenAI Sys
 
 [gtzheng/Awesome-Agentic-System-Design](https://github.com/gtzheng/Awesome-Agentic-System-Design) is a curated, interview-prep-flavoured index. The landing page is thin; the substance is in `resources/papers.md`, `resources/frameworks.md`, `docs/evaluation.md` and `UPDATES.md` (all read). Its structure:
 
+![Awesome-Agentic-System-Design: How the Index Is Organised](diagrams/rl-awesome-list-taxonomy.png)
+
+*Figure: the index has four layers, and both papers and frameworks are grouped by the question or responsibility rather than by technique.*
+
 | Layer | Contents |
 |---|---|
 | Learning paths | Fundamentals (architecture, context, memory) -> production (tools/protocols, evals, safety) -> interview prep -> recent developments -> implementation tools |
@@ -38,6 +42,10 @@ Notable design choice: it classifies **by question asked** ("which workflow and 
 
 The core observation across this literature: request-level LLM serving (vLLM-style) discards program structure. An agent is a *program* of dependent LLM calls interleaved with tool latency, and its prefix grows monotonically, which makes KV-cache reuse and program-aware scheduling the main levers.
 
+![Why Agent Workloads Stress LLM Serving](diagrams/rl-agent-serving-pause.png)
+
+*Figure: the tool-latency window between two LLM calls is where request-level serving loses information, and each work in the table below attacks a different part of it.*
+
 | Work | Lever | Reported result (authors' claims unless noted) |
 |---|---|---|
 | [SGLang / RadixAttention](https://arxiv.org/abs/2312.07104) (Dec 2023) | Radix-tree prefix cache across calls; structured-program runtime | Up to 6.4x throughput vs prior inference systems on agent control, JSON decoding, multi-turn chat |
@@ -53,6 +61,10 @@ The core observation across this literature: request-level LLM serving (vLLM-sty
 Practical shape of the findings, hedged: (i) gains scale with tool latency relative to decode time and vanish on strictly serial dependency chains; (ii) side-effecting tools make speculation unsafe; (iii) a Berkeley-led workload characterisation ([TraceLab](https://arxiv.org/pdf/2606.30560), 2026) exists for coding-agent traces (indexed only). Provider-side prompt caching (hosted APIs) is the commercial analogue of RadixAttention but its pricing/TTL terms are vendor-specific and out of scope here.
 
 ## A3. Automated agent design, prompt/program optimisation, self-improvement
+
+![Automated Agent Design Loop](diagrams/rl-agent-design-search-loop.png)
+
+*Figure: the methods share one propose-evaluate-archive-select-mutate cycle and differ mainly in the selection rule and what is mutated.*
 
 | Work | Idea | Numbers / status |
 |---|---|---|
@@ -110,6 +122,10 @@ The two camps reconcile on a read/write split: parallel *reading/exploration* sc
 # Part B: Framework and platform landscape (as of October 2026)
 
 ## B1. Open-source frameworks and SDKs
+
+![Framework and Platform Landscape by Abstraction Level](diagrams/rl-framework-landscape.png)
+
+*Figure: frameworks and platforms stack by how much the platform manages, while MCP, A2A, Agent Skills and AG-UI sit alongside rather than as a level.*
 
 | Framework | Abstraction level | State / persistence | Multi-agent | Language | Notable trade-offs |
 |---|---|---|---|---|---|
