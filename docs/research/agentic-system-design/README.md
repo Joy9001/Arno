@@ -59,7 +59,8 @@ evidence and tooling.*
    gateway → optional agent loop with read/write-split tools → output guardrails → stream,
    wrapped in observability, evals and a feedback flywheel. Huyen's build order is incremental —
    add each box only when needed. [`genai-system-architecture.md`](genai-system-architecture.md) §2
-   draws it as a two-part [reference architecture](diagrams/arch-reference-architecture.png).
+   draws it as a [reference-architecture overview](diagrams/arch-reference-architecture.png) with
+   detail figures for the request path and the agent/output stages.
 
 4. **Multi-agent is the field's main live argument, and it has narrowed to one rule:
    fan out reads, keep writes single-threaded.** Anthropic reports +90.2% from orchestrator-worker
