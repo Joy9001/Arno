@@ -58,6 +58,10 @@ Evidence quality varies and is marked on each entry: **primary** (company's own 
 
 ### Anthropic — multi-agent Research
 
+![Anthropic multi-agent Research system](diagrams/cs-anthropic-research-system.png)
+
+*Figure: Subagent results return to the lead as references via external storage, and a separate citation agent runs only after synthesis.*
+
 [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) (June 2025, primary).
 
 - **Problem**: open-ended research needs breadth, dynamic path choice, and more context than a window holds; one-shot RAG retrieves static chunks.
@@ -68,6 +72,10 @@ Evidence quality varies and is marked on each entry: **primary** (company's own 
 
 ### Uber — QueryGPT (text-to-SQL)
 
+![Uber QueryGPT workflow of narrow agents](diagrams/cs-uber-querygpt-workflow.png)
+
+*Figure: Each agent does one narrow classification-style job, and the user confirms tables before column pruning shrinks the schema sent to the model.*
+
 [QueryGPT](https://www.uber.com/blog/query-gpt/) (2024-09, primary).
 
 - **Problem**: ~1.2M interactive queries/month on Uber's data platform; authoring one takes ~10 min (find datasets, write SQL).
@@ -77,6 +85,10 @@ Evidence quality varies and is marked on each entry: **primary** (company's own 
 - **Lessons**: LLMs work best as classifiers on narrow single-task units; hallucinated tables/columns are unsolved (a validation agent was planned); raw prompts need an enhancer.
 
 ### Uber — uReview (AI code review)
+
+![Uber uReview code review prompt chain](diagrams/cs-uber-ureview-prompt-chain.png)
+
+*Figure: Quality comes from successive filtering stages (grade, dedup, suppress) rather than from a single prompt.*
 
 [uReview](https://www.uber.com/blog/ureview/) (2025-08-12, primary).
 
@@ -111,6 +123,10 @@ Evidence quality varies and is marked on each entry: **primary** (company's own 
 
 ### DoorDash — Dasher support RAG with guardrails
 
+![DoorDash Dasher support RAG with two-tier guardrail](diagrams/cs-doordash-support-guardrail.png)
+
+*Figure: The expensive LLM groundedness check runs only when the cheap similarity check flags, and any failure defaults to a human agent.*
+
 [ZenML entry summarising DoorDash's 2024-09 post](https://www.zenml.io/llmops-database/llm-based-dasher-support-automation-with-rag-and-quality-controls) (original post returned 403, so this is secondary).
 
 - **Architecture**: condense the multi-turn conversation to one core issue, retrieve resolved cases mapped to knowledge-base articles, generate. A **two-tier online guardrail**: tier 1 is a cheap semantic-similarity check of the response against article segments; tier 2 is an LLM groundedness evaluator invoked only when tier 1 flags. All checks must pass before display, and **failure defaults to a human agent**. A heavier guardrail model was rejected for latency and token cost.
@@ -137,6 +153,10 @@ Evidence quality varies and is marked on each entry: **primary** (company's own 
 - **Limit**: parallel runs on one project are locked because patch-merge conflicts remain unsolved. Its July 2025 database deletion is under Failures.
 
 ### Cursor — scaling long-running multi-agent runs
+
+![Cursor evolution of multi-agent coordination](diagrams/cs-cursor-coordination-evolution.png)
+
+*Figure: Each design was replaced because of a specific failure, and the last change was to delete a role.*
 
 [Scaling agents](https://cursor.com/blog/scaling-agents) (2026; publish date not captured in the fetch, primary).
 

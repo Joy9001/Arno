@@ -12,7 +12,6 @@ flowchart TD
   SHOW([Response shown to Dasher]):::code
   HUM["Human agent<br/>failure default"]:::human
   subgraph OFF ["Offline monitoring"]
-    direction TB
     J["LLM judge: retrieval correctness,<br/>accuracy, grammar, coherence, relevance"]:::llm
     P["Promptfoo regression suites<br/>block deploy on failure"]:::code
     H["Humans calibrate against judge"]:::human
