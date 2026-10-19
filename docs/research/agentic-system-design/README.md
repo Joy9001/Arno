@@ -22,8 +22,9 @@ survey then went outward to roughly 340 further vendor, academic and practitione
 
 ![Survey map: where each file sits in an agentic system](diagrams/readme-survey-map.png)
 
-*Figure: the three topic files in the middle describe the layers of one system; operations wraps all
-of them, and the case studies and landscape files sit outside as evidence and tooling.*
+*Figure: three topic files describe the layers of one system and sit inside the operations boundary;
+the agent layer is the survey's focus, and the case studies and landscape files sit outside as
+evidence and tooling.*
 
 | File | Covers |
 |---|---|
@@ -35,7 +36,7 @@ of them, and the case studies and landscape files sit outside as evidence and to
 | [`case-studies.md`](case-studies.md) | **18 production systems** (Anthropic, Uber ×2, Shopify, LinkedIn ×2, DoorDash, Klarna, Replit, Cursor, Cognition, Notion, Harvey, Intercom, Amazon, Morgan Stanley, Manus…), recurring patterns, and a failures-and-reversals section |
 | [`research-and-landscape.md`](research-and-landscape.md) | Serving research for agent workloads, automated agent design (ADAS, AFlow, DSPy/GEPA), benchmarks and METR time horizons, and a comparison of 11 frameworks + 5 managed platforms |
 | [`sources.md`](sources.md) | How the starting sources were used, tagging scheme, and where each file's full bibliography lives |
-| [`diagrams/`](diagrams/) | Every figure as PNG + SVG + editable source (Graphviz / Mermaid / PlantUML), each with a short `.md` note on what it shows and why that diagram type. Rendered via [Kroki](https://kroki.io); one shared colour key: blue = model, green = deterministic code, orange = human/oversight, red = risk, grey = data, purple = external |
+| [`diagrams/`](diagrams/) | Every figure as an editable self-contained `.html` source plus exported PNG and SVG, each with a short `.md` note on what it shows, which diagram type, and what the complexity budget forced out. Drawn with the [diagram-design](https://github.com/cathrynlavery/diagram-design) skill's default editorial skin: monochrome ink, with the burnt-orange accent reserved for the one or two focal elements of each figure |
 
 ## Executive summary
 
