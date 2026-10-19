@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Framework Landscape</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;   /* white-smoke */
+      --color-ink:     #2d3142;   /* jet-black */
+      --color-muted:   #4f5d75;   /* blue-slate */
+      --color-accent:  #bf4520;   /* burnt-tangerine */
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    /* The SVG holds its readable width (min-width == the viewBox width, so the
+       type ramp is never silently scaled down). This wrapper lets a narrow
+       screen scroll the diagram instead of the whole page. */
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    /* Paper has no scrollbar, so the local scroller would clip instead of
+       scroll. Let the diagram scale down to the sheet: smaller but whole
+       beats sharp but cut off. Must come after the svg rule above - a media
+       query adds no specificity, so a later plain rule would win. */
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · Diagram Design</p>
+    <h1>Framework and Platform Landscape by Abstraction Level</h1>
+
+    <!-- Replace rl-framework-landscape with a unique slug for this diagram before export. -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="rl-framework-landscape-title rl-framework-landscape-desc">
+        <title id="rl-framework-landscape-title">Framework and platform landscape by abstraction level</title>
+        <desc id="rl-framework-landscape-desc">Layer stack of managed platforms, graph frameworks, agent SDKs and the raw LLM API, with the protocol layer alongside and DSPy orthogonal.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+        <rect x="96" y="56" width="584" height="336" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<line x1="96" y1="140" x2="680" y2="140" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+<line x1="96" y1="224" x2="680" y2="224" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+<line x1="96" y1="308" x2="680" y2="308" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+<text x="110" y="78" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L4</text>
+<text x="140" y="94" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Managed</text>
+<text x="140" y="110" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">platforms</text>
+<text x="320" y="78" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Amazon Bedrock AgentCore · Microsoft Foundry Agent Service</text>
+<text x="320" y="92" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Gemini Enterprise Agent Platform · Databricks Agent Bricks</text>
+<text x="320" y="106" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Hosted harnesses: OpenAI Agents API, Anthropic Managed Agents</text>
+<text x="320" y="124" fill="#5a6580" font-size="9" font-family="'Geist Mono', monospace">AgentCore and Foundry host any framework</text>
+<text x="110" y="162" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L3</text>
+<text x="140" y="178" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Graph / workflow</text>
+<text x="140" y="194" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">frameworks</text>
+<text x="320" y="178" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">LangGraph · Google ADK 2.0 · Microsoft Agent Framework</text>
+<text x="320" y="192" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">LlamaIndex Workflows · Mastra · CrewAI (Crews + Flows)</text>
+<text x="110" y="246" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L2</text>
+<text x="140" y="262" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Agent SDKs</text>
+<text x="140" y="278" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">and libraries</text>
+<text x="320" y="262" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">OpenAI Agents SDK · Claude Agent SDK</text>
+<text x="320" y="276" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Pydantic AI · smolagents</text>
+<text x="110" y="330" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L1</text>
+<text x="140" y="354" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Raw LLM API</text>
+<text x="320" y="346" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Anthropic: start here, many patterns take</text>
+<text x="320" y="360" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">only a few lines of code</text>
+<line x1="60" y1="384" x2="60" y2="90" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="40" y="64" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.12em">MORE</text>
+<text x="40" y="76" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.12em">MANAGED</text>
+<text x="40" y="396" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.12em">LESS</text>
+<rect x="704" y="56" width="216" height="336" rx="6" fill="#f5f5f5"/>
+<rect x="704" y="56" width="216" height="336" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+<rect x="716" y="68" width="56" height="12" rx="2" fill="transparent" stroke="rgba(191,69,32,0.50)" stroke-width="0.8"/>
+<text x="744" y="77" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ALONGSIDE</text>
+<text x="720" y="102" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Protocol layer</text>
+<text x="720" y="116" fill="#5a6580" font-size="9" font-family="'Geist Mono', monospace">not a level of the stack</text>
+<text x="720" y="142" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">MCP</text>
+<text x="720" y="155" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">agent to tools</text>
+<text x="720" y="186" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">A2A</text>
+<text x="720" y="199" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">agent to agent</text>
+<text x="720" y="230" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Agent Skills</text>
+<text x="720" y="243" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">instruction bundles</text>
+<text x="720" y="274" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">AG-UI</text>
+<text x="720" y="287" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">agent to UI event stream</text>
+<line x1="720" y1="310" x2="904" y2="310" stroke="rgba(191,69,32,0.30)" stroke-width="0.8"/>
+<text x="720" y="328" fill="#2d3142" font-size="10" font-family="'Geist', sans-serif">Gateways wrap tools as MCP;</text>
+<text x="720" y="341" fill="#2d3142" font-size="10" font-family="'Geist', sans-serif">runtimes list A2A. Every</text>
+<text x="720" y="354" fill="#2d3142" font-size="10" font-family="'Geist', sans-serif">framework lists MCP.</text>
+<rect x="96" y="416" width="584" height="60" rx="6" fill="#f5f5f5"/>
+<rect x="96" y="416" width="584" height="60" rx="6" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+<rect x="108" y="426" width="60" height="12" rx="2" fill="transparent" stroke="rgba(45,49,66,0.40)" stroke-width="0.8"/>
+<text x="138" y="435" fill="#2d3142" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ORTHOGONAL</text>
+<text x="140" y="458" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">DSPy</text>
+<text x="320" y="444" fill="#2d3142" font-size="11" font-family="'Geist', sans-serif">Optimises prompts; can sit inside other frameworks</text>
+<text x="320" y="460" fill="#5a6580" font-size="9" font-family="'Geist Mono', monospace">not an orchestrator</text>
+<line x1="40" y1="524" x2="920" y2="524" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+<text x="40" y="540" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="556" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="62" y="564" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Level of the stack, ordered by how much the platform manages</text>
+<rect x="370" y="556" width="14" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+<text x="392" y="564" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Sits alongside the levels</text>
+<rect x="560" y="556" width="14" height="10" rx="2" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+<text x="582" y="564" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Orthogonal to the stack</text>
+
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

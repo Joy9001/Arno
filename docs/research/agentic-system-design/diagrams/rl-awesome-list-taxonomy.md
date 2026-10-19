@@ -1,11 +1,13 @@
 # Awesome-Agentic-System-Design: How the Index Is Organised
 
-**What it shows:** The four layers of the awesome-list index: learning paths, seven core topics, papers grouped by design question, and frameworks grouped by responsibility.
+**What it shows:** The index root, its four layers (learning paths, core topics, papers by design question, frameworks by responsibility) and the leaves listed under each, in the order the A1 table gives them.
 
-**Why this diagram type:** A mind map suits a one-root, four-branch classification where hierarchy matters and there are no flows.
+**Diagram type:** Tree (diagram-design skill, default skin, minimal light, doc-inline). A one-root, four-branch classification with no flows is a tree.
 
-**Design decisions:** All branches extend to one side to keep the figure narrow and tall; neutral greys because colour carries no meaning here.
+**Budget handling:** 26 leaf labels would break the 9-node limit as individual nodes, so each layer's leaves are grouped into one leaf box (one node per layer): 1 root + 4 layers + 4 leaf boxes = 9 nodes, 8 connectors, one accent (the root), one callout with two leaders.
+
+**Assumptions:** Labels are shortened from the A1 table; nothing added. "Foundations" and "Surveys" are shown as separate paper groups, as the A1 table lists them (the old mind map merged them). The two-stage descriptions on Fundamentals and Production come from the table.
 
 ![Awesome-Agentic-System-Design: How the Index Is Organised](./rl-awesome-list-taxonomy.png)
 
-**Assumptions / source:** Labels are shortened from the table in A1; nothing added. Illustrates section A1 of `../research-and-landscape.md`. Source script: `rl-awesome-list-taxonomy.puml`.
+Source: `rl-awesome-list-taxonomy.html` (diagram-design skill, default skin). Illustrates section A1 of `../research-and-landscape.md`.

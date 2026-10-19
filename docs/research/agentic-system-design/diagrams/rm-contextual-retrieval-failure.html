@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contextual retrieval: top-20 failure rate by step</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;   /* white-smoke */
+      --color-ink:     #2d3142;   /* jet-black */
+      --color-muted:   #4f5d75;   /* blue-slate */
+      --color-accent:  #bf4520;   /* burnt-tangerine */
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    /* The SVG holds its readable width (min-width == the viewBox width, so the
+       type ramp is never silently scaled down). This wrapper lets a narrow
+       screen scroll the diagram instead of the whole page. */
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    /* Paper has no scrollbar, so the local scroller would clip instead of
+       scroll. Let the diagram scale down to the sheet: smaller but whole
+       beats sharp but cut off. Must come after the svg rule above - a media
+       query adds no specificity, so a later plain rule would win. */
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Bar chart · Diagram Design</p>
+    <h1>Contextual retrieval: top-20 failure rate by step</h1>
+
+    <!-- Replace rm-contextual-retrieval-failure with a unique slug for this diagram before export. -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="rm-contextual-retrieval-failure-title rm-contextual-retrieval-failure-desc">
+        <title id="rm-contextual-retrieval-failure-title">Contextual retrieval: top-20 failure rate by step</title>
+        <desc id="rm-contextual-retrieval-failure-desc">Bar chart of top-20 retrieval failure rate falling from 5.7% for baseline embeddings to 1.9% after contextual embeddings, contextual BM25 and reranking, a 67% cumulative reduction.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+        <text x="96" y="44" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" font-weight="500" letter-spacing="0.14em">TOP-20 RETRIEVAL FAILURE RATE (1 - RECALL@20), % OF QUERIES</text>
+        <line x1="96" y1="360" x2="900" y2="360" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="300" x2="900" y2="300" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="240" x2="900" y2="240" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="180" x2="900" y2="180" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="120" x2="900" y2="120" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="60" x2="900" y2="60" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="96" y1="60" x2="96" y2="420" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+        <line x1="96" y1="420" x2="900" y2="420" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+        <text x="88" y="423" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">0%</text>
+        <text x="88" y="363" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">1%</text>
+        <text x="88" y="303" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">2%</text>
+        <text x="88" y="243" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">3%</text>
+        <text x="88" y="183" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">4%</text>
+        <text x="88" y="123" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">5%</text>
+        <text x="88" y="63" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">6%</text>
+        <rect x="136" y="78" width="120" height="342" fill="#f5f5f5"/>
+        <rect x="136" y="78" width="120" height="342" fill="rgba(79,93,117,0.15)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="196" y="70" fill="#4f5d75" font-size="11" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">5.7%</text>
+        <text x="196" y="446" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Baseline embeddings</text>
+        <text x="196" y="462" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">baseline</text>
+        <rect x="336" y="198" width="120" height="222" fill="#f5f5f5"/>
+        <rect x="336" y="198" width="120" height="222" fill="rgba(79,93,117,0.15)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="396" y="190" fill="#4f5d75" font-size="11" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">3.7%</text>
+        <text x="396" y="446" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">+ Contextual embeddings</text>
+        <text x="396" y="462" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">-35%</text>
+        <rect x="536" y="246" width="120" height="174" fill="#f5f5f5"/>
+        <rect x="536" y="246" width="120" height="174" fill="rgba(79,93,117,0.15)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="596" y="238" fill="#4f5d75" font-size="11" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">2.9%</text>
+        <text x="596" y="446" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">+ Contextual BM25</text>
+        <text x="596" y="462" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">-49%</text>
+        <rect x="736" y="306" width="120" height="114" fill="#f5f5f5"/>
+        <rect x="736" y="306" width="120" height="114" fill="rgba(191,69,32,0.12)" stroke="#bf4520" stroke-width="1"/>
+        <text x="796" y="298" fill="#bf4520" font-size="11" font-weight="600" font-family="'Geist Mono', monospace" text-anchor="middle">1.9%</text>
+        <text x="796" y="446" fill="#bf4520" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">+ Rerank</text>
+        <text x="796" y="462" fill="#bf4520" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">-67% cumulative</text>
+        <text x="96" y="500" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">SOURCE: ANTHROPIC CONTEXTUAL RETRIEVAL, SEP 2024 · VENDOR TEST SETS · STEPS ARE CUMULATIVE LEFT TO RIGHT</text>
+        <line x1="40" y1="540" x2="920" y2="540" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="556" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="566" width="24" height="12" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="72" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Full recipe: contextual chunks, BM25 + dense fusion, rerank</text>
+        <rect x="500" y="566" width="24" height="12" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="532" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Intermediate steps, each added to the previous</text>
+
+
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

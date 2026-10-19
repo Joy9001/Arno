@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anthropic's workflow patterns: parallelization vs orchestrator-workers</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;   /* white-smoke */
+      --color-ink:     #2d3142;   /* jet-black */
+      --color-muted:   #4f5d75;   /* blue-slate */
+      --color-accent:  #bf4520;   /* burnt-tangerine */
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    /* The SVG holds its readable width (min-width == the viewBox width, so the
+       type ramp is never silently scaled down). This wrapper lets a narrow
+       screen scroll the diagram instead of the whole page. */
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    /* Paper has no scrollbar, so the local scroller would clip instead of
+       scroll. Let the diagram scale down to the sheet: smaller but whole
+       beats sharp but cut off. Must come after the svg rule above - a media
+       query adds no specificity, so a later plain rule would win. */
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Diagram Design</p>
+    <h1>Anthropic's workflow patterns: parallelization vs orchestrator-workers</h1>
+
+    <!-- Replace fp-workflow-patterns-fanout with a unique slug for this diagram before export. -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fp-workflow-patterns-fanout-title fp-workflow-patterns-fanout-desc">
+        <title id="fp-workflow-patterns-fanout-title">Anthropic's workflow patterns: parallelization vs orchestrator-workers</title>
+        <desc id="fp-workflow-patterns-fanout-desc">Two fan-out patterns from Anthropic's catalog: parallelization with a fixed split and code aggregation, versus an orchestrator LLM that sets subtasks at runtime and a synthesis step.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+                <rect x="40" y="32" width="880" height="212" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="48" y="36" width="212" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="52" y="45" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">PARALLELIZATION (SECTIONING OR VOTING)</text>
+        <rect x="40" y="268" width="880" height="212" rx="8" fill="rgba(45,49,66,0.02)" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <rect x="48" y="272" width="116" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="52" y="281" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">ORCHESTRATOR-WORKERS</text>
+        <path d="M 176,148 H 352 Q 360,148 360,140 V 128 Q 360,120 368,120 H 544" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 176,172 H 352 Q 360,172 360,180 V 192 Q 360,200 368,200 H 544" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 672,120 H 704 Q 712,120 712,128 V 140 Q 712,148 720,148 H 752" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 672,200 H 704 Q 712,200 712,192 V 180 Q 712,172 720,172 H 752" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 176,392 H 240" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 368,380 H 400 Q 408,380 408,372 V 360 Q 408,352 416,352 H 544" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 368,404 H 400 Q 408,404 408,412 V 424 Q 408,432 416,432 H 544" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 672,352 H 704 Q 712,352 712,360 V 372 Q 712,380 720,380 H 752" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 672,432 H 704 Q 712,432 712,424 V 412 Q 712,404 720,404 H 752" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="436" y="334" width="88" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="480" y="343" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SET AT RUNTIME</text>
+        <rect x="64" y="132" width="112" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="64" y="132" width="112" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="120.0" y="164" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Input</text>
+        <rect x="544" y="92" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="544" y="92" width="128" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="608.0" y="124" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">LLM 1</text>
+        <rect x="544" y="172" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="544" y="172" width="128" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="608.0" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">LLM 2</text>
+        <rect x="752" y="132" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="752" y="132" width="128" height="56" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="816.0" y="157.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Aggregate</text>
+        <text x="816.0" y="170.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">code</text>
+        <rect x="64" y="364" width="112" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="64" y="364" width="112" height="56" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="120.0" y="396" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Input</text>
+        <rect x="240" y="364" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="240" y="364" width="128" height="56" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="304.0" y="389.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Orchestrator</text>
+        <text x="304.0" y="402.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">LLM</text>
+        <rect x="544" y="324" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="544" y="324" width="128" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="608.0" y="356" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Worker 1</text>
+        <rect x="544" y="404" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="544" y="404" width="128" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="608.0" y="436" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Worker 2</text>
+        <rect x="752" y="364" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="752" y="364" width="128" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="816.0" y="396" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Synthesize</text>
+        <line x1="40" y1="540" x2="920" y2="540" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="560" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="550" width="16" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="144" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">LLM call</text>
+        <rect x="215" y="550" width="16" height="10" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="239" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">deterministic code</text>
+        <rect x="364" y="550" width="16" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="388" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">orchestrator (focal)</text>
+        <rect x="524" y="550" width="16" height="10" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="548" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">input</text>
+
+      </svg>
+    </div>
+  </div>
+</body>
+</html>
