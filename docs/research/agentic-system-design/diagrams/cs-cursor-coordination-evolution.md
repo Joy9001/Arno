@@ -1,13 +1,13 @@
-# Cursor - evolution of multi-agent coordination
+# Cursor evolution of multi-agent coordination
 
-**What it shows:** Four design stages, each with the problem that ended it, ending in planners/workers/judge with the integrator role removed.
+**What it shows:** Four coordination designs, each paired with what happened: locks stalled, optimistic concurrency made agents risk-averse, planners/workers/judge scaled, and the integrator QC role became a bottleneck and was removed.
 
-**Why this diagram type:** A vertical flowchart reads as a timeline of design iterations.
+**Diagram type:** Flowchart (no semantic pattern routed): a vertical sequence of replacements with an outcome column. A timeline was rejected because the source gives no dates.
 
-**Design decisions:** Problems are red; the final planner/worker/judge cycle is expanded with its fresh-restart loop. Colours follow the shared set: blue for model calls, green for deterministic code, orange for humans, red for failure causes, grey for data stores, purple for external inputs. Top-to-bottom layout keeps it narrow.
+**What the budget forced out or merged:** The expanded planner/worker/judge cycle is summarised in one node sublabel instead of a split figure. The integrator problem and its removal merged into one note. Accent: the final design and the removed-role note.
 
-![Cursor - evolution of multi-agent coordination](./cs-cursor-coordination-evolution.png)
+**Assumptions:** Doc-inline preset, mixed audience, balanced detail. Content only from the "Cursor - scaling long-running multi-agent runs" section. Illustrates the matching entry in [`../case-studies.md`](../case-studies.md).
 
-**Assumptions / source:** Every element comes from the text of the section named below; no new facts. Illustrates the "Cursor — scaling long-running multi-agent runs" entry in [`../case-studies.md`](../case-studies.md).
+![Cursor evolution of multi-agent coordination](./cs-cursor-coordination-evolution.png)
 
-Source script: `cs-cursor-coordination-evolution.mmd` (Mermaid, rendered via Kroki).
+Source: `cs-cursor-coordination-evolution.html` (diagram-design skill, default skin, minimal light variant).

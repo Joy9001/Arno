@@ -1,13 +1,13 @@
-# Uber uReview - code review prompt chain
+# Uber uReview code review prompt chain
 
-**What it shows:** A fixed chain: pluggable generator assistants, a grader prompt, semantic dedup, then a category classifier, with feedback and a Fixer off the output.
+**What it shows:** A fixed chain of stages: generators, a grader prompt, semantic dedup and a category classifier, with reviewer feedback returning to the classifier and an optional Fixer.
 
-**Why this diagram type:** A flowchart shows that this is a deterministic chain of stages, not a free-roaming agent.
+**Diagram type:** Flowchart (no semantic pattern routed): shows a deterministic chain with a feedback return, not a free-roaming agent.
 
-**Design decisions:** LLM stages are blue and code stages green; the feedback store is a cylinder. Colours follow the shared set: blue for model calls, green for deterministic code, orange for humans, red for failure causes, grey for data stores, purple for external inputs. Top-to-bottom layout keeps it narrow.
+**What the budget forced out or merged:** The three pluggable assistants collapsed into one "Generators" node with an italic callout naming them. Accent: grader and the feedback-to-classifier arrow.
 
-![Uber uReview - code review prompt chain](./cs-uber-ureview-prompt-chain.png)
+**Assumptions:** Doc-inline preset, mixed audience, balanced detail. Model names (Claude 4 Sonnet generator, o4-mini-high grader) come from the Models bullet of the same section. Illustrates the matching entry in [`../case-studies.md`](../case-studies.md).
 
-**Assumptions / source:** Every element comes from the text of the section named below; no new facts. Illustrates the "Uber — uReview (AI code review)" entry in [`../case-studies.md`](../case-studies.md).
+![Uber uReview code review prompt chain](./cs-uber-ureview-prompt-chain.png)
 
-Source script: `cs-uber-ureview-prompt-chain.mmd` (Mermaid, rendered via Kroki).
+Source: `cs-uber-ureview-prompt-chain.html` (diagram-design skill, default skin, minimal light variant).

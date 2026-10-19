@@ -1,13 +1,13 @@
-# Uber QueryGPT - workflow of narrow agents
+# Uber QueryGPT workflow of narrow agents
 
-**What it shows:** The intent, table and column-prune agents run in sequence before SQL generation, with a user confirmation step after table selection.
+**What it shows:** Intent, table and column-prune agents run in sequence before SQL generation, with the user confirming tables before pruning.
 
-**Why this diagram type:** A Mermaid flowchart suits a linear pipeline with a few side inputs.
+**Diagram type:** Flowchart (no semantic pattern routed): a linear pipeline with one human step and one store input.
 
-**Design decisions:** The red note explains why column pruning exists; the eval box is attached to the output as a dotted side input. Colours follow the shared set: blue for model calls, green for deterministic code, orange for humans, red for failure causes, grey for data stores, purple for external inputs. Top-to-bottom layout keeps it narrow.
+**What the budget forced out or merged:** The eval box (golden set, vanilla vs decoupled flows) was dropped; it stays in the prose. The "why pruning" red box became an italic callout. Accent: user confirmation and column-prune agent.
 
-![Uber QueryGPT - workflow of narrow agents](./cs-uber-querygpt-workflow.png)
+**Assumptions:** Doc-inline preset, mixed audience, balanced detail. The user confirmation is drawn as a step, not a decision diamond, because it has no branches in the source. Illustrates the matching entry in [`../case-studies.md`](../case-studies.md).
 
-**Assumptions / source:** Every element comes from the text of the section named below; no new facts. Illustrates the "Uber — QueryGPT (text-to-SQL)" entry in [`../case-studies.md`](../case-studies.md).
+![Uber QueryGPT workflow of narrow agents](./cs-uber-querygpt-workflow.png)
 
-Source script: `cs-uber-querygpt-workflow.mmd` (Mermaid, rendered via Kroki).
+Source: `cs-uber-querygpt-workflow.html` (diagram-design skill, default skin, minimal light variant).

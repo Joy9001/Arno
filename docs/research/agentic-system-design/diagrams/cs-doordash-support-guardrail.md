@@ -1,13 +1,13 @@
-# DoorDash Dasher support - RAG with two-tier guardrail
+# DoorDash Dasher support RAG with two-tier guardrail
 
-**What it shows:** The online path (condense, retrieve, generate, tier-1 similarity check, tier-2 LLM groundedness check, human fallback) beside the offline monitoring loop.
+**What it shows:** The online path: condense, retrieve, generate, tier-1 similarity check, tier-2 LLM groundedness check only when flagged, and the human-agent fallback.
 
-**Why this diagram type:** A flowchart makes the decision logic and the default-to-human failure path explicit.
+**Diagram type:** Flowchart (no semantic pattern routed): the two guardrail tiers are decisions and the default-to-human path is the point.
 
-**Design decisions:** Decision diamonds for the two guardrail tiers; offline judge and Promptfoo grouped in a separate box with dotted edges because they act outside the request path. Colours follow the shared set: blue for model calls, green for deterministic code, orange for humans, red for failure causes, grey for data stores, purple for external inputs. Top-to-bottom layout keeps it narrow.
+**What the budget forced out or merged:** The offline monitoring subgraph (LLM judge, Promptfoo regression suites, human calibration) was dropped to stay inside the 9-node budget; it stays in the prose, and the caption only describes the online path. Accent: tier-2 check and human agent.
 
-![DoorDash Dasher support - RAG with two-tier guardrail](./cs-doordash-support-guardrail.png)
+**Assumptions:** Doc-inline preset, mixed audience, balanced detail. Source is a secondary summary, as noted in the topic file. Illustrates the matching entry in [`../case-studies.md`](../case-studies.md).
 
-**Assumptions / source:** Every element comes from the text of the section named below; no new facts. Illustrates the "DoorDash — Dasher support RAG with guardrails" entry in [`../case-studies.md`](../case-studies.md).
+![DoorDash Dasher support RAG with two-tier guardrail](./cs-doordash-support-guardrail.png)
 
-Source script: `cs-doordash-support-guardrail.mmd` (Mermaid, rendered via Kroki).
+Source: `cs-doordash-support-guardrail.html` (diagram-design skill, default skin, minimal light variant).

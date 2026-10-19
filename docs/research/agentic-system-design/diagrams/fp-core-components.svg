@@ -1,1 +1,130 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" data-diagram-type="DESCRIPTION" style="width:716px;height:725px;background:#FFFFFF;" width="716px" height="725px" viewBox="0 0 716 725" zoomAndPan="magnify" preserveAspectRatio="none" contentStyleType="text/css"><?plantuml 1.2026.8?><defs/><g font-family="sans-serif" lengthAdjust="spacing"><g class="title" data-source-line="36"><text x="200.745" y="22.995" fill="#000" font-size="14" textLength="307.672" font-weight="700" font-family="'Helvetica'">Core components of an agentic system</text><text x="227.466" y="39.292" fill="#000" font-size="14" textLength="254.229" font-weight="700" font-family="'Helvetica'">(normalized across vendor lists)</text></g><!--cluster orch--><g class="cluster" data-qualified-name="orch" id="ent0003" data-source-line="41"><rect x="66.2" y="178.854" width="342" height="406.93" fill="#F0FDF4" style="stroke:#16A34A;stroke-width:1.5;" rx="7" ry="7"/><text x="186.584" y="192.921" fill="#000" font-size="13" textLength="101.232" font-weight="700" font-family="'Helvetica'">Orchestration</text><text x="89.709" y="208.053" fill="#000" font-size="13" textLength="294.982" font-weight="700" font-family="'Helvetica'">run loop, workflow code, exit conditions</text><text x="73.922" y="223.186" fill="#000" font-size="13" textLength="326.555" font-weight="700" font-family="'Helvetica'">(final output, no tool calls, error, max turns)</text></g><!--entity model--><g class="entity" data-qualified-name="orch.model" id="ent0004" data-source-line="42"><rect x="170.23" y="242.854" width="159.947" height="50.266" fill="#DBEAFE" style="stroke:#2563EB;stroke-width:1.5;" rx="7" ry="7"/><text x="180.23" y="264.921" fill="#000" font-size="13" textLength="44.446" font-weight="700" font-family="'Helvetica'">Model</text><text x="180.23" y="280.053" fill="#000" font-size="13" textLength="139.947" font-family="'Helvetica'">reasoning + planning</text></g><!--entity guard--><g class="entity" data-qualified-name="orch.guard" id="ent0005" data-source-line="43"><rect x="147.88" y="367.124" width="194.637" height="50.266" fill="#DCFCE7" style="stroke:#16A34A;stroke-width:1.5;" rx="7" ry="7"/><text x="157.88" y="389.191" fill="#000" font-size="13" textLength="152.344" font-weight="700" font-family="'Helvetica'">Guardrails, sandbox,</text><text x="157.88" y="404.323" fill="#000" font-size="13" textLength="174.637" font-family="'Helvetica'">least-privilege permissions</text></g><!--entity tools--><g class="entity" data-qualified-name="orch.tools" id="ent0006" data-source-line="44"><rect x="131.32" y="504.384" width="219.761" height="65.398" fill="#EDE9FE" style="stroke:#7C3AED;stroke-width:1.5;" rx="7" ry="7"/><text x="141.32" y="526.451" fill="#000" font-size="13" textLength="105.796" font-weight="700" font-family="'Helvetica'">Tools / actions</text><text x="141.32" y="541.583" fill="#000" font-size="13" textLength="169.083" font-family="'Helvetica'">data and retrieval, action,</text><text x="141.32" y="556.716" fill="#000" font-size="13" textLength="199.761" font-family="'Helvetica'">orchestration (agents as tools)</text></g><!--entity instr--><g class="entity" data-qualified-name="instr" id="ent0001" data-source-line="38"><rect x="7" y="64.094" width="230.399" height="50.266" fill="#DBEAFE" style="stroke:#2563EB;stroke-width:1.5;" rx="7" ry="7"/><text x="17" y="86.161" fill="#000" font-size="13" textLength="145.139" font-weight="700" font-family="'Helvetica'">Instructions / policy</text><text x="17" y="101.293" fill="#000" font-size="13" textLength="210.399" font-family="'Helvetica'">prompt, goals, scope, guardrails</text></g><!--entity mem--><g class="entity" data-qualified-name="mem" id="ent0002" data-source-line="39"><path d="M272.56,69.594 C272.56,59.594 377.197,59.594 377.197,59.594 C377.197,59.594 481.834,59.594 481.834,69.594 L481.834,108.859 C481.834,118.859 377.197,118.859 377.197,118.859 C377.197,118.859 272.56,118.859 272.56,108.859 L272.56,69.594" style="stroke:#6B7280;stroke-width:0.5;" fill="#F3F4F6"/><path d="M272.56,69.594 C272.56,79.594 377.197,79.594 377.197,79.594 C377.197,79.594 481.834,79.594 481.834,69.594" style="stroke:#6B7280;stroke-width:0.5;" fill="none"/><text x="282.56" y="95.661" fill="#000" font-size="13" textLength="59.116" font-weight="700" font-family="'Helvetica'">Memory</text><text x="282.56" y="110.793" fill="#000" font-size="13" textLength="189.274" font-family="'Helvetica'">short-term + long-term state</text></g><!--entity env--><g class="entity" data-qualified-name="env" id="ent0007" data-source-line="47"><rect x="199.71" y="645.784" width="246.973" height="65.398" fill="#EDE9FE" style="stroke:#7C3AED;stroke-width:1.5;" rx="7" ry="7"/><text x="209.71" y="667.851" fill="#000" font-size="13" textLength="93.495" font-weight="700" font-family="'Helvetica'">Environment</text><text x="209.71" y="682.983" fill="#000" font-size="13" textLength="226.973" font-family="'Helvetica'">data sources, APIs, code execution</text><text x="209.71" y="698.116" fill="#000" font-size="13" textLength="184.653" font-family="'Helvetica'">('ground truth' at each step)</text></g><!--entity human--><g class="entity" data-qualified-name="human" id="ent0008" data-source-line="48"><rect x="464.24" y="242.854" width="237.921" height="50.266" fill="#FFEDD5" style="stroke:#EA580C;stroke-width:1.5;" rx="7" ry="7"/><text x="474.24" y="264.921" fill="#000" font-size="13" textLength="125.836" font-weight="700" font-family="'Helvetica'">Human oversight</text><text x="474.24" y="280.053" fill="#000" font-size="13" textLength="217.921" font-family="'Helvetica'">checkpoints, approval, escalation</text></g><!--link instr to model--><g class="link" data-entity-1="ent0001" data-entity-2="ent0004" id="lnk9" data-source-line="50" data-link-type="dependency"><path d="M140,114.804 C164.45,148.574 205.248,204.904 229.618,238.564" style="stroke:#555;stroke-width:1;" fill="none" id="instr-to-model"/><polygon points="232.55,242.614,230.512,232.978,229.618,238.564,224.032,237.67,232.55,242.614" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="175.74" y="160.064" fill="#000" font-size="11" textLength="36.491" font-family="'Helvetica'">guides</text></g><!--link mem to model--><g class="link" data-entity-1="ent0002" data-entity-2="ent0004" id="lnk10" data-source-line="51" data-link-type="dependency"><path d="M353.593,123.074 C328.923,157.414 293.947,206.093 270.727,238.423" style="stroke:#555;stroke-width:1;" fill="none" id="mem-model"/><polygon points="356.51,119.014,348.01,123.989,353.593,123.074,354.508,128.657,356.51,119.014" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><polygon points="267.81,242.484,276.309,237.507,270.727,238.423,269.811,232.84,267.81,242.484" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="333.5" y="160.064" fill="#000" font-size="11" textLength="63.368" font-family="'Helvetica'">read / write</text></g><!--link model to guard--><g class="link" data-entity-1="ent0004" data-entity-2="ent0005" id="lnk11" data-source-line="52" data-link-type="dependency"><path d="M249.2,293.434 C248.33,314.764 247.274,340.538 246.404,361.848" style="stroke:#555;stroke-width:1;" fill="none" id="model-to-guard"/><polygon points="246.2,366.844,250.564,358.014,246.404,361.848,242.57,357.688,246.2,366.844" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="248.85" y="334.334" fill="#000" font-size="11" textLength="98.151" font-family="'Helvetica'">proposed tool call</text></g><!--link guard to tools--><g class="link" data-entity-1="ent0005" data-entity-2="ent0006" id="lnk12" data-source-line="53" data-link-type="dependency"><path d="M244.51,417.804 C243.84,441.654 242.97,472.986 242.24,499.096" style="stroke:#555;stroke-width:1;" fill="none" id="guard-to-tools"/><polygon points="242.1,504.094,246.35,495.209,242.24,499.096,238.353,494.985,242.1,504.094" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="244.68" y="465.094" fill="#000" font-size="11" textLength="64.727" font-family="'Helvetica'">allowed call</text></g><!--link tools to env--><g class="link" data-entity-1="ent0006" data-entity-2="ent0007" id="lnk13" data-source-line="54" data-link-type="dependency"><path d="M258.92,569.994 C266.84,584.094 276.37,600.834 285.2,615.784 C290.96,625.534 294.747,631.797 300.627,641.337" style="stroke:#555;stroke-width:1;" fill="none" id="tools-to-env"/><polygon points="303.25,645.594,301.933,635.833,300.627,641.337,295.123,640.031,303.25,645.594" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="286.2" y="612.994" fill="#000" font-size="11" textLength="91.529" font-family="'Helvetica'">acts on / queries</text></g><!--link env to model--><g class="link" data-entity-1="ent0007" data-entity-2="ent0004" id="lnk14" data-source-line="55" data-link-type="dependency"><path d="M362.56,645.374 C370.55,636.684 377.84,626.654 382.2,615.784 C430.82,494.594 429.48,431.204 356.2,323.124 C347.85,310.804 340.136,303.641 327.146,296.111" style="stroke:#2563EB;stroke-width:1;stroke-dasharray:7,7;" fill="none" id="env-to-model"/><polygon points="322.82,293.604,328.6,301.578,327.146,296.111,332.612,294.657,322.82,293.604" fill="#2563EB" style="stroke:#2563EB;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="416.37" y="458.594" fill="#2563EB" font-size="11" textLength="103.834" font-family="'Helvetica'">results = feedback</text><text x="422.276" y="471.399" fill="#2563EB" font-size="11" textLength="92.023" font-family="'Helvetica'">for the next step</text></g><!--link model to human--><g class="link" data-entity-1="ent0004" data-entity-2="ent0008" id="lnk15" data-source-line="56" data-link-type="dependency"><path d="M335.39,267.984 C375.41,267.984 414.64,267.984 458.99,267.984" style="stroke:#555;stroke-width:1;" fill="none" id="model-human"/><polygon points="330.39,267.984,339.39,271.984,335.39,267.984,339.39,263.984,330.39,267.984" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><polygon points="463.99,267.984,454.99,263.984,458.99,267.984,454.99,271.984,463.99,267.984" fill="#555" style="stroke:#555;stroke-width:1;stroke-linejoin:miter;stroke-miterlimit:10;"/><text x="364.041" y="249.194" fill="#000" font-size="11" textLength="67.251" font-family="'Helvetica'">risky action:</text><text x="348.21" y="261.999" fill="#000" font-size="11" textLength="98.914" font-family="'Helvetica'">approve / redirect</text></g><?plantuml-src ZLLDRziu4BthLmpIGzjKxiPrd7IDD81ZIsqF_K3RsteFZ3Ys25CSBKdPoIxwtpka5DTHAs1zC2JEyCsyDu-KsofJ2oigk1N5TcEfCN91cYpiI-KnSOUuAuMalJ8RM0ljZYCIrwBHFYVZFueAuUGTwXrwLOYJtsTzLVyYZ2T7mRcrj6_hFfd6Np_uSz_uAFIbxTSQj30-FmfOBBmm6utmNm9mGrQY_LQgOclGEHY_d2RVVvTzTQLrTNtTRke9ycHvaytpx03NhRwQNaooco6uWYGEuYtoHNRPnnjVp2Vdyo4ylFD3SDao-_FNzYuNatcs788hcq6sUPujbzC-N3QVlZvR3C6HBSf1lBDycP__3xPIU74h70x0JFBp_A8FSt5p-Uhr6SEKIY8uZnR9tzUOUENP0-mGX8AgcWmQxu3M80o83R-e0jmzRwXMvfaXMmdD9fCW2ajib1qQoVXQEU-U9ybFLvsSdhutpjkcy8gCWp-W9gsA-zFJbQajL_8fR8WFIWgke1hvhH5MMg6qEm7XG8NTqFajEN1ct0zOaOr0hYJhHqocWXUWoMpQP-U5nmXIOTLhwXDF01bPXBO2XcqCRwKwXJtPxLhJ7e8dKy0xvVdHI1KPCFsrCa83DRvkk7j3u8aq54875iY7qAPGYJlmZJNkUMmW31mUpVrHDn-uaevTe71amkNn0cejJ7Xi6OICWmozxMyFah6AmiXRkai3ccOqFwgjsYcD6uIQLL7E1HeHD4eD3uUlZ_gDMOM1YNPq0J38puwGdEYjmftGQHTELuQE9OLdqJKkb0doT3h4H-YE9zlmyL0oirEMJCKR3zKSDRP09ZR__9x_Gwiy4YoQK8M7yRHrFR35VFaKX0SKh3KxjMvBejaT2ZwgzgwfsDoqG-lKfemLcK2nhKbnuqoiPeD6YkXuk95MH2pZnkvII9BMeIE-zCtekXlKZBNb4-OITXvSzMCyPSd2xctuShIB3odjI6R0fMjoVC0EtahQq4DYg-GCE49xpeifxU93Ic0-2_DX_nckzq-3F3INXFNHNzs5d4hXIfH_7xN7Vk3BOjObN5jq_3roy0RMY39y_bQcbxBci-zB1CCoH-axLbSZ6wHbx5OpfgxSzhxpp6nbMesHcxCeLHZF3m00?></g></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fp-core-components-title fp-core-components-desc" id="fp-core-components-root">
+        <title id="fp-core-components-title">Core components of an agentic system</title>
+        <desc id="fp-core-components-desc">Architecture diagram of an agentic system: instructions guide the model inside orchestration, guardrails gate tool calls into the environment, results feed back to the model, with memory and human oversight attached.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #fp-core-components-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #fp-core-components-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #fp-core-components-root .diagram-container { width: 100%; overflow-x: auto; }
+      #fp-core-components-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="fp-core-components-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="fp-core-components-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="fp-core-components-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="fp-core-components-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#fp-core-components-dots)" opacity="0.55"/> -->
+
+                <rect x="264" y="104" width="312" height="416" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <rect x="272" y="108" width="92" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="276" y="117" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">ORCHESTRATION</text>
+        <text x="420" y="496" fill="#5a6580" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">run loop · workflow code · exit conditions</text>
+        <text x="420" y="508" fill="#5a6580" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">(final output, no tool calls, error, max turns)</text>
+        <path d="M 420,88 V 144" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 320,164 H 208" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 208,196 H 320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 520,164 H 700" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 700,196 H 520" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 380,216 V 272" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 380,344 V 400" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 520,436 H 700" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#fp-core-components-arrow)"/>
+        <path d="M 780,400 V 252 Q 780,244 772,244 H 468 Q 460,244 460,236 V 216" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#fp-core-components-arrow-accent)"/>
+        <rect x="450" y="108" width="44" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="455" y="117" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">GUIDES</text>
+        
+        <rect x="220" y="146" width="40" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="155" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">WRITE</text>
+        
+        <rect x="224" y="202" width="32" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="240" y="211" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">READ</text>
+        
+        <rect x="598" y="146" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="636" y="155" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">RISKY ACTION</text>
+        
+        <rect x="606" y="202" width="60" height="21" rx="2" fill="#f5f5f5"/>
+        <text x="636" y="211" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">APPROVE /</text>
+        <text x="636" y="220" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">REDIRECT</text>
+        
+        <rect x="292" y="238" width="80" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="367" y="247" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end" letter-spacing="0.06em">PROPOSED CALL</text>
+        
+        <rect x="296" y="366" width="76" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="367" y="375" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end" letter-spacing="0.06em">ALLOWED CALL</text>
+        
+        <rect x="596" y="418" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="640" y="427" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ACTS / QUERIES</text>
+        
+        <rect x="492" y="224" width="56" height="12" rx="2" fill="#f1f1f1"/>
+        <text x="520" y="233" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">FEEDBACK</text>
+        
+        <rect x="320" y="32" width="200" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="320" y="32" width="200" height="56" rx="6" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+        <text x="420.0" y="57.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Instructions / policy</text>
+        <text x="420.0" y="70.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">prompt, goals, scope, guardrails</text>
+        
+        <rect x="48" y="144" width="160" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="48" y="144" width="160" height="72" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="128.0" y="171" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Memory</text>
+        <text x="128.0" y="184" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">short-term +</text>
+        <text x="128.0" y="197" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">long-term state</text>
+        
+        <rect x="320" y="144" width="200" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="320" y="144" width="200" height="72" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="420.0" y="177.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Model</text>
+        <text x="420.0" y="190.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reasoning + planning</text>
+        
+        <rect x="320" y="272" width="200" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="320" y="272" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="420.0" y="305.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Guardrails, sandbox</text>
+        <text x="420.0" y="318.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">least-privilege permissions</text>
+        
+        <rect x="320" y="400" width="200" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="320" y="400" width="200" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="420.0" y="427" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tools / actions</text>
+        <text x="420.0" y="440" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">data and retrieval, action,</text>
+        <text x="420.0" y="453" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">orchestration (agents as tools)</text>
+        
+        <rect x="700" y="144" width="176" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="700" y="144" width="176" height="72" rx="6" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+        <text x="788.0" y="171" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Human oversight</text>
+        <text x="788.0" y="184" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">checkpoints, approval,</text>
+        <text x="788.0" y="197" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">escalation</text>
+        
+        <rect x="700" y="400" width="176" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="700" y="400" width="176" height="72" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="788.0" y="420.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Environment</text>
+        <text x="788.0" y="433.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">data sources, APIs,</text>
+        <text x="788.0" y="446.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">code execution</text>
+        <text x="788.0" y="459.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">'ground truth' at each step</text>
+        
+        <line x1="40" y1="540" x2="920" y2="540" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="560" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="550" width="16" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="144" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">model (focal)</text>
+        <rect x="242" y="550" width="16" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="266" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">component</text>
+        <rect x="342" y="550" width="16" height="10" rx="2" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="366" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">state store</text>
+        <rect x="453" y="550" width="16" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="477" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">environment</text>
+        <rect x="564" y="550" width="16" height="10" rx="2" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+        <text x="588" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">instructions / human</text>
+        <line x1="724" y1="555" x2="744" y2="555" stroke="#bf4520" stroke-width="1.2"/>
+        <text x="752" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">feedback</text>
+        
+
+      </svg>
