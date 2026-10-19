@@ -45,6 +45,12 @@ Other sources converge on the same line, with different wording:
 
 ### 1.2 The agentic spectrum
 
+
+![Who controls the next step: code or model?](diagrams/fp-autonomy-spectrum.png)
+
+*Figure: the workflow/agent line is drawn where control of the next step passes from code to the model, and complexity, cost and debugging burden rise along the ladder.*
+
+
 Three independent framings of "degrees of agency":
 
 **(a) Code-level agency ladder** ([smolagents](https://huggingface.co/docs/smolagents/conceptual_guides/intro_agents)):
@@ -97,6 +103,12 @@ Other level-like framings:
 
 Sources list components at different granularities. A normalized view:
 
+![Core components of an agentic system](diagrams/fp-core-components.png)
+
+*Figure: the model-tools-environment loop sits inside orchestration, with memory, instructions and human oversight attached and guardrails gating tool calls.*
+
+
+
 | Component | Anthropic | OpenAI | Google Cloud | IBM | Exabeam **[vendor]** | Databricks **[vendor]** |
 |---|---|---|---|---|---|---|
 | Model / reasoning | "Augmented LLM" | Model | AI model | Reasoning | Cognitive module (reasoning engine) | Reasoning layer |
@@ -134,6 +146,12 @@ Depth on how context, tools, and the loop are engineered is in [`../agent-harnes
 ## 3. Pattern catalogs
 
 ### 3.1 Per-vendor catalogs
+
+
+![Anthropic's five workflow patterns](diagrams/fp-workflow-patterns.png)
+
+*Figure: code (green) gates and aggregates, while orchestrator-workers differs from parallelization in that subtasks are set at runtime.*
+
 
 **Anthropic** ([2024-12](https://www.anthropic.com/engineering/building-effective-agents)): five workflows plus the autonomous agent.
 - *Prompt chaining* (fixed subtasks, gates between steps; "trades latency for accuracy"),
@@ -244,6 +262,12 @@ benchmarks across these patterns under identical conditions were not found in th
 ## 4. When-to-use guidance, by source
 
 The consensus decision rule across sources is "simplest thing that works, escalate on evidence." Specific criteria differ.
+
+![Start simple, escalate on measured evidence](diagrams/fp-escalation-decision-flow.png)
+
+*Figure: each step up the ladder is justified only by evidence that the simpler level falls short.*
+
+
 
 | Source | Use a plain LLM call / workflow when... | Use an agent when... | Use multi-agent when... |
 |---|---|---|---|

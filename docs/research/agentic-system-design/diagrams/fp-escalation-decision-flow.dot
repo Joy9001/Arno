@@ -1,0 +1,38 @@
+digraph G {
+  graph [rankdir=TB, fontname="Helvetica", bgcolor=white, label="Start simple, escalate on measured evidence", labelloc=t, fontsize=16, nodesep=0.25, ranksep=0.45, pad=0.2]
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, margin="0.15,0.08"]
+  edge [color="#555555", fontname="Helvetica", fontsize=10, arrowsize=0.8]
+
+  start [label="Start with the simplest thing that works", shape=box, style="rounded,filled", fillcolor="#F3F4F6", color="#6B7280"]
+
+  node [fillcolor="white", color="#6B7280", shape=box, style="filled,bold"]
+  q1 [label="Rules suffice, or task is\npredictable / one-shot (summarize,\ntranslate, classify)?"]
+  q2 [label="Task decomposes into fixed subtasks\nand predictability is needed?"]
+  q3 [label="Open-ended, step count\nunpredictable, model decisions\ntrusted, trusted environment?"]
+  q4 [label="Single agent can't reliably\nhandle the task? (prompt complexity,\ntool overload, security boundaries)"]
+
+  node [style="rounded,filled"]
+  a1 [label="Deterministic solution or\noptimized single LLM call\n(retrieval + in-context examples)", fillcolor="#DCFCE7", color="#16A34A"]
+  a2 [label="Workflow: chaining, routing,\nparallelization, evaluator-optimizer\n(predefined code paths)", fillcolor="#DCFCE7", color="#16A34A"]
+  a3 [label="Single agent with tools\n(iteration limits, sandbox, guardrails)", fillcolor="#DBEAFE", color="#2563EB"]
+  a4 [label="Multi-agent\n(orchestrator-workers when subtasks\ncan't be predicted)", fillcolor="#DBEAFE", color="#2563EB"]
+  warn [label="Caution: not when all agents need the same\ncontext, many dependencies, or most coding\ntasks (Anthropic); Cognition calls\nmulti-agent currently fragile", fillcolor="#FEE2E2", color="#DC2626", fontsize=10]
+  hum [label="Irreversible actions (deleting\nrecords, moving money): explicit\nhuman approval. Pilot a low-risk,\nreversible workflow.", fillcolor="#FFEDD5", color="#EA580C", fontsize=10]
+
+  start -> q1
+  q1 -> a1 [label=" yes"]
+  q1 -> q2 [label=" no"]
+  q2 -> a2 [label=" yes"]
+  q2 -> q3 [label=" no"]
+  q3 -> a3 [label=" yes"]
+  a3 -> q4 [label=" escalate only on evidence"]
+  q4 -> a4 [label=" yes"]
+  {rank=same; q1; a1}
+  {rank=same; q2; a2}
+  {rank=same; q3; a3}
+  {rank=same; q4; a4}
+  a1 -> a2 [style=dashed, color="#7C3AED", fontcolor="#7C3AED", label="measured evidence\nit falls short", constraint=false]
+  a2 -> a3 [style=dashed, color="#7C3AED", fontcolor="#7C3AED", label="workflow falls\nshort too often", constraint=false]
+  a4 -> warn [style=dashed, arrowhead=none, color="#6B7280"]
+  a3 -> hum [style=dashed, arrowhead=none, color="#6B7280"]
+}
