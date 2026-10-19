@@ -1,11 +1,13 @@
 # Who controls the next step: code or model?
 
-**What it shows:** Patterns ordered from least to most autonomous, split at Anthropic's workflow/agent line.
+**What it shows:** Six patterns ordered from least to most autonomous, split at Anthropic's workflow/agent line where control of the next step passes from code to the model.
 
-**Why this diagram type:** Graphviz (top-to-bottom) suits a one-dimensional ordered ladder with grouped regions.
+**Diagram type:** Layer stack (diagram-design). It is an ordered ladder of rows, and the thick divider plus the left-margin direction arrow carry the "more autonomy" reading.
 
-**Design decisions:** Green = code-controlled workflow, blue = model-controlled agent; side labels keep arrows clear of group titles; order follows MongoDB's least-to-most-autonomous list with Microsoft's direct call as the lowest level.
+**What the budget forced out:** The old figure's coloured clusters became the CODE / MODEL tags and two right-hand captions. The arrow labels between rungs ("add fixed steps", "add branching", ...) became a second sublabel line on each row. The MongoDB and Microsoft quotes are the two italic callouts. Accent is only on the Single agent row (where the model takes the loop).
+
+**Assumptions:** Same ordering as before (MongoDB's least-to-most-autonomous list, with Microsoft's direct call as the lowest level); orchestrator-workers stays omitted because no source places it on that ordering. The tag "LOWEST" for the direct call is taken from Microsoft's "lowest complexity level".
 
 ![Who controls the next step: code or model?](./fp-autonomy-spectrum.png)
 
-**Assumptions / source:** Illustrates section 1.2 of foundations-and-patterns.md; orchestrator-workers is omitted because no source places it on the MongoDB ordering.
+**Source:** `fp-autonomy-spectrum.html` (diagram-design skill, default skin). Illustrates section 1.2 of foundations-and-patterns.md.

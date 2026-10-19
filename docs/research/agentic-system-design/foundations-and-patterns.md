@@ -148,9 +148,13 @@ Depth on how context, tools, and the loop are engineered is in [`../agent-harnes
 ### 3.1 Per-vendor catalogs
 
 
-![Anthropic's five workflow patterns](diagrams/fp-workflow-patterns.png)
+![Anthropic's workflow patterns: chaining, routing, evaluator-optimizer](diagrams/fp-workflow-patterns.png)
 
-*Figure: code (green) gates and aggregates, while orchestrator-workers differs from parallelization in that subtasks are set at runtime.*
+*Figure (1 of 2): prompt chaining gates between LLM calls with code, routing dispatches on an LLM classification, and evaluator-optimizer loops feedback until the output is accepted.*
+
+![Anthropic's workflow patterns: parallelization vs orchestrator-workers](diagrams/fp-workflow-patterns-fanout.png)
+
+*Figure (2 of 2): code aggregates parallel LLM calls, while orchestrator-workers differs from parallelization in that subtasks are set at runtime.*
 
 
 **Anthropic** ([2024-12](https://www.anthropic.com/engineering/building-effective-agents)): five workflows plus the autonomous agent.

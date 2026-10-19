@@ -1,13 +1,15 @@
-# Where multi-agent systems lose information and compound errors
+# Where handoffs lose context
 
-**What it shows:** Two failure families from section 10: context loss when work crosses a handoff (summary, paraphrase or translation tax) and error compounding along a chain of steps or agents, with partial mitigations.
+**What it shows:** The context-loss half of section 10: detail dropped when a worker's result crosses a handoff, the translation tax when the lead rewrites it for the user, and the partial fixes.
 
-**Why this diagram type:** A graph with red annotations attached to the exact handoff where each failure arises ties the failure table to the data path. (Rendered with graphviz via Kroki; source: `ma-handoff-failure-points.dot`.)
+**Diagram type:** Architecture (a three-node handoff chain with annotation boxes hung off the lossy handoffs).
 
-**Design decisions:** Red for failures, green for mitigations, blue for agents. Numbers (0.95^20 ~ 36%, 17.2x vs 4.4x) are quoted from the file, not new.
+**What the budget forced out or split:** Over budget as one figure, so the original panel B (error compounding) was split into `ma-error-compounding`.
 
-![Where multi-agent systems lose information and compound errors](./ma-handoff-failure-points.png)
+**Assumptions / notes:** Failure boxes use the dashed accent treatment; the dots on the arrows mark where information is lost.
 
-**Assumptions / notes:** The 36% figure assumes independent steps, as the file states.
+![Where handoffs lose context](./ma-handoff-failure-points.png)
+
+**Source:** `ma-handoff-failure-points.html` (diagram-design skill, default skin, minimal light, doc-inline preset).
 
 **Illustrates:** multi-agent-systems.md, section 10 (Failure modes, consolidated)

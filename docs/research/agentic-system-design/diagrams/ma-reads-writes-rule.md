@@ -1,13 +1,15 @@
 # Convergent rule: fan out reads, keep writes single-threaded
 
-**What it shows:** The shared 2026 rule from Anthropic, Cognition and LangChain: parallel read-only workers feed one writer, a clean-context reviewer checks the draft, and parallel writers are the fragile path.
+**What it shows:** The shared 2026 rule: a lead fans read-only work out to workers with fresh context windows, their compact results inform ONE writer, a clean-context reviewer checks the draft, and parallel writers are the fragile path.
 
-**Why this diagram type:** A top-down flow with a green (safe) branch and a red (fragile) branch makes the decision rule visible at a glance. (Rendered with graphviz via Kroki; source: `ma-reads-writes-rule.dot`.)
+**Diagram type:** Architecture (components and connectors, with two labelled zones for the robust and fragile paths). No semantic pattern matched.
 
-**Design decisions:** Green and red clusters side by side; the single writer sits below the reads branch. The note restates the three justifications for extra agents.
+**What the budget forced out or split:** The "Task" start node was removed (the lead is the entry point), and the two writers keep one shared failure-outcome node. The three justifications for extra agents are a single italic callout.
+
+**Assumptions / notes:** Writer examples ("final report, edits, commits") generalise from Anthropic (one agent writes the report) and Cognition (writes stay single-threaded). Accent is on the single writer and the failure outcome only.
 
 ![Convergent rule: fan out reads, keep writes single-threaded](./ma-reads-writes-rule.png)
 
-**Assumptions / notes:** Writer examples ("final report, edits, commits") generalise from Anthropic (one agent writes the report) and Cognition (writes stay single-threaded).
+**Source:** `ma-reads-writes-rule.html` (diagram-design skill, default skin, minimal light, doc-inline preset).
 
 **Illustrates:** multi-agent-systems.md, section 1 (headline) with support from sections 4, 6 and 11

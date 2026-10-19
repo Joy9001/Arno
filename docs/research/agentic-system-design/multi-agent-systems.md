@@ -24,7 +24,11 @@ Vendor-interest note: Anthropic, LangChain, Microsoft, CrewAI, Google and OpenAI
 
 ![Multi-agent topologies](diagrams/ma-topologies.png)
 
-*Figure: Six of the topologies below as graphs; notice who holds control (lead, peer, nobody) and whether context is isolated (scratchpads) or shared (board).*
+*Figure: Three of the topologies below in which a lead holds control; notice that workers keep isolated scratchpads.*
+
+![Multi-agent topologies without a lead](diagrams/ma-topologies-flat.png)
+
+*Figure: The other three, with no single lead: peers handing control to each other, a shared board (shared context), and a sequential pipeline.*
 
 | Topology | Structure | Use when | Failure modes | Examples |
 |---|---|---|---|---|
@@ -177,7 +181,11 @@ Note the framing tension: MCP's own sampling feature (server-initiated LLM calls
 
 ![Where multi-agent systems lose information and compound errors](diagrams/ma-handoff-failure-points.png)
 
-*Figure: Context is lost at each handoff and errors compound along a chain; the partial fixes are structured handoffs, checkpoints and explicit-criteria verifiers.*
+*Figure: Context is lost at each handoff (summary, paraphrase, translation tax); the partial fix is a structured handoff.*
+
+![Where errors compound along a chain](diagrams/ma-error-compounding.png)
+
+*Figure: Errors compound along a chain of steps or agents; the partial fixes are checkpoints and explicit-criteria verifiers.*
 
 | Failure | Mechanism | Evidence |
 |---|---|---|

@@ -1,13 +1,15 @@
-# Multi-agent topologies: who holds control, and what each agent sees
+# Topologies with a lead: who holds control
 
-**What it shows:** Six of the section 2 topologies as small graphs stacked vertically: single agent, orchestrator-workers, hierarchical teams, network/swarm handoff, shared-state blackboard, and sequential pipeline.
+**What it shows:** Three of the six section 2 topologies in which a lead holds control: single agent with tools (baseline), orchestrator-workers with isolated scratchpads, and hierarchical teams.
 
-**Why this diagram type:** Graphviz clusters stack several independent small graphs in one narrow figure; structure (fan-out, tree, cycle, hub) is the point, so a graph beats a table. (Rendered with graphviz via Kroki; source: `ma-topologies.dot`.)
+**Diagram type:** Architecture, three independent panels (zones) in one figure.
 
-**Design decisions:** Blue for agents, purple for tools, grey cylinder for the shared store, orange for the user. Control flow and context flow differ per panel: scratchpads are isolated in panel 2, shared in panel 5.
+**What the budget forced out or split:** The original six-panel gallery is split into two figures of three (this one and `ma-topologies-flat`) so each panel keeps the connector rules. Hierarchical teams draws "Workers x2" as one node per sub-supervisor instead of four worker nodes; the hierarchy is laid out left to right to fit.
 
-![Multi-agent topologies: who holds control, and what each agent sees](./ma-topologies.png)
+**Assumptions / notes:** Panels are separate mini-diagrams, so the 9-node budget is applied per panel (at most 5 nodes). No accent is used: control holders are white, workers and tools are grey.
 
-**Assumptions / notes:** Omits the other table rows (concurrent, generator-verifier, work queue, message bus, manager-led planning, debate); they are variations on these shapes.
+![Topologies with a lead: who holds control](./ma-topologies.png)
+
+**Source:** `ma-topologies.html` (diagram-design skill, default skin, minimal light, doc-inline preset).
 
 **Illustrates:** multi-agent-systems.md, section 2 (Topology catalogue)
