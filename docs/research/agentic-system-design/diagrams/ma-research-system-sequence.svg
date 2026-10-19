@@ -37,26 +37,26 @@
         <rect x="296" y="132" width="8" height="332" fill="#2d3142" stroke="#4f5d75" stroke-width="0.8" fill-opacity="0.06"/>
         <rect x="656" y="220" width="8" height="96" fill="#2d3142" stroke="#4f5d75" stroke-width="0.8" fill-opacity="0.06"/>
         <rect x="836" y="372" width="8" height="48" fill="#2d3142" stroke="#4f5d75" stroke-width="0.8" fill-opacity="0.06"/>
-        <path d="M120,132 L296,132" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow-link)"/>
+        <path d="M120,132 L296,132" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <path d="M304,176 L480,176" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
-        <path d="M304,220 L656,220" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow-link)"/>
+        <path d="M304,220 L656,220" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <path d="M664,248 L692,248 Q700,248 700,256 L700,264 Q700,272 692,272 L664,272" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <path d="M656,316 L304,316" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#ma-research-system-sequence-arrow)"/>
-        <path d="M304,372 L836,372" fill="none" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow-link)"/>
+        <path d="M304,372 L836,372" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <path d="M836,420 L304,420" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <path d="M296,464 L120,464" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#ma-research-system-sequence-arrow-accent)"/>
         <rect x="166" y="114" width="88" height="12" rx="2" fill="#f5f5f5"/>
-        <text x="210" y="123" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">RESEARCH QUERY</text>
+        <text x="210" y="123" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">RESEARCH QUERY</text>
         <rect x="362" y="158" width="60" height="12" rx="2" fill="#f5f5f5"/>
         <text x="392" y="167" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SAVE PLAN</text>
         <rect x="364" y="202" width="72" height="12" rx="2" fill="#f5f5f5"/>
-        <text x="400" y="211" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">BRIEF × 3-5</text>
+        <text x="400" y="211" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">BRIEF × 3-5</text>
         <rect x="708" y="254" width="80" height="12" rx="2" fill="#f5f5f5"/>
         <text x="748" y="263" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SEARCH + READ</text>
         <rect x="356" y="298" width="88" height="12" rx="2" fill="#f5f5f5"/>
         <text x="400" y="307" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">COMPACT ANSWER</text>
         <rect x="378" y="354" width="44" height="12" rx="2" fill="#f5f5f5"/>
-        <text x="400" y="363" fill="#2e5aa8" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">REPORT</text>
+        <text x="400" y="363" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">REPORT</text>
         <rect x="522" y="402" width="76" height="12" rx="2" fill="#f5f5f5"/>
         <text x="560" y="411" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ATTRIBUTIONS</text>
         <rect x="172" y="446" width="76" height="12" rx="2" fill="#f5f5f5"/>
@@ -92,7 +92,7 @@
         <text x="60" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Lead agent (focal)</text>
         <rect x="180" y="536" width="6" height="16" fill="#2d3142" stroke="#4f5d75" stroke-width="0.8" fill-opacity="0.06"/>
         <text x="196" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Activation</text>
-        <line x1="273" y1="545" x2="301" y2="545" stroke="#2e5aa8" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow-link)"/>
+        <line x1="273" y1="545" x2="301" y2="545" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <text x="309" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Call</text>
         <line x1="356" y1="545" x2="384" y2="545" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#ma-research-system-sequence-arrow)"/>
         <text x="392" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Return</text>

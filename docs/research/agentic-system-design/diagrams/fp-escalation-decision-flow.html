@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Start simple, escalate on measured evidence</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;   /* white-smoke */
+      --color-ink:     #2d3142;   /* jet-black */
+      --color-muted:   #4f5d75;   /* blue-slate */
+      --color-accent:  #bf4520;   /* burnt-tangerine */
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1200px; width: 100%; }
+    /* The SVG holds its readable width (min-width == the viewBox width, so the
+       type ramp is never silently scaled down). This wrapper lets a narrow
+       screen scroll the diagram instead of the whole page. */
+    .diagram-container { width: 100%; overflow-x: auto; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 960px; display: block; }
+    /* Paper has no scrollbar, so the local scroller would clip instead of
+       scroll. Let the diagram scale down to the sheet: smaller but whole
+       beats sharp but cut off. Must come after the svg rule above - a media
+       query adds no specificity, so a later plain rule would win. */
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · Diagram Design</p>
+    <h1>Start simple, escalate on measured evidence</h1>
+
+    <!-- Replace fp-escalation-decision-flow with a unique slug for this diagram before export. -->
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="fp-escalation-decision-flow-title fp-escalation-decision-flow-desc">
+        <title id="fp-escalation-decision-flow-title">Start simple, escalate on measured evidence</title>
+        <desc id="fp-escalation-decision-flow-desc">Flowchart of four questions that move from a deterministic solution to a workflow, a single agent and multi-agent only when evidence shows the simpler level falls short, with cautions on multi-agent and irreversible actions.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+                <path d="M 352,72 H 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 352,176 H 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 352,280 H 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 352,384 H 424" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 196,108 V 140" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 196,212 V 244" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 564,108 V 140" fill="none" stroke="#bf4520" stroke-width="1.4" stroke-dasharray="4,3" marker-end="url(#arrow-accent)"/>
+        <path d="M 564,212 V 244" fill="none" stroke="#bf4520" stroke-width="1.4" stroke-dasharray="4,3" marker-end="url(#arrow-accent)"/>
+        <path d="M 564,316 V 324 Q 564,332 556,332 H 204 Q 196,332 196,340 V 348" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <rect x="374" y="52" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="388" y="61" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+        <rect x="374" y="156" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="388" y="165" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+        <rect x="374" y="260" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="388" y="269" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+        <rect x="374" y="364" width="28" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="388" y="373" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+        <rect x="204" y="118.0" width="20" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="209" y="127.0" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">NO</text>
+        <rect x="204" y="222.0" width="20" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="209" y="231.0" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">NO</text>
+        <rect x="572" y="118.0" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="577" y="127.0" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">FALLS SHORT</text>
+        <rect x="572" y="222.0" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="577" y="231.0" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">FALLS SHORT</text>
+        <rect x="352" y="314" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="388" y="323" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ON EVIDENCE</text>
+        <rect x="40" y="36" width="312" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="36" width="312" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="196.0" y="63" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Rules suffice or one-shot task?</text>
+        <text x="196.0" y="76" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">predictable; summarize,</text>
+        <text x="196.0" y="89" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">translate, classify</text>
+        <polygon points="54,40 60,46 54,52 48,46" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <rect x="40" y="140" width="312" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="140" width="312" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="196.0" y="173.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Decomposes into fixed subtasks?</text>
+        <text x="196.0" y="186.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">predictability is needed</text>
+        <polygon points="54,144 60,150 54,156 48,150" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <rect x="40" y="244" width="312" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="244" width="312" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="196.0" y="271" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Open-ended, steps unpredictable?</text>
+        <text x="196.0" y="284" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">model decisions trusted,</text>
+        <text x="196.0" y="297" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">trusted environment</text>
+        <polygon points="54,248 60,254 54,260 48,254" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <rect x="40" y="348" width="312" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="348" width="312" height="72" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <text x="196.0" y="375" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Single agent can't reliably cope?</text>
+        <text x="196.0" y="388" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">prompt complexity, tool overload,</text>
+        <text x="196.0" y="401" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">security boundaries</text>
+        <polygon points="54,352 60,358 54,364 48,358" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <rect x="424" y="36" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="424" y="36" width="280" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="564.0" y="69.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Deterministic or optimized LLM call</text>
+        <text x="564.0" y="82.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">retrieval + in-context examples</text>
+        <rect x="424" y="140" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="424" y="140" width="280" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="564.0" y="167" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Workflow</text>
+        <text x="564.0" y="180" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">chaining, routing, parallelization,</text>
+        <text x="564.0" y="193" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">evaluator-optimizer (predefined code paths)</text>
+        <rect x="424" y="244" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="424" y="244" width="280" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="564.0" y="277.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Single agent with tools</text>
+        <text x="564.0" y="290.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">iteration limits, sandbox, guardrails</text>
+        <rect x="424" y="348" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="424" y="348" width="280" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="564.0" y="375" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Multi-agent</text>
+        <text x="564.0" y="388" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">orchestrator-workers when subtasks</text>
+        <text x="564.0" y="401" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">can't be predicted</text>
+        <circle cx="704" cy="280" r="2" fill="#2d3142"/>
+        <line x1="708" y1="280" x2="728" y2="280" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="736" y="260" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">Irreversible actions (deleting</text>
+        <text x="736" y="276" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">records, moving money): explicit</text>
+        <text x="736" y="292" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">human approval. Pilot a low-risk,</text>
+        <text x="736" y="308" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">reversible workflow.</text>
+        <circle cx="704" cy="384" r="2" fill="#2d3142"/>
+        <line x1="708" y1="384" x2="728" y2="384" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="736" y="364" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">Caution: not when all agents need</text>
+        <text x="736" y="380" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">the same context, many</text>
+        <text x="736" y="396" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">dependencies, or most coding</text>
+        <text x="736" y="412" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">tasks (Anthropic); Cognition</text>
+        <text x="736" y="428" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">calls multi-agent currently</text>
+        <text x="736" y="444" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">fragile.</text>
+        <line x1="40" y1="532" x2="920" y2="532" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="560" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="550" width="16" height="10" rx="2" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/><polygon points="128,551 132,555 128,559 124,555" fill="none" stroke="#2d3142" stroke-width="0.8"/>
+        <text x="144" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">decision question</text>
+        <rect x="290" y="550" width="16" height="10" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="314" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">code decides next step</text>
+        <rect x="490" y="550" width="16" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="514" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">model decides next step</text>
+        <line x1="690" y1="555" x2="710" y2="555" stroke="#bf4520" stroke-width="1.4" stroke-dasharray="4,3"/>
+        <text x="718" y="559" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">escalate on evidence</text>
+
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

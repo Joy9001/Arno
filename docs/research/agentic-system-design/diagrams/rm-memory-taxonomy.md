@@ -1,11 +1,13 @@
 # Agent memory: CoALA taxonomy and four implementation families
 
-**What it shows:** CoALA's working vs long-term (episodic/semantic/procedural) memory, and the four implementation families in the file's comparison.
+**What it shows:** CoALA's working memory and long-term episodic, semantic and procedural stores (what is stored), above the four implementation families from the section 6 comparison (how writes happen), grouped by whether a fixed pipeline or the agent decides what to store.
 
-**Why this diagram type:** Graphviz with two stacked clusters: conceptual taxonomy on top, concrete families below, so the reader sees that the taxonomy is not the architecture.
+**Diagram type:** Nested containment with two zones (long-term memory nested in the taxonomy zone), diagram-design skill, default skin, minimal light, `doc-inline`. The point is that the taxonomy is not the architecture.
 
-**Design decisions:** Grey cylinders are stores; green families use a fixed pipeline to decide writes, blue families let the agent decide (section 6.4 'who decides'). The 'implemented by' edge is cluster-level, not a per-type mapping.
+**Budget:** Exactly 8 nodes and 2 arrows; no cuts beyond shortening family sublabels. Accent: the two agent-decides families (OS-style tiers, Files); the fixed-pipeline families (Fact store, Temporal graph) stay neutral.
+
+**Assumptions:** The "implemented by" arrow is zone to zone; no mapping of each family to a specific memory type is claimed (sections 6.1-6.2).
 
 ![Agent memory: CoALA taxonomy and four implementation families](./rm-memory-taxonomy.png)
 
-**Assumptions / source:** Sections 6.1-6.2 of retrieval-and-memory.md. No mapping of each family to a specific memory type is claimed.
+**Source:** `rm-memory-taxonomy.html` (diagram-design skill, default skin).

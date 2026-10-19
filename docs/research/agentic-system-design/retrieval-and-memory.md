@@ -49,6 +49,10 @@ Three research lines made the "agentic" step concrete:
 
 *Figure: Contextualization happens once at indexing and feeds both indexes; query time is search, fusion (150 candidates), rerank, then 20 chunks into the prompt.*
 
+![Contextual retrieval: top-20 failure rate by step](diagrams/rm-contextual-retrieval-failure.png)
+
+*Figure: Cumulative top-20 retrieval failure rate on Anthropic's test sets (vendor numbers): 5.7% baseline, 3.7% with contextual embeddings, 2.9% adding contextual BM25, 1.9% adding rerank (-67%).*
+
 ### 3.1 Chunking and indexing
 
 | Decision | Options | Evidence | Trade-off |

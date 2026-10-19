@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ma-error-compounding-title ma-error-compounding-desc" id="ma-error-compounding-root">
+        <title id="ma-error-compounding-title">Where errors compound along a chain</title>
+        <desc id="ma-error-compounding-desc">Architecture diagram of a chain of steps in which each output is the next input, with the end-to-end reliability and amplification figures and the partial mitigations.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #ma-error-compounding-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #ma-error-compounding-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #ma-error-compounding-root .diagram-container { width: 100%; overflow-x: auto; }
+      #ma-error-compounding-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="ma-error-compounding-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="ma-error-compounding-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="ma-error-compounding-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="ma-error-compounding-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#ma-error-compounding-dots)" opacity="0.55"/> -->
+
+                <path d="M224,124 L352,124" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-error-compounding-arrow)"/>
+        <path d="M512,124 L640,124" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-error-compounding-arrow)"/>
+        <line x1="288" y1="128" x2="288" y2="208" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <circle cx="288" cy="124" r="3.5" fill="#4f5d75"/>
+        <line x1="720" y1="152" x2="720" y2="208" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
+        <rect x="244" y="106" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="288" y="115" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">OUTPUT = INPUT</text>
+        <rect x="64" y="96" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="64" y="96" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="144.0" y="128.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Step 1</text>
+        <rect x="352" y="96" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="352" y="96" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="432.0" y="128.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Step 2</text>
+        <rect x="640" y="96" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="640" y="96" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="720.0" y="128.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">… Step 20</text>
+        <rect x="108" y="208" width="360" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="108" y="208" width="360" height="72" rx="6" fill="#bf4520" stroke="rgba(191,69,32,0.50)" stroke-width="1" stroke-dasharray="4,4" fill-opacity="0.05"/>
+        <text x="288.0" y="235.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Kim et al.: 17.2x vs 4.4x</text>
+        <text x="288.0" y="250.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">errors amplified 17.2x with independent</text>
+        <text x="288.0" y="262.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">agents, 4.4x with centralised coordination</text>
+        <rect x="560" y="208" width="320" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="560" y="208" width="320" height="72" rx="6" fill="#bf4520" stroke="rgba(191,69,32,0.50)" stroke-width="1" stroke-dasharray="4,4" fill-opacity="0.05"/>
+        <text x="720.0" y="235.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">95% per step over 20 steps</text>
+        <text x="720.0" y="250.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">= ~36% end-to-end (0.95^20)</text>
+        <text x="720.0" y="262.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">assumes independent steps</text>
+        <rect x="320" y="344" width="320" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="320" y="344" width="320" height="72" rx="6" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+        <rect x="328" y="350" width="24" height="12" rx="2" fill="none" stroke="#5a6580" stroke-opacity="0.45" stroke-width="0.8"/>
+        <text x="340.0" y="359" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">FIX</text>
+        <text x="480.0" y="371.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Mitigation</text>
+        <text x="480.0" y="386.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">resume from checkpoints;</text>
+        <text x="480.0" y="398.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">verifier with explicit criteria</text>
+        <line x1="40" y1="512" x2="920" y2="512" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="528" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="540" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="60" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Step or agent</text>
+        <rect x="151" y="540" width="14" height="10" rx="2" fill="#bf4520" stroke="rgba(191,69,32,0.50)" stroke-width="1" stroke-dasharray="4,4" fill-opacity="0.05"/>
+        <text x="171" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Compounded error</text>
+        <rect x="277" y="540" width="14" height="10" rx="2" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+        <text x="297" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Mitigation</text>
+        <line x1="374" y1="545" x2="402" y2="545" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-error-compounding-arrow)"/>
+        <text x="410" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Output feeds next step</text>
+        <circle cx="552" cy="545" r="3.5" fill="#4f5d75"/>
+        <text x="565" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Where errors propagate</text>
+
+      </svg>
