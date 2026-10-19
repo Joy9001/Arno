@@ -7,11 +7,11 @@ flowchart TD
   LEAD["Lead agent (Opus 4)<br/>plans, synthesizes, can spawn more"]:::llm
   MEM[("External memory<br/>saved plan (context past<br/>200K tokens is truncated)")]:::store
   RULES["Effort-scaling rules in prompt<br/>1 agent / 3-10 calls for facts,<br/>10+ subagents for complex work"]:::code
-  subgraph PAR ["3-5 parallel subagents (Sonnet 4), each with own context, tools, prompt"]
+  subgraph PAR ["3-5 parallel subagents (Sonnet 4)"]
     direction LR
-    S1["Subagent 1"]:::llm
-    S2["Subagent 2"]:::llm
-    S3["Subagent 3"]:::llm
+    S1["Subagent<br/>own context,<br/>tools, prompt"]:::llm
+    S2["Subagent<br/>own context,<br/>tools, prompt"]:::llm
+    S3["Subagent<br/>own context,<br/>tools, prompt"]:::llm
   end
   STORE[("External storage<br/>large outputs")]:::store
   CIT["Citation agent<br/>attaches claims to sources"]:::llm
