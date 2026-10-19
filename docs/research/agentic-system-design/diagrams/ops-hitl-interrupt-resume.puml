@@ -1,0 +1,56 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 13
+skinparam ArrowColor #555555
+skinparam ArrowFontSize 12
+skinparam state {
+  BackgroundColor #DCFCE7
+  BorderColor #16A34A
+  BackgroundColor<<human>> #FFEDD5
+  BorderColor<<human>> #EA580C
+  BackgroundColor<<risk>> #FEE2E2
+  BorderColor<<risk>> #DC2626
+}
+skinparam note {
+  BorderColor #9CA3AF
+  BackgroundColor #F9FAFB
+}
+
+title LangGraph interrupt and resume: the node runs twice
+
+state "Node starts" as S1
+state "Code before interrupt()" as S2
+state "interrupt() raises\ncontrol-flow exception" as S3
+state "Paused\nstate saved by checkpointer\nwaits indefinitely" as S4 <<human>>
+state "Node re-executes\nfrom its first line" as S5 <<risk>>
+state "Code before interrupt() runs AGAIN" as S6 <<risk>>
+state "interrupt() returns resume value\n(matched to interrupt by position)" as S7
+state "Code after interrupt()" as S8
+state "Node completes" as S9
+
+[*] --> S1
+S1 --> S2
+S2 --> S3 : first pass
+S3 --> S4 : persist under thread_id
+S4 --> S5 : Command(resume=...)\nsame thread_id
+S5 --> S6
+S6 --> S7 : second pass
+S7 --> S8
+S8 --> S9
+S9 --> [*]
+
+note right of S2
+  Side effects here repeat on resume,
+  so keep them idempotent,
+  move them after interrupt(),
+  or put them in a separate node
+end note
+
+note left of S3
+  A bare try/except around
+  interrupt() swallows the
+  exception and breaks the pause
+end note
+@enduml

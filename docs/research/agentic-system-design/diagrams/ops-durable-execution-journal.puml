@@ -1,0 +1,67 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 13
+skinparam ArrowColor #555555
+skinparam ArrowFontSize 12
+skinparam sequenceLifeLineBorderColor #888888
+skinparam sequenceParticipant {
+  BorderColor #16A34A
+  BackgroundColor #DCFCE7
+}
+skinparam participant<<model>> {
+  BorderColor #2563EB
+  BackgroundColor #DBEAFE
+}
+skinparam participant<<ext>> {
+  BorderColor #7C3AED
+  BackgroundColor #EDE9FE
+}
+skinparam database {
+  BorderColor #6B7280
+  BackgroundColor #F3F4F6
+}
+skinparam note {
+  BorderColor #9CA3AF
+  BackgroundColor #F9FAFB
+}
+
+title Durable execution: journal, crash, resume
+
+participant "Agent loop\n(workflow code)" as W
+database "Journal" as J
+participant "LLM" as M <<model>>
+participant "Payment API\n(external)" as P <<ext>>
+
+== First run ==
+W -> M : step 1: model call
+M --> W : tool request (charge)
+W -> J : persist model result
+note right of J
+  Replay will reuse this result,
+  so the call is not re-billed
+end note
+
+W -> P : step 2: charge\n(Idempotency-Key = step ID)
+P -> P : performs the charge
+P --> W : result
+note over W, P #FEE2E2
+  **Crash** after the external action
+  but before the result is persisted
+end note
+
+== Resume from journal ==
+W -> J : load journal
+J --> W : step 1 recorded, step 2 absent
+W -> W : step 1 skipped (result replayed)
+W -> P : step 2 retried\n(same Idempotency-Key)
+P --> W : repeat treated as one action\n(no second charge)
+W -> J : persist step 2 result
+
+note over W, P
+  Journal prevents re-running completed steps.
+  Idempotency keys make the in-flight step safe.
+  Separate runs need a business ID or a DB uniqueness constraint.
+end note
+@enduml

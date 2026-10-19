@@ -1,0 +1,38 @@
+digraph security {
+  graph [rankdir=TB, fontname="Helvetica", fontsize=18, bgcolor=white, label="Layered agent security: construction over detection", labelloc=t, nodesep=0.35, ranksep=0.45, compound=true];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, margin="0.18,0.1"];
+  edge [color="#555555", fontname="Helvetica", fontsize=11, fontcolor="#333333"];
+
+  IN [label="Untrusted content\n(web page, email, tool output)", fillcolor="#FEE2E2", color="#DC2626"];
+
+  subgraph cluster_prob {
+    label="Probabilistic layer: useful, not a security boundary";
+    fontname="Helvetica"; fontsize=12; style="dashed,rounded"; color="#DC2626"; labeljust=l;
+    G [label="Classifiers, filters, validators\n(Llama Guard, injection detectors)\nAdaptive attacks: >90% success on most of 12 defenses\nHuman red-teaming: 100%", fillcolor="#FEE2E2", color="#DC2626"];
+  }
+
+  AG [label="Agent LLM\nreads input, chooses tool calls", fillcolor="#DBEAFE", color="#2563EB"];
+
+  RULE [label="Rule of Two check for this session\nA untrusted input\nB sensitive data or systems\nC state change or external communication", shape=box, fillcolor="#FFEDD5", color="#EA580C"];
+
+  HUMAN [label="All three needed:\nhuman approval or\nanother reliable check", fillcolor="#FFEDD5", color="#EA580C"];
+
+  subgraph cluster_det {
+    label="Deterministic layer: the guarantee comes from what the agent cannot do";
+    fontname="Helvetica"; fontsize=12; style="rounded"; color="#16A34A";
+    D1 [label="Architectural patterns\nAction-Selector, Plan-Then-Execute, Dual LLM,\nCaMeL capabilities attached to data", fillcolor="#DCFCE7", color="#16A34A"];
+    D2 [label="Policy engine at the gateway (e.g. Cedar)\ndefault-deny, forbid overrides permit, audit log", fillcolor="#DCFCE7", color="#16A34A"];
+    D3 [label="Least-privilege auth\naudience-bound OAuth tokens,\nshort-lived task-scoped credentials", fillcolor="#DCFCE7", color="#16A34A"];
+    D1 -> D2 -> D3 [style=invis];
+  }
+
+  TOOLS [label="Tools and external systems", fillcolor="#EDE9FE", color="#7C3AED"];
+
+  IN -> G [label="  filtered, but may be bypassed"];
+  G -> AG;
+  AG -> RULE [label="  proposed tool call"];
+  RULE -> D1 [label="  at most two of A, B, C", lhead=cluster_det];
+  RULE -> HUMAN [label="  all three"];
+  HUMAN -> D1 [label="  approved", lhead=cluster_det];
+  D3 -> TOOLS [label="  only permitted calls reach tools", ltail=cluster_det];
+}

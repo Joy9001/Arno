@@ -1,0 +1,33 @@
+digraph G {
+  rankdir=TB; newrank=true; bgcolor=white; nodesep=0.3; ranksep=0.5;
+  label="Convergent rule: fan out reads, keep writes single-threaded"; labelloc=t; fontsize=18; fontname="Helvetica-Bold";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, fillcolor="#DBEAFE", color="#2563EB", penwidth=1.5];
+  edge [color="#555555", fontname="Helvetica", fontsize=10, arrowsize=0.7];
+
+  task [label="Task", fillcolor="#DCFCE7", color="#16A34A"];
+  lead [label="Lead / primary agent\ndecides what to read, what to write"];
+  task -> lead;
+
+  subgraph cluster_reads { label="Fan out READS (robust)"; fontname="Helvetica-Bold"; fontsize=13; style="rounded,filled"; fillcolor="#F0FDF4"; color="#16A34A";
+    r1 [label="Reader A\nfresh context window"]; r2 [label="Reader B\nfresh context window"];
+    res [label="Compact results\nconflicting reads do little damage", fillcolor="#DCFCE7", color="#16A34A"];
+    r1 -> res; r2 -> res;
+  }
+  subgraph cluster_bad { label="Fan out WRITES (fragile)"; fontname="Helvetica-Bold"; fontsize=13; style="rounded,filled"; fillcolor="#FEF2F2"; color="#DC2626";
+    w1 [label="Writer A", fillcolor="#FEE2E2", color="#DC2626"]; w2 [label="Writer B", fillcolor="#FEE2E2", color="#DC2626"];
+    bad [label="Unstated, incompatible assumptions;\nsame-bug pileup, fixes overwritten", fillcolor="#FEE2E2", color="#DC2626"];
+    w1 -> bad; w2 -> bad;
+  }
+  lead -> r1 [label="read-only\nbriefs"]; lead -> r2;
+  lead -> w1 [label="parallel\nedits", color="#DC2626", fontcolor="#DC2626", style=dashed]; lead -> w2 [color="#DC2626", style=dashed];
+
+  one [label="ONE writer\nfinal report, edits, commits\n(extra agents add intelligence, not actions)", fillcolor="#DCFCE7", color="#16A34A"];
+  rev [label="Reviewer / verifier\nclean context, explicit criteria\n(e.g. sees only the diff)", fillcolor="#DBEAFE", color="#2563EB"];
+  res -> one [label="informs"];
+  rev -> one [label="findings", constraint=false];
+  one -> rev [label="draft"];
+  bad -> one [style=invis];
+
+  note [shape=note, style=filled, fillcolor="#FFFBEB", color="#9CA3AF", fontsize=11, label="Justify every extra agent by:\ncontext isolation, real parallelism,\nor independent review"];
+  one -> note [style=invis];
+}

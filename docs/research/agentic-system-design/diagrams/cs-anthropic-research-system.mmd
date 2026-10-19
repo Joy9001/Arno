@@ -1,0 +1,33 @@
+---
+title: Anthropic multi-agent Research system
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Helvetica, Arial, sans-serif","fontSize":"14px","lineColor":"#555555","background":"#ffffff"}}}%%
+flowchart TD
+  Q([User research query]):::ext
+  LEAD["Lead agent (Opus 4)<br/>plans, synthesizes, can spawn more"]:::llm
+  MEM[("External memory<br/>saved plan (context past<br/>200K tokens is truncated)")]:::store
+  RULES["Effort-scaling rules in prompt<br/>1 agent / 3-10 calls for facts,<br/>10+ subagents for complex work"]:::code
+  subgraph PAR ["3-5 parallel subagents (Sonnet 4), each with own context, tools, prompt"]
+    direction LR
+    S1["Subagent 1"]:::llm
+    S2["Subagent 2"]:::llm
+    S3["Subagent 3"]:::llm
+  end
+  STORE[("External storage<br/>large outputs")]:::store
+  CIT["Citation agent<br/>attaches claims to sources"]:::llm
+  OUT([Final answer with citations]):::code
+
+  Q --> LEAD
+  RULES -.->|bounds spawning| LEAD
+  LEAD -->|saves plan| MEM
+  LEAD -->|spawns, waits for each batch| PAR
+  PAR -->|write large outputs| STORE
+  STORE -->|lightweight references<br/>avoid telephone-game loss| LEAD
+  LEAD -->|synthesized report| CIT
+  CIT --> OUT
+  classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111;
+  classDef code fill:#DCFCE7,stroke:#16A34A,color:#111;
+  classDef human fill:#FFEDD5,stroke:#EA580C,color:#111;
+  classDef risk fill:#FEE2E2,stroke:#DC2626,color:#111;
+  classDef store fill:#F3F4F6,stroke:#6B7280,color:#111;
+  classDef ext fill:#EDE9FE,stroke:#7C3AED,color:#111;

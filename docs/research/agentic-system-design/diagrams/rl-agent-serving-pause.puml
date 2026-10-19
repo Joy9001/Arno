@@ -1,0 +1,54 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 13
+skinparam ArrowColor #555555
+skinparam ArrowFontSize 12
+skinparam sequenceLifeLineBorderColor #9CA3AF
+skinparam sequenceParticipantBorderColor #2563EB
+skinparam sequenceParticipantBackgroundColor #DBEAFE
+skinparam sequenceBoxBorderColor #9CA3AF
+skinparam noteBorderColor #6B7280
+skinparam noteBackgroundColor #F3F4F6
+
+title Why Agent Workloads Stress LLM Serving
+
+participant "Agent program\n(orchestration)" as prog #DCFCE7
+participant "LLM server\n(GPU)" as gpu #DBEAFE
+database "KV cache\n(prefix)" as kv #F3F4F6
+participant "Tool\n(external)" as tool #EDE9FE
+
+autonumber
+
+prog -> gpu : LLM call 1 (prompt prefix)
+activate gpu
+gpu -> kv : build KV for the prefix
+gpu --> prog : output containing a tool call
+deactivate gpu
+
+prog -> tool : run tool
+activate tool
+note over gpu, kv #FEE2E2
+  **Tool latency window**
+  Request-level serving sees the call as finished.
+  GPU idles; the cache may be evicted, swapped, or recomputed (InferCept's per-pause choice).
+end note
+tool --> prog : tool result
+deactivate tool
+
+prog -> gpu : LLM call 2 (same prefix + result)
+activate gpu
+gpu -> kv : reuse prefix, or re-prefill if evicted
+gpu --> prog : next output
+deactivate gpu
+
+note over prog, tool #DCFCE7
+  **Where the research intervenes**
+  * Prefix cache across calls: SGLang / RadixAttention
+  * Pin KV with a TTL sized to the predicted tool duration: Continuum
+  * Overlap tool run with prefill or decoding: Sutradhara, AsyncFC (futures)
+  * Plan a DAG and run independent calls in parallel: LLMCompiler
+  * Program-level scheduling: Autellix
+end note
+@enduml

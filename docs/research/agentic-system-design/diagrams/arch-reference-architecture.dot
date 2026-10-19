@@ -1,0 +1,38 @@
+digraph G {
+  rankdir=TB; bgcolor=white; nodesep=0.35; ranksep=0.42;
+  fontname="Helvetica"; labelloc=t; fontsize=20;
+  label="Reference architecture (1 of 2): request path from client to models\n ";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, margin="0.14,0.08", penwidth=1.5];
+  edge [color="#555555", fontname="Helvetica", fontsize=11, fontcolor="#333333", arrowsize=0.8];
+
+  XC [label="CROSS-CUTTING (spans every layer)\nobservability: metrics, logs, traces  |  evals  |  cost / quota meter\nauth / tenancy  |  prompt + config registry  |  feature flags / A-B", fillcolor="#F3F4F6", color="#6B7280", style="filled,dashed"];
+
+  C  [label="Client (web / mobile / IDE)", fillcolor="#EDE9FE", color="#7C3AED"];
+  G  [label="API gateway\nauthN, TLS, routing; rate limit by requests + tokens", fillcolor="#DCFCE7", color="#16A34A"];
+
+  subgraph cluster_orch {
+    label="Orchestrator / app service (stateless)"; fontsize=13; fontname="Helvetica-Bold";
+    style="rounded,dashed"; color="#16A34A";
+    S1 [label="1. Input guardrails\nPII mask, injection / topic classifiers, moderation", fillcolor="#DCFCE7", color="#16A34A"];
+    S2 [label="2. Cache lookup\nexact, then semantic", fillcolor="#DCFCE7", color="#16A34A"];
+    S3 [label="3. Router\nintent / complexity picks pipeline + model tier", fillcolor="#DCFCE7", color="#16A34A"];
+    S4 [label="4. Context construction\nquery rewrite, retrieve (BM25 + dense), rerank;\nassemble prompt: registry template + history + tool schemas", fillcolor="#DCFCE7", color="#16A34A"];
+    S1 -> S2; S2 -> S3 [label="  miss"]; S3 -> S4;
+  }
+  CS [label="Conversation store\nPostgres / Redis / KV", shape=cylinder, fillcolor="#F3F4F6", color="#6B7280"];
+  { rank=same; S2; CS; }
+
+  LG [label="LLM gateway\nunified API, keys, fallbacks, retries,\nload balancing, per-user budgets", fillcolor="#DCFCE7", color="#16A34A"];
+  M1 [label="Managed API\nOpenAI / Anthropic /\nGoogle", fillcolor="#DBEAFE", color="#2563EB"];
+  M2 [label="Self-hosted pool\nvLLM / TGI / TensorRT-LLM\non GPUs", fillcolor="#DBEAFE", color="#2563EB"];
+  M3 [label="Small specialist models\nclassifier, reranker,\nembedder", fillcolor="#DBEAFE", color="#2563EB"];
+  NEXT [label="Continues in figure 2:\nagent loop, output guardrails, stream, persist", shape=note, fillcolor="white", color="#6B7280", style="filled,dashed"];
+
+  XC -> C [style=invis];
+  C -> G [label="  request"];
+  G -> S1 [label="  authenticated"];
+  S2 -> CS [dir=both, style=dashed, arrowsize=0.6, label="history"];
+  S4 -> LG [label="  prompt"];
+  LG -> M1; LG -> M2; LG -> M3;
+  M1 -> NEXT [style=dashed]; M2 -> NEXT [style=dashed]; M3 -> NEXT [style=invis];
+}

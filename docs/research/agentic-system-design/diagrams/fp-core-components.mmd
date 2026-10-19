@@ -1,0 +1,37 @@
+---
+title: Core components of an agentic system (normalized across vendor lists)
+---
+flowchart TD
+    instr["<b>Instructions / policy</b><br/>prompt, goals, scope, guardrails"]
+
+    subgraph orch["Orchestration: run loop, workflow code, exit conditions (final output, no tool calls, error, max turns)"]
+        direction TB
+        model["<b>Model</b><br/>reasoning + planning"]
+        tools["<b>Tools / actions</b><br/>data and retrieval, action,<br/>orchestration (agents as tools)"]
+        model -->|tool call| tools
+    end
+    guard["<b>Guardrails and sandbox</b><br/>least-privilege permissions"]
+    guard -.->|constrain| tools
+
+    mem[("<b>Memory</b><br/>short-term + long-term state")]
+    human["<b>Human oversight</b><br/>checkpoints, approval, escalation"]
+    env["<b>Environment</b><br/>data sources, APIs, code execution<br/>'ground truth' at each step"]
+
+    instr -->|guides| model
+    mem <-->|read / write| model
+    model <-->|risky action: approve / redirect| human
+    tools -->|acts on / queries| env
+    env -.->|results are feedback for the next step| model
+
+    classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111;
+    classDef code fill:#DCFCE7,stroke:#16A34A,color:#111;
+    classDef human fill:#FFEDD5,stroke:#EA580C,color:#111;
+    classDef store fill:#F3F4F6,stroke:#6B7280,color:#111;
+    classDef ext fill:#EDE9FE,stroke:#7C3AED,color:#111;
+    class instr,model llm;
+    class guard code;
+    class human human;
+    class mem store;
+    class tools,env ext;
+    style orch fill:#F0FDF4,stroke:#16A34A,color:#111
+    linkStyle default stroke:#555555

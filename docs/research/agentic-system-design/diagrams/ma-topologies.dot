@@ -1,0 +1,46 @@
+digraph G {
+  rankdir=TB; compound=true; newrank=true;
+  label="Multi-agent topologies: who holds control, and what each agent sees"; labelloc=t; fontsize=18; fontname="Helvetica-Bold";
+  bgcolor=white; nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, fillcolor="#DBEAFE", color="#2563EB", penwidth=1.5];
+  edge [color="#555555", fontname="Helvetica", fontsize=10, arrowsize=0.7];
+
+  subgraph cluster_single { label="1. Single agent (baseline)"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    s_a [group=g, label="One agent\none thread, one context"];
+    s_t [group=g, label="Tools", fillcolor="#EDE9FE", color="#7C3AED"];
+    s_a -> s_t [dir=both];
+  }
+  subgraph cluster_sup { label="2. Orchestrator-workers / supervisor"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    l [group=g, label="Lead\nplans, delegates, integrates"];
+    w1 [label="Worker 1\nown scratchpad"]; w2 [group=g, label="Worker 2\nown scratchpad"]; w3 [label="Worker 3\nown scratchpad"];
+    l -> w1 [dir=both, label="brief out,\nanswer back"]; l -> w2 [dir=both]; l -> w3 [dir=both];
+    {rank=same; w1; w2; w3}
+  }
+  subgraph cluster_hier { label="3. Hierarchical teams"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    top [group=g, label="Top supervisor"];
+    m1 [label="Sub-supervisor A"]; m2 [label="Sub-supervisor B"];
+    h1 [label="Worker"]; h2 [group=g, label="Worker"]; h3 [label="Worker"]; h4 [label="Worker"];
+    top -> m1; top -> m2; m1 -> h1; m1 -> h2; m2 -> h3; m2 -> h4;
+    {rank=same; m1; m2} {rank=same; h1; h2; h3; h4}
+  }
+  subgraph cluster_swarm { label="4. Network / swarm / handoff"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    p1 [label="Peer A\n(active)"]; p3 [label="Peer C"]; p2 [group=g, label="Peer B"];     p1 -> p2 [dir=both, label="handoff"]; p2 -> p3 [dir=both, label="handoff"];
+    {rank=same; p1; p2; p3}
+    u [group=g, label="User", shape=ellipse, fillcolor="#FFEDD5", color="#EA580C"];
+    p2 -> u [label="active agent may\nanswer directly", style=dashed];
+    pn [shape=plaintext, style="", label="no global owner: any peer can\ntransfer control to any other", fontsize=10];
+    {rank=same; u; pn}
+  }
+  subgraph cluster_bb { label="5. Shared state / blackboard"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    b [group=g, label="Shared board\n(persistent store)", shape=cylinder, fillcolor="#F3F4F6", color="#6B7280"];
+    a1 [label="Agent 1"]; a2 [group=g, label="Agent 2"]; a3 [label="Agent 3"];
+    a1 -> b [dir=both, label="read / write"]; a2 -> b [dir=both]; a3 -> b [dir=both];
+    {rank=same; a1; a2; a3}
+  }
+  subgraph cluster_pipe { label="6. Sequential pipeline"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    q1 [label="Stage A\ntriage"]; q2 [group=g, label="Stage B\nresolve"]; q3 [label="Stage C\ncheck"];
+    q1 -> q2 [group=g, label="output is\nnext input"]; q2 -> q3;
+    {rank=same; q1; q2; q3}
+  }
+  s_t -> l [style=invis,weight=10]; w2 -> top [style=invis,weight=10]; h2 -> p2 [style=invis,weight=10]; u -> a2 [style=invis,weight=10]; b -> q2 [style=invis,weight=10];
+}

@@ -1,0 +1,25 @@
+---
+title: Automated Agent Design Loop (ADAS / AFlow / GEPA / DGM style)
+---
+flowchart TD
+    M["Meta-agent / optimiser<br/>proposes a candidate:<br/>agent code, workflow, or prompt"]:::llm
+    E["Evaluate candidate<br/>run on benchmark or metric,<br/>collect trajectories"]:::code
+    A[("Archive of candidates<br/>and scores")]:::store
+    S["Select what to expand<br/>AFlow: MCTS<br/>GEPA: Pareto front<br/>HGM: clade metaproductivity"]:::code
+    R["Mutate<br/>reflect on trajectories in<br/>natural language, rewrite"]:::llm
+    O["Best discovered agent<br/>or prompt"]:::code
+    X["Caveats: search cost,<br/>overfitting to the metric,<br/>safety of self-modifying code"]:::risk
+
+    M -->|candidate| E
+    E -->|score + traces| A
+    A -->|history| S
+    S -->|chosen parent| R
+    R -->|new variant, repeat| M
+    A -->|best entry when budget ends| O
+    E -.->|optimiser sees the metric| X
+
+    classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111
+    classDef code fill:#DCFCE7,stroke:#16A34A,color:#111
+    classDef store fill:#F3F4F6,stroke:#6B7280,color:#111
+    classDef risk fill:#FEE2E2,stroke:#DC2626,color:#111
+    linkStyle default stroke:#555555

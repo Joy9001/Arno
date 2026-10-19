@@ -14,9 +14,17 @@ Three positions coexist in 2025-2026 sources.
 
 By 2026 the camps converge on a shared rule: **fan out reads, keep writes single-threaded, and justify every extra agent by context isolation, real parallelism, or independent review.** Cognition itself moved in this direction (section 6).
 
+![Convergent rule: fan out reads, keep writes single-threaded](diagrams/ma-reads-writes-rule.png)
+
+*Figure: Read-only workers fan out and return compact results to a single writer; parallel writers are the fragile path.*
+
 Vendor-interest note: Anthropic, LangChain, Microsoft, CrewAI, Google and OpenAI all sell agent infrastructure or model tokens. Multi-agent designs consume more tokens and more framework surface; read their favourable numbers accordingly. Cognition sells a single-agent-first product and later a managed multi-agent one.
 
 ## 2. Topology catalogue
+
+![Multi-agent topologies](diagrams/ma-topologies.png)
+
+*Figure: Six of the topologies below as graphs; notice who holds control (lead, peer, nobody) and whether context is isolated (scratchpads) or shared (board).*
 
 | Topology | Structure | Use when | Failure modes | Examples |
 |---|---|---|---|---|
@@ -50,6 +58,10 @@ Vendor-interest note: Anthropic, LangChain, Microsoft, CrewAI, Google and OpenAI
 | [Magentic-One](https://www.microsoft.com/en-us/research/articles/magentic-one-a-generalist-multi-agent-system-for-solving-complex-tasks/) | Orchestrator with outer-loop Task Ledger (facts, guesses, plan) and inner-loop Progress Ledger; WebSurfer, FileSurfer, Coder, ComputerTerminal | Competitive with SOTA on GAIA/AssistantBench as of 2024-10-21; WebArena self-reported. Authors list incidents: repeated failed logins locked an account, agents tried to recruit humans via social media and email |
 
 ## 4. Anthropic's research system: the strongest pro-multi-agent evidence (vendor-authored)
+
+![Anthropic research system sequence](diagrams/ma-research-system-sequence.png)
+
+*Figure: The lead saves its plan, subagents read in parallel and return only compact answers, and one agent writes the final report after a citation pass.*
 
 [How we built our multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) (2025-06-13):
 
@@ -146,6 +158,10 @@ Debugging cost scales with agent count: DesignGurus notes five agents mean five 
 
 ## 9. Inter-agent and agent-tool protocols (state as of 2026-10)
 
+![Protocol layering](diagrams/ma-protocol-layers.png)
+
+*Figure: MCP sits below an agent (to tools and data) and A2A sits between agents across ownership boundaries; inside one codebase neither is required.*
+
 | Protocol | Layer | Status |
 |---|---|---|
 | **MCP** (Anthropic, 2024-11) | Agent to tools/data/prompts; JSON-RPC 2.0 client-server; servers expose resources, prompts, tools | Contributed to the Linux Foundation's **Agentic AI Foundation (AAIF)**, announced **2025-12-09** with Block's goose and OpenAI's AGENTS.md; platinum members include AWS, Anthropic, Block, Bloomberg, Cloudflare, Google, Microsoft, OpenAI ([press](https://www.linuxfoundation.org/press/linux-foundation-announces-the-formation-of-the-Agentic-ai-foundation), via search summary). Spec **2026-07-28** ([RC post](https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/)) is stateless (no `initialize`, no `Mcp-Session-Id`; any server instance handles any request), moves Tasks to an official extension for long-running calls, adds MCP Apps, and deprecates Roots, Sampling and Logging (annotation-only; removal needs 12+ months). Breaking changes |
@@ -158,6 +174,10 @@ Debugging cost scales with agent count: DesignGurus notes five agents mean five 
 Note the framing tension: MCP's own sampling feature (server-initiated LLM calls) is now deprecated, and an MCP tool can hide a whole agent behind a function call. Where the tool/agent line falls is a design choice rather than a protocol fact.
 
 ## 10. Failure modes, consolidated
+
+![Where multi-agent systems lose information and compound errors](diagrams/ma-handoff-failure-points.png)
+
+*Figure: Context is lost at each handoff and errors compound along a chain; the partial fixes are structured handoffs, checkpoints and explicit-criteria verifiers.*
 
 | Failure | Mechanism | Evidence |
 |---|---|---|

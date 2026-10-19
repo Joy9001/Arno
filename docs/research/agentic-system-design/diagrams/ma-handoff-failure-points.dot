@@ -1,0 +1,34 @@
+digraph G {
+  rankdir=TB; newrank=true; bgcolor=white; nodesep=0.35; ranksep=0.5;
+  label="Where multi-agent systems lose information and compound errors"; labelloc=t; fontsize=18; fontname="Helvetica-Bold";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, fillcolor="#DBEAFE", color="#2563EB", penwidth=1.5];
+  edge [color="#555555", fontname="Helvetica", fontsize=10, arrowsize=0.7];
+
+  subgraph cluster_ctx { label="A. Context loss across handoffs"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    wk [label="Worker\nfull trace, tool results"];
+    ld [label="Lead / orchestrator"];
+    us [label="User", shape=ellipse, fillcolor="#FFEDD5", color="#EA580C"];
+    wk -> ld [label=" summary or\n brief crosses boundary"];
+    ld -> us [label=" lead rewrites the\n worker's answer"];
+    l1 [label="Detail dropped or paraphrased;\nreceiver lacks the trace\n(Anthropic bottleneck, MAST FM-1.4, FM-2.1)", fillcolor="#FEE2E2", color="#DC2626", fontsize=11];
+    l2 [label="Translation tax\n(LangChain supervisor benchmark)", fillcolor="#FEE2E2", color="#DC2626", fontsize=11];
+    wk -> l1 [style=dashed, arrowhead=none, color="#DC2626", constraint=false];
+    ld -> l2 [style=dashed, arrowhead=none, color="#DC2626", constraint=false];
+    {rank=same; wk; l1} {rank=same; us; l2}
+    fix [label="Partial fixes: forward-message tool; handoff as a contract\n(task, minimal context, tool scope, budget, report schema)", fillcolor="#DCFCE7", color="#16A34A", fontsize=11];
+    us -> fix [style=invis];
+  }
+
+  subgraph cluster_err { label="B. Error compounding along a chain"; fontname="Helvetica-Bold"; fontsize=13; style="rounded"; color="#9CA3AF";
+    s1 [label="Step 1"]; s2 [label="Step 2"]; sn [label="... Step 20"];
+    s1 -> s2 [label=" output is\n next input"]; s2 -> sn;
+    {rank=same; s1; s2; sn}
+    e1 [label="95% per step over 20 steps = ~36% end-to-end\n(0.95^20; assumes independent steps)", fillcolor="#FEE2E2", color="#DC2626", fontsize=11];
+    e2 [label="Kim et al.: errors amplified 17.2x with independent agents,\n4.4x with centralised coordination", fillcolor="#FEE2E2", color="#DC2626", fontsize=11];
+    sn -> e1 [style=dashed, arrowhead=none, color="#DC2626"];
+    e1 -> e2 [style=invis];
+    ck [label="Mitigation: resume from checkpoints; verifier with explicit criteria", fillcolor="#DCFCE7", color="#16A34A", fontsize=11];
+    e2 -> ck [style=invis];
+  }
+  fix -> s2 [style=invis];
+}

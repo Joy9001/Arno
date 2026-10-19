@@ -20,6 +20,11 @@ survey then went outward to roughly 340 further vendor, academic and practitione
 
 ## Index
 
+![Survey map: where each file sits in an agentic system](diagrams/readme-survey-map.png)
+
+*Figure: the three topic files in the middle describe the layers of one system; operations wraps all
+of them, and the case studies and landscape files sit outside as evidence and tooling.*
+
 | File | Covers |
 |---|---|
 | [`foundations-and-patterns.md`](foundations-and-patterns.md) | Workflow vs agent, autonomy spectra, core components, and a **cross-vendor pattern-name mapping** (Anthropic, Google, Microsoft, AWS, OpenAI, LangGraph, IBM, Ng, 12-Factor) |
@@ -30,6 +35,7 @@ survey then went outward to roughly 340 further vendor, academic and practitione
 | [`case-studies.md`](case-studies.md) | **18 production systems** (Anthropic, Uber ×2, Shopify, LinkedIn ×2, DoorDash, Klarna, Replit, Cursor, Cognition, Notion, Harvey, Intercom, Amazon, Morgan Stanley, Manus…), recurring patterns, and a failures-and-reversals section |
 | [`research-and-landscape.md`](research-and-landscape.md) | Serving research for agent workloads, automated agent design (ADAS, AFlow, DSPy/GEPA), benchmarks and METR time horizons, and a comparison of 11 frameworks + 5 managed platforms |
 | [`sources.md`](sources.md) | How the starting sources were used, tagging scheme, and where each file's full bibliography lives |
+| [`diagrams/`](diagrams/) | Every figure as PNG + SVG + editable source (Graphviz / Mermaid / PlantUML), each with a short `.md` note on what it shows and why that diagram type. Rendered via [Kroki](https://kroki.io); one shared colour key: blue = model, green = deterministic code, orange = human/oversight, red = risk, grey = data, purple = external |
 
 ## Executive summary
 
@@ -51,7 +57,8 @@ survey then went outward to roughly 340 further vendor, academic and practitione
    input guardrails → cache → router → context construction (retrieve, rerank, assemble) → model
    gateway → optional agent loop with read/write-split tools → output guardrails → stream,
    wrapped in observability, evals and a feedback flywheel. Huyen's build order is incremental —
-   add each box only when needed. [`genai-system-architecture.md`](genai-system-architecture.md) §2.
+   add each box only when needed. [`genai-system-architecture.md`](genai-system-architecture.md) §2
+   draws it as a two-part [reference architecture](diagrams/arch-reference-architecture.png).
 
 4. **Multi-agent is the field's main live argument, and it has narrowed to one rule:
    fan out reads, keep writes single-threaded.** Anthropic reports +90.2% from orchestrator-worker

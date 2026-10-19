@@ -1,0 +1,22 @@
+digraph landscape {
+  graph [rankdir=TB, fontname="Segoe UI", bgcolor=white, label="Framework and Platform Landscape by Abstraction Level (Oct 2026)", labelloc=t, fontsize=18, nodesep=0.5, ranksep=0.55]
+  node  [shape=box, style="rounded,filled", fontname="Segoe UI", fontsize=12, margin="0.2,0.12"]
+  edge  [color="#555555", fontname="Segoe UI", fontsize=11]
+
+  managed [fillcolor="#EDE9FE", color="#7C3AED", label=<<B>Managed platforms</B><BR/>Amazon Bedrock AgentCore<BR/>Gemini Enterprise Agent Platform<BR/>Microsoft Foundry Agent Service<BR/>Databricks Agent Bricks<BR/>Hosted harnesses: OpenAI Agents API,<BR/>Anthropic Managed Agents>]
+  graphfw [fillcolor="#DCFCE7", color="#16A34A", label=<<B>Graph / workflow frameworks</B><BR/>LangGraph, Google ADK 2.0<BR/>Microsoft Agent Framework<BR/>LlamaIndex Workflows, Mastra<BR/>CrewAI (Crews + Flows)>]
+  sdk [fillcolor="#DBEAFE", color="#2563EB", label=<<B>Agent SDKs / libraries</B><BR/>OpenAI Agents SDK, Claude Agent SDK<BR/>Pydantic AI, smolagents>]
+  raw [fillcolor="#F3F4F6", color="#6B7280", label=<<B>Raw LLM API</B><BR/>Anthropic: start here, many patterns<BR/>take only a few lines of code>]
+
+  managed -> graphfw [label=" AgentCore and Foundry\l host any framework\l", style=dashed]
+  graphfw -> sdk [style=dashed, label=" "]
+  sdk -> raw [style=dashed, label=" "]
+
+  dspy [style="rounded,filled,dashed", fillcolor="#FFFFFF", color="#2563EB", label=<<B>DSPy</B><BR/>Orthogonal: optimises prompts;<BR/>can sit inside other frameworks>]
+  raw -> dspy [style=invis]
+
+  proto [fillcolor="#EDE9FE", color="#7C3AED", label=<<B>Protocol layer</B><BR/>(alongside, not a level)<BR/><BR/><B>MCP</B>: agent to tools<BR/><B>A2A</B>: agent to agent<BR/><B>Agent Skills</B>: instruction bundles<BR/><B>AG-UI</B>: agent to UI event stream>]
+  {rank=same; graphfw; proto}
+  proto -> managed [style=dashed, label=" Gateways wrap tools\l as MCP; runtimes list A2A\l", constraint=false]
+  proto -> sdk [style=dashed, label=" every framework\l lists MCP\l", constraint=false]
+}

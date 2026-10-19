@@ -1,0 +1,37 @@
+---
+title: DoorDash Dasher support - RAG with two-tier guardrail
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Helvetica, Arial, sans-serif","fontSize":"14px","lineColor":"#555555","background":"#ffffff"}}}%%
+flowchart TD
+  C([Multi-turn Dasher conversation]):::ext
+  COND["Condense to one core issue"]:::llm
+  KB[("Resolved cases mapped to<br/>knowledge-base articles")]:::store
+  GEN["Generate response"]:::llm
+  T1{"Tier 1: semantic similarity<br/>response vs article segments<br/>(cheap)"}:::code
+  T2{"Tier 2: LLM groundedness<br/>evaluator (only if tier 1 flags)"}:::llm
+  SHOW([Response shown to Dasher]):::code
+  HUM["Human agent<br/>failure default"]:::human
+  subgraph OFF ["Offline monitoring"]
+    direction TB
+    J["LLM judge: retrieval correctness,<br/>accuracy, grammar, coherence, relevance"]:::llm
+    P["Promptfoo regression suites<br/>block deploy on failure"]:::code
+    H["Humans calibrate against judge"]:::human
+  end
+
+  C --> COND
+  COND -->|core issue| KB
+  KB -->|retrieved cases and articles| GEN
+  GEN --> T1
+  T1 -->|passes| SHOW
+  T1 -->|flagged| T2
+  T2 -->|grounded| SHOW
+  T2 -->|fails| HUM
+  GEN -.->|sampled responses| J
+  H -.-> J
+  P -.->|every prompt change| GEN
+  classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111;
+  classDef code fill:#DCFCE7,stroke:#16A34A,color:#111;
+  classDef human fill:#FFEDD5,stroke:#EA580C,color:#111;
+  classDef risk fill:#FEE2E2,stroke:#DC2626,color:#111;
+  classDef store fill:#F3F4F6,stroke:#6B7280,color:#111;
+  classDef ext fill:#EDE9FE,stroke:#7C3AED,color:#111;

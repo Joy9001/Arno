@@ -46,9 +46,17 @@ The design variable common to all of these is where step boundaries sit. Vercel'
 
 ### 1.4 Idempotent tool calls and retries
 
+![Durable execution: journal, crash, resume](diagrams/ops-durable-execution-journal.png)
+
+*Figure: A journal skips completed steps on resume, but the step that was in flight at the crash is retried, so the external call needs an idempotency key.*
+
 - **Replay safety is not exactly-once.** A step that performs a charge and crashes before its result is persisted will run again. Vercel: use an `Idempotency-Key` header so the receiver treats repeats as one action; the step ID is stable across retries within one run, but **separate runs** need a business identifier or a database uniqueness constraint ([read](https://vercel.com/kb/guide/durable-ai-agents)).
 - **Human-interrupt re-execution.** LangGraph's `interrupt()` resumes by re-running the node from its beginning; code before the interrupt runs again, resume values are matched to interrupts **by position**, and a bare `try/except` around `interrupt()` swallows the control-flow exception. Guidance: keep pre-interrupt side effects idempotent or move them after the interrupt or into a separate node ([docs](https://docs.langchain.com/oss/python/langgraph/interrupts) [read]).
 - **Retry classes.** Read-only tools are generally safe to retry; mutating tools need dedup. Temporal retries rate-limit and network failures on LLM calls "until they succeed" ([read](https://temporal.io/blog/announcing-openai-agents-sdk-integration)); the corresponding failure mode (retry storms against a degraded provider, and unbounded spend) is a budget problem, see section 5.5.
+
+![LangGraph interrupt and resume](diagrams/ops-hitl-interrupt-resume.png)
+
+*Figure: On resume the node restarts from its first line, so everything before interrupt() runs twice.*
 
 ### 1.5 Sagas and compensation
 
@@ -169,6 +177,10 @@ The summary applies least privilege per risk: bounded identity with short-lived 
 
 ### 4.2 Architectural constraint instead of detection
 
+![Layered agent security](diagrams/ops-layered-security.png)
+
+*Figure: Filters sit on the probabilistic side; the guarantees come from the deterministic layer behind the Rule of Two gate.*
+
 - **Lethal trifecta** (Willison, 2025-06-16): access to private data + exposure to untrusted content + external communication. An agent with all three can be tricked into exfiltrating. His advice: "avoid that lethal trifecta combination entirely" ([read](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)). He lists dated real-world instances from ChatGPT plugins (May 2023) through Microsoft 365 Copilot, GitHub's MCP server and GitLab Duo (2025).
 - **Agents Rule of Two** (Meta, 2025-10-31): within one session, an agent should have **at most two** of (A) untrustworthy inputs, (B) sensitive systems or private data, (C) ability to change state or communicate externally. If all three are needed, no autonomous operation without human approval or another reliable check. Willison likes it and notes it extends the trifecta from exfiltration to state change ([read](https://simonw.substack.com/p/new-prompt-injection-papers-agents)). Critiques: it is a single-session frame and does not address cross-session memory leakage ([summary](https://kenhuangus.substack.com/p/the-rule-of-two-vs-reality-why-metas)).
 - **Six design patterns** (arXiv:2506.08837, June 2025; ETH Zurich, Google, Microsoft, IBM, Invariant Labs and others; ten case studies). Pattern list from the HTML paper ([read](https://arxiv.org/html/2506.08837v3)):
@@ -202,6 +214,10 @@ The pattern across all four: the guarantee comes from what the agent **cannot** 
 ---
 
 ## 5. Cost and latency engineering
+
+![Cost and latency levers on the request path](diagrams/ops-cost-latency-levers.png)
+
+*Figure: Each lever acts at a different point: caches before or around the model, budgets before each call, parallel tools after it.*
 
 ### 5.1 Prompt caching
 
@@ -324,6 +340,10 @@ Adoption status: Gibson Dunn (May 2026) described a provisional political agreem
 Penalty tiers (Art. 99): up to EUR 35M or 7% of worldwide turnover for prohibited practices; EUR 15M or 3% for other operator obligations (including Arts. 16, 26, 50); EUR 7.5M or 1% for misleading information; for SMEs the **lower** of the two applies ([Art. 99](https://artificialintelligenceact.eu/article/99/) [read]).
 
 **Agents are not a legal category.** Obligations attach to risk class and role (provider, deployer) by use case. Whether an agent falls under Annex III depends on what it decides, which is a legal assessment this survey does not make.
+
+![EU AI Act and NIST milestones](diagrams/ops-governance-timeline.png)
+
+*Figure: Solid milestones are already in effect at the read date; dashed ones are still ahead.*
 
 ### 7.2 Audit trails and logging
 

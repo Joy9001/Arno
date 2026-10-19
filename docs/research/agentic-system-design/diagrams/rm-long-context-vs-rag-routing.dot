@@ -1,0 +1,26 @@
+digraph route {
+  graph [rankdir=TB, fontname="Helvetica", bgcolor=white, label="Long context vs RAG: routing by the criteria in section 4", labelloc=t, fontsize=16, nodesep=0.4, ranksep=0.45, pad=0.2]
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=12, penwidth=1.5, color="#16A34A", fillcolor="#DCFCE7", margin="0.12,0.07"]
+  edge [color="#555555", fontname="Helvetica", fontsize=11, penwidth=1.3]
+
+  start [label="corpus + query workload", color="#6B7280", fillcolor="#FFFFFF"]
+  c1 [label="Small, stable corpus?\n(under ~200k tokens, ~500 pages)", shape=diamond, style=filled, margin="0.02,0.02"]
+  c2 [label="Whole-document\nsynthesis task?", shape=diamond, style=filled, margin="0.02,0.02"]
+  c3 [label="Large, changing, access-controlled,\ncitation-requiring corpus, or\nhigh query volume?", shape=diamond, style=filled, margin="0.02,0.02"]
+  lc [label="LONG CONTEXT\nput the corpus in the prompt;\nprompt caching: up to 90% lower cost,\n>2x lower latency", color="#2563EB", fillcolor="#DBEAFE"]
+  rag [label="RETRIEVAL\nhybrid search + rerank\n(much cheaper than long context)", color="#7C3AED", fillcolor="#EDE9FE"]
+  sr [label="ROUTE PER QUERY (Self-Route)\nthe model decides: near-LC quality\nat much lower cost", color="#2563EB", fillcolor="#DBEAFE"]
+  caveat [label="Watch: long-context accuracy decays with length and\ldistractors (NoLiMa, Context Rot). The break-even\lcorpus size is contested as windows and caching improve.\l", shape=note, color="#DC2626", fillcolor="#FEE2E2", fontsize=11]
+
+  start -> c1
+  c1 -> lc [label="  yes"]
+  c1 -> c2 [label="  no"]
+  c2 -> lc [label="  yes"]
+  c2 -> c3 [label="  no"]
+  c3 -> rag [label="  yes"]
+  c3 -> sr [label="  no / mixed"]
+  {rank=same; lc; c2}
+  lc -> caveat [style=invis]
+  sr -> caveat [style=invis]
+  rag -> caveat [style=invis]
+}

@@ -1,0 +1,50 @@
+digraph rag_evolution {
+  graph [rankdir=TB, fontname="Helvetica", bgcolor=white, label="RAG evolution: control moves from fixed code into the model", labelloc=t, fontsize=16, nodesep=0.3, ranksep=0.5, pad=0.2]
+  node [shape=plain, fontname="Helvetica", fontsize=12]
+  edge [color="#555555", fontname="Helvetica", fontsize=11, penwidth=1.3]
+
+  naive [label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="7" STYLE="rounded">
+   <TR><TD COLSPAN="4" BORDER="0"><B>1. Naive RAG (2020-23): fixed pipeline</B></TD></TR>
+   <TR><TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">embed query</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">top-k<BR/>cosine kNN</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">stuff into<BR/>prompt</TD>
+       <TD BGCOLOR="#DBEAFE" COLOR="#2563EB" STYLE="rounded">generate</TD></TR>
+  </TABLE>>]
+  adv [label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="7">
+   <TR><TD COLSPAN="4" BORDER="0"><B>2. Advanced RAG: fixed, plus pre- and post-retrieval stages</B></TD></TR>
+   <TR><TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">query rewrite<BR/>/ HyDE</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">hybrid search +<BR/>metadata filters</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">rerank</TD>
+       <TD BGCOLOR="#DBEAFE" COLOR="#2563EB" STYLE="rounded">generate</TD></TR>
+  </TABLE>>]
+  mod [label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="7">
+   <TR><TD COLSPAN="4" BORDER="0"><B>3. Modular RAG: configurable graph of modules</B></TD></TR>
+   <TR><TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">router</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">retriever<BR/>per source</TD>
+       <TD BGCOLOR="#DCFCE7" COLOR="#16A34A" STYLE="rounded">fusion</TD>
+       <TD BGCOLOR="#DBEAFE" COLOR="#2563EB" STYLE="rounded">generate</TD></TR>
+  </TABLE>>]
+  ag [label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="6" CELLPADDING="7">
+   <TR><TD COLSPAN="4" BORDER="0"><B>4. Agentic RAG: model-directed loop</B></TD></TR>
+   <TR><TD BGCOLOR="#DBEAFE" COLOR="#2563EB" STYLE="rounded">plan</TD>
+       <TD BGCOLOR="#EDE9FE" COLOR="#7C3AED" STYLE="rounded">select tool<BR/>(vector, SQL,<BR/>web, grep)</TD>
+       <TD BGCOLOR="#EDE9FE" COLOR="#7C3AED" STYLE="rounded">retrieve</TD>
+       <TD BGCOLOR="#DBEAFE" COLOR="#2563EB" STYLE="rounded">reflect /<BR/>grade</TD></TR>
+   <TR><TD COLSPAN="4" BORDER="0"><FONT COLOR="#2563EB">reflect fails: re-retrieve, loop back to plan</FONT></TD></TR>
+  </TABLE>>]
+  leg [label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="4" CELLPADDING="3">
+   <TR><TD BGCOLOR="#DCFCE7" COLOR="#16A34A"><FONT POINT-SIZE="10">deterministic code</FONT></TD>
+       <TD BGCOLOR="#DBEAFE" COLOR="#2563EB"><FONT POINT-SIZE="10">model call</FONT></TD>
+       <TD BGCOLOR="#EDE9FE" COLOR="#7C3AED"><FONT POINT-SIZE="10">retrieval tool / source</FONT></TD></TR>
+  </TABLE>>]
+
+  naive -> adv [label="  adds pre- and post-retrieval stages"]
+  adv -> mod [label="  adds routing, fusion, scheduling"]
+  mod -> ag [label="  model decides whether, what, where\l  and how often to retrieve\l", color="#2563EB", fontcolor="#2563EB"]
+  ag -> leg [style=invis]
+}

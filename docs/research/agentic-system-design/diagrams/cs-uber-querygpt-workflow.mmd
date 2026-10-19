@@ -1,0 +1,31 @@
+---
+title: Uber QueryGPT - workflow of narrow agents
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Helvetica, Arial, sans-serif","fontSize":"14px","lineColor":"#555555","background":"#ffffff"}}}%%
+flowchart TD
+  Q([Natural-language question]):::ext
+  WS[("Workspaces<br/>12 curated domain collections<br/>plus custom ones")]:::store
+  IA["Intent agent<br/>picks workspaces"]:::llm
+  TA["Table agent<br/>proposes tables"]:::llm
+  U{{"User confirms tables"}}:::human
+  CP["Column-prune agent<br/>strips irrelevant columns"]:::llm
+  GEN["Generate SQL<br/>GPT-4 Turbo (128K window)"]:::llm
+  OUT([SQL query]):::code
+  WHY["Why pruning: schemas of 200+ columns<br/>(40-60K tokens) blew the prototype's 32K window"]:::risk
+  EV["Eval: golden set of logged questions<br/>vanilla (end-to-end) vs decoupled flows"]:::code
+
+  Q --> IA
+  WS -.->|narrow retrieval| IA
+  IA -->|selected workspaces| TA
+  TA -->|candidate tables| U
+  U -->|confirmed tables| CP
+  WHY -.-> CP
+  CP -->|pruned schemas| GEN
+  GEN --> OUT
+  EV -.->|scores intent, tables,<br/>execution, similarity| OUT
+  classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111;
+  classDef code fill:#DCFCE7,stroke:#16A34A,color:#111;
+  classDef human fill:#FFEDD5,stroke:#EA580C,color:#111;
+  classDef risk fill:#FEE2E2,stroke:#DC2626,color:#111;
+  classDef store fill:#F3F4F6,stroke:#6B7280,color:#111;
+  classDef ext fill:#EDE9FE,stroke:#7C3AED,color:#111;

@@ -19,6 +19,16 @@ Source-quality caveats worth carrying through the rest of the document:
 
 The convergent picture across Huyen, a16z, the System Design Handbook, and the "design ChatGPT" write-ups is a request path with a fixed set of stages, wrapped by cross-cutting concerns.
 
+![Reference architecture (1 of 2): request path from client to models](diagrams/arch-reference-architecture.png)
+
+*Figure: the stateless request path from client through the orchestrator's four stages and the LLM gateway to the three model pools, with cross-cutting concerns spanning every layer.*
+
+![Reference architecture (2 of 2): agent loop, output guardrails, flywheel](diagrams/arch-reference-architecture-agent-output.png)
+
+*Figure: after the model call, the optional agent loop (write tools gated by human approval), output guardrails with their fail paths, and the data flywheel that feeds evals, fine-tuning and prompt fixes.*
+
+<details><summary>Text version</summary>
+
 ```
                          ┌───────────────────────── cross-cutting ─────────────────────────┐
                          │ observability (metrics/logs/traces) · evals · cost/quota meter   │
@@ -55,6 +65,8 @@ The convergent picture across Huyen, a16z, the System Design Handbook, and the "
  Post-process, citations, stream to client, persist, emit trace + metrics
 ```
 
+</details>
+
 Huyen's stated build order is incremental: start with query → model → response, then add context construction, guardrails, router/gateway, cache, and complex logic/write actions as needs arise, with observability and orchestration spanning every layer. a16z's earlier framing reduces the same thing to three stages of "in-context learning": (1) data preprocessing and embedding, (2) prompt construction and retrieval, (3) prompt execution and inference, with logging, caching, and validation attached at stage 3.
 
 ## 3. Component-by-component
@@ -90,6 +102,10 @@ Guides often conflate these; Huyen separates them.
 
 Order in the request path: exact → semantic → generation (with provider prefix caching applied inside the model call).
 
+![Lifecycle of one request: cache hit vs miss, guardrail failure](diagrams/arch-request-lifecycle.png)
+
+*Figure: a cache hit short-circuits generation; a miss runs router, context construction and the model call, and a failed output check loops to retry / fallback model or human handoff.*
+
 ### 3.2 Observability as taught
 
 Huyen's three pillars, and the LLM-specific metric set that interview guides repeat:
@@ -103,6 +119,10 @@ Huyen's three pillars, and the LLM-specific metric set that interview guides rep
 The System Design Handbook adds retrieval hit rate and P50/P95/P99 latency, plus a failure-mode list: token overload, queue congestion, index bloat, cold starts, rate limits, prompt crashes, irrelevant retrieval, model drift.
 
 ## 4. Model serving: managed APIs vs self-hosted
+
+![Model serving: managed API vs self-hosted pool, and the levers inside it](diagrams/arch-model-serving-levers.png)
+
+*Figure: the gateway chooses a managed or self-hosted route; inside the self-hosted pool each lever (batching, paged KV cache, quantization, speculative decoding) acts on a specific stage.*
 
 ### 4.1 Mechanics every guide expects you to name
 
@@ -262,6 +282,10 @@ self-hosted $/Mtok = GPU_$/hr ÷ (tokens/sec × 3600) × 1e6
 LLM awareness (tokens, context limits, sampling), modular/composable thinking, cost-consciousness, safety and governance, communication. For agentic questions: balance of autonomy and control; over-autonomous designs signal inexperience, over-constrained ones signal fear of complexity; mid-level candidates are expected to name components, senior/staff to argue trade-offs.
 
 ### 9.3 A merged template (synthesis, not a quoted source)
+
+![Merged interview template for a GenAI system-design question](diagrams/arch-interview-framework.png)
+
+*Figure: the seven steps below as a flow, grouped into frame, design and close.*
 
 1. **Clarify**: user, task, autonomy level, success metric, latency class, scale, data sensitivity, error tolerance, write-action risk.
 2. **Estimate**: DAU → tokens/sec (in and out separately) → GPUs/cost; state assumptions aloud.

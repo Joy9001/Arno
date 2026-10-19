@@ -1,0 +1,76 @@
+@startuml
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName "Helvetica"
+skinparam defaultFontSize 12
+skinparam ArrowColor #555555
+skinparam ArrowFontSize 11
+skinparam sequenceLifeLineBorderColor #6B7280
+skinparam sequenceParticipant {
+  BorderColor #16A34A
+  BackgroundColor #DCFCE7
+}
+skinparam participant<<ext>> {
+  BackgroundColor #EDE9FE
+  BorderColor #7C3AED
+}
+skinparam participant<<model>> {
+  BackgroundColor #DBEAFE
+  BorderColor #2563EB
+}
+skinparam database {
+  BackgroundColor #F3F4F6
+  BorderColor #6B7280
+}
+skinparam NoteBackgroundColor #FFFBEB
+skinparam NoteBorderColor #999999
+
+title Lifecycle of one request: cache hit vs miss, guardrail failure
+
+participant "Client" as C <<ext>>
+participant "API\ngateway" as G
+participant "Orchestrator" as O
+database "Caches" as K
+participant "LLM gateway\n+ models" as L <<model>>
+participant "Output\nguardrails" as OG
+
+autonumber
+
+C -> G : prompt (SSE / WebSocket)
+G -> O : authN + rate limit\n(requests + tokens)
+O -> O : input guardrails\n(PII, injection, topic)
+O -> K : lookup: exact,\nthen semantic
+
+alt cache hit
+  K --> O : stored answer
+  O --> C : stream cached answer
+  note over K, L #FEE2E2
+    Risk: stale / user-specific answer,
+    or wrong answer on a false semantic match
+  end note
+else cache miss
+  K --> O : miss
+  O -> O : router picks pipeline\n+ model tier
+  O -> O : context construction\n(rewrite, retrieve, rerank,\nassemble prompt)
+  O -> L : prompt
+  note right of L
+    provider prefix cache applies here;
+    optional agent loop: tool call ->
+    validated executor -> observation;
+    write tools need human approval
+  end note
+  L --> O : completion
+  O -> OG : format, toxicity,\ngrounding, PII
+  alt checks pass
+    OG --> O : pass
+    O --> C : post-process, citations,\nstream tokens
+    O -> O : persist, emit trace\n+ metrics
+  else checks fail
+    OG --> O : fail
+    O -> L : retry / fallback model
+    note over O, OG #FEE2E2
+      or human handoff
+    end note
+  end
+end
+@enduml

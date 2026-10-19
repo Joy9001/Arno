@@ -15,6 +15,10 @@ Source-tag legend (see [Sources](#sources)): **[read]** = page fetched and read 
 
 ## 2. RAG evolution: naive → advanced → modular → agentic
 
+![RAG evolution: control moves from fixed code into the model](diagrams/rm-rag-evolution.png)
+
+*Figure: Stages 1-3 are fixed or configured code ending in one generate call; only stage 4 hands the whether/what/where/how-often decisions, and the loop, to the model.*
+
 | Paradigm | Control flow | Typical components | Failure it addresses | New failure it adds |
 |---|---|---|---|---|
 | **Naive RAG** (2020-23) | Fixed: embed → top-k → stuff → generate | Fixed-size chunks, one embedding model, cosine kNN | Parametric knowledge staleness | Lost context in chunks, low precision/recall, one-shot retrieval |
@@ -23,6 +27,10 @@ Source-tag legend (see [Sources](#sources)): **[read]** = page fetched and read 
 | **Agentic RAG** | Model-directed loop: plan, retrieve, reflect, re-retrieve, tool-select | Planner, retrieval tools (vector, SQL, web, grep), critic/grader, memory | Multi-hop, ambiguous or under-specified queries | Unbounded cost/latency, harder to evaluate, error compounding, new attack surface |
 
 The Agentic RAG survey ([Singh et al., arXiv 2501.09136](https://arxiv.org/abs/2501.09136), v1 Jan 2025, v4 Apr 2026) organizes the space along four dimensions: agent cardinality, control structure, autonomy, and knowledge representation, and names reflection, planning, tool use and multi-agent collaboration as the agentic ingredients. (The abstract page did not expose the per-architecture taxonomy; treat finer categories - single-agent router, hierarchical, corrective, adaptive, graph-based - as the survey body's, not verified here.)
+
+![Agentic RAG: the model runs the retrieval loop](diagrams/rm-agentic-rag-loop.png)
+
+*Figure: The dashed back-edge is what distinguishes agentic RAG from advanced RAG: the model can re-plan, rewrite or switch tools, which is also the source of unbounded cost.*
 
 Three research lines made the "agentic" step concrete:
 
@@ -36,6 +44,10 @@ Three research lines made the "agentic" step concrete:
 **Where practice diverges from research.** Production coding agents mostly skip embeddings: Boris Cherny (Claude Code) has said early versions used a local vector DB and agentic search "outperformed everything, by a lot"; a developer inspection reported Claude Code searches via Grep/Glob/Read with no built-in embedding index (secondary reports, no Anthropic write-up; [search summary](https://www.mindstudio.ai/blog/is-rag-dead-what-ai-coding-agents-use-instead)). Counter-evidence: Cursor, which does index codebases, reported a 12.5% average answer-accuracy gain from semantic search (vendor, benchmark pre-dates its Composer 2, per the same summaries). Reading: for code, where exact identifiers dominate and the agent can iterate cheaply, lexical search plus a loop is competitive; semantic indexes still add measurable recall on vague queries.
 
 ## 3. The retrieval stack: design decisions and trade-offs
+
+![Hybrid retrieval pipeline: indexing time vs query time](diagrams/rm-hybrid-retrieval-pipeline.png)
+
+*Figure: Contextualization happens once at indexing and feeds both indexes; query time is search, fusion (150 candidates), rerank, then 20 chunks into the prompt.*
 
 ### 3.1 Chunking and indexing
 
@@ -73,6 +85,10 @@ Consensus: graphs pay off for *corpus-level* questions ("what are the main theme
 
 ## 4. Long context vs RAG
 
+![Long context vs RAG: routing by the criteria in section 4](diagrams/rm-long-context-vs-rag-routing.png)
+
+*Figure: The file's consensus is to route, not pick one; long-context accuracy decay and the contested break-even size are the caveats on the long-context branch.*
+
 | Evidence | Finding | Source type |
 |---|---|---|
 | Li et al., EMNLP 2024 industry ([arXiv 2407.16833](https://arxiv.org/abs/2407.16833)) | "When resourced sufficiently, LC consistently outperforms RAG" on average, but RAG is much cheaper; **Self-Route** lets the model decide per query and keeps near-LC quality at much lower cost | Academic (Google-affiliated authors per secondary reports) |
@@ -97,6 +113,10 @@ Common reading of the evidence: recall@10 is similar across major engines at mat
 ## 6. Agent memory
 
 ### 6.1 Taxonomy
+
+![Agent memory: CoALA taxonomy and four implementation families](diagrams/rm-memory-taxonomy.png)
+
+*Figure: The CoALA types describe what is stored; the four families differ mainly in how writes happen and who decides, and no single architecture is settled.*
 
 CoALA ([Sumers et al., arXiv 2309.02427, TMLR](https://arxiv.org/abs/2309.02427)) is the reference framework: modular memory components plus a structured action space split into internal actions (reasoning, retrieval, learning) and external grounding. The commonly cited breakdown from the paper's body (not visible on the abstract page) is **working** memory (current context) and long-term **episodic** (past experiences), **semantic** (facts) and **procedural** (code/prompt-encoded skills). LangMem uses the same three long-term types ([LangMem docs](https://langchain-ai.github.io/langmem/concepts/conceptual_guide/)).
 

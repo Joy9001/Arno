@@ -1,0 +1,54 @@
+@startmindmap
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 13
+skinparam ArrowColor #555555
+title Awesome-Agentic-System-Design: How the Index Is Organised
+
+<style>
+mindmapDiagram {
+  node {
+    BackgroundColor #F3F4F6
+    LineColor #6B7280
+    RoundCorner 10
+    MaximumWidth 260
+  }
+  :depth(0) {
+    BackgroundColor #E5E7EB
+    LineColor #374151
+  }
+  :depth(1) {
+    BackgroundColor #FFFFFF
+    LineColor #6B7280
+  }
+}
+</style>
+
+* Awesome-Agentic-System-Design
+** Learning paths
+*** Fundamentals: architecture, context, memory
+*** Production: tools/protocols, evals, safety
+*** Interview prep, recent developments, tools
+** 7 core topics
+*** 1 Architecture and orchestration
+*** 2 Context, retrieval, memory
+*** 3 Tools, skills, protocols
+*** 4 Evaluation and benchmarks
+*** 5 Production, reliability, safety
+*** 6 Interview prep
+*** 7 Case studies
+** Papers by design question
+*** Foundations and Surveys
+*** Orchestration
+*** Context and harnesses
+*** Evaluation
+*** Safety and attribution
+** Frameworks by responsibility
+*** Own the loop
+*** Explicit workflow control
+*** Delegate
+*** Run code or computer
+*** Operate a service
+*** Adopt a hosted runtime
+@endmindmap

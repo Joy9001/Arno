@@ -1,0 +1,33 @@
+---
+title: Uber uReview - code review prompt chain
+---
+%%{init: {"theme":"base","themeVariables":{"fontFamily":"Helvetica, Arial, sans-serif","fontSize":"14px","lineColor":"#555555","background":"#ffffff"}}}%%
+flowchart TD
+  D([Code diff on Phabricator]):::ext
+  subgraph GEN ["1. Generation: pluggable assistants (generator: Claude 4 Sonnet)"]
+    direction LR
+    A1["Bugs"]:::llm
+    A2["Internal<br/>best-practices"]:::llm
+    A3["AppSec"]:::llm
+  end
+  GR["2. Grader prompt (o4-mini-high)<br/>assigns confidence; thresholds per<br/>assistant, language, category"]:::llm
+  DD["3. Semantic-similarity dedup"]:::code
+  CL["4. Category classifier<br/>suppresses historically<br/>low-value comment types"]:::code
+  OUT([Inline comments on Phabricator]):::code
+  FB[("Useful / Not-Useful feedback<br/>Kafka to Hive")]:::store
+  FX["Fixer proposes patches"]:::llm
+
+  D --> GEN
+  GEN -->|candidate comments| GR
+  GR -->|confident comments| DD
+  DD -->|unique comments| CL
+  CL -->|surviving comments| OUT
+  OUT -->|reviewer feedback| FB
+  OUT -.-> FX
+  FB -.->|informs thresholds and<br/>suppressed categories| CL
+  classDef llm fill:#DBEAFE,stroke:#2563EB,color:#111;
+  classDef code fill:#DCFCE7,stroke:#16A34A,color:#111;
+  classDef human fill:#FFEDD5,stroke:#EA580C,color:#111;
+  classDef risk fill:#FEE2E2,stroke:#DC2626,color:#111;
+  classDef store fill:#F3F4F6,stroke:#6B7280,color:#111;
+  classDef ext fill:#EDE9FE,stroke:#7C3AED,color:#111;
