@@ -1,11 +1,13 @@
-# Model serving: managed API vs self-hosted pool, and the levers inside it
+# Self-hosted serving: where the levers act
 
-![Model serving: managed API vs self-hosted pool, and the levers inside it](./arch-model-serving-levers.png)
+![Self-hosted serving: where the levers act](./arch-model-serving-levers.png)
 
-**What it shows.** The LLM gateway's two routes, and inside the self-hosted pool the queue, prefill, KV cache and decode path with the four levers (continuous batching, PagedAttention / GQA, quantization, speculative decoding) attached to the part each one acts on.
+**What it shows.** Inside the self-hosted pool a request flows queue, prefill, KV cache, decode; each lever (continuous batching, PagedAttention and GQA, quantization, speculative decoding) is attached to the stage it acts on.
 
-**Why this diagram type.** Graphviz: a flow with attached annotations; a table (already in the text) would not show where each lever acts.
+**Diagram type.** Architecture-style flow with one zone (a pipeline of stages with attached lever nodes).
 
-**Design decisions.** Blue = model compute, grey cylinder = KV cache, dashed green = levers. The KV example figure is NVIDIA's from section 4.1; no new numbers.
+**What the budget forced out or split.** Split from the old combined figure: the managed vs self-hosted route is now `arch-model-serving-routes`. The output node was dropped (Decode's job is the streamed token), arrow labels between stages became sublabels, and the vLLM/TGI caveat is one callout.
 
-**Assumptions and source.** From section 4.1 and 4.2. Source caveats on engine comparisons are repeated in the figure note. Illustrates section 4.
+**Assumptions.** Quantization is attached to Decode and speculative decoding to Decode, as in the original; GQA is grouped with PagedAttention as in the original.
+
+**Source.** `arch-model-serving-levers.html` (diagram-design skill, default skin, minimal light, doc-inline width 960; height extended where content needs it). Content comes from the topic file genai-system-architecture.md; no claims or numbers added.

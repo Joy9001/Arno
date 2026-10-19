@@ -36,7 +36,7 @@
 <path d="M664,92 L664,80 Q664,72 656,72 L144,72 Q136,72 136,80 L136,92" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arch-reference-architecture-agent-output-arrow)"/>
 <rect x="362" y="52" width="76" height="12" rx="2" fill="#f5f5f5"/><text x="400" y="61" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">OBSERVATIONS</text>
 <path d="M664,292 L664,304 Q664,312 656,312 L200,312 Q192,312 192,304 L192,172" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arch-reference-architecture-agent-output-arrow)"/>
-<rect x="362" y="292" width="76" height="12" rx="2" fill="#f5f5f5"/><text x="400" y="301" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">OBSERVATIONS</text>
+<rect x="494" y="292" width="76" height="12" rx="2" fill="#f5f5f5"/><text x="532" y="301" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">OBSERVATIONS</text>
 <line x1="96" y1="172" x2="96" y2="368" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-reference-architecture-agent-output-arrow)"/>
 <rect x="104" y="344" width="76" height="12" rx="2" fill="#f5f5f5"/><text x="142" y="353" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DRAFT ANSWER</text>
 <line x1="216" y1="408" x2="320" y2="408" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-reference-architecture-agent-output-arrow)"/>

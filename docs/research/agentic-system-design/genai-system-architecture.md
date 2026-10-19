@@ -19,13 +19,17 @@ Source-quality caveats worth carrying through the rest of the document:
 
 The convergent picture across Huyen, a16z, the System Design Handbook, and the "design ChatGPT" write-ups is a request path with a fixed set of stages, wrapped by cross-cutting concerns.
 
-![Reference architecture (1 of 2): request path from client to models](diagrams/arch-reference-architecture.png)
+![Reference architecture: layer view](diagrams/arch-reference-architecture.png)
 
-*Figure: the stateless request path from client through the orchestrator's four stages and the LLM gateway to the three model pools, with cross-cutting concerns spanning every layer.*
+*Figure: layer-level overview of the stateless request path (client, API gateway, orchestrator, LLM gateway, model pools), the optional agent loop, output guardrails, client stream and data flywheel, with cross-cutting concerns spanning every layer.*
 
-![Reference architecture (2 of 2): agent loop, output guardrails, flywheel](diagrams/arch-reference-architecture-agent-output.png)
+![Request path: orchestrator to model pools](diagrams/arch-reference-architecture-request-path.png)
 
-*Figure: after the model call, the optional agent loop (write tools gated by human approval), output guardrails with their fail paths, and the data flywheel that feeds evals, fine-tuning and prompt fixes.*
+*Figure: detail of the orchestrator's four stages (input guardrails, cache lookup, router, context construction), the conversation store, and the hand-off through the LLM gateway to the model pools.*
+
+![Agent loop and output guardrails](diagrams/arch-reference-architecture-agent-output.png)
+
+*Figure: after the model call, the optional agent loop (write tools gated by human approval) and output guardrails with their retry / fallback and human-handoff fail paths.*
 
 <details><summary>Text version</summary>
 
@@ -120,9 +124,13 @@ The System Design Handbook adds retrieval hit rate and P50/P95/P99 latency, plus
 
 ## 4. Model serving: managed APIs vs self-hosted
 
-![Model serving: managed API vs self-hosted pool, and the levers inside it](diagrams/arch-model-serving-levers.png)
+![Model serving: managed API vs self-hosted pool](diagrams/arch-model-serving-routes.png)
 
-*Figure: the gateway chooses a managed or self-hosted route; inside the self-hosted pool each lever (batching, paged KV cache, quantization, speculative decoding) acts on a specific stage.*
+*Figure: the LLM gateway chooses a managed or self-hosted route; both return streamed tokens to the client.*
+
+![Self-hosted serving: where the levers act](diagrams/arch-model-serving-levers.png)
+
+*Figure: inside the self-hosted pool each lever (continuous batching, PagedAttention and GQA, quantization, speculative decoding) acts on a specific stage of queue, prefill, KV cache and decode.*
 
 ### 4.1 Mechanics every guide expects you to name
 

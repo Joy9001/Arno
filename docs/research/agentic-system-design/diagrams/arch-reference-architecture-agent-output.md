@@ -1,11 +1,13 @@
-# Reference architecture (2 of 2): agent loop, output guardrails, flywheel
+# Agent loop and output guardrails
 
-![Reference architecture (2 of 2): agent loop, output guardrails, flywheel](./arch-reference-architecture-agent-output.png)
+![Agent loop and output guardrails](./arch-reference-architecture-agent-output.png)
 
-**What it shows.** What happens after the model call: the optional agent loop (read tools direct, write tools behind human approval), output guardrails with the fail paths (retry / fallback model, human handoff), post-processing and streaming, and the data flywheel feeding evals, fine-tuning and prompt fixes.
+**What it shows.** After the model call: the optional agent loop (write tools gated by human approval, observations returned to the model), then output guardrails with pass, retry/fallback and human-handoff paths.
 
-**Why this diagram type.** Graphviz flow with a cluster for the loop; the observation back-edges are easiest to show in a node-edge graph.
+**Diagram type.** Architecture (one zone for the agent loop).
 
-**Design decisions.** Red for the fail branches, orange for human steps, dashed edges for feedback paths. Continues from figure 1 via an input node.
+**What the budget forced out or split.** The data flywheel and client stream moved to the overview. Two observation returns (read tools, write tools) are kept as separate dashed connectors.
 
-**Assumptions and source.** Grounded in section 2 (ASCII diagram) and section 3 components 11-13 and 15. Illustrates section 2.
+**Assumptions.** The draft-answer path leaves the model node directly, as in the original. Retry / fallback re-enters the LLM gateway (stated in its sublabel, not drawn as a loop-back arrow).
+
+**Source.** `arch-reference-architecture-agent-output.html` (diagram-design skill, default skin, minimal light, doc-inline width 960; height extended where content needs it). Content comes from the topic file genai-system-architecture.md; no claims or numbers added.

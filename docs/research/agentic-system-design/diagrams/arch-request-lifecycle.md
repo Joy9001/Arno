@@ -1,11 +1,13 @@
-# Lifecycle of one request: cache hit vs miss, guardrail failure
+# Lifecycle of one request
 
-![Lifecycle of one request: cache hit vs miss, guardrail failure](./arch-request-lifecycle.png)
+![Lifecycle of one request](./arch-request-lifecycle.png)
 
-**What it shows.** One request through gateway, orchestrator, caches, LLM gateway plus models, and output guardrails, with the cache-hit branch, the cache-miss generation path, and the guardrail pass / fail branches.
+**What it shows.** A cache hit short-circuits generation; a miss runs router, context construction and the model call; output checks gate the stream, and a failed check retries on a fallback model or hands off to a human.
 
-**Why this diagram type.** PlantUML sequence diagram: the point is ordering and alternatives over time, which a static architecture diagram cannot show.
+**Diagram type.** Sequence with one `alt` fragment (hit / miss).
 
-**Design decisions.** Six participants to stay narrow; alt blocks for hit/miss and pass/fail; red notes mark risks (false semantic match, human handoff). The agent loop is a note, not a lane.
+**What the budget forced out or split.** Sequence budget is 5 lifelines and no nested fragments: the API gateway is folded into the orchestrator lifeline, and the inner pass/fail branch is a RESULT message plus a callout instead of a nested `alt`. The note about the agent loop and write-tool approval was dropped (covered in the agent-output figure); the provider prefix cache is a sublabel on the LLM gateway.
 
-**Assumptions and source.** Order (exact then semantic cache; provider prefix cache inside the model call; fail -> retry / fallback model / human handoff) is from section 2 and section 3.1. Illustrates section 3.1 (Caching) and section 2.
+**Assumptions.** Persist + trace is drawn as a self-message after streaming.
+
+**Source.** `arch-request-lifecycle.html` (diagram-design skill, default skin, minimal light, doc-inline width 960; height extended where content needs it). Content comes from the topic file genai-system-architecture.md; no claims or numbers added.
