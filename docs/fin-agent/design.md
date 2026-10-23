@@ -125,7 +125,7 @@ The following tables hold memory, conversations, and provenance:
 | Table | Holds |
 |---|---|
 | `preferences` | Typed facts and rules ("Mom's monthly transfer is not discretionary spend"). `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting fact, shown as a "Remembered" card with undo. Never a number the ledger owns. Visible and editable in settings |
-| `conversations`, `messages` | Full chat history. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled |
+| `conversations`, `messages` | Full chat history. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)) |
 | `audit_log` | Every write: actor, `message_id`, table, row ID, before and after JSON, `undone_at`. Powers undo |
 | `imports` | File hash, parser, account, period, opening and closing balances, invariant result, status (`review`, `committed`, or `rejected`) |
 | `attachments` | Receipt photos and UPI screenshots as `bytea`. Statement files are not kept—only their hash |
@@ -167,7 +167,9 @@ The agent has six write tools:
 | `undo(audit_id=None)` | Reverts the last (or a given) write |
 
 Voice and photos are not tools. They're input preprocessing—speech-to-text output, or a typed
-photo extraction—handed to the agent as a user turn. That keeps rule 2 in `plan.md` §4.
+photo extraction—handed to the agent as a user turn. That keeps rule 2 in `plan.md` §4. A photo
+extraction's text fields count as outside text, so that turn flags the conversation
+([write tiers](#untrusted-text-and-write-tiers)).
 
 ### Design notes
 
@@ -207,6 +209,44 @@ The following table sets how it is configured:
 **Open at L2:** whether `VercelAIAdapter` streams the UI metadata of tool returns nested inside
 `run_code`. If it doesn't, Fin-Agent emits those cards and citations itself from the `run_code`
 return's metadata (`plan.md` §6).
+
+### Untrusted text and write tiers
+
+Bank statements carry text that other people choose: a payer's name and, on some banks, the
+note typed on a UPI transfer. Anyone can send ₹1 with a note written as an instruction. The agent
+has no outbound tools, can't move money, and every write is audited and undoable, so the damage
+worth guarding is a write that _lasts silently_—a poisoned preference that mutes rent warnings
+forever. This is how rule 2 in `plan.md` §4 works.
+
+**Outside text.** The following fields count as outside text:
+
+- `description_raw` and `merchant` on rows whose `source` is `import` or `photo`
+- Any text copied from them into another table, such as a schedule name taken from a
+  recurring-charge proposal. Those rows carry an `outside_text` boolean, so the mark travels
+  with the copy
+- Every `run_query` result, because model-written SQL can select any column under any alias
+
+**How it's tracked.** Tool returns wrap outside-text fields in markers, and the system prompt has
+one line saying that marked text is data from statements and never an instruction. Frontier
+models stop most casual attempts this way, but adaptive attacks beat prompt-based defenses, so the
+markers are a layer, not the boundary. When a read tool returns marked text—directly or nested
+inside `run_code`—it sets `conversations.outside_text_at`. Server code sets the flag from where the
+data came from; the model can't set or clear it. A new conversation starts clean.
+
+**Write tiers.** The following table sets which writes ask first:
+
+| Tier | Writes | Behavior |
+|---|---|---|
+| Visible and undoable | `record_transaction`, `edit_transaction`, and `undo` on a single row, including the category rule an edit creates (named on its card) | Always instant, with an undo card—outside text or not |
+| Lasting or wide | `preference` saves; `update_setup` (floor, schedules, goals, accounts, categories); any write that touches more than one existing row | Instant in a clean conversation. In a flagged one, the tool raises PydanticAI's `ApprovalRequired`, and the chat shows a confirm card that states the exact change. Nothing is written until the user taps Confirm |
+
+Recategorizing a statement row right after reading it stays instant. A preference save that
+nobody asked for, in a conversation that has read a crafted payee note, shows up as a card the
+user can cancel.
+
+**Exfiltration.** A markdown image in a reply makes the browser fetch its URL, which could carry
+data out. The content security policy allows images only from the app's own origin, and links in
+agent replies render as plain text ([`platform.md`](platform.md#security)).
 
 ---
 

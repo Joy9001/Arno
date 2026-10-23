@@ -73,7 +73,8 @@ The web app has the following parts:
 - **Chat (home):** Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary. Citations open the
-  rows behind a number. Voice-note recording and photo upload live in the composer.
+  rows behind a number. Voice-note recording and photo upload live in the composer. Links in
+  agent replies render as plain text, and external images never load ([Security](#security)).
 - **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
 - **Editable screens:** Imports (upload, review, history) and Settings.
@@ -182,7 +183,8 @@ The following table is the threat model, refreshed at L8:
 | Leaked backup | restic encryption; the password isn't stored with the backups |
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
 | Live host compromise | _Not defended._ Stated in the docs |
-| Prompt injection through statements or photos | Rule 2 in `plan.md` §4: untrusted text goes through an isolated, tool-less extraction call into a typed schema. Eval cases test it |
+| Prompt injection through statements or photos | Rule 2 in `plan.md` §4: documents go through an isolated, tool-less extraction call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
+| Data carried out through rendered output | A content security policy from L0 that allows images only from the app's own origin (`img-src 'self'`); links in agent replies render as plain text |
 | Agent-written SQL | The `agent_ro` role: read-only, no auth tables, statement timeout |
 | LLM provider sees data | The self-hoster's choice for each role. Docs state plainly what each role sends |
 | Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI |

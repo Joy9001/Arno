@@ -117,7 +117,9 @@ nags for a balance; it always states how old its numbers are.
   weekly briefing; and detection of recurring charges and new or missed subscriptions.
   Delivered to an in-app inbox plus web push.
 - **Writes:** chat writes and memory saves land immediately with an inline card and undo.
-  Imports and photos go through a review step before commit.
+  Imports and photos go through a review step before commit. The one exception is a lasting or
+  wide write—a memory save, a setup change, or a change to many rows—in a conversation that has
+  read outside text. It asks for one tap first (rule 2 in §4).
 - **Advice boundary:** facts and tradeoffs only. It never recommends what to do with investments
   or which product to buy.
 - **Language:** mirrors the user's language mix.
@@ -242,9 +244,12 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
    what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
    tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
    its own head. Affordability verdicts come only from the tested engine.
-2. **Untrusted text never reaches a write-capable agent.** Statements and photos are extracted by
-   an isolated, tool-less model call into a typed schema. Only typed fields reach the agent. Voice
-   transcripts are the user's own words and take the normal chat path.
+2. **Untrusted text never makes a lasting change unseen.** Statements and photos are extracted by
+   an isolated, tool-less model call into a typed schema. Fields that still carry other people's
+   words—payee names, UPI notes—reach the agent marked as data. Writes that are visible and
+   undoable stay instant. Writes that last or reach wide—memory, setup, many rows—need a
+   confirming tap in any conversation that has read such text. Voice transcripts are the user's
+   own words and take the normal chat path.
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, the REST API,
    and any future MCP server wrap the same functions.
 4. **The database is the whole state.** Photos live in it; a dump from `pg_dump` is a complete
@@ -266,7 +271,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    `schema_version`; the `app` and read-only `agent_ro` roles.
 3. Schema v1: every table in [`design.md`](design.md), money as `BIGINT` paise.
 4. The `docker compose up` command serves the web shell and an API health check, reached over
-   HTTPS through `tailscale serve`.
+   HTTPS through `tailscale serve`. The web shell ships with a content security policy that
+   blocks images from other origins.
 5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
 6. CI: ruff, pytest against a Postgres service container, web lint and build.
 
@@ -293,7 +299,9 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     versus unknown, data age, and source IDs (for citations) in every return. Code Mode over the
     read tools, so the agent can run multistep modeling in the sandbox; write tools stay direct
     calls.
-17. Write tools with inline write-show-undo cards; corrections learn rules.
+17. Write tools with inline write-show-undo cards; corrections learn rules. Outside text is
+    marked in tool returns, and lasting or wide writes ask first in a conversation that has read
+    it ([`design.md`](design.md#untrusted-text-and-write-tiers)).
 18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible
     and editable in settings.
 19. Setup conversation lands accounts, income, obligations, goals, floor, and estimated baselines.

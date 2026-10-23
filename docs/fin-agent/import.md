@@ -95,7 +95,8 @@ To run the spike, follow these steps:
    parser reads them, run the generic fallback by hand (text extraction plus one model call) to
    see whether the invariant passes.
 4. For each bank, record the parser, the format to download, the password pattern, and any
-   quirks.
+   quirks—including which payer text (names, UPI notes) the narration carries. That's the
+   outside text the agent will see ([`design.md`](design.md#untrusted-text-and-write-tiers)).
 
 Real statements never enter the repository. Parser tests use synthetic fixtures; a git-ignored
 local folder holds real files for manual runs.

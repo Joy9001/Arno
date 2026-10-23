@@ -79,6 +79,7 @@ The following capabilities are on from the start:
 | Core agent + tools + structured output | The product |
 | Spend Limits | Development runs against a cloud API. A runaway loop costing real money is the one failure that bites immediately, and this is a few lines |
 | Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
+| Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
 
 ### Later, with triggers
@@ -89,8 +90,7 @@ The following capabilities wait for their triggers:
 |---|---|
 | Compaction | A single conversation actually approaches the context window. Conversations are kept forever, but only the current one is sent—total history is not the trigger |
 | Tool Output Limits | A tool return is genuinely large—most likely a wide `run_query` result |
-| Guardrails | Untrusted text has to reach the agent directly (for example, a chat-app bridge forwarding other people's messages), or a tool gains a destructive mode undo can't reverse. Today rule 2 in `plan.md` §4 keeps untrusted text out structurally |
-| Tool approval | Write-show-undo proves insufficient. The plan chose undo for chat writes and a review screen for imports and photos. If adopted, the Vercel AI adapter already renders approval requests |
+| Guardrails | Outside text larger than short statement fields reaches the agent (for example, a chat-app bridge forwarding other people's messages), or a tool gains a destructive mode undo can't reverse. Today outside text is limited to statement fields, marked as data, and lasting writes are gated (rule 2 in `plan.md` §4) |
 | Tool Search | The tool count grows past roughly a dozen. At 11, it costs more than it saves |
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't |
 | System Reminders | Long multiturn sessions show instruction drift |
@@ -158,7 +158,9 @@ The suite takes its shape from the survey:
 - **Use at least 50 tasks.** Draw them from real usage and real failures rather than imagined ones,
   including modeling questions that need a script, Hinglish, voice-transcript, and
   prompt-injection inputs (a statement row or
-  screenshot whose text tries to instruct the agent). Run them against _every_ configured model,
+  screenshot whose text tries to instruct the agent). Injection tasks are graded on database
+  state—no lasting write lands without its confirm card—and each model's fooled rate goes on the
+  scorecard. Run them against _every_ configured model,
   so the suite is also how a self-hoster learns whether their local model is good enough.
 - **Grade the outcome, not the trajectory.** The question is whether the row landed in the
   ledger.
