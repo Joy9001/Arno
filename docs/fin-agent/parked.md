@@ -187,26 +187,6 @@ India code lives in one folder, so extracting an interface later is mechanical.
 
 ## Agent
 
-### Code Mode: Sandboxed code execution
-
-The `pydantic-ai-harness` library ships _Code Mode_: the model writes one Python script calling
-many tools inside a Monty sandbox. The read-only `run_query(sql)` half of this idea is already in
-the product.
-
-The following points argue against it:
-
-- **Generated code has no tested semantics.** The model chooses the filter and the join; the
-  `run_query` tool has the same property in weaker form, which is why it ships first and gets
-  watched.
-- **Small models can't write correct code against a half-remembered schema.** It would push the
-  product toward cloud-only models.
-- **The product may not need it.** The `run_query` tool covers aggregation, which is most of what a
-  ledger is asked.
-
-**Trigger:** the eval suite and real use show questions the `run_query` tool can't answer that are
-genuinely computational—regressions, multistep modeling. If they're aggregations, fix the tool
-descriptions instead.
-
 ### Hidden memory extraction and semantic search (mem0-style)
 
 **Why parked:** memory is agent-managed typed preferences—saved unprompted, but visible and

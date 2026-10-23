@@ -79,6 +79,7 @@ The following capabilities are on from the start:
 | Core agent + tools + structured output | The product |
 | Spend Limits | Development runs against a cloud API. A runaway loop costing real money is the one failure that bites immediately, and this is a few lines |
 | Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
+| Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
 
 ### Later, with triggers
 
@@ -94,7 +95,6 @@ The following capabilities wait for their triggers:
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't |
 | System Reminders | Long multiturn sessions show instruction drift |
 | Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds |
-| Code Mode | See [`parked.md`](parked.md) |
 
 ## The tool surface is deliberately wide
 
@@ -106,8 +106,8 @@ tool applies, the agent cannot either._
 Two consequences are already in the design:
 
 - **The `get_financial_context` tool is comprehensive on purpose.** One call returns settings,
-  balances, the next 30 days of scheduled events, goals, open claims, and preferences. Small
-  models lose coherence after 2-3 chained calls, so one comprehensive call beats four narrow ones.
+  balances, the next 30 days of scheduled events, goals, open claims, and preferences. The model
+  gets the whole picture before it plans anything, and every turn saves round trips.
 - **The `run_query(sql)` tool applies the wide, shell-shaped pattern to a ledger.** It was
   parked; the evidence reversed that. A read-only Postgres role (`agent_ro`, which has a statement
   timeout) means the database does the arithmetic deterministically, so rule 1 in `plan.md` §4
@@ -138,9 +138,9 @@ This applies to the Fin-Agent system prompt as follows:
   Active preferences arrive through `get_financial_context`, not the prompt.
 - The advice boundary is one line: facts and tradeoffs, never investment or product
   recommendations.
-- Behavior that must _always_ hold belongs in code, not prose. "The LLM never does arithmetic" is
-  enforced structurally: the model is given no way to compute, because every number arrives as a
-  tool return.
+- Behavior that must _always_ hold belongs in code, not prose. Rule 1 in `plan.md` §4 is
+  enforced structurally: the model computes by calling tools or by writing a Code Mode script,
+  so every number it states arrives as a tool return.
 
 ## Evals are a milestone, not an afterthought
 
@@ -156,7 +156,8 @@ Both are useful; they measure different things.
 The suite takes its shape from the survey:
 
 - **Use at least 50 tasks.** Draw them from real usage and real failures rather than imagined ones,
-  including Hinglish, voice-transcript, and prompt-injection inputs (a statement row or
+  including modeling questions that need a script, Hinglish, voice-transcript, and
+  prompt-injection inputs (a statement row or
   screenshot whose text tries to instruct the agent). Run them against _every_ configured model,
   so the suite is also how a self-hoster learns whether their local model is good enough.
 - **Grade the outcome, not the trajectory.** The question is whether the row landed in the

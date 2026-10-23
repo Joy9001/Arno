@@ -66,6 +66,7 @@ still useful for checking whether a given local model can hold a tool-calling co
 
 ## The one rule
 
-**The LLM never does arithmetic.** Every number is computed by a Python function. The model
-parses language and picks tools; it does not add, subtract, or project. Rationale in
+**The model decides what to compute; code computes it.** The model reasons, models scenarios,
+and explains tradeoffs, but every number it states comes from a tool return or a script it ran in
+a sandbox, never from its own head. Rationale in
 [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md#4-architecture).

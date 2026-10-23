@@ -105,6 +105,9 @@ nags for a balance; it always states how old its numbers are.
 ### What it answers and does
 
 - **Any question about the ledger:** read tools plus a read-only `run_query(sql)` escape hatch.
+- **Modeling:** multistep what-ifs the read tools don't answer directly, such as prepaying a loan,
+  interest saved, or how a monthly saving grows. The agent writes a short Python script that calls
+  the read tools in a sandbox (Code Mode), and the script is shown with the answer.
 - **Affordability:** yes, yes-but, or no, from a projection computed in code. Scheduled events are
   exact; day-to-day spending is simulated from my own history, so the verdict carries a
   probability ("94% chance you stay above the floor"). "Yes-but" may propose any of the
@@ -126,7 +129,7 @@ conversation, editable panels, SMS and email autocapture, balance nudges, receip
 worth from investment statements, broker APIs, tax engine, category budgets, multicurrency,
 multiuser households, a projection for each account, extra briefings (daily, monthly, payday),
 anomaly detection, public-internet access, encryption inside the database, a locale-pack
-interface, arm64 images, Code Mode, and hidden memory extraction. Each has a trigger in
+interface, arm64 images, and hidden memory extraction. Each has a trigger in
 [`parked.md`](parked.md).
 
 To decide whether something comes back in, ask: _does the agent answer questions about my money
@@ -139,7 +142,7 @@ The following table states what each requirement demands:
 | Requirement | Target |
 |---|---|
 | Scale | One user for each instance |
-| Latency | Under ~5 s per chat reply on a cloud model; local models are allowed to be slower |
+| Latency | Under ~5 s per chat reply on a cloud model; a modeling reply that runs a script may take longer, and so may local models |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
 | Durability | Do not lose the ledger. Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
@@ -205,7 +208,12 @@ STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
 ```
 
 No PII-stripping layer, no split routing inside a role. Which role runs where is the self-hoster's
-choice. Develop against cloud; the eval suite decides which local models are good enough.
+choice.
+
+**The design target is a frontier model.** Tool shapes, Code Mode, and prompts are chosen for
+what a capable model can do, so a strong model is never held to a basic level. Local models stay
+supported through this switch, and the eval scorecard records what each one handles. A small
+model's limits go in the scorecard; they are never designed into the product.
 
 ---
 
@@ -230,8 +238,10 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
 
 ### The rules
 
-1. **The LLM never does arithmetic.** Every number is computed by Python (or Postgres) and handed
-   back. The model parses language, picks tools, and phrases results.
+1. **The model decides what to compute; code computes it.** The model reasons freely: it decides
+   what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
+   tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
+   its own head. Affordability verdicts come only from the tested engine.
 2. **Untrusted text never reaches a write-capable agent.** Statements and photos are extracted by
    an isolated, tool-less model call into a typed schema. Only typed fields reach the agent. Voice
    transcripts are the user's own words and take the normal chat path.
@@ -280,7 +290,9 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
     Limits; a trace log for each run.
 16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout; zero
-    versus unknown, data age, and source IDs (for citations) in every return.
+    versus unknown, data age, and source IDs (for citations) in every return. Code Mode over the
+    read tools, so the agent can run multistep modeling in the sandbox; write tools stay direct
+    calls.
 17. Write tools with inline write-show-undo cards; corrections learn rules.
 18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible
     and editable in settings.
@@ -299,9 +311,10 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 ### L4: Evals (gate: engine work starts when this exists)
 
 25. At least 50 agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish,
-    prompt-injection cases, a fresh database for each trial cloned from the demo template,
-    `pass^k`, run against every configured model. Shape in [`harness.md`](harness.md).
-26. Model scorecard: `pass^k` for each local model, published in the README.
+    modeling questions that need a script, prompt-injection cases, a fresh database for each
+    trial cloned from the demo template, `pass^k`, run against every configured model. Shape in
+    [`harness.md`](harness.md).
+26. Model scorecard: `pass^k` for each configured model, cloud and local, published in the README.
 
 ### L5: Engine
 
@@ -349,8 +362,10 @@ something has crept in—check it against [`parked.md`](parked.md).
 Answer each when its layer arrives, not before.
 
 - **L0:** Tailscale on the host, or as a sidecar container in compose?
-- **L2:** one discriminated-union `update_setup` tool, or one tool for each entity? Evals decide.
-  Which local chat model clears the bar? Evals decide.
+- **L2:** do cards and citations from tools called inside a Code Mode script reach the chat
+  stream, or does Fin-Agent render them from the `run_code` return's metadata? Enforce rule 1 at
+  the output too—check that every number in a reply matches a tool return—or rely on evals?
+  Which local chat models handle which tasks? The scorecard records it.
 - **L3:** what does Slice export, and in what format? Does any parser read Union Bank, or is it
   the generic path?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor

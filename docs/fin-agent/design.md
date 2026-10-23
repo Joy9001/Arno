@@ -137,7 +137,9 @@ The following tables hold memory, conversations, and provenance:
 ## Tool surface: 11 tools
 
 _"Answers any question" is a property of the tool surface._ Few wide tools over complete data;
-a twelfth tool is the trigger to reconsider Tool Search ([`harness.md`](harness.md)).
+a twelfth tool is the trigger to reconsider Tool Search ([`harness.md`](harness.md)). The five
+read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools: `run_code`
+and the six write tools. See [Code Mode](#code-mode).
 
 ### Read
 
@@ -159,7 +161,7 @@ The agent has six write tools:
 |---|---|
 | `record_transaction(...)` | Expense, income, transfer, split, or loan in one call. Returns an inline card with undo |
 | `edit_transaction(id, changes \| delete)` | Conversational repair. A category change creates or updates a rule |
-| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, counterparties. Discriminated union—or one tool for each entity if evals show that small models struggle (`plan.md` §6, L2) |
+| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, counterparties. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
 | `preference(action, text \| id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
 | `import_document(attachment_id, password=None)` | Parses into an import in `review` state. Committing is a separate, explicit step |
 | `undo(audit_id=None)` | Reverts the last (or a given) write |
@@ -181,12 +183,37 @@ there is no `compare_periods` tool: it's two `summarize_spending` calls the mode
 **Every read tool distinguishes zero from unknown.** Outside an account's data coverage, the
 answer is "no data," not ₹0. Every balance carries its `as_of` date.
 
+### Code Mode
+
+The model answers questions by writing Python that calls the read tools inside the Monty sandbox
+from `pydantic-ai-harness`. A script can loop, branch, run several queries at once, and model a
+scenario—"prepay ₹50,000 on the loan: new EMI, interest saved, and what happens to the Goa
+goal"—so intermediate results stay out of the context window. Code Mode is how rule 1 in
+`plan.md` §4 works in practice: the model does the thinking, and the script does the arithmetic.
+
+The following table sets how it is configured:
+
+| Concern | Decision |
+|---|---|
+| Which tools move behind `run_code` | The five read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
+| Writes | Always direct tool calls, one row at a time, each with its write-show-undo card. A script never writes |
+| Money in the sandbox | Monty has no `decimal` module, and `Decimal` values arrive as strings. Read tools therefore also return amounts as integer paise, which stay exact in Python integers. Rate arithmetic (interest, growth) is floating point, so results are rounded to the rupee for display |
+| Dates | The sandbox has no clock. "Today" comes from `get_financial_context`, never from `datetime.now()` |
+| Host access | `mount` and `os_access` stay unset. The read tools hold the only route to data, through the `agent_ro` role |
+| Limits | A cap on nested tool calls and a short duration for each snippet, tuned at L2. Spend Limits still cap the run |
+| Provenance | The `run_code` return keeps every nested tool call and return in its metadata. The UI shows the script next to the answer, and the source IDs from the nested returns become the answer's citations |
+| Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge |
+
+**Open at L2:** whether `VercelAIAdapter` streams the UI metadata of tool returns nested inside
+`run_code`. If it doesn't, Fin-Agent emits those cards and citations itself from the `run_code`
+return's metadata (`plan.md` §6).
+
 ---
 
 ## The projection engine
 
 One function in code, seeded so the same inputs always give the same output. No LLM
-involvement—this is where "the LLM never does arithmetic" is actually enforced.
+involvement—this is the tested arithmetic every affordability verdict comes from.
 
 ### Inputs
 
