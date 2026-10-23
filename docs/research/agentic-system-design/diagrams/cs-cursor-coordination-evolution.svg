@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cs-cursor-coordination-evolution-title cs-cursor-coordination-evolution-desc" id="cs-cursor-coordination-evolution-root">
+        <title id="cs-cursor-coordination-evolution-title">Cursor evolution of multi-agent coordination</title>
+        <desc id="cs-cursor-coordination-evolution-desc">Flowchart of four coordination designs, each replaced or revised because of the failure shown beside it, ending with the integrator role removed.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #cs-cursor-coordination-evolution-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #cs-cursor-coordination-evolution-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #cs-cursor-coordination-evolution-root .diagram-container { width: 100%; overflow-x: auto; }
+      #cs-cursor-coordination-evolution-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="cs-cursor-coordination-evolution-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="cs-cursor-coordination-evolution-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="cs-cursor-coordination-evolution-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+<!-- Arrows (drawn first, behind nodes) -->
+<path d="M360,108 H440" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<path d="M360,212 H440" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<path d="M360,316 H440" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<path d="M360,420 H440" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<path d="M200,144 V174" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<rect x="208" y="155" width="68" height="12" rx="2" fill="#f5f5f5"/>
+<text x="242" y="164" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">REPLACED BY</text>
+<path d="M200,248 V278" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<rect x="208" y="259" width="68" height="12" rx="2" fill="#f5f5f5"/>
+<text x="242" y="268" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">REPLACED BY</text>
+<path d="M200,352 V382" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-cursor-coordination-evolution-arrow)"/>
+<rect x="208" y="363" width="68" height="12" rx="2" fill="#f5f5f5"/>
+<text x="242" y="372" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ADDED LATER</text>
+<!-- Nodes -->
+<text x="40" y="56" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em" text-anchor="start">DESIGN</text>
+<text x="440" y="56" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em" text-anchor="start">WHAT HAPPENED</text>
+<rect x="40" y="72" width="320" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="72" width="320" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="200" y="105.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">1. Flat agents</text>
+<text x="200" y="118.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">shared file with locks</text>
+<rect x="40" y="176" width="320" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="176" width="320" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="200" y="216" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">2. Optimistic concurrency</text>
+<rect x="40" y="280" width="320" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="280" width="320" height="72" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="200" y="307" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">3. Planners / workers / judge</text>
+<text x="200" y="320" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">planners spawn tasks, workers execute,</text>
+<text x="200" y="333" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">judge decides; fresh restart each cycle</text>
+<rect x="40" y="384" width="320" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="384" width="320" height="72" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<text x="200" y="424" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">4. Integrator QC role</text>
+<rect x="440" y="72" width="480" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="440" y="72" width="480" height="72" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="680" y="105.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Stalls and never-released locks</text>
+<text x="680" y="118.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">20 agents performed like 2 or 3</text>
+<rect x="440" y="176" width="480" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="440" y="176" width="480" height="72" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="680" y="209.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Agents became risk-averse</text>
+<text x="680" y="222.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sturdier, but they avoided hard tasks</text>
+<rect x="440" y="280" width="480" height="72" rx="20" fill="#f5f5f5"/>
+<rect x="440" y="280" width="480" height="72" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="680" y="313.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Hundreds of concurrent agents</text>
+<text x="680" y="326.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">browser from scratch in about a week (1M+ LoC)</text>
+<rect x="440" y="384" width="480" height="72" rx="6" fill="#f5f5f5"/>
+<rect x="440" y="384" width="480" height="72" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="680" y="417.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Became a bottleneck</text>
+<text x="680" y="430.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">the role was removed</text>
+<!-- Legend -->
+<line x1="40" y1="540" x2="920" y2="540" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="556" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="120" y="548" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="152" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Design</text>
+<rect x="209" y="548" width="24" height="12" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="241" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Outcome or failure</text>
+<rect x="357" y="548" width="24" height="12" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<text x="389" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Later addition</text>
+<rect x="485" y="548" width="24" height="12" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="517" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal: final design, removed role</text>      </svg>

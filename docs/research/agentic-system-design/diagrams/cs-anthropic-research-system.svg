@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cs-anthropic-research-system-title cs-anthropic-research-system-desc" id="cs-anthropic-research-system-root">
+        <title id="cs-anthropic-research-system-title">Anthropic multi-agent Research system</title>
+        <desc id="cs-anthropic-research-system-desc">Architecture diagram of a lead agent that saves its plan to external memory, spawns parallel subagents, receives lightweight references back via external storage, and passes its synthesis to a citation agent.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #cs-anthropic-research-system-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #cs-anthropic-research-system-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #cs-anthropic-research-system-root .diagram-container { width: 100%; overflow-x: auto; }
+      #cs-anthropic-research-system-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="cs-anthropic-research-system-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="cs-anthropic-research-system-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="cs-anthropic-research-system-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+<!-- Arrows (drawn first, behind nodes) -->
+<path d="M152,252 H232" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<path d="M292,224 V122" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<rect x="300" y="136" width="64" height="12" rx="2" fill="#f5f5f5"/>
+<text x="332" y="145" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SAVES PLAN</text>
+<path d="M408,252 H496" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<rect x="430" y="232" width="44" height="12" rx="2" fill="#f5f5f5"/>
+<text x="452" y="241" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SPAWNS</text>
+<path d="M672,252 H760" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<rect x="676" y="232" width="80" height="12" rx="2" fill="#f5f5f5"/>
+<text x="716" y="241" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LARGE OUTPUTS</text>
+<path d="M840,224 V172 Q840,164 832,164 H356 Q348,164 348,172 V222" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#cs-anthropic-research-system-arrow-accent)"/>
+<rect x="562" y="144" width="64" height="12" rx="2" fill="#f5f5f5"/>
+<text x="594" y="153" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">REFERENCES</text>
+<path d="M320,280 V374" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<rect x="328" y="322" width="68" height="12" rx="2" fill="#f5f5f5"/>
+<text x="362" y="331" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SYNTHESIZED</text>
+<path d="M408,404 H496" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-anthropic-research-system-arrow)"/>
+<!-- Nodes -->
+<rect x="40" y="224" width="112" height="56" rx="20" fill="#f5f5f5"/>
+<rect x="40" y="224" width="112" height="56" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="96" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">User query</text>
+<rect x="232" y="224" width="176" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="232" y="224" width="176" height="56" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="320" y="249.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Lead agent</text>
+<text x="320" y="262.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Opus 4 · plans, synthesizes</text>
+<rect x="232" y="72" width="176" height="48" rx="6" fill="#f5f5f5"/>
+<rect x="232" y="72" width="176" height="48" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+<text x="320" y="93.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">External memory</text>
+<text x="320" y="106.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">saved plan</text>
+<rect x="496" y="224" width="176" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="496" y="224" width="176" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="584" y="249.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Subagents ×3-5</text>
+<text x="584" y="262.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Sonnet 4 · own context</text>
+<rect x="760" y="224" width="160" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="760" y="224" width="160" height="56" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+<text x="840" y="249.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">External storage</text>
+<text x="840" y="262.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">large outputs</text>
+<rect x="232" y="376" width="176" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="232" y="376" width="176" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="320" y="401.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Citation agent</text>
+<text x="320" y="414.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">attaches claims to sources</text>
+<rect x="496" y="376" width="176" height="56" rx="20" fill="#f5f5f5"/>
+<rect x="496" y="376" width="176" height="56" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="584" y="408" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Answer with citations</text>
+<!-- Callouts -->
+<text x="440" y="100" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">Context past 200K tokens is truncated,</text>
+<text x="440" y="118" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">so the plan is saved first.</text>
+<path d="M434,96 H412" fill="none" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/>
+<circle cx="408" cy="96" r="2" fill="#2d3142"/>
+<text x="496" y="336" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">Effort-scaling rules in the prompt bound spawning:</text>
+<text x="496" y="354" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">1 agent for facts, 10+ subagents for complex work.</text>
+<path d="M584,318 V284" fill="none" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/>
+<circle cx="584" cy="280" r="2" fill="#2d3142"/>
+<!-- Legend -->
+<line x1="40" y1="540" x2="920" y2="540" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="556" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="120" y="548" width="24" height="12" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="152" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Input / output</text>
+<rect x="248" y="548" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="280" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Agent</text>
+<rect x="332" y="548" width="24" height="12" rx="2" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+<text x="364" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Data store</text>
+<line x1="441" y1="554" x2="465" y2="554" stroke="#bf4520" stroke-width="1.4" marker-end="url(#cs-anthropic-research-system-arrow-accent)"/>
+<text x="473" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal: lead agent and reference return</text>      </svg>

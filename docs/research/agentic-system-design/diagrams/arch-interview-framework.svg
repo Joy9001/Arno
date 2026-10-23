@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-interview-framework-title arch-interview-framework-desc" id="arch-interview-framework-root">
+        <title id="arch-interview-framework-title">Merged GenAI interview template</title>
+        <desc id="arch-interview-framework-desc">Seven interview steps grouped into frame, design and close: clarify, estimate, sketch, deep dive, trade-offs, failure and ops, evolve.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #arch-interview-framework-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #arch-interview-framework-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #arch-interview-framework-root .diagram-container { width: 100%; overflow-x: auto; }
+      #arch-interview-framework-root .diagram-container { overflow-x: visible; }</style>
+<marker id="arch-interview-framework-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+<marker id="arch-interview-framework-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+<marker id="arch-interview-framework-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+<marker id="arch-interview-framework-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+<marker id="arch-interview-framework-arrow-start" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto"><polygon points="8 0, 0 3, 8 6" fill="#4f5d75"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+        <rect x="40" y="56" width="272" height="368" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/><rect x="158" y="60" width="36" height="12" rx="2" fill="#f5f5f5"/><text x="176" y="69" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">FRAME</text>
+<rect x="344" y="56" width="272" height="368" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/><rect x="460" y="60" width="40" height="12" rx="2" fill="#f5f5f5"/><text x="480" y="69" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">DESIGN</text>
+<rect x="648" y="56" width="272" height="368" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/><rect x="766" y="60" width="36" height="12" rx="2" fill="#f5f5f5"/><text x="784" y="69" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CLOSE</text>
+<line x1="176" y1="208" x2="176" y2="240" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<path d="M296,284 L320,284 Q328,284 328,276 L328,152 Q328,144 336,144 L360,144" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<line x1="480" y1="184" x2="480" y2="216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<line x1="480" y1="296" x2="480" y2="328" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<path d="M600,368 L624,368 Q632,368 632,360 L632,156 Q632,148 640,148 L664,148" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<line x1="784" y1="192" x2="784" y2="224" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<rect x="56" y="104" width="240" height="104" rx="6" fill="#f5f5f5"/>
+<rect x="56" y="104" width="240" height="104" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="64" y="112" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="86" y="121" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 1</text>
+<text x="176" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Clarify</text>
+<text x="176" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">user, task, autonomy level,</text>
+<text x="176" y="169" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">success metric, latency class,</text>
+<text x="176" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">scale, data sensitivity,</text>
+<text x="176" y="195" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">error tolerance, write-action risk</text>
+<rect x="56" y="240" width="240" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="56" y="240" width="240" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="64" y="248" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="86" y="257" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 2</text>
+<text x="176" y="276" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Estimate</text>
+<text x="176" y="292" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">DAU → tokens/sec (input and</text>
+<text x="176" y="305" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">output separately) → GPUs / cost;</text>
+<text x="176" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">state assumptions aloud</text>
+<rect x="360" y="104" width="240" height="80" rx="6" fill="#f5f5f5"/>
+<rect x="360" y="104" width="240" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="368" y="112" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="390" y="121" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 3</text>
+<text x="480" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Sketch</text>
+<text x="480" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">the request-path pipeline;</text>
+<text x="480" y="169" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">mark which boxes are in scope</text>
+<rect x="360" y="216" width="240" height="80" rx="6" fill="#f5f5f5"/>
+<rect x="360" y="216" width="240" height="80" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<rect x="368" y="224" width="44" height="12" rx="2" fill="none" stroke="#bf4520" stroke-width="0.8" stroke-opacity="0.50"/>
+<text x="390" y="233" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 4</text>
+<text x="480" y="252" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Deep dive where probed</text>
+<text x="480" y="268" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">retrieval, serving, agent loop,</text>
+<text x="480" y="281" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">or safety</text>
+<rect x="360" y="328" width="240" height="80" rx="6" fill="#f5f5f5"/>
+<rect x="360" y="328" width="240" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="368" y="336" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="390" y="345" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 5</text>
+<text x="480" y="364" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Trade-offs</text>
+<text x="480" y="380" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">at least one table-style</text>
+<text x="480" y="393" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">comparison per major decision</text>
+<rect x="664" y="104" width="240" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="664" y="104" width="240" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="672" y="112" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="694" y="121" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 6</text>
+<text x="784" y="140" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Failure, ops, evals</text>
+<text x="784" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">top failure modes; metrics</text>
+<text x="784" y="169" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">(TTFT / TPOT / P95, grounding</text>
+<text x="784" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rate, task success); fallbacks</text>
+<rect x="664" y="224" width="240" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="664" y="224" width="240" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="672" y="232" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="694" y="241" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STEP 7</text>
+<text x="784" y="260" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Evolve</text>
+<text x="784" y="276" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">v1 → v2: distillation, routing,</text>
+<text x="784" y="289" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">personalization, offline jobs,</text>
+<text x="784" y="302" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">A/B, feedback loop</text>
+<text x="40" y="472" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif" text-anchor="start">graded: LLM awareness (tokens, context limits), modular thinking, cost-consciousness,</text>
+<text x="40" y="488" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif" text-anchor="start">safety and governance, communication; for agentic questions, autonomy vs control.</text>
+<line x1="480" y1="450" x2="480" y2="424" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/><circle cx="480" cy="424" r="2" fill="#2d3142"/>
+<line x1="40" y1="520" x2="920" y2="520" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="536" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="552" width="14" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="62" y="560" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Step interviewers probe</text>
+<rect x="202" y="552" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="224" y="560" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Step</text>
+<rect x="271" y="552" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.22"/>
+<text x="293" y="560" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Phase</text>
+<line x1="345" y1="557" x2="373" y2="557" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-interview-framework-arrow)"/>
+<text x="381" y="560" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Next step</text>
+
+      </svg>

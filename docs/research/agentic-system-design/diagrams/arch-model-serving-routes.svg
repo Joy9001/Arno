@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 456" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-model-serving-routes-title arch-model-serving-routes-desc" id="arch-model-serving-routes-root">
+        <title id="arch-model-serving-routes-title">Model serving: managed API vs self-hosted pool</title>
+        <desc id="arch-model-serving-routes-desc">The LLM gateway routes a request either to a managed API or to a self-hosted GPU pool, and both routes return streamed tokens to the client.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #arch-model-serving-routes-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #arch-model-serving-routes-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #arch-model-serving-routes-root .diagram-container { width: 100%; overflow-x: auto; }
+      #arch-model-serving-routes-root .diagram-container { overflow-x: visible; }</style>
+<marker id="arch-model-serving-routes-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+<marker id="arch-model-serving-routes-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+<marker id="arch-model-serving-routes-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+<marker id="arch-model-serving-routes-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+<marker id="arch-model-serving-routes-arrow-start" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto"><polygon points="8 0, 0 3, 8 6" fill="#4f5d75"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+        <path d="M200,200 L298,200 Q306,200 306,192 L306,120 Q306,112 314,112 L412,112" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-routes-arrow)"/>
+<rect x="319" y="92" width="80" height="12" rx="2" fill="#f5f5f5"/><text x="359" y="101" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">MANAGED ROUTE</text>
+<path d="M200,224 L298,224 Q306,224 306,232 L306,288 Q306,296 314,296 L412,296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-routes-arrow)"/>
+<rect x="325" y="276" width="68" height="12" rx="2" fill="#f5f5f5"/><text x="359" y="285" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SELF-HOSTED</text>
+<path d="M652,112 L692,112 Q700,112 700,120 L700,188 Q700,196 708,196 L748,196" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-routes-arrow)"/>
+<path d="M652,296 L692,296 Q700,296 700,288 L700,224 Q700,216 708,216 L748,216" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-routes-arrow)"/>
+<rect x="40" y="172" width="160" height="80" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="172" width="160" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="48" y="180" width="32" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="64" y="189" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GATE</text>
+<text x="120" y="208" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">LLM gateway</text>
+<text x="120" y="224" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">routes by tier,</text>
+<text x="120" y="237" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">privacy, fallback</text>
+<rect x="412" y="68" width="240" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="412" y="68" width="240" height="88" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<rect x="420" y="76" width="44" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+<text x="442" y="85" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VENDOR</text>
+<text x="532" y="104" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Managed API</text>
+<text x="532" y="120" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">per-token price, shipped in hours;</text>
+<text x="532" y="133" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">provider queues, rate limits;</text>
+<text x="532" y="146" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">data leaves your boundary</text>
+<rect x="412" y="252" width="240" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="412" y="252" width="240" height="88" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<rect x="420" y="260" width="28" height="12" rx="2" fill="none" stroke="#bf4520" stroke-width="0.8" stroke-opacity="0.50"/>
+<text x="434" y="269" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GPU</text>
+<text x="532" y="288" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Self-hosted pool</text>
+<text x="532" y="304" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">vLLM / TGI / TensorRT-LLM on GPUs;</text>
+<text x="532" y="317" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">you control batching, placement,</text>
+<text x="532" y="330" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">quantization, speculative decoding</text>
+<rect x="748" y="172" width="172" height="64" rx="6" fill="#f5f5f5"/>
+<rect x="748" y="172" width="172" height="64" rx="6" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+<rect x="756" y="180" width="44" height="12" rx="2" fill="none" stroke="#5a6580" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="778" y="189" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CLIENT</text>
+<text x="834" y="208" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Streamed tokens</text>
+<text x="834" y="224" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">from either route</text>
+<line x1="40" y1="388" x2="920" y2="388" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="404" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="420" width="14" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="62" y="428" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal</text>
+<rect x="114" y="420" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="136" y="428" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Service</text>
+<rect x="198" y="420" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="220" y="428" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Vendor-run</text>
+<rect x="297" y="420" width="14" height="10" rx="2" fill="#4f5d75" stroke="#5a6580" stroke-width="1" fill-opacity="0.10"/>
+<text x="319" y="428" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Client</text>
+<line x1="376" y1="425" x2="404" y2="425" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-routes-arrow)"/>
+<text x="412" y="428" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Route</text>
+
+      </svg>

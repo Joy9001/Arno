@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="rm-memory-taxonomy-title rm-memory-taxonomy-desc" id="rm-memory-taxonomy-root">
+        <title id="rm-memory-taxonomy-title">Agent memory: CoALA taxonomy and four implementation families</title>
+        <desc id="rm-memory-taxonomy-desc">CoALA's working memory and long-term episodic, semantic and procedural stores, above four implementation families split by whether a fixed pipeline or the agent decides what to store.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #rm-memory-taxonomy-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #rm-memory-taxonomy-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #rm-memory-taxonomy-root .diagram-container { width: 100%; overflow-x: auto; }
+      #rm-memory-taxonomy-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="rm-memory-taxonomy-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="rm-memory-taxonomy-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="rm-memory-taxonomy-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <marker id="rm-memory-taxonomy-arrow-start" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto"><polygon points="8 0, 0 3, 8 6" fill="#4f5d75"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="rm-memory-taxonomy-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#rm-memory-taxonomy-dots)" opacity="0.55"/> -->
+
+        <rect x="40" y="40" width="880" height="224" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <text x="56" y="57" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" font-weight="500" letter-spacing="0.14em">WHAT IS STORED · COALA TAXONOMY (SUMERS ET AL.)</text>
+        <rect x="300" y="84" width="600" height="164" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <rect x="316" y="78" width="104" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="368" y="87" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" font-weight="500" letter-spacing="0.14em" text-anchor="middle">LONG-TERM MEMORY</text>
+        <rect x="40" y="304" width="880" height="216" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <text x="56" y="321" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" font-weight="500" letter-spacing="0.14em">HOW WRITES HAPPEN · FOUR IMPLEMENTATION FAMILIES, NO SETTLED ARCHITECTURE</text>
+        <path d="M212,168 H300" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#rm-memory-taxonomy-arrow-start)" marker-end="url(#rm-memory-taxonomy-arrow)"/>
+        <path d="M600,248 V304" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#rm-memory-taxonomy-arrow)"/>
+        <rect x="218" y="148" width="76" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="256" y="157" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">READ / WRITE</text>
+        <rect x="610" y="270" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="654.0" y="279" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">IMPLEMENTED BY</text>
+        <path d="M60,476 V484 H468 V476" fill="none" stroke="#2d3142" stroke-width="1" stroke-opacity="0.40"/>
+        <path d="M492,476 V484 H900 V476" fill="none" stroke="#2d3142" stroke-width="1" stroke-opacity="0.40"/>
+        <text x="264" y="504" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em" text-anchor="middle">PIPELINE DECIDES WHAT TO STORE</text>
+        <text x="696" y="504" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em" text-anchor="middle">AGENT DECIDES WHAT TO STORE</text>
+        <rect x="60" y="120" width="152" height="96" rx="6" fill="#f5f5f5"/>
+        <rect x="60" y="120" width="152" height="96" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="136.0" y="146.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Working</text>
+        <text x="136.0" y="161.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">current task state</text>
+        <text x="136.0" y="173.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">context window,</text>
+        <text x="136.0" y="185.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">scratchpad</text>
+        <text x="136.0" y="197.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">always in prompt</text>
+        <rect x="316" y="120" width="176" height="96" rx="6" fill="#f5f5f5"/>
+        <rect x="316" y="120" width="176" height="96" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="404.0" y="152.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Episodic</text>
+        <text x="404.0" y="167.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">past interactions,</text>
+        <text x="404.0" y="179.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">trajectories</text>
+        <text x="404.0" y="191.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">similarity + recency search</text>
+        <rect x="512" y="120" width="176" height="96" rx="6" fill="#f5f5f5"/>
+        <rect x="512" y="120" width="176" height="96" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="600.0" y="152.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Semantic</text>
+        <text x="600.0" y="167.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">facts about user / world</text>
+        <text x="600.0" y="179.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">profile or fact collection,</text>
+        <text x="600.0" y="191.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">knowledge graph</text>
+        <rect x="708" y="120" width="176" height="96" rx="6" fill="#f5f5f5"/>
+        <rect x="708" y="120" width="176" height="96" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="796.0" y="158.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Procedural</text>
+        <text x="796.0" y="173.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">how to behave</text>
+        <text x="796.0" y="185.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">system-prompt rules, skills</text>
+        <rect x="60" y="344" width="192" height="120" rx="6" fill="#f5f5f5"/>
+        <rect x="60" y="344" width="192" height="120" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="156.0" y="382.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fact store</text>
+        <text x="156.0" y="397.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Mem0: extracts facts per turn;</text>
+        <text x="156.0" y="409.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">LLM picks ADD / UPDATE /</text>
+        <text x="156.0" y="421.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">DELETE / NOOP; vector</text>
+        <text x="156.0" y="433.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">(+ graph) retrieval</text>
+        <rect x="276" y="344" width="192" height="120" rx="6" fill="#f5f5f5"/>
+        <rect x="276" y="344" width="192" height="120" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="372.0" y="382.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Temporal graph</text>
+        <text x="372.0" y="397.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Zep / Graphiti: episodes</text>
+        <text x="372.0" y="409.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">become entities and facts</text>
+        <text x="372.0" y="421.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">with validity windows;</text>
+        <text x="372.0" y="433.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">invalidated, not deleted</text>
+        <rect x="492" y="344" width="192" height="120" rx="6" fill="#f5f5f5"/>
+        <rect x="492" y="344" width="192" height="120" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="588.0" y="382.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">OS-style tiers</text>
+        <text x="588.0" y="397.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">MemGPT / Letta: the LLM edits</text>
+        <text x="588.0" y="409.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">its own core blocks, recall</text>
+        <text x="588.0" y="421.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">log and archival store</text>
+        <text x="588.0" y="433.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">via function calls</text>
+        <rect x="708" y="344" width="192" height="120" rx="6" fill="#f5f5f5"/>
+        <rect x="708" y="344" width="192" height="120" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="804.0" y="376.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Files</text>
+        <text x="804.0" y="391.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Anthropic memory tool,</text>
+        <text x="804.0" y="403.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Claude Code MEMORY.md:</text>
+        <text x="804.0" y="415.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">model views / creates / edits</text>
+        <text x="804.0" y="427.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">a /memories directory</text>
+        <text x="804.0" y="439.0" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">(client-side)</text>
+        <line x1="40" y1="540" x2="920" y2="540" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="556" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="566" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="72" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Pipeline decides writes</text>
+        <rect x="250" y="566" width="24" height="12" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="282" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Agent decides writes</text>
+        <rect x="450" y="566" width="24" height="12" rx="2" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+        <text x="482" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Memory store</text>
+        <line x1="620" y1="572" x2="644" y2="572" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#rm-memory-taxonomy-arrow)"/>
+        <text x="652" y="575" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Implemented by (no per-type mapping)</text>
+
+
+      </svg>

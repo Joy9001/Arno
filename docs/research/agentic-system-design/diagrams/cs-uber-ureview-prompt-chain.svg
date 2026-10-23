@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cs-uber-ureview-prompt-chain-title cs-uber-ureview-prompt-chain-desc" id="cs-uber-ureview-prompt-chain-root">
+        <title id="cs-uber-ureview-prompt-chain-title">Uber uReview code review prompt chain</title>
+        <desc id="cs-uber-ureview-prompt-chain-desc">Flowchart of a fixed review chain: generators, a grader prompt, semantic dedup and a category classifier fed by reviewer feedback, ending in inline comments.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #cs-uber-ureview-prompt-chain-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #cs-uber-ureview-prompt-chain-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #cs-uber-ureview-prompt-chain-root .diagram-container { width: 100%; overflow-x: auto; }
+      #cs-uber-ureview-prompt-chain-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="cs-uber-ureview-prompt-chain-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="cs-uber-ureview-prompt-chain-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="cs-uber-ureview-prompt-chain-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+<!-- Arrows (drawn first, behind nodes) -->
+<path d="M208,140 H272" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M440,140 H504" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M672,140 H736" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M820,168 V256" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M736,284 H672" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M504,284 H440" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<path d="M588,312 V412 Q588,420 596,420 H736" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#cs-uber-ureview-prompt-chain-arrow)"/>
+<rect x="640" y="400" width="52" height="12" rx="2" fill="#f5f5f5"/>
+<text x="666" y="409" fill="#5a6580" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">FEEDBACK</text>
+<path d="M820,392 V314" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#cs-uber-ureview-prompt-chain-arrow-accent)"/>
+<rect x="828" y="348" width="60" height="12" rx="2" fill="#f5f5f5"/>
+<text x="858" y="357" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">LOW-VALUE</text>
+<!-- Nodes -->
+<rect x="40" y="112" width="168" height="56" rx="20" fill="#f5f5f5"/>
+<rect x="40" y="112" width="168" height="56" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="124" y="144" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Diff on Phabricator</text>
+<rect x="272" y="112" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="272" y="112" width="168" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="356" y="137.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Generators</text>
+<text x="356" y="150.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Claude 4 Sonnet</text>
+<rect x="504" y="112" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="504" y="112" width="168" height="56" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="588" y="137.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Grader prompt</text>
+<text x="588" y="150.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">o4-mini-high · confidence</text>
+<rect x="736" y="112" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="736" y="112" width="168" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="820" y="137.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Semantic dedup</text>
+<text x="820" y="150.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">drops similar comments</text>
+<rect x="736" y="256" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="736" y="256" width="168" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="820" y="281.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Category classifier</text>
+<text x="820" y="294.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">suppresses low-value types</text>
+<rect x="504" y="256" width="168" height="56" rx="20" fill="#f5f5f5"/>
+<rect x="504" y="256" width="168" height="56" rx="20" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="588" y="288" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Inline comments</text>
+<rect x="272" y="256" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="272" y="256" width="168" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<text x="356" y="281.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Fixer</text>
+<text x="356" y="294.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">proposes patches</text>
+<rect x="736" y="392" width="168" height="56" rx="6" fill="#f5f5f5"/>
+<rect x="736" y="392" width="168" height="56" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+<text x="820" y="417.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Feedback store</text>
+<text x="820" y="430.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Useful / Not-Useful</text>
+<!-- Callouts -->
+<text x="272" y="72" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif" text-anchor="start">Pluggable assistants: bugs, internal best-practices, AppSec</text>
+<path d="M356,80 V110" fill="none" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/>
+<circle cx="356" cy="112" r="2" fill="#2d3142"/>
+<!-- Legend -->
+<line x1="40" y1="540" x2="920" y2="540" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="556" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="120" y="548" width="24" height="12" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+<text x="152" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Input / output</text>
+<rect x="248" y="548" width="24" height="12" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="280" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Stage</text>
+<rect x="332" y="548" width="24" height="12" rx="2" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
+<text x="364" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Data store</text>
+<rect x="441" y="548" width="24" height="12" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<text x="473" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Optional</text>
+<rect x="540" y="548" width="24" height="12" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="572" y="557" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Focal: grader, feedback to classifier</text>      </svg>

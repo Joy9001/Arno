@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="ma-topologies-title ma-topologies-desc" id="ma-topologies-root">
+        <title id="ma-topologies-title">Topologies with a lead: who holds control</title>
+        <desc id="ma-topologies-desc">Three multi-agent topologies in which a lead holds control: a single agent with tools, an orchestrator with workers that keep their own scratchpads, and a hierarchy of supervisors.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #ma-topologies-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #ma-topologies-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #ma-topologies-root .diagram-container { width: 100%; overflow-x: auto; }
+      #ma-topologies-root .diagram-container { overflow-x: visible; }</style>
+          <marker id="ma-topologies-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="ma-topologies-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+          <marker id="ma-topologies-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto-start-reverse"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+
+          <!-- OPTIONAL: dot-pattern background. Uncomment the <pattern> and the second <rect> below if you want the dotted paper look. -->
+          <!--
+          <pattern id="ma-topologies-dots" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="0.9" fill="rgba(45,49,66,0.10)"/>
+          </pattern>
+          -->
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#ma-topologies-dots)" opacity="0.55"/> -->
+
+                <rect x="40" y="44" width="280" height="200" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <rect x="52" y="48" width="160" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="132.0" y="57" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">1 · SINGLE AGENT (BASELINE)</text>
+        <rect x="340" y="44" width="580" height="200" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <rect x="352" y="48" width="212" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="458.0" y="57" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">2 · ORCHESTRATOR-WORKERS / SUPERVISOR</text>
+        <rect x="40" y="264" width="880" height="200" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/>
+        <rect x="52" y="268" width="132" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="118.0" y="277" fill="#5a6580" font-size="7" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">3 · HIERARCHICAL TEAMS</text>
+        <path d="M180,132 L180,180" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#ma-topologies-arrow)" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M584,132 L584,144 Q584,152 576,152 L448,152 Q440,152 440,160 L440,172" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#ma-topologies-arrow)" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M630,132 L630,172" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#ma-topologies-arrow)" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M676,132 L676,144 Q676,152 684,152 L812,152 Q820,152 820,160 L820,172" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#ma-topologies-arrow)" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M240,364 L312,364 Q320,364 320,356 L320,332 Q320,324 328,324 L400,324" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M240,380 L312,380 Q320,380 320,388 L320,412 Q320,420 328,420 L400,420" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M560,324 L720,324" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-topologies-arrow)"/>
+        <path d="M560,420 L720,420" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-topologies-arrow)"/>
+        <rect x="456" y="134" width="88" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="500" y="143" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">BRIEF / ANSWER</text>
+        <rect x="100" y="76" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="100" y="76" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="180.0" y="101.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">One agent</text>
+        <text x="180.0" y="116.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">one thread, one context</text>
+        <rect x="132" y="180" width="96" height="48" rx="6" fill="#f5f5f5"/>
+        <rect x="132" y="180" width="96" height="48" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="180.0" y="208.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tools</text>
+        <rect x="538" y="76" width="184" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="538" y="76" width="184" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="630.0" y="101.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Lead</text>
+        <text x="630.0" y="116.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">plans, delegates, integrates</text>
+        <rect x="376" y="172" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="376" y="172" width="128" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="440.0" y="197.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Worker 1</text>
+        <text x="440.0" y="212.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">own scratchpad</text>
+        <rect x="566" y="172" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="566" y="172" width="128" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="630.0" y="197.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Worker 2</text>
+        <text x="630.0" y="212.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">own scratchpad</text>
+        <rect x="756" y="172" width="128" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="756" y="172" width="128" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="820.0" y="197.5" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Worker 3</text>
+        <text x="820.0" y="212.5" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">own scratchpad</text>
+        <rect x="80" y="344" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="80" y="344" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="160.0" y="376.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Top supervisor</text>
+        <rect x="400" y="296" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="400" y="296" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="480.0" y="328.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Sub-supervisor A</text>
+        <rect x="400" y="392" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="400" y="392" width="160" height="56" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="480.0" y="424.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Sub-supervisor B</text>
+        <rect x="720" y="296" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="720" y="296" width="160" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="800.0" y="328.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Workers ×2</text>
+        <rect x="720" y="392" width="160" height="56" rx="6" fill="#f5f5f5"/>
+        <rect x="720" y="392" width="160" height="56" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="800.0" y="424.0" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Workers ×2</text>
+        <line x1="40" y1="512" x2="920" y2="512" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="528" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.18em">LEGEND</text>
+        <rect x="40" y="540" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="60" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Agent holding control</text>
+        <rect x="190" y="540" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" fill-opacity="0.03" stroke-opacity="0.30"/>
+        <text x="210" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Worker / tools</text>
+        <line x1="306" y1="545" x2="334" y2="545" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#ma-topologies-arrow)"/>
+        <text x="342" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Delegates</text>
+        <line x1="414" y1="545" x2="442" y2="545" stroke="#4f5d75" stroke-width="1.2" marker-start="url(#ma-topologies-arrow)" marker-end="url(#ma-topologies-arrow)"/>
+        <text x="450" y="548" fill="#4f5d75" font-size="8.5" font-family="'Geist', system-ui, sans-serif">Call and return</text>
+
+      </svg>

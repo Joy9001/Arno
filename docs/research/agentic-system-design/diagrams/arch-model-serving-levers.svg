@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="arch-model-serving-levers-title arch-model-serving-levers-desc" id="arch-model-serving-levers-root">
+        <title id="arch-model-serving-levers-title">Self-hosted serving: where the levers act</title>
+        <desc id="arch-model-serving-levers-desc">Inside the self-hosted pool a request flows from queue through prefill and the KV cache to decode, and each lever (continuous batching, PagedAttention and GQA, quantization, speculative decoding) acts on one stage.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #arch-model-serving-levers-root { --color-paper:   #f5f5f5;   
+      --color-ink:     #2d3142;   
+      --color-muted:   #4f5d75;   
+      --color-accent:  #bf4520;   
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #arch-model-serving-levers-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #arch-model-serving-levers-root .diagram-container { width: 100%; overflow-x: auto; }
+      #arch-model-serving-levers-root .diagram-container { overflow-x: visible; }</style>
+<marker id="arch-model-serving-levers-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+<marker id="arch-model-serving-levers-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+<marker id="arch-model-serving-levers-arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2e5aa8"/></marker>
+<marker id="arch-model-serving-levers-arrow-open" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polyline points="0 0, 8 3, 0 6" fill="none" stroke="#4f5d75" stroke-width="1.2"/></marker>
+<marker id="arch-model-serving-levers-arrow-start" markerWidth="8" markerHeight="6" refX="1" refY="3" orient="auto"><polygon points="8 0, 0 3, 8 6" fill="#4f5d75"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+        <!-- <rect width="100%" height="100%" fill="url(#dots)" opacity="0.55"/> -->
+
+        <rect x="184" y="40" width="736" height="428" rx="8" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.10"/><rect x="408" y="44" width="288" height="12" rx="2" fill="#f5f5f5"/><text x="552" y="53" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SELF-HOSTED POOL · vLLM / TGI / TensorRT-LLM ON GPUS</text>
+<line x1="160" y1="264" x2="200" y2="264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-levers-arrow)"/>
+<line x1="352" y1="264" x2="384" y2="264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-levers-arrow)"/>
+<line x1="536" y1="264" x2="568" y2="264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-levers-arrow)"/>
+<line x1="720" y1="264" x2="752" y2="264" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-levers-arrow)"/>
+<line x1="276" y1="172" x2="276" y2="220" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="2,3"/>
+<line x1="644" y1="172" x2="644" y2="220" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="2,3"/>
+<line x1="828" y1="172" x2="828" y2="220" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="2,3"/>
+<line x1="828" y1="308" x2="828" y2="356" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="2,3"/>
+<text x="216" y="382" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif" text-anchor="start">speculative-decoding gains shrink as batch size grows;</text>
+<text x="216" y="398" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif" text-anchor="start">vLLM favors throughput, TGI showed lower tail latency</text>
+<text x="216" y="414" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif" text-anchor="start">at single-user concurrency (arXiv, Nov 2025)</text>
+<line x1="512" y1="400" x2="752" y2="400" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" stroke-opacity="0.40"/><circle cx="752" cy="400" r="2" fill="#2d3142"/>
+<rect x="40" y="220" width="120" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="40" y="220" width="120" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="48" y="228" width="32" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="64" y="237" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GATE</text>
+<text x="100" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">LLM gateway</text>
+<text x="100" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">self-hosted route:</text>
+<text x="100" y="285" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">tier, privacy,</text>
+<text x="100" y="298" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">fallback</text>
+<rect x="200" y="220" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="200" y="220" width="152" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="208" y="228" width="40" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="228" y="237" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">QUEUE</text>
+<text x="276" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Request queue</text>
+<text x="276" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">queueing counts</text>
+<text x="276" y="285" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">toward TTFT</text>
+<rect x="384" y="220" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="384" y="220" width="152" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="392" y="228" width="28" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="406" y="237" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GPU</text>
+<text x="460" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Prefill</text>
+<text x="460" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">all input tokens in</text>
+<text x="460" y="285" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">parallel; compute-</text>
+<text x="460" y="298" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">bound: sets TTFT</text>
+<rect x="568" y="220" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="568" y="220" width="152" height="88" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<rect x="576" y="228" width="48" height="12" rx="2" fill="none" stroke="#bf4520" stroke-width="0.8" stroke-opacity="0.50"/>
+<text x="600" y="237" fill="#bf4520" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GPU MEM</text>
+<text x="644" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">KV cache</text>
+<text x="644" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">grows with batch x seq</text>
+<text x="644" y="285" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Llama 2 7B, 4,096 tok,</text>
+<text x="644" y="298" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">FP16: ~2 GB</text>
+<rect x="752" y="220" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="752" y="220" width="152" height="88" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<rect x="760" y="228" width="28" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.40"/>
+<text x="774" y="237" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">GPU</text>
+<text x="828" y="256" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Decode</text>
+<text x="828" y="272" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one token per step;</text>
+<text x="828" y="285" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">memory-bandwidth-bound:</text>
+<text x="828" y="298" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sets TPOT</text>
+<rect x="200" y="84" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="200" y="84" width="152" height="88" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<rect x="208" y="92" width="40" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+<text x="228" y="101" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LEVER</text>
+<text x="276" y="120" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Continuous batching</text>
+<text x="276" y="136" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">finished sequences</text>
+<text x="276" y="149" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">leave, new ones join</text>
+<text x="276" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">each iteration</text>
+<rect x="568" y="84" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="568" y="84" width="152" height="88" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<rect x="576" y="92" width="40" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+<text x="596" y="101" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LEVER</text>
+<text x="644" y="120" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">PagedAttention, GQA</text>
+<text x="644" y="136" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">block-allocated KV;</text>
+<text x="644" y="149" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">fewer KV heads:</text>
+<text x="644" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">bigger batches fit</text>
+<rect x="752" y="84" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="752" y="84" width="152" height="88" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<rect x="760" y="92" width="40" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+<text x="780" y="101" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LEVER</text>
+<text x="828" y="120" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Quantization</text>
+<text x="828" y="136" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">lower-precision weights:</text>
+<text x="828" y="149" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">fit larger models,</text>
+<text x="828" y="162" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">less to read per token</text>
+<rect x="752" y="356" width="152" height="88" rx="6" fill="#f5f5f5"/>
+<rect x="752" y="356" width="152" height="88" rx="6" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<rect x="760" y="364" width="40" height="12" rx="2" fill="none" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.22"/>
+<text x="780" y="373" fill="#5a6580" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">LEVER</text>
+<text x="828" y="392" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Speculative decoding</text>
+<text x="828" y="408" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">draft proposes k tokens;</text>
+<text x="828" y="421" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">target verifies in</text>
+<text x="828" y="434" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one pass</text>
+<line x1="40" y1="500" x2="920" y2="500" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+<text x="40" y="516" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="40" y="532" width="14" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+<text x="62" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Memory limit</text>
+<rect x="148" y="532" width="14" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+<text x="170" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Pipeline stage</text>
+<rect x="266" y="532" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="1" stroke-dasharray="4,3" fill-opacity="0.02" stroke-opacity="0.20"/>
+<text x="288" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Lever</text>
+<rect x="340" y="532" width="14" height="10" rx="2" fill="#2d3142" stroke="#2d3142" stroke-width="0.8" fill-opacity="0.02" stroke-opacity="0.22"/>
+<text x="362" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Self-hosted pool</text>
+<line x1="468" y1="537" x2="496" y2="537" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arch-model-serving-levers-arrow)"/>
+<text x="504" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Request flow</text>
+<line x1="590" y1="537" x2="618" y2="537" stroke="#4f5d75" stroke-width="1" stroke-dasharray="2,3"/>
+<text x="626" y="540" fill="#4f5d75" font-size="8.5" font-family="'Geist', sans-serif">Lever acts on</text>
+
+      </svg>
