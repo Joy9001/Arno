@@ -38,6 +38,8 @@ holds the following surveys:
 | Survey | Covers |
 |---|---|
 | [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, about 1,800 lines, annotated sources with a gap log |
+| [`agentic-system-design/`](research/agentic-system-design/) | How whole agentic systems are composed: patterns, multi-agent topology, retrieval and memory, production operations, and 18 case studies |
+| [`agent-toolkit-2026/`](research/agent-toolkit-2026/) | Let's Code's catalog of 404 open source agent tools, shortlisted for each design step. _Filtered by this project's requirements on purpose_ |
 | [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
 
 ## Superseded work in the `archive/` directory

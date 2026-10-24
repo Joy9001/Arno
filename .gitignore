@@ -29,6 +29,9 @@ htmlcov/
 .idea/
 .vscode/
 
+# Third-party research data, kept local (see each research README)
+docs/research/agent-toolkit-2026/data/
+
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 
