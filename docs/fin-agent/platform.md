@@ -119,6 +119,10 @@ An in-process scheduler (APScheduler) in the API process runs the following jobs
 | Pattern detection | Nightly and after each import |
 | Baseline recompute | Nightly |
 
+Job state lives in Postgres, so a run missed while the machine slept or restarted fires once when
+it's back. Each run carries a key for its job and period (for example, one week's briefing), so a
+restart can't send it twice.
+
 Backups are not a scheduler job. They run in their own sidecar, so they keep running when the
 app is broken.
 

@@ -231,10 +231,14 @@ CHAT_BASE_URL=http://ollama:11434/v1      # or https://api.<provider>.com/v1
 CHAT_MODEL=qwen3:4b                       # or a cloud model id
 VISION_BASE_URL=...  VISION_MODEL=...     # photos, fallback statement extraction
 STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
+CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails
 ```
 
-No PII-stripping layer, no split routing inside a role. Which role runs where is the self-hoster's
-choice.
+No reversible PII-scrubbing layer: identifiers the product doesn't use are dropped at import
+instead ([system design, step 2](system-design.md#b-identifiers-at-import-not-a-scrubbing-layer)).
+No routing by content inside a role, but a role may name a backup endpoint that takes over when
+the main one fails, and replies the backup produced carry a badge. Which role runs where is the
+self-hoster's choice.
 
 **The design target is a frontier model.** Tool shapes, Code Mode, and prompts are chosen for
 what a capable model can do, so a strong model is never held to a basic level. Local models stay

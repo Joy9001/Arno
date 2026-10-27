@@ -112,7 +112,7 @@ Three tables handle categorization:
 | Table | Holds |
 |---|---|
 | `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active` |
-| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches |
+| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches. The one-shot categorizer's answer for a new merchant is saved as a rule too, so each merchant costs one LLM call, once. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
 | `baselines` | Typical spend for each category: `amount_per_day`, `source` (`estimated` at setup, `computed` from real rows), `window`, `updated_at` |
 
 Baselines are recomputed nightly after a category has enough real rows. The `source` flag exists
@@ -204,7 +204,7 @@ The following table sets how it is configured:
 | Host access | `mount` and `os_access` stay unset. The read tools hold the only route to data, through the `agent_ro` role |
 | Limits | A cap on nested tool calls and a short duration for each snippet, tuned at L2. Spend Limits still cap the run |
 | Provenance | The `run_code` return keeps every nested tool call and return in its metadata. The UI shows the script next to the answer, and the source IDs from the nested returns become the answer's citations |
-| Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge |
+| Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge. Standard money maths—EMI and amortization, prepayment, compounding—comes from tested engine functions the script calls; free-form arithmetic covers what those don't, and the script is shown either way |
 
 **Open at L2:** whether `VercelAIAdapter` streams the UI metadata of tool returns nested inside
 `run_code`. If it doesn't, Fin-Agent emits those cards and citations itself from the `run_code`
