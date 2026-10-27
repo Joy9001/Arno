@@ -10,6 +10,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`harness.md`](harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
 | [`import.md`](import.md) | Statements, photos, and voice: parsers, the invariant, reconciliation |
 | [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
+| [`system-design.md`](system-design.md) | The eight-step system design walk: where each step is recorded, what waits for which step, and review notes |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
 that needs a table, a schema, or three paragraphs of justification goes in a satellite doc
@@ -79,7 +80,7 @@ The following table sets what the agent knows, by area:
 | Floor | A fixed amount the projection must never cross |
 | People | Splits, lending, borrowing, reimbursements—one counterparty ledger |
 | Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
-| Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants |
+| Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants. A correction about a payee or UPI ID ("ramesh@okaxis is my landlord") applies to that payee's past and future transactions |
 | Memory | Agent-managed typed preferences. The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
 | Conversations | Kept and searchable. Every ledger write links to the message that caused it |
 
@@ -102,6 +103,14 @@ daily capture missed.
 **Balances update from statements and explicit statements of balance only.** The agent never
 nags for a balance; it always states how old its numbers are.
 
+**One record per real money movement, however it was captured.** A payment logged by chat, shared
+as a photo, and later found on a statement is one record. Certain matches merge on import;
+uncertain ones go to the import review screen and are never merged silently
+([`import.md`](import.md)).
+
+**Useful from the first conversation.** A spoken snapshot—balances, card dues, salary day—is
+enough for answers and verdicts on day one. Statements and the 12-month backfill deepen it later.
+
 ### What it answers and does
 
 - **Any question about the ledger:** read tools plus a read-only `run_query(sql)` escape hatch.
@@ -122,6 +131,11 @@ nags for a balance; it always states how old its numbers are.
   read outside text. It asks for one tap first (rule 2 in §4).
 - **Advice boundary:** facts and tradeoffs only. It never recommends what to do with investments
   or which product to buy.
+- **Spending means consumption.** Moving money between your own accounts (including paying a card
+  bill), lending, settlements, reimbursements, and savings or investment outflows such as SIPs and
+  FDs never count as spend. A refund offsets the purchase it reverses.
+- **Never moves money.** It reads, records, and models; paying is always done by you, in your own
+  bank or UPI app.
 - **Language:** mirrors the user's language mix.
 
 ### Deliberately out
@@ -143,8 +157,8 @@ The following table states what each requirement demands:
 
 | Requirement | Target |
 |---|---|
-| Scale | One user for each instance |
-| Latency | Under ~5 s per chat reply on a cloud model; a modeling reply that runs a script may take longer, and so may local models |
+| Scale | One user for each instance, and the data is small ([assumptions](system-design.md#scale-assumptions)) |
+| Latency | Targets that step 8 re-checks: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
 | Durability | Do not lose the ledger. Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
@@ -154,6 +168,16 @@ The following table states what each requirement demands:
 
 Honesty is a real requirement, not a nicety: a general query surface over incomplete data
 otherwise answers confidently with no basis.
+
+### Constraints
+
+- **One developer,** 15-20 hours a week.
+- **India-first:** INR, UPI, Indian statement formats, Hinglish, and Indian holidays.
+- **No bank APIs.** India's Account Aggregator network serves only institutions regulated by
+  RBI, SEBI, IRDAI, or PFRDA ([Sahamati](https://sahamati.org.in/financial-information-user-fiu)),
+  so data comes from statements and from the user.
+- **Permissive licenses only** (§1).
+- **Modest hardware:** a laptop, mini PC, or VPS. LLM cost isn't a constraint, but it's metered.
 
 ---
 
