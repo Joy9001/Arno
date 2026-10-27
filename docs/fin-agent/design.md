@@ -237,8 +237,8 @@ data came from; the model can't set or clear it. A new conversation starts clean
 
 | Tier | Writes | Behavior |
 |---|---|---|
-| Visible and undoable | `record_transaction`, `edit_transaction`, and `undo` on a single row, including the category rule an edit creates (named on its card) | Always instant, with an undo card—outside text or not |
-| Lasting or wide | `preference` saves; `update_setup` (floor, schedules, goals, accounts, categories); any write that touches more than one existing row | Instant in a clean conversation. In a flagged one, the tool raises PydanticAI's `ApprovalRequired`, and the chat shows a confirm card that states the exact change. Nothing is written until the user taps Confirm |
+| Visible and undoable | `record_transaction`, `edit_transaction`, and `undo` on a single row, including the category rule an edit creates (named on its card). A payee correction that also applies the rule to that payee's past rows stays here: its card names the rule and how many past rows changed, and one undo reverts the rule and every row | Always instant, with an undo card—outside text or not |
+| Lasting or wide | `preference` saves; `update_setup` (floor, schedules, goals, accounts, categories); any other write that touches more than one existing row | Instant in a clean conversation. In a flagged one, the tool raises PydanticAI's `ApprovalRequired`, and the chat shows a confirm card that states the exact change. Nothing is written until the user taps Confirm |
 
 Recategorizing a statement row right after reading it stays instant. A preference save that
 nobody asked for, in a conversation that has read a crafted payee note, shows up as a card the

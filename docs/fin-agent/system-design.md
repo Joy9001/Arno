@@ -15,8 +15,8 @@ The following table lists the steps, in order:
 
 | Step | Covers | Recorded in | Status |
 |---|---|---|---|
-| 1. Requirements | Functional, non-functional, scale, constraints | [`plan.md`](plan.md) §1-2; scale [below](#scale-assumptions) | Recorded; one question open |
-| 2. Trade-offs | The tensions the requirements create, and which side wins | This file | Next |
+| 1. Requirements | Functional, non-functional, scale, constraints | [`plan.md`](plan.md) §1-2; scale [below](#scale-assumptions) | Agreed, October 27, 2026 |
+| 2. Trade-offs | The tensions the requirements create, and which side wins | This file | In progress |
 | 3. API design | Endpoints, the chat stream, auth, versioning | [`platform.md`](platform.md) | Not started |
 | 4. Data model | Entities, schema, database | [`design.md`](design.md) | Not started |
 | 5. High-level design | Layers and data flow | [`plan.md`](plan.md) §4 | Not started |
@@ -49,13 +49,14 @@ The following table lists the scale assumptions that step 8 re-checks:
 
 The consequence: throughput doesn't shape the design. Correctness and trust do.
 
-### Open question
+### Retroactive payee corrections
 
-**Retroactive payee corrections.** "ramesh@okaxis is my landlord" rewrites that payee's past rows,
-which makes it a _wide_ write under the [write tiers](design.md#untrusted-text-and-write-tiers). In
-a conversation that has read imported rows—exactly where such corrections happen—it would need a
-confirming tap. The choice is to keep it instant, with an undo card that names the rule and how
-many past rows changed, or to accept one tap.
+"ramesh@okaxis is my landlord" rewrites that payee's past rows, which would make it a _wide_
+write under the [write tiers](design.md#untrusted-text-and-write-tiers). It happens most in a
+conversation that has just read imported rows, so a confirm tap there would be everyday friction.
+
+**Decided:** it stays instant. The undo card names the rule and how many past rows changed, and
+one undo reverts the rule and every row.
 
 ### External review, October 27, 2026
 
@@ -66,7 +67,7 @@ and why:
 |---|---|
 | Savings and investment outflows (SIPs, FDs) aren't spending | Taken into `plan.md` §2 |
 | Refunds offset the purchase; reimbursements aren't income | Taken into `plan.md` §2. Claims already model reimbursements; the requirement is now explicit |
-| A payee or UPI ID correction applies to past and future rows | Taken into `plan.md` §2; the tier question is [open](#open-question) |
+| A payee or UPI ID correction applies to past and future rows | Taken into `plan.md` §2; stays instant with undo ([decided](#retroactive-payee-corrections)) |
 | Useful from a spoken snapshot on day one | Taken into `plan.md` §2. The setup conversation already lands balances; now it's a requirement |
 | Higher transaction volume, and context size as a scale dimension | Taken into the [scale assumptions](#scale-assumptions) |
 | Separate latency targets for lookups and what-ifs | Taken into `plan.md` §2 as targets that step 8 re-checks |
