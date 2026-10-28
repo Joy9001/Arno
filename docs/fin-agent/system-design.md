@@ -28,7 +28,7 @@ The following table lists the steps, in order:
 
 | Step | The question it answers | Recorded in | Status |
 |---|---|---|---|
-| 1. Requirements and success | What must it do, how is "it works" measured, and how much autonomy and write risk is involved? | [`plan.md`](plan.md) §1-2; [below](#step-1-requirements-and-success) | Agreed October 27, 2026; two additions in progress |
+| 1. Requirements and success | What must it do, how is "it works" measured, and how much autonomy and write risk is involved? | [`plan.md`](plan.md) §1-2; [below](#step-1-requirements-and-success) | Agreed October 28, 2026 |
 | 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Partly decided; next |
 | 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Partly decided |
 | 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [`design.md`](design.md) | Not started; questions parked |
@@ -48,8 +48,43 @@ and re-checked when that step is walked.
 ## Step 1: Requirements and success
 
 The requirements are recorded in [`plan.md`](plan.md) §1-2: the product, functional scope,
-non-functional targets, and constraints. Two additions are in progress: how success is measured,
-and the autonomy each kind of action needs.
+non-functional targets, and constraints. This section adds how success is measured and how much
+autonomy each kind of action gets.
+
+### Success measures
+
+The following targets say what "it works" means. Step 9 refines how each is measured. `pass^3`
+means a task passes in all three trials, not just once.
+
+| What | Measure | Target |
+|---|---|---|
+| Answers and writes | The agent eval suite (50+ tasks from real use), `pass^3` on the configured model | 90% or more—the research's launch gates sit at 80-90% |
+| Honesty | Tasks where the data is missing: it says "no data" and never invents | `pass^3` of 95% or more |
+| Injection | Planted payee notes: no lasting write lands without its confirm card | 100%, a hard gate |
+| Numbers | Every number in a reply traces back to a tool return | 100%; step 9 decides how it's enforced |
+| Forecast honesty | In the backtest, the real balance 30 days later lands inside the P10-P90 band | About 8 months in 10 |
+| Forecast accuracy | Median 30-day error in the backtest | Published; a target once the first backtest shows what's realistic |
+| Affordability engine | The 25 labeled HackerRank "Buy or Wait" samples | Published; a target after the first run |
+| Categorizer | Share of its answers you don't correct | 90% or more |
+| Daily use | Four weeks without falling back to a spreadsheet or mental math | Already in "Done is" (`plan.md` §1) |
+
+### Autonomy for each kind of action
+
+The following table sets who starts each kind of action and what the agent may do on its own:
+
+| Action | Who starts it | What the agent may do on its own |
+|---|---|---|
+| Answering a question, modeling a what-if | You | Everything: it reads, computes, and explains |
+| Logging, editing, correcting | You | Writes at once; you can undo |
+| Remembering a lasting fact | The agent, when it notices one | Saves at once with a "Remembered" card; asks first only in a conversation that has read outside text |
+| Setup changes: the floor, schedules, goals | You | Writes at once; asks first in a conversation that has read outside text |
+| Statement imports | You, by uploading | Parses and matches; nothing is written until you approve the review screen |
+| Reminders, warnings, the weekly briefing | The schedule | Informs only |
+| A detected subscription | The schedule | Proposes; writes only when you accept |
+| Moving money, investment advice | — | Never |
+
+The agent never starts a write on its own, with one exception: saving a memory, which you can
+always see and undo.
 
 ### Scale assumptions
 

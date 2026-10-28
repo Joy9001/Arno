@@ -164,7 +164,8 @@ The following table states what each requirement demands:
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
 | Privacy | Inference provider is switchable for each role; nothing else leaves the box except encrypted backups and contentless push pings |
 | Honesty | Tools distinguish _zero_ from _unknown_, and every number carries its age and source |
-| Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` for each model) are measured and published, not claimed |
+| Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` for each model) are measured and published, not claimed. Targets: [success measures](system-design.md#success-measures) |
+| Autonomy | The agent never starts a write on its own except saving a memory, and never moves money ([autonomy for each kind of action](system-design.md#autonomy-for-each-kind-of-action)) |
 
 Honesty is a real requirement, not a nicety: a general query surface over incomplete data
 otherwise answers confidently with no basis.
