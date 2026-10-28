@@ -10,7 +10,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`harness.md`](harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
 | [`import.md`](import.md) | Statements, photos, and voice: parsers, the invariant, reconciliation |
 | [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
-| [`system-design.md`](system-design.md) | The eight-step system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`system-design.md`](system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
 that needs a table, a schema, or three paragraphs of justification goes in a satellite doc
@@ -158,7 +158,7 @@ The following table states what each requirement demands:
 | Requirement | Target |
 |---|---|
 | Scale | One user for each instance, and the data is small ([assumptions](system-design.md#scale-assumptions)) |
-| Latency | Targets that step 8 re-checks: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
+| Latency | Targets that step 10 re-checks: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
 | Durability | Do not lose the ledger. Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
@@ -235,7 +235,7 @@ CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the
 ```
 
 No reversible PII-scrubbing layer: identifiers the product doesn't use are dropped at import
-instead ([system design, step 2](system-design.md#b-identifiers-at-import-not-a-scrubbing-layer)).
+instead ([system design, step 7](system-design.md#identifiers-at-import-not-a-scrubbing-layer)).
 No routing by content inside a role, but a role may name a backup endpoint that takes over when
 the main one fails, and replies the backup produced carry a badge. Which role runs where is the
 self-hoster's choice.

@@ -23,7 +23,7 @@ plan wins. The project has the following docs:
 | [`harness.md`](fin-agent/harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
 | [`import.md`](fin-agent/import.md) | Statements, photos, and voice: parsers, the invariant, reconciliation |
 | [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
-| [`system-design.md`](fin-agent/system-design.md) | The eight-step system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 
 **Rule for keeping these readable:** a decision and its one-line rationale go in the `plan.md`
 file. Anything that needs a table, a schema, or three paragraphs of justification goes in a
