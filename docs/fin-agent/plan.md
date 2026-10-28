@@ -124,9 +124,13 @@ enough for answers and verdicts on day one. Statements and the 12-month backfill
 - **Citations:** every number in an answer links to the rows and schedules behind it.
 - **Proactive:** bill, EMI, and card-due reminders; risk warnings when the projection turns; a
   weekly briefing; and detection of recurring charges and new or missed subscriptions.
-  Delivered to an in-app inbox plus web push.
-- **Writes:** chat writes and memory saves land immediately with an inline card and undo.
-  Imports and photos go through a review step before commit. The one exception is a lasting or
+  Delivered to an in-app inbox plus web push. These run as fixed code, so they work when the LLM
+  is down.
+- **Your own scheduled questions:** "every Sunday, tell me what I spent on food". The agent runs
+  on your schedule, read-only, and answers into the inbox
+  ([system design, step 2](system-design.md#agent-or-workflow-for-each-path)).
+- **Writes:** chat writes, photos, and memory saves land immediately with an inline card and undo.
+  Statement imports go through a review screen before commit. The one exception is a lasting or
   wide write—a memory save, a setup change, or a change to many rows—in a conversation that has
   read outside text. It asks for one tap first (rule 2 in §4).
 - **Advice boundary:** facts and tradeoffs only. It never recommends what to do with investments
@@ -369,14 +373,15 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 32. Scheduler, notification inbox, web push from the installed PWA.
 33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
+    Your own scheduled questions, run by the agent read-only, with a spend limit for each run.
 34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never
     silent writes.
 
 ### L7: Capture
 
 35. Voice notes: push-to-talk in the web app → STT → chat. Hinglish eval cases pass.
-36. Photos: receipt or UPI screenshot → isolated vision extraction → review card → one
-    transaction with the image attached; Android share target.
+36. Photos: receipt or UPI screenshot → isolated vision extraction → one transaction, logged at
+    once with an undo card that shows the image beside the extracted fields; Android share target.
 
 ### L8: Ship
 

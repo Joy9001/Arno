@@ -29,8 +29,8 @@ The following table lists the steps, in order:
 | Step | The question it answers | Recorded in | Status |
 |---|---|---|---|
 | 1. Requirements and success | What must it do, how is "it works" measured, and how much autonomy and write risk is involved? | [`plan.md`](plan.md) §1-2; [below](#step-1-requirements-and-success) | Agreed October 28, 2026 |
-| 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Partly decided; next |
-| 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Partly decided |
+| 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Agreed October 28, 2026 |
+| 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Partly decided; next |
 | 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [`design.md`](design.md) | Not started; questions parked |
 | 5. Tools | What the agent can read and write, through which contracts | [`design.md`](design.md#tool-surface-11-tools) | Not started; the tool surface predates the walk |
 | 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; questions parked |
@@ -79,6 +79,7 @@ The following table sets who starts each kind of action and what the agent may d
 | Remembering a lasting fact | The agent, when it notices one | Saves at once with a "Remembered" card; asks first only in a conversation that has read outside text |
 | Setup changes: the floor, schedules, goals | You | Writes at once; asks first in a conversation that has read outside text |
 | Statement imports | You, by uploading | Parses and matches; nothing is written until you approve the review screen |
+| A question you scheduled | You, by scheduling it | Reads and answers into the inbox; never writes |
 | Reminders, warnings, the weekly briefing | The schedule | Informs only |
 | A detected subscription | The schedule | Proposes; writes only when you accept |
 | Moving money, investment advice | — | Never |
@@ -113,33 +114,87 @@ one undo reverts the rule and every row.
 
 ## Step 2: Control and autonomy
 
-Decided so far; the step itself hasn't been walked.
+For each path: who picks the next move—the model, code, or you? Agreed October 28, 2026.
 
 ### Agent or workflow, for each path
 
-![Only chat runs an agent loop](diagrams/sd-agent-vs-workflow.png)
+![The agent loop runs only for you](diagrams/sd-agent-vs-workflow.png)
 
-*Figure: your chat drives the only agent loop; scheduled jobs and imports run as code with at most
-one LLM call each, and still run when the LLM is down ([note](diagrams/sd-agent-vs-workflow.md)).*
+*Figure: your chat and the questions you schedule drive the one agent loop; built-in jobs and
+imports run as code with at most one LLM call each, and still run when the LLM is down
+([note](diagrams/sd-agent-vs-workflow.md)).*
 
-The merchant categorizer writes its answer through as a category rule (source `llm`), so each new
-merchant costs one LLM call, once. User rules win, and a correction replaces an `llm` rule
-([`design.md`](design.md#categorization)). What we give up: background jobs can't improvise. In
-return, they're predictable, cheap, and testable.
+- **Built-in jobs are workflows.** Warnings, reminders, and the briefing run as fixed code: the
+  engine computes, rules decide whether to warn, and at most one LLM call writes the prose. They
+  work when the LLM is down and can't go wrong silently. What we give up: they can't improvise.
+- **Your own scheduled questions run the agent, read-only.** "Every Sunday, tell me what I spent on
+  food and whether it's up" runs the agent on a schedule, the way Claude Cowork's scheduled tasks
+  do. No write tools—nobody is there to see an undo card or answer a confirm card—so the answer
+  lands in the inbox, and each run has its own spend limit.
+- **The merchant categorizer** writes its answer through as a category rule (source `llm`), so
+  each new merchant costs one LLM call, once. User rules win, and a correction replaces an `llm`
+  rule ([`design.md`](design.md#categorization)).
 
-### Autonomy for writes
+### Who decides what inside a chat turn
 
-- Everyday writes land instantly, with an undo card.
-- A confirm card appears only for lasting or wide writes in a conversation that has read outside
-  text ([write tiers](design.md#untrusted-text-and-write-tiers)).
-- Background jobs propose; they never write silently. Recurring-charge detection, for example,
-  suggests a schedule and waits for you.
+![Who decides what in one chat turn](diagrams/sd-chat-turn-control.png)
+
+*Figure: the model picks the tool and phrases the answer; code checks the rules and writes; you're
+asked first only for a lasting write in a flagged conversation
+([note](diagrams/sd-chat-turn-control.md)).*
+
+The following table is the control map. The model owns judgment and language; code owns every rule
+that must hold every time.
+
+| The model decides | Code decides | You decide |
+|---|---|---|
+| Which tools to call, and what to compute (Code Mode) | The category of a known merchant—your rules win | Starting a turn, or scheduling one |
+| How to phrase the answer, and which tradeoffs to mention | The yes, yes-but, or no verdict (the engine) | Confirming a lasting write in a flagged conversation |
+| Whether to remember a lasting fact | Whether a write needs a confirm card ([write tiers](design.md#untrusted-text-and-write-tiers)) | Approving an import's review screen |
+| When to ask you a clarifying question | Whether a write looks like a duplicate ([step 8](#step-8-reliability)) | Accepting a proposal |
+| | How long a turn may run and what it may spend ([step 3](#step-3-agent-core)) | Undoing anything |
+
+### Ask or assume
+
+The agent assumes when a sensible default exists and a wrong guess is a visible field you can fix:
+"paid 450 on swiggy" uses the account you usually pay Swiggy from, shown on the undo card. It asks
+when there's no default (the amount is missing), or when a wrong guess would create money owed by
+other people: "dinner with Ravi and Amit, 1,200" gets "split equally?" rather than an assumed
+split.
+
+### Setup is agent-led; code tracks what's missing
+
+There's no scripted wizard. Code works out from the data which parts of your picture are still
+empty—no income schedule, no floor, an account with no balance—and hands that list to the agent,
+which leads the conversation; you can skip anything. The same list feeds the data-quality note
+that verdicts must state.
+
+### The agent never starts a conversation
+
+Warnings, reminders, and the briefing are workflows. Tapping one opens a new chat seeded with that
+notification, so you can ask "what can I do about it?" and the agent picks up from there. Control
+passes from a workflow to the agent only through you.
+
+### Photos log at once, with undo
+
+Sharing a screenshot already shows your intent, so the vision model's extraction becomes one
+transaction at once. The undo card shows the screenshot beside the extracted amount, merchant, and
+date. A vision model can misread a digit, but the misread is visible and undoable. Statement
+imports keep their review screen, because they write many rows at once. This replaces the
+photo review step that `plan.md` §2 had before.
+
+### When the agent can't answer, it hands control back
+
+It names what's missing and what would fix it—"September's SBI statement isn't uploaded; upload it
+and I can answer"—and doesn't guess. At the advice boundary, it gives the facts and tradeoffs and
+leaves the choice to you.
 
 ---
 
 ## Step 3: Agent core
 
-Decided so far; the step itself hasn't been walked.
+Decided so far; the step itself hasn't been walked. Parked here: stopping rules—the most steps,
+tool calls, and spend for each chat turn and each scheduled run.
 
 - **One agent.** The work is sequential and write-heavy—where the research found multi-agent
   setups lose.

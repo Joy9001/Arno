@@ -146,8 +146,9 @@ statement"—wrong account, cash, or a mistake.
 ## Photos and voice
 
 **Photos.** A receipt photo or a UPI payment screenshot (GPay, PhonePe, Paytm) → isolated vision
-call (the `VISION_*` endpoint) → typed `{merchant, amount, date, method, upi_ref}` → a review card
-in chat → one transaction, image kept as an attachment. On Android, the installed app is a share
+call (the `VISION_*` endpoint) → typed `{merchant, amount, date, method, upi_ref}` → one
+transaction, logged at once, image kept as an attachment. The undo card shows the screenshot beside
+the extracted fields, so a misread digit is easy to spot and undo. On Android, the installed app is a share
 target, so a screenshot goes straight from the UPI app to Fin-Agent. The UPI reference number is
 what later matches the row to its statement line. Line items are not extracted.
 

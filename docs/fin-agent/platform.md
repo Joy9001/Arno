@@ -47,7 +47,7 @@ The API exposes the following surfaces:
 |---|---|
 | Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()`. Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | CRUD for accounts, transactions, schedules, goals, counterparties, claims, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
-| Uploads | `POST /api/attachments` (statement, photo, audio). Imports and photos then go through `review` → `commit` endpoints |
+| Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `review` → `commit` endpoints; a photo becomes one transaction at once, with undo |
 | Conversations | List, read, full-text search |
 | Inbox and push | List and read notifications; register a push subscription |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
@@ -118,6 +118,10 @@ An in-process scheduler (APScheduler) in the API process runs the following jobs
 | Risk check | Nightly, plus after every write |
 | Pattern detection | Nightly and after each import |
 | Baseline recompute | Nightly |
+| Your scheduled questions | On the schedule you set. The agent runs read-only, with no write tools and its own spend limit, and answers into the inbox |
+
+Every job except your scheduled questions is fixed code with at most one LLM call, so it still runs
+when the LLM is down.
 
 Job state lives in Postgres, so a run missed while the machine slept or restarted fires once when
 it's back. Each run carries a key for its job and period (for example, one week's briefing), so a

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Only chat runs an agent loop</title>
+  <title>The agent loop runs only for you</title>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,12 +56,12 @@
 <body>
   <div class="frame">
     <p class="eyebrow">Architecture · Fin-Agent system design, step 2</p>
-    <h1>Only chat runs an agent loop</h1>
+    <h1>The agent loop runs only for you</h1>
 
     <div class="diagram-container">
       <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-agent-vs-workflow-title sd-agent-vs-workflow-desc">
-        <title id="sd-agent-vs-workflow-title">Only chat runs an agent loop</title>
-        <desc id="sd-agent-vs-workflow-desc">Fin-Agent's paths by trigger: your chat goes to the one agent loop, while scheduled jobs and statement imports run as code workflows with at most one LLM call each, and all of them work on the ledger.</desc>
+        <title id="sd-agent-vs-workflow-title">The agent loop runs only for you</title>
+        <desc id="sd-agent-vs-workflow-desc">Fin-Agent's paths by trigger: your chat and the questions you schedule go to the one agent loop, scheduled runs read-only, while built-in scheduled jobs and statement imports run as code workflows with at most one LLM call each, and all of them work on the ledger.</desc>
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
           <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
@@ -90,8 +90,8 @@
         <!-- Triggers (input) -->
         <rect x="40" y="72" width="168" height="68" rx="6" fill="#f5f5f5"/>
         <rect x="40" y="72" width="168" height="68" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
-        <text x="124" y="102" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">You, in chat</text>
-        <text x="124" y="118" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">text and voice notes</text>
+        <text x="124" y="102" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">You</text>
+        <text x="124" y="118" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">chat, or your own schedules</text>
 
         <rect x="40" y="234" width="168" height="64" rx="6" fill="#f5f5f5"/>
         <rect x="40" y="234" width="168" height="64" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
@@ -107,8 +107,8 @@
         <rect x="296" y="72" width="296" height="68" rx="6" fill="#f5f5f5"/>
         <rect x="296" y="72" width="296" height="68" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
         <text x="312" y="98" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Agent loop</text>
-        <text x="312" y="114" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">chat and setup; picks its own tools</text>
-        <text x="312" y="127" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">reads via Code Mode, writes one row each</text>
+        <text x="312" y="114" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">chat, setup, your scheduled questions</text>
+        <text x="312" y="127" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">picks its tools; schedules run read-only</text>
         <rect x="524" y="82" width="56" height="14" rx="2" fill="#f5f5f5" stroke="#bf4520" stroke-width="0.8"/>
         <text x="552" y="92" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">LLM LOOP</text>
 
