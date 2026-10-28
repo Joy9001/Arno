@@ -30,8 +30,8 @@ The following table lists the steps, in order:
 |---|---|---|---|
 | 1. Requirements and success | What must it do, how is "it works" measured, and how much autonomy and write risk is involved? | [`plan.md`](plan.md) §1-2; [below](#step-1-requirements-and-success) | Agreed October 28, 2026 |
 | 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Agreed October 28, 2026 |
-| 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Partly decided; next |
-| 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [`design.md`](design.md) | Not started; questions parked |
+| 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Agreed October 28, 2026 |
+| 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [`design.md`](design.md) | Not started; questions parked; next |
 | 5. Tools | What the agent can read and write, through which contracts | [`design.md`](design.md#tool-surface-11-tools) | Not started; the tool surface predates the walk |
 | 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; questions parked |
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers) | Partly decided |
@@ -193,22 +193,83 @@ leaves the choice to you.
 
 ## Step 3: Agent core
 
-Decided so far; the step itself hasn't been walked. Parked here: stopping rules—the most steps,
-tool calls, and spend for each chat turn and each scheduled run.
+What runs the thinking: how many agents, which models, how the loop runs, and when it must stop.
+Agreed October 28, 2026.
+
+![The agent loop and its guards](diagrams/sd-agent-loop.png)
+
+*Figure: one agent loops between the model and its tools; compaction and tool output limits keep
+the context small, a backup model covers errors, and circuit breakers stop a runaway turn
+([note](diagrams/sd-agent-loop.md)).*
+
+### One agent, with Code Mode and the engine
 
 - **One agent.** The work is sequential and write-heavy—where the research found multi-agent
-  setups lose.
+  setups lose. None of the research's three reasons for another agent applies: there's no context
+  to isolate (the data is small), nothing to parallelize (turns are sequential), and independent
+  review is a deterministic check ([step 9](#step-9-evals-and-observability)).
 - **Code Mode gives it computing power, and the engine gives verdicts.** Scripts orchestrate:
   standard money maths (EMI and amortization, prepayment, compounding) comes from tested engine
   functions, and free-form arithmetic covers the rest, with the script shown
   ([`design.md`](design.md#code-mode)). The yes, yes-but, or no verdict comes only from the engine.
 - **Answer quality over cost.** A frontier model, metered by Spend Limits, with no routing to
   cheaper models. Prompt caching is the main cost lever.
+
+### Models
+
+The following table lists the three model roles:
+
+| Role | Used for |
+|---|---|
+| `CHAT` | The agent loop, your scheduled questions, and the one-shot calls: the merchant categorizer, briefing prose, statement column mapping |
+| `VISION` | Photos and scanned statements |
+| `STT` | Voice notes |
+
+- **One-shot calls reuse the chat model.** One less setting, and it matches quality over cost. The
+  trigger for a separate `UTILITY` role: cost starts to matter.
+- **Exact model versions are pinned.** Dated model IDs, never floating aliases like "latest"—the
+  research shows an alias can change behavior silently. Any model change re-runs the eval
+  scorecard before it counts as done.
 - **A backup chat model.** Each role may name an optional backup endpoint, and PydanticAI's
   `FallbackModel` switches to it when the main one fails—typically cloud first, a local model
   second. Replies the backup produced carry a badge, so a weaker answer is never silent. Tools
   aren't restricted on the backup: its eval scorecard already says what it handles, and
   `FallbackModel` switches for each request inside a run. `plan.md` §3 records the switch.
+- **Reasoning effort.** Where the model supports thinking or effort levels, the provider's
+  adaptive or default level applies, so it thinks harder on a what-if than on "paid 450". Thinking
+  counts toward the spend ceilings.
+
+### The loop: context is managed, runaways are stopped
+
+A turn ends when the model gives its final answer. Two different problems need two different
+guards:
+
+| Problem | Guard |
+|---|---|
+| The context grows too large: a long conversation, or a wide `run_query` result | Compaction keeps the history inside the window, and tool output limits spill or trim a big return. Both are on from day one; how they're configured belongs to [step 6](#step-6-context-and-memory) |
+| The loop runs away: it repeats steps or never stops—the failure behind Notion's 17-day runaway agent thread, which a harness bug caused | Circuit breakers: spend and request ceilings set well above what any real turn needs, so they never shape a normal answer |
+
+Compaction and tool output limits don't stop loops or cap spend—they only shrink what's sent—so the
+breakers stay. The following table lists their starting values, tuned from real traces so that a
+normal turn never reaches them:
+
+| Ceiling | Chat turn | Scheduled question |
+|---|---|---|
+| Model requests | 50 | 20 |
+| Spend | $5 | $1 |
+| Daily spend, across everything | $20 (shared) | |
+
+- **Hitting a ceiling hands control back.** The agent says what it found so far and which ceiling
+  stopped it, and the trace records it. A ceiling never looks like a finished answer.
+- **Errors: retry, then the backup, then say so.** A failed model call is retried twice, then the
+  backup model takes over if one is configured. If both fail, the agent says plainly that it
+  couldn't answer.
+- **One running turn per conversation.** A message sent while a reply is still running waits.
+  Different conversations, and scheduled questions, run independently.
+
+Parked to later steps: what goes in the instructions and how the prompt is ordered
+([step 6](#step-6-context-and-memory)); what happens when the client disconnects
+([step 8](#step-8-reliability)).
 
 ---
 
@@ -229,7 +290,14 @@ Not started. Parked here:
 ## Step 5: Tools
 
 Not started. The tool surface in [`design.md`](design.md#tool-surface-11-tools)—11 tools, with
-the read tools behind Code Mode—predates the walk; this step re-checks it.
+the read tools behind Code Mode—predates the walk; this step re-checks it. Parked here:
+
+- **Charts the agent makes.** Claude's dashboards put a query behind each chart; Fin-Agent's
+  equivalent: a Code Mode script returns a declarative chart spec built from data it computed, a
+  fixed UI component renders it, and the script is the chart's citation. No model-written HTML or
+  JavaScript—it would bypass the content security policy and let the model type numbers. Fixed
+  cards (the projection, a spending breakdown) stay for the core views. Rendering belongs to
+  [step 10](#step-10-interfaces-and-operations).
 
 ---
 
@@ -345,6 +413,8 @@ Parked here, from an API draft of October 27, 2026 that was never agreed:
 - No `/v1` in URLs while the web app and CLI ship in the same image. Tool names and argument shapes
   are part of the contract, because stored conversations replay old tool calls.
 - Rate limits, CSP, and other headers; MCP exposure stays parked.
+- Rendering the charts the agent makes ([step 5](#step-5-tools)): one chart component that draws a
+  declarative spec, with the citation and "as of" time on every chart.
 
 ---
 

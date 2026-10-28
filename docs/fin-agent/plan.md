@@ -250,6 +250,10 @@ what a capable model can do, so a strong model is never held to a basic level. L
 supported through this switch, and the eval scorecard records what each one handles. A small
 model's limits go in the scorecard; they are never designed into the product.
 
+Model IDs are pinned to exact, dated versions, never floating aliases, and any model change re-runs
+the eval scorecard. One-shot calls—the categorizer, briefing prose, statement column mapping—use
+the chat role ([system design, step 3](system-design.md#models)).
+
 ---
 
 ## 4. Architecture
