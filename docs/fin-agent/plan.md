@@ -78,7 +78,7 @@ The following table sets what the agent knows, by area:
 | Obligations | Rent, EMIs, subscriptions, insurance, family transfers as a type of their own; card installment plans (no-cost EMI, "slice in 3") |
 | Goals | Goals with deadlines. Target, date, fenced savings, contribution plan |
 | Floor | A fixed amount the projection must never cross |
-| People | Splits, lending, borrowing, reimbursements—one counterparty ledger |
+| People | Splits, lending, borrowing, reimbursements—what each person owes is a ledger balance |
 | Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
 | Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants. A correction about a payee or UPI ID ("ramesh@okaxis is my landlord") applies to that payee's past and future transactions |
 | Memory | Agent-managed typed preferences. The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
@@ -204,6 +204,7 @@ it to each piece:
 | Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Fin-Agent doesn't invent its own security code |
 | Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
 | Off-site backup | Buy: restic | Encrypts, dedupes, any S3-compatible target, zero app code |
+| Double-entry ledger core | Buy: pgledger, vendored | MIT, pure Postgres SQL, built-in idempotency. Credited in `THIRD_PARTY_NOTICES.md` and the README. Fit check in [system design, step 4](system-design.md#step-4-ground-truth) |
 | Mapping extracted rows → the Fin-Agent schema | Build | No library knows the Fin-Agent data model |
 | Projection and affordability engine | Build | This _is_ the product |
 | Pattern detection | Build | Small, rule-based, needs Fin-Agent's schedules and categories |
@@ -220,7 +221,7 @@ The following table records the choice for each layer:
 | Agent | PydanticAI + `pydantic-ai-harness` | [`harness.md`](harness.md) |
 | API | FastAPI | Built on Pydantic; OpenAPI is the contract every client shares. Also serves the static web build |
 | LLM | Switchable for each role | Chat, vision, and STT each take `*_BASE_URL`, `*_API_KEY`, and `*_MODEL`. Any OpenAI-compatible endpoint, local (Ollama) or cloud. Cost is not a constraint; Spend Limits still meter it |
-| Database | PostgreSQL, one pinned major version | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
+| Database | PostgreSQL 18, pinned | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
 | Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
@@ -306,7 +307,9 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    `compose.yaml`.
 2. Postgres in compose for development and production; numbered SQL migrations with
    `schema_version`; the `app` and read-only `agent_ro` roles.
-3. Schema v1: every table in [`design.md`](design.md), money as `BIGINT` paise.
+3. Schema v1: pgledger vendored unmodified at a pinned commit, with its licenses,
+   `THIRD_PARTY_NOTICES.md`, and a "Built on" credit in the README; then every table in
+   [`design.md`](design.md), money as whole paise.
 4. The `docker compose up` command serves the web shell and an API health check, reached over
    HTTPS through `tailscale serve`. The web shell ships with a content security policy that
    blocks images from other origins.
@@ -317,8 +320,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 7. Accounts—bank, card (cycle, limit), cash, wallet, loan, asset—through the API and read-only
    panels.
-8. Transactions: record, edit, delete; transfers as linked pairs; splits, lending, and
-   reimbursements through counterparties.
+8. Movements: record as balanced transfers through pgledger, correct by reversal, edit labels;
+   splits, lending, and reimbursements through payees' ledger accounts.
 9. Schedules: income (fixed, variable, one-off), obligations, family transfers, installment
    plans—recurrence rules, holiday-aware "last working day."
 10. Goals with fenced savings; categories with a reducible flag; learned categorization rules.

@@ -15,7 +15,7 @@ The repository has the following layout:
 
 ```
 src/fin_agent/
-  db/          connection, migrations/*.sql, roles
+  db/          connection, migrations/*.sql, roles, vendor/pgledger/ (unmodified, with licenses)
   ledger/      plain functions over the DB — the tools live here (no PydanticAI types)
   engine/      projection, affordability, backtest, pattern detection
   importers/   parser registry, invariant, reconciliation, photo extraction
@@ -46,7 +46,7 @@ The API exposes the following surfaces:
 | Surface | Shape |
 |---|---|
 | Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()`. Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
-| Ledger REST | CRUD for accounts, transactions, schedules, goals, counterparties, claims, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
+| Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
 | Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `review` → `commit` endpoints; a photo becomes one transaction at once, with undo |
 | Conversations | List, read, full-text search |
 | Inbox and push | List and read notifications; register a push subscription |

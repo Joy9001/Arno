@@ -31,8 +31,8 @@ The following table lists the steps, in order:
 | 1. Requirements and success | What must it do, how is "it works" measured, and how much autonomy and write risk is involved? | [`plan.md`](plan.md) §1-2; [below](#step-1-requirements-and-success) | Agreed October 28, 2026 |
 | 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Agreed October 28, 2026 |
 | 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Agreed October 28, 2026 |
-| 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [`design.md`](design.md) | Not started; questions parked; next |
-| 5. Tools | What the agent can read and write, through which contracts | [`design.md`](design.md#tool-surface-11-tools) | Not started; the tool surface predates the walk |
+| 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [Below](#step-4-ground-truth); [`design.md`](design.md#the-ledger) | Agreed October 30, 2026 |
+| 5. Tools | What the agent can read and write, through which contracts | [`design.md`](design.md#tool-surface-11-tools) | Not started; the tool surface predates the walk; next |
 | 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; questions parked |
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers) | Partly decided |
 | 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability) | Partly decided |
@@ -275,15 +275,72 @@ Parked to later steps: what goes in the instructions and how the prompt is order
 
 ## Step 4: Ground truth
 
-Not started. Parked here:
+The ledger every answer must agree with. Agreed October 30, 2026. The full data model is in
+[`design.md`](design.md#the-ledger).
 
-- How spending is counted: the classification rules, and whether `run_query` reads views that
-  apply them.
-- One record for each movement: single rows with transfer pairs and claims (the current design),
-  or double-entry legs. How a loan EMI's interest and principal are held for prepayment what-ifs.
-- The keys behind duplicate protection: the retry key (message and tool call), and the
-  suspected-duplicate window and fields ([step 8](#step-8-reliability)).
-- ID types.
+![The ledger, built on pgledger](diagrams/sd-ledger-model.png)
+
+*Figure: one movement is one pgledger call of balanced transfers; labels hold the editable category
+and payee, and captures link the evidence ([note](diagrams/sd-ledger-model.md)).*
+
+### Double-entry, on pgledger
+
+- **Double-entry.** Every movement goes from one place to another, and spending is one rule: money
+  that went into the Spending account. The card bill, the SIP, a friend's repayment, and loan
+  principal never touch it, so they can't be miscounted. This replaces the old rulebook of
+  `transfer_group`, `claims`, and `kind`.
+- **The core is vendored, not built.** Against the plan's constraints—Postgres holds all state,
+  plain SQL, a permissive license, one process—only [pgledger](https://github.com/pgr0ss/pgledger)
+  fits. Beancount has the most mature accounting, but it's GPL and keeps state in text files.
+  python-accounting and django-hordak need an ORM. Formance and Blnk are separate services.
+- **Categories are editable labels, not ledger accounts.** pgledger only appends, so a category
+  stored in the ledger would turn every recategorization into a reversal. As a label, a payee
+  correction never touches the ledger. Only undo and amount fixes append reversals, which keeps
+  the history honest.
+
+### The fit check, October 30, 2026
+
+Read from pgledger's source, license, and README at commit `fee1aa0`.
+
+| Need | pgledger | Verdict |
+|---|---|---|
+| Permissive license | MIT, plus BSD-3-Clause for its ID helpers | Fits |
+| Postgres only, plain SQL, one process | SQL functions and views, no extensions; commits in the app's own transaction | Fits; pin Postgres 18 |
+| Every movement balances | Each transfer has one `from` and one `to`, written atomically | Fits |
+| Splits and EMIs | One call writes several transfers, all or nothing | Fits; one call for each movement |
+| The retry key | A built-in idempotency key for the whole call | Fits |
+| Statement dates vs logging time | `event_at`, separate from `created_at`, but fixed once written | Adapted: `movements.date` is authoritative and editable |
+| The agent's read-only role | Functions run with the caller's rights | Fits |
+| A balance on a past date | Stored running balances follow write order, and a backfill arrives out of order | Adapted: `v_balances` sums entries by each movement's date |
+| Edits and undo | Append-only, and retries compare `metadata` | Adapted: reversals, and labels in our own table |
+| Account details | Name, currency, and balance flags only | Adapted: our `accounts` table links one-to-one |
+| IDs | Prefixed text ULIDs | Adopted throughout |
+
+Risks: one maintainer and no tagged releases. Vendoring a pinned commit of a 375-line file limits
+both.
+
+### Credit
+
+pgledger (MIT, © 2025 Paul Gross) and `scoville/pgsql-ulid` (BSD-3-Clause, © 2021 Scoville) are
+copied unmodified, with both LICENSE files; `THIRD_PARTY_NOTICES.md` ships in the Docker image; and
+the README credits pgledger under "Built on," with no wording that implies endorsement
+([`design.md`](design.md#the-ledger)).
+
+### Other decisions
+
+- **Captures link to movements.** Every chat message, screenshot, and statement line is kept as
+  evidence for one movement, and unmatched ones are visible.
+- **Payees are an entity,** with a display name, a UPI ID, a hashed match key, and a default
+  category. A person who owes you, or whom you owe, also gets a ledger account.
+- **Loans:** the ledger balance is the outstanding principal. The engine's amortization splits each
+  EMI, and a loan statement corrects any drift. That's what a prepayment what-if needs.
+- **Coverage comes from imports,** so a missing month is visible and answers say "no data."
+- **Duplicates:** the retry key is the message ID plus the tool call ID. A suspected duplicate is
+  the same account, amount, and payee, logged by chat within 10 minutes. Statement lines dedupe by
+  a content hash.
+- **The agent's SQL** reads views for the common questions (`v_spending`, `v_cashflow`,
+  `v_balances`, `v_owed`) that the typed tools share, so there's one definition of each number.
+  The raw tables stay readable, because with double-entry they hide no double-counting trap.
 
 ---
 
@@ -438,9 +495,9 @@ and why:
 | Coverage tracking, so "no data" isn't ₹0 | Already covered: data coverage for each account in every read tool ([`design.md`](design.md)) |
 | Balance checksum on imports | Already covered: the invariant in [`import.md`](import.md). It catches most bad extractions, not all—swapped rows or wrong dates can still pass |
 | Three reconciliation states | Already covered: certain, ambiguous, and none, plus "logged but not on the statement" ([`import.md`](import.md)) |
-| Double-entry legs for each movement; EMI interest and principal as separate legs | Parked to [step 4](#step-4-ground-truth) |
+| Double-entry legs for each movement; EMI interest and principal as separate legs | Taken in [step 4](#step-4-ground-truth), on pgledger |
 | A PII scrubber before cloud LLM calls | Decided in [step 7](#identifiers-at-import-not-a-scrubbing-layer): identifiers are handled at import instead |
-| Typed query plans or views for model-written SQL | Parked to [step 4](#step-4-ground-truth) |
+| Typed query plans or views for model-written SQL | Views taken in [step 4](#step-4-ground-truth) |
 | Writes only from direct user turns | Rejected: the write tiers replace it and keep everyday edits instant |
 | Merge matching within ±5 minutes | Rejected: statements carry dates, not times. Matching uses the UPI reference, or the amount within ±3 days |
 | Candidate merges surfaced in chat or the weekly briefing | Rejected: they stay on the import review screen, with no new chat surface |

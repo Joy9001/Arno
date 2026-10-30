@@ -11,15 +11,19 @@ wins and this file is stale.
 ## Data model
 
 One Postgres database. Column lists are the intended shape, firmed up into the first migration
-at L0 (milestone 3).
+at L0 (milestone 3). The ledger is double-entry, on a vendored copy of
+[pgledger](https://github.com/pgr0ss/pgledger).
 
 ### Conventions
 
-- Money is stored as `BIGINT` minor units (paise) and handled as a `Decimal` value at the Python
-  boundary, never as a `float` value.
-- Signed amounts: a negative amount means money leaves that account. A card purchase is negative
-  on the card.
-- Dates are `date`; moments are `timestamptz`.
+- Money is whole paise: `NUMERIC` in pgledger's tables, `BIGINT` in ours, and a `Decimal` value at
+  the Python boundary, never a `float` value.
+- Every movement balances: money leaves one place and arrives at another. Amounts on transfers are
+  always positive; the direction comes from the `from` and `to` accounts.
+- The ledger is append-only. A correction appends a reversal; nothing is updated or deleted.
+- IDs are prefixed text ULIDs throughout, from pgledger's `pgledger_generate_id`.
+- Dates are `date`; moments are `timestamptz`. pgledger's `event_at` holds the date as first known,
+  at noon India time so it never drifts across a day; `movements.date` is the authoritative one.
 - Kinds are `text` columns that have a `CHECK` constraint, not Postgres enums—enums are awkward
   to change.
 - Every row the agent can write has `created_at`, and every write goes through the audit log.
@@ -32,7 +36,7 @@ The database has two roles:
 | Role | Can |
 |---|---|
 | `app` | Owns the schema; everything the API does |
-| `agent_ro` | `SELECT` on ledger, plan, people, categorization, and conversation tables. No auth tables. `default_transaction_read_only` and a `statement_timeout`, so `run_query` can neither write nor run away |
+| `agent_ro` | `SELECT` on the ledger, plan, people, categorization, and conversation tables and views. No auth tables. `default_transaction_read_only` and a `statement_timeout`, so `run_query` can neither write nor run away. pgledger's functions run with the caller's rights, so this role can't write through them either |
 
 ### Instance
 
@@ -43,37 +47,97 @@ The following tables hold instance-wide data:
 | `settings` | Single row: base currency, time zone, floor (fixed amount), default horizon (90 days), notification times |
 | `users`, `webauthn_credentials`, `sessions` | Single-user auth (`user` is reserved in Postgres). See [`platform.md`](platform.md) |
 
-### Money and where it sits
+### The ledger
 
-**`accounts`:** one table that has a `kind` column and kind-specific nullable fields. The
-following table lists its fields:
+![The ledger, built on pgledger](diagrams/sd-ledger-model.png)
+
+*Figure: one movement is one pgledger call of balanced transfers; labels hold the editable category
+and payee, and captures link the evidence ([note](diagrams/sd-ledger-model.md)).*
+
+**How money moves.** Every movement goes from one place to another. Spending is one rule with no
+exceptions: money that went into the Spending account.
+
+| What happened | Transfers |
+|---|---|
+| Swiggy ₹3,000 on the Slice card | Slice → Spending ₹3,000, labeled Food |
+| Paying the Slice bill from SBI | SBI → Slice ₹3,000 |
+| ₹1,200 dinner; Ravi and Amit owe ₹400 each | SBI → Spending ₹400, SBI → Ravi ₹400, SBI → Amit ₹400 |
+| Ravi pays you back | Ravi → SBI ₹400 |
+| ₹5,000 SIP | SBI → Mutual funds ₹5,000 |
+| ₹25,000 loan EMI | SBI → Loan ₹18,000, SBI → Spending ₹7,000, labeled Interest |
+| Refund of a ₹600 order | Spending → Slice ₹600, labeled Food |
+
+**pgledger's tables** (vendored, append-only): `pgledger_accounts`, `pgledger_transfers`,
+`pgledger_entries`, and `pgledger_idempotency_keys`, read through their views and written through
+`pgledger_create_transfers`, which writes a whole batch or nothing.
+
+**`accounts`:** every place money can sit, one-to-one with a pgledger account, carrying what
+pgledger doesn't. The following table lists its fields:
 
 | Field | Notes |
 |---|---|
-| `kind` | `bank`, `card`, `cash`, `wallet`, `loan`, `asset` |
-| `name`, `institution` | "SBI savings", "Slice" |
-| `balance`, `balance_as_of`, `balance_source` | Last known balance, its date, and where it came from (`statement`, `user`, `computed`). Staleness is always reported |
+| `kind` | `bank`, `card`, `cash`, `wallet`, `loan`, `asset`, `goal`, `person`, `spending`, `income`, `equity` |
+| `ledger_account_id` | The pgledger account |
+| `name`, `institution`, `last4` | "SBI savings", "Slice". Only the last four digits of an account or card number are kept |
+| `statement_balance`, `statement_balance_as_of` | The last balance a statement or the user stated, as a check on the ledger's own balance. Staleness is always reported |
 | `liquid` | Counts toward spendable cash in the projection. True for bank, cash, and wallet accounts |
 | card: `credit_limit`, `statement_day`, `due_day` | Card spend is a liability until the due date |
-| loan: `principal`, `rate`, `emi_schedule_id` | Outstanding principal; the EMI lives in `schedules` |
-| asset | No extra fields—the balance is updated by hand (EPF, FD, PPF, NPS, gold, funds). Statement-driven holdings are parked ([`parked.md`](parked.md)) |
+| loan: `rate`, `tenure_months`, `emi_schedule_id` | The ledger balance is the outstanding principal. The engine's amortization splits each EMI into principal and interest, and a loan statement corrects any drift |
+| asset | No extra fields—hand updates are adjustment movements (EPF, FD, PPF, NPS, gold, funds). Statement-driven holdings are parked ([`parked.md`](parked.md)) |
 | `active` | Soft-delete keeps history |
 
-**`transactions`:** the ledger. The following table lists its fields:
+One `spending`, one `income`, and one `equity` account exist. `equity` holds opening balances and
+adjustments: when a statement's closing balance disagrees with the ledger, the difference is a
+visible adjustment, and it never counts as spending.
+
+**`movements`:** one real-world money movement, written as one `pgledger_create_transfers` call.
+Its transfers carry `{movement_id}` in their metadata. The following table lists its fields:
 
 | Field | Notes |
 |---|---|
-| `account_id`, `date`, `amount` | |
-| `description_raw`, `merchant` | Raw text as captured; normalized merchant for rules and grouping |
-| `category_id` | Nullable until categorized |
-| `kind` | `expense`, `income`, `transfer`, `refund`, `fee`, `interest`, `adjustment` |
-| `transfer_group` | Links the two legs of a transfer—including paying a card bill. Transfers are never spend |
-| `status` | `posted`, `pending` |
-| `source`, `source_ref` | `source` is `chat`, `voice`, `photo`, `import`, `ui`, or `system`; `source_ref` is the message, import, or attachment that produced it |
-| `upi_ref` | UPI reference number when known—from a screenshot or the statement narration. The strongest reconciliation key |
-| `confidence` | Extractor-reported for imported and photo rows; 1.0 for typed |
-| `content_hash` | Dedupe key across reimports. See [`import.md`](import.md) |
-| `attachment_id` | Receipt photo or UPI screenshot |
+| `date` | The authoritative business date, and editable: chat logs the 14th, the statement says the 15th, and reconciling edits this without touching the ledger |
+| `description`, `kind` | `kind` is descriptive, for the UI: `expense`, `income`, `transfer`, `split`, `loan`, `refund`, `settlement`, `adjustment`, `reversal` |
+| `reverses_id` | The movement this one reverses. Undo, or fixing an amount, writes the opposite transfers in one batch |
+| `idempotency_key` | The message ID plus the tool call ID, also passed to pgledger, so a retried call returns the transfers already written |
+
+**`transfer_labels`:** the editable side, keyed by transfer: `category_id`, `payee_id`,
+`expected_date` (when a person is expected to pay), and `note`. Recategorizing edits a label and
+never touches the ledger. Labels stay out of pgledger's `metadata` because a retry compares it.
+
+**`captures`:** the evidence behind a movement. A chat message, a screenshot, and a statement line
+can all describe one movement, so each is kept and linked: `movement_id`, `kind` (`chat`, `voice`,
+`photo`, `statement_line`), `ref`, `upi_ref`, and `confidence`. The UPI reference number is the
+strongest reconciliation key.
+
+**`statement_lines`:** one row for each imported line: `import_id`, `date`, `description_raw`,
+`amount`, `upi_ref`, `content_hash` (the dedupe key across reimports), and `match_state`. See
+[`import.md`](import.md).
+
+**Views** are the semantic layer the tools and `run_query` share, so there's one definition of
+each number:
+
+| View | Answers |
+|---|---|
+| `v_spending` | Transfers into and out of the Spending account, net, with category and payee |
+| `v_cashflow` | Money in and out of liquid accounts |
+| `v_balances` | Balances by date, summed from entries by each movement's `date`. pgledger's stored running balances follow write order, and a backfill arrives out of order, so they aren't used for dated balances |
+| `v_owed` | Who owes what: `person` account balances with expected dates |
+
+The raw tables stay readable too. With double-entry they hide no double-counting trap.
+
+**Coverage** is derived from `imports`: the dates each account's statements cover. A gap is visible,
+and an answer over a gap says "no data."
+
+**Duplicates.** A retry is caught by `idempotency_key`. A suspected duplicate—the same account,
+amount, and payee, logged by chat within 10 minutes—makes the agent ask in words. Statement lines
+dedupe by `content_hash`.
+
+**Credit.** pgledger (MIT, © 2025 Paul Gross) and its ID helpers from `scoville/pgsql-ulid`
+(BSD-3-Clause, © 2021 Scoville) are copied unmodified into `src/fin_agent/db/vendor/pgledger/`,
+with both LICENSE files and a README recording the source and pinned commit. Fin-Agent's own
+changes go in its own migrations. `THIRD_PARTY_NOTICES.md` carries both license texts into the Docker
+image, and the project README credits pgledger under "Built on," with no wording that implies
+endorsement.
 
 ### The plan: What's coming
 
@@ -89,21 +153,28 @@ table lists its fields:
 | `confirmed` | For variable income: confirmed amounts count toward verdicts, expected ones only show as an optimistic case |
 | `starts`, `ends`, `active` | |
 
-**`goals`:** `name`, `target`, `deadline`, `priority`, `saved` (fenced, excluded from spendable),
-`contribution_schedule_id`, `status`.
+**`goals`:** `name`, `target`, `deadline`, `priority`, `contribution_schedule_id`, `status`. Each goal
+has a `goal` account, so its fenced savings are a real ledger balance, excluded from spendable
+because the account isn't `liquid`.
+
+**`scheduled_questions`:** the questions you schedule yourself: `prompt`, `rule` (an iCalendar
+RRULE), `spend_limit`, `last_run_at`, and `active`. The agent runs them read-only and answers into
+the inbox.
 
 ### People
 
-**`counterparties`:** people and organizations (an employer for reimbursements).
-
-**`claims`:** money owed between me and a counterparty. The following table lists its fields:
+**`payees`:** anyone money goes to or comes from: Swiggy, ramesh@okaxis, an employer. The following
+table lists its fields:
 
 | Field | Notes |
 |---|---|
-| `counterparty_id`, `amount` | A positive amount means they owe me |
-| `kind` | `split`, `lend`, `borrow`, `reimbursement` |
-| `source_txn_id`, `settled_txn_id` | A ₹1,200 dinner split 3 ways is one −1,200 transaction plus two +400 `split` claims. My spend is the remainder |
-| `expected_date` | Only claims that have a date enter the projection |
+| `display_name`, `kind` | `kind` is `person`, `merchant`, or `organization` |
+| `upi_id` | Kept as it is: payee corrections name it |
+| `match_hash` | A keyed one-way hash of identifiers used only for matching, such as another person's account number in a NEFT narration |
+| `default_category_id` | How "ramesh@okaxis is my landlord" works: it applies to the payee's past and future transfers |
+| `person_account_id` | The `person` account, once money is owed in either direction. A positive balance means they owe me, a negative one that I owe them. Reimbursements work the same way, on the employer's account |
+
+Money owed counts in the projection only when its label has an `expected_date`.
 
 ### Categorization
 
@@ -111,7 +182,7 @@ Three tables handle categorization:
 
 | Table | Holds |
 |---|---|
-| `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active` |
+| `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active`. Categories are labels on spending, not ledger accounts |
 | `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches. The one-shot categorizer's answer for a new merchant is saved as a rule too, so each merchant costs one LLM call, once. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
 | `baselines` | Typical spend for each category: `amount_per_day`, `source` (`estimated` at setup, `computed` from real rows), `window`, `updated_at` |
 
@@ -126,7 +197,7 @@ The following tables hold memory, conversations, and provenance:
 |---|---|
 | `preferences` | Typed facts and rules ("Mom's monthly transfer is not discretionary spend"). `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting fact, shown as a "Remembered" card with undo. Never a number the ledger owns. Visible and editable in settings |
 | `conversations`, `messages` | Full chat history. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)) |
-| `audit_log` | Every write: actor, `message_id`, table, row ID, before and after JSON, `undone_at`. Powers undo |
+| `audit_log` | Every write: actor, `message_id`, `group_id`, table, row ID, before and after JSON, `undone_at`. Powers undo; one undo reverts a whole group, such as a payee correction and every label it changed |
 | `imports` | File hash, parser, account, period, opening and closing balances, invariant result, status (`review`, `committed`, or `rejected`) |
 | `attachments` | Receipt photos and UPI screenshots as `bytea`. Statement files are not kept—only their hash |
 | `agent_runs` | Trace: model, tokens, cost, tool calls and results, duration, error |
@@ -147,9 +218,9 @@ The agent has five read tools:
 
 | Tool | Returns |
 |---|---|
-| `get_financial_context()` | Deliberately comprehensive. Settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, open claims, active preferences, staleness warnings |
-| `query_transactions(filters)` | Rows, filterable by account, category, merchant, date, amount, kind, and counterparty |
-| `summarize_spending(group_by, period, filters)` | Aggregates, summed in code. Transfers excluded; split shares netted |
+| `get_financial_context()` | Deliberately comprehensive. Settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences, staleness warnings |
+| `query_transactions(filters)` | Movements with their transfers and labels, filterable by account, category, payee, date, amount, and kind |
+| `summarize_spending(group_by, period, filters)` | Aggregates from `v_spending`, summed in the database |
 | `project(horizon=None, hypothetical=None)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
 | `run_query(sql)` | Rows, queried as the read-only `agent_ro` role, including conversation search on `messages.search`. The agent shows the SQL it ran |
 
@@ -160,8 +231,8 @@ The agent has six write tools:
 | Tool | Does |
 |---|---|
 | `record_transaction(...)` | Expense, income, transfer, split, or loan in one call. Returns an inline card with undo |
-| `edit_transaction(id, changes \| delete)` | Conversational repair. A category change creates or updates a rule |
-| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, counterparties. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
+| `edit_transaction(id, changes \| delete)` | Conversational repair. A category change edits the label and creates or updates a rule; an amount fix or a delete appends a reversal |
+| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, payees. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
 | `preference(action, text \| id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
 | `import_document(attachment_id, password=None)` | Parses into an import in `review` state. Committing is a separate, explicit step |
 | `undo(audit_id=None)` | Reverts the last (or a given) write |
@@ -220,8 +291,9 @@ forever. This is how rule 2 in `plan.md` §4 works.
 
 **Outside text.** The following fields count as outside text:
 
-- `description_raw` and `merchant` on rows whose `source` is `import` or `photo`
-- Any text copied from them into another table, such as a schedule name taken from a
+- `statement_lines.description_raw`, and the text fields of a photo extraction
+- Any text copied from them into another table, such as a payee's `display_name` or a schedule
+  name taken from a
   recurring-charge proposal. Those rows carry an `outside_text` boolean, so the mark travels
   with the copy
 - Every `run_query` result, because model-written SQL can select any column under any alias
@@ -257,8 +329,7 @@ involvement—this is the tested arithmetic every affordability verdict comes fr
 
 ### Inputs
 
-- Liquid balance: sum of `liquid` accounts at their `balance_as_of` dates, plus logged
-  transactions since.
+- Liquid balance: the ledger balance of `liquid` accounts, with their statement ages reported.
 - Horizon: max(90 days, furthest goal deadline, the asked horizon).
 - Scheduled events expanded from the `schedules` table over the horizon. Unconfirmed variable
   income is shown as an optimistic case only, never counted toward a verdict.
@@ -268,8 +339,8 @@ involvement—this is the tested arithmetic every affordability verdict comes fr
   each category, excluding categories already covered by obligations. A thousand runs give the
   spread. Until a category has enough real days, its setup estimate is used as a flat rate and the
   `data_quality` field says so. Days versus whole weeks is an open question (`plan.md` §6, L5).
-- Goal contributions move money into fenced savings; fenced savings are not spendable.
-- Claims count only when they have an `expected_date`.
+- Goal contributions move money into a goal's account; those fenced savings are not spendable.
+- Money owed counts only when its label has an `expected_date`.
 
 ### Walk
 

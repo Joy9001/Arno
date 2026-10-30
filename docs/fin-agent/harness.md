@@ -106,7 +106,7 @@ tool applies, the agent cannot either._
 Two consequences are already in the design:
 
 - **The `get_financial_context` tool is comprehensive on purpose.** One call returns settings,
-  balances, the next 30 days of scheduled events, goals, open claims, and preferences. The model
+  balances, the next 30 days of scheduled events, goals, who owes what, and preferences. The model
   gets the whole picture before it plans anything, and every turn saves round trips.
 - **The `run_query(sql)` tool applies the wide, shell-shaped pattern to a ledger.** It was
   parked; the evidence reversed that. A read-only Postgres role (`agent_ro`, which has a statement

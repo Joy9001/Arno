@@ -45,8 +45,9 @@ Each stage works as follows:
 5. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
 6. **Review screen.** The web app shows new rows, merged rows, ambiguous matches, and categories.
    The user commits, edits, or rejects.
-7. **Commit.** Write the rows, update the account's `balance` and `balance_as_of` fields from the
-   closing balance, and recompute baselines.
+7. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
+   record the closing balance on the account. If it disagrees with the ledger, the difference is a
+   visible adjustment. Then recompute baselines.
 
 ### The generic fallback
 
@@ -136,8 +137,10 @@ The following table shows the three match outcomes for a statement row:
 | Ambiguous | Several candidates, or amount within a small tolerance—shown on the review screen |
 | None | New row from the statement |
 
-On a merge, the _statement wins on amount, date, and account_; the logged row keeps its
-category, notes, claims (splits), photo, and link to the conversation. Logged rows still unmatched
+On a merge, the statement line becomes a capture of the logged movement, and the _statement wins on
+amount, date, and account_: a different date edits the movement's date, and a different amount or
+account appends a reversal and the corrected transfers. The movement keeps its labels, notes,
+money owed by people, photo, and link to the conversation. Logged rows still unmatched
 after a statement covering their date appear on the review screen as "logged but not on the
 statement"—wrong account, cash, or a mistake.
 
