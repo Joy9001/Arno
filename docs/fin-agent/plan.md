@@ -6,9 +6,10 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | Doc | Holds |
 |---|---|
 | [`design.md`](design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
+| [`tools.md`](tools.md) | Each tool's description, input, output, and logic |
 | [`platform.md`](platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
 | [`harness.md`](harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
-| [`import.md`](import.md) | Statements, photos, and voice: parsers, the invariant, reconciliation |
+| [`import.md`](import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 
@@ -95,8 +96,9 @@ daily capture missed.
 3. **Photos:** a receipt or a UPI payment screenshot becomes one transaction, image kept as an
    attachment. On Android, the installed app is a share target, so a screenshot goes straight from
    the UPI app to Fin-Agent.
-4. **Statement import:** PDF, CSV, or XLS; password-protected PDFs; 12-month backfill at setup.
-   Reconciles against rows already logged. See [`import.md`](import.md).
+4. **Statement import:** PDF, spreadsheet, or text, from any bank; password-protected files; a
+   12-month backfill at setup. The agent learns each new layout once. Reconciles against rows
+   already logged. See [`import.md`](import.md).
 5. **Web UI:** uploads, the import review screen, and settings. Panels are read-only; edits go
    through chat, where every write has undo.
 
@@ -149,7 +151,8 @@ conversation, editable panels, SMS and email autocapture, balance nudges, receip
 worth from investment statements, broker APIs, tax engine, category budgets, multicurrency,
 multiuser households, a projection for each account, extra briefings (daily, monthly, payday),
 anomaly detection, public-internet access, encryption inside the database, a locale-pack
-interface, arm64 images, and hidden memory extraction. Each has a trigger in
+interface, arm64 images, hidden memory extraction, OCR for scanned statements, and a separate code
+sandbox. Each has a trigger in
 [`parked.md`](parked.md).
 
 To decide whether something comes back in, ask: _does the agent answer questions about my money
@@ -198,7 +201,8 @@ it to each piece:
 | Piece | Decision | Why |
 |---|---|---|
 | Agent loop, tool calling, UI streaming | Buy: PydanticAI | Harness library, Vercel-AI-protocol adapter, provider switching. [`harness.md`](harness.md) |
-| Statement parsing | Buy where it exists, generic fallback otherwise | `xfina`, `bankstatementparser`. [`import.md`](import.md) |
+| Reading statement files | Buy: `pypdfium2`, `python-calamine`, and the like | One reader for each kind of file. [`import.md`](import.md) |
+| Parsing a statement layout | Build once: the agent writes a parser in Monty, saved for that layout | No parser for each bank. Tested on synthetic files; the L3 spike is the real test. [System design, step 5](system-design.md#imports-the-agent-writes-the-parser) |
 | Speech-to-text | Buy: any OpenAI-compatible STT endpoint | `speaches` (faster-whisper) locally, or a cloud API |
 | Photo extraction | Buy: any OpenAI-compatible vision model | The `VISION_*` role, local or cloud |
 | Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Fin-Agent doesn't invent its own security code |
@@ -225,7 +229,7 @@ The following table records the choice for each layer:
 | Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
-| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command |
+| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
 | License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive |
 
 ### Provider switch
@@ -235,7 +239,7 @@ Each role uses one code path for local and cloud:
 ```
 CHAT_BASE_URL=http://ollama:11434/v1      # or https://api.<provider>.com/v1
 CHAT_MODEL=qwen3:4b                       # or a cloud model id
-VISION_BASE_URL=...  VISION_MODEL=...     # photos, fallback statement extraction
+VISION_BASE_URL=...  VISION_MODEL=...     # photos, statement pages with no text
 STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
 CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails
 ```
@@ -252,8 +256,8 @@ supported through this switch, and the eval scorecard records what each one hand
 model's limits go in the scorecard; they are never designed into the product.
 
 Model IDs are pinned to exact, dated versions, never floating aliases, and any model change re-runs
-the eval scorecard. One-shot calls—the categorizer, briefing prose, statement column mapping—use
-the chat role ([system design, step 3](system-design.md#models)).
+the eval scorecard. Parse runs and one-shot calls—the categorizer, briefing prose—use the chat
+role ([system design, step 3](system-design.md#models)).
 
 ---
 
@@ -282,12 +286,12 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
    what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
    tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
    its own head. Affordability verdicts come only from the tested engine.
-2. **Untrusted text never makes a lasting change unseen.** Statements and photos are extracted by
-   an isolated, tool-less model call into a typed schema. Fields that still carry other people's
-   words—payee names, UPI notes—reach the agent marked as data. Writes that are visible and
-   undoable stay instant. Writes that last or reach wide—memory, setup, many rows—need a
-   confirming tap in any conversation that has read such text. Voice transcripts are the user's
-   own words and take the normal chat path.
+2. **Untrusted text never makes a lasting change unseen.** Statements are parsed in a run with no
+   write or ledger tools, and photos by an isolated, tool-less model call into a typed schema.
+   Fields that still carry other people's words—payee names, UPI notes—reach the agent marked as
+   data. Writes that are visible and undoable stay instant. Writes that last or reach wide—memory,
+   setup, many rows—need a confirming tap in any conversation that has read such text. Voice
+   transcripts are the user's own words and take the normal chat path.
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, the REST API,
    and any future MCP server wrap the same functions.
 4. **The database is the whole state.** Photos live in it; a dump from `pg_dump` is a complete
@@ -335,25 +339,27 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 14. Web chat streams from the PydanticAI agent; conversations stored and full-text searchable.
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
     Limits; a trace log for each run.
-16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout; zero
-    versus unknown, data age, and source IDs (for citations) in every return. Code Mode over the
-    read tools, so the agent can run multistep modeling in the sandbox; write tools stay direct
-    calls.
+16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
+    `amortize` and `compound` functions, and `show_chart`; zero versus unknown, data age, and source
+    IDs (for citations) in every return. Code Mode over the read tools, so the agent can run
+    multistep modeling in the sandbox; write tools stay direct calls. Fin-Agent emits cards from
+    the `run_code` return. Specs in [`tools.md`](tools.md).
 17. Write tools with inline write-show-undo cards; corrections learn rules. Outside text is
     marked in tool returns, and lasting or wide writes ask first in a conversation that has read
     it ([`design.md`](design.md#untrusted-text-and-write-tiers)).
 18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible
-    and editable in settings.
+    in settings, where each can be turned off or deleted.
 19. Setup conversation lands accounts, income, obligations, goals, floor, and estimated baselines.
 20. CLI: chat plus administration (setup, migrate, export, passkey reset).
 
 ### L3: Import
 
-21. **Spike:** my real SBI, Union Bank, and Slice statements through the candidate parsers.
-    Output is a decision for each bank. Protocol in [`import.md`](import.md).
-22. Pipeline: upload → parse → invariant → dedupe and reconcile against logged rows → review
-    screen → commit.
-23. Generic fallback for banks with no parser, invariant-gated.
+21. **Spike:** a fresh model writes a parser for my real SBI, Union Bank, and Slice statements in
+    Monty. Output is a decision for each bank. Protocol in [`import.md`](import.md).
+22. Pipeline: upload → read → saved parser or parse run → checks → dedupe and reconcile against
+    logged rows → review screen → commit.
+23. Parse runs: the `parse-statement` skill and host functions; parsers saved in
+    `statement_layouts` after commit, and rerun with no LLM.
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)
@@ -395,8 +401,7 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 37. Restore drill on a fresh machine: given the backup and the restic password, the ledger comes
     back.
 38. Security pass: threat model, dependency audit, security headers.
-39. Docs: install (Docker + Tailscale), configure LLMs, add a bank parser. License file,
-    versioned image.
+39. Docs: install (Docker + Tailscale), configure LLMs. License file, versioned image.
 40. Someone else installs it from the docs alone.
 41. Four weeks of daily use without falling back to mental math or a spreadsheet.
 
@@ -411,12 +416,10 @@ something has crept in—check it against [`parked.md`](parked.md).
 Answer each when its layer arrives, not before.
 
 - **L0:** Tailscale on the host, or as a sidecar container in compose?
-- **L2:** do cards and citations from tools called inside a Code Mode script reach the chat
-  stream, or does Fin-Agent render them from the `run_code` return's metadata? Enforce rule 1 at
-  the output too—check that every number in a reply matches a tool return—or rely on evals?
+- **L2:** enforce rule 1 at the output too—check that every number in a reply matches a tool return—or rely on evals?
   Which local chat models handle which tasks? The scorecard records it.
-- **L3:** what does Slice export, and in what format? Does any parser read Union Bank, or is it
-  the generic path?
+- **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
+  statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor
   probability makes a "yes"—90% or 95%? Card share of variable spend—learned from history or set
   for each account?

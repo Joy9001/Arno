@@ -12,7 +12,7 @@ question about it — including whether you can afford something, and what it wo
 ```
 .
 ├── docs/            all documentation — see docs/README.md
-│   ├── fin-agent/   the project: plan, design, platform, harness, import, parked
+│   ├── fin-agent/   the project: plan, design, tools, platform, harness, import, parked
 │   ├── research/    independent surveys (agent-harness-engineering)
 │   └── archive/     superseded May 2026 design docs — historical only
 └── evals/           human-judged eval harness for local models (+ recorded runs)

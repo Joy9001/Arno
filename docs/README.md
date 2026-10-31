@@ -19,9 +19,10 @@ plan wins. The project has the following docs:
 |---|---|
 | [`plan.md`](fin-agent/plan.md) | Start here. The final product: scope, stack, architecture, build order, definition of done |
 | [`design.md`](fin-agent/design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
+| [`tools.md`](fin-agent/tools.md) | Each tool's description, input, output, and logic |
 | [`platform.md`](fin-agent/platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
 | [`harness.md`](fin-agent/harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
-| [`import.md`](fin-agent/import.md) | Statements, photos, and voice: parsers, the invariant, reconciliation |
+| [`import.md`](fin-agent/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 
@@ -41,6 +42,7 @@ holds the following surveys:
 | [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, about 1,800 lines, annotated sources with a gap log |
 | [`agentic-system-design/`](research/agentic-system-design/) | How whole agentic systems are composed: patterns, multi-agent topology, retrieval and memory, production operations, and 18 case studies |
 | [`agent-toolkit-2026/`](research/agent-toolkit-2026/) | Let's Code's catalog of 404 open source agent tools, shortlisted for each design step. _Filtered by this project's requirements on purpose_ |
+| [`monty-document-parsing/`](research/monty-document-parsing/) | A test of Monty as the sandbox for model-written statement parsers, on every document type, with its scripts. _Applied to this project on purpose, unlike the rest of this tree_ |
 | [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
 
 ## Superseded work in the `archive/` directory

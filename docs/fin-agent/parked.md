@@ -66,6 +66,20 @@ age.
 
 **Trigger:** a verdict turns out wrong because a balance was stale and nobody noticed the age.
 
+### OCR for scanned statements
+
+**Why parked:** the `VISION` model reads pages with no text layer, and a harsh phone photo needs it
+either way. In the Monty test, RapidOCR read clean scans and a moderate photo after 1-2 repairs, at
+4-8 s a page on a CPU, and returned nothing on a harsh photo. It also pulls in OpenCV, which bundles
+an LGPL FFmpeg that would need a license check before shipping. The evidence comparing OCR with
+vision models on dense bank-statement tables is weak.
+
+**Shape when it comes:** one more source of positioned words for `doc_words`, so a saved parser can
+reuse it. The pipeline doesn't change.
+
+**Trigger:** the L3 spike finds scanned statements common or OCR clearly better, or a self-hoster
+has no vision model.
+
 ### Receipt line items
 
 **Why parked:** one transaction for each photo was chosen.
@@ -198,6 +212,20 @@ same database.
 
 **Trigger:** keyword search over past conversations keeps missing things I said, or I keep
 repeating a fact that never becomes a preference.
+
+### A separate code sandbox
+
+**Why parked:** Monty runs model-written parsers inside the API process, with no filesystem,
+environment, or network, and it worked for every text-based format in the
+[Monty test](../research/monty-document-parsing/README.md). Inside Docker Compose, the others cost
+more: Docker needs the host's socket, BoxLite and Smol need `/dev/kvm`, and Bubblewrap's docs say it
+isn't a boundary against a hostile agent.
+
+**Shape when it comes:** a no-network sidecar holding only the statement being parsed, or BoxLite or
+Smol with `/dev/kvm` passed through, as an optional Compose profile. Neither is tested. The skill and
+the checks stay as they are.
+
+**Trigger:** the L3 spike finds a real statement that can't be parsed in Monty.
 
 ---
 

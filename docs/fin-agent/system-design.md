@@ -32,12 +32,12 @@ The following table lists the steps, in order:
 | 2. Control and autonomy | For each path, does code or the model pick the next step, and where does a human step in? | [Below](#step-2-control-and-autonomy) | Agreed October 28, 2026 |
 | 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Agreed October 28, 2026 |
 | 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [Below](#step-4-ground-truth); [`design.md`](design.md#the-ledger) | Agreed October 30, 2026 |
-| 5. Tools | What the agent can read and write, through which contracts | [`design.md`](design.md#tool-surface-11-tools) | Not started; the tool surface predates the walk; next |
-| 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; questions parked |
+| 5. Tools | What the agent can read and write, through which contracts | [Below](#step-5-tools); [`tools.md`](tools.md) | Agreed October 31, 2026 |
+| 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; next |
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers) | Partly decided |
 | 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability) | Partly decided |
 | 9. Evals and observability | How it's measured, traced, and scored for each model | [`harness.md`](harness.md) | Not started; questions parked |
-| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [`platform.md`](platform.md) | Not started; an API draft is parked |
+| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; an API draft and a deployment check are parked |
 
 Decisions made before or outside their step—rule 1 (the model decides what to compute; code
 computes it), Code Mode, the write tiers, and the old trade-offs step—are filed under their step
@@ -118,11 +118,11 @@ For each path: who picks the next move—the model, code, or you? Agreed October
 
 ### Agent or workflow, for each path
 
-![The agent loop runs only for you](diagrams/sd-agent-vs-workflow.png)
+![The agent loop runs for you and for new layouts](diagrams/sd-agent-vs-workflow.png)
 
-*Figure: your chat and the questions you schedule drive the one agent loop; built-in jobs and
-imports run as code with at most one LLM call each, and still run when the LLM is down
-([note](diagrams/sd-agent-vs-workflow.md)).*
+*Figure: your chat and the questions you schedule drive the agent loop, and a new statement layout
+starts a parse run with no write tools. Built-in jobs and known layouts run as code with at most
+one LLM call each, and still run when the LLM is down ([note](diagrams/sd-agent-vs-workflow.md)).*
 
 - **Built-in jobs are workflows.** Warnings, reminders, and the briefing run as fixed code: the
   engine computes, rules decide whether to warn, and at most one LLM call writes the prose. They
@@ -131,6 +131,10 @@ imports run as code with at most one LLM call each, and still run when the LLM i
   food and whether it's up" runs the agent on a schedule, the way Claude Cowork's scheduled tasks
   do. No write tools—nobody is there to see an undo card or answer a confirm card—so the answer
   lands in the inbox, and each run has its own spend limit.
+- **Imports are code, until a layout is new.** A known layout reruns its saved parser with no LLM
+  call. A new layout starts a parse run: the same agent, with no write tools, and it waits if the
+  LLM is down. This replaced "at most one LLM call" on October 31, 2026
+  ([step 5](#imports-the-agent-writes-the-parser)).
 - **The merchant categorizer** writes its answer through as a category rule (source `llm`), so
   each new merchant costs one LLM call, once. User rules win, and a correction replaces an `llm`
   rule ([`design.md`](design.md#categorization)).
@@ -207,7 +211,8 @@ the context small, a backup model covers errors, and circuit breakers stop a run
 - **One agent.** The work is sequential and write-heavy—where the research found multi-agent
   setups lose. None of the research's three reasons for another agent applies: there's no context
   to isolate (the data is small), nothing to parallelize (turns are sequential), and independent
-  review is a deterministic check ([step 9](#step-9-evals-and-observability)).
+  review is a deterministic check ([step 9](#step-9-evals-and-observability)). A parse run is this
+  agent with fewer tools ([step 5](#imports-the-agent-writes-the-parser)).
 - **Code Mode gives it computing power, and the engine gives verdicts.** Scripts orchestrate:
   standard money maths (EMI and amortization, prepayment, compounding) comes from tested engine
   functions, and free-form arithmetic covers the rest, with the script shown
@@ -221,7 +226,7 @@ The following table lists the three model roles:
 
 | Role | Used for |
 |---|---|
-| `CHAT` | The agent loop, your scheduled questions, and the one-shot calls: the merchant categorizer, briefing prose, statement column mapping |
+| `CHAT` | The agent loop, your scheduled questions, parse runs, and the one-shot calls: the merchant categorizer and briefing prose |
 | `VISION` | Photos and scanned statements |
 | `STT` | Voice notes |
 
@@ -346,15 +351,109 @@ the README credits pgledger under "Built on," with no wording that implies endor
 
 ## Step 5: Tools
 
-Not started. The tool surface in [`design.md`](design.md#tool-surface-11-tools)—11 tools, with
-the read tools behind Code Mode—predates the walk; this step re-checks it. Parked here:
+What the agent can read and write, through which contracts. Agreed October 31, 2026. Each tool's
+description, input, output, and logic are in [`tools.md`](tools.md).
 
-- **Charts the agent makes.** Claude's dashboards put a query behind each chart; Fin-Agent's
-  equivalent: a Code Mode script returns a declarative chart spec built from data it computed, a
-  fixed UI component renders it, and the script is the chart's citation. No model-written HTML or
-  JavaScript—it would bypass the content security policy and let the model type numbers. Fixed
-  cards (the projection, a spending breakdown) stay for the core views. Rendering belongs to
+![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
+
+*Figure: the model sees seven tools. A script reaches the eight read tools through `run_code`, and
+every write is a direct call with its own card ([note](diagrams/sd-tool-surface.md)).*
+
+### Decisions on the surface
+
+- **One word: movement.** `query_movements`, `record_movement`, and `correct_movement` replace the
+  `transaction` names, matching the ledger.
+- **Every tool is a normal PydanticAI tool.** Code Mode changes how the model calls the eight read
+  tools, not what they are. Writes stay direct calls, because an approval-gated tool can't pause
+  inside a script, and a script could otherwise write many rows with no card for each.
+- **Two tested money functions.** `amortize` and `compound` cover loans and compounding, so standard
+  maths isn't rewritten in each script. The rate in `compound` is an assumption the reply must state.
+- **The unit is in the field name.** Read tools take `*_paise`, because scripts compute in paise.
+  Write tools take `*_rupees`, as you said it, so the model never multiplies by 100.
+- **`category` or `category_guess`.** `category` means you named it, and it wins. `category_guess` is
+  used only when no rule exists, then saved as an `llm` rule. This keeps "your rules win" and saves a
+  separate categorizer call on chat.
+- **`scope` on a correction:** `this` (no rule), `future` (a rule), or `all` (a rule and past rows).
+- **Charts.** A script calls `show_chart` with a small typed spec (line, bar, stacked bar, donut) built
+  from data it computed. A fixed component draws it, and the script is its citation. There's no
+  model-written HTML, and no Vega-Lite. Fixed cards stay for the core views, and rendering belongs to
   [step 10](#step-10-interfaces-and-operations).
+- **Passwords never reach the model.** A statement password goes in a field on the import card, over
+  REST. It stays in memory and is never stored.
+- **Preferences: off, or deleted.** Forgetting sets `active = false`, so a preference stays listed in
+  Settings and can be turned back on. Delete is separate, in Settings only, with a confirm, and it
+  also blanks the text in the audit rows. The agent has no delete, so everything it writes stays
+  undoable. The audit log keeps powering undo for every write.
+- **Marks on outside text can clear.** Otherwise a schedule name copied from a statement would flag
+  every conversation that reads the financial context. A marked name you confirm on a card loses its
+  mark, and a new name in a flagged conversation stays unmarked if it appears in your own message
+  ([`design.md`](design.md#untrusted-text-and-write-tiers)).
+- **Not taken:** a dry-run mode, because confirm cards and undo cover it, and an MCP server, which
+  stays parked. Tool Search's trigger is now confusion seen in evals, not a tool count.
+
+### Imports: the agent writes the parser
+
+![The agent learns each statement layout once](diagrams/sd-import-pipeline.png)
+
+*Figure: a known layout reruns its saved parser with no LLM call. A new layout starts a parse run,
+checks gate both paths, and the parser is saved only after you commit
+([note](diagrams/sd-import-pipeline.md)).*
+
+- **No parser for each bank.** A small set of readers turns any file into cells or positioned words,
+  and the agent writes a parser for each new layout. A typed layout spec would need new schema and
+  code for every oddity, such as wrapped narrations, which is per-format logic under another name.
+- **A parse run is the same agent with different tools.** It has `run_code` and a skill, and no write
+  or ledger tools, the way scheduled questions have no write tools. To write a parser the model must
+  read sample rows. In the chat run, that would flag the conversation and put a crafted payee note
+  beside the write tools. In its own run, the worst case is wrong rows, and the chat stays free. The
+  cost is that its questions come back through the import card. It uses the chat turn's ceilings.
+- **Monty is the sandbox.** It's already in the stack, runs in the API process, and has no filesystem,
+  environment, or network. Local sandboxes remain the fallback ([parked](parked.md#a-separate-code-sandbox)).
+- **The model submits a script, never rows.** The server reruns the script from its text in a fresh
+  sandbox. Saved after you commit, it parses later statements with no LLM call.
+- **A vision model reads pages with no text.** OCR waits for the L3 spike
+  ([parked](parked.md#ocr-for-scanned-statements)).
+
+The following table records the other options that were considered:
+
+| Option | Verdict | Why |
+|---|---|---|
+| A library for each bank (`xfina`, `bankstatementparser`) | Optional | The L3 spike keeps one only if it beats a written parser on real statements |
+| `FileUnderstanding`, the harness capability | No | It describes files a model can't read, as free text. A frontier model gets the PDF unchanged, in the run that holds the write tools, and it leaves files alone under `FallbackModel` |
+| The model reads the whole file every time | Last layer only | Every import would send the whole statement to the provider and stop when the LLM is down. It stays for pages with no text |
+| Docker, BoxLite, Smol, Bubblewrap sandboxes | Fallback | Docker needs the host's Docker socket from inside Compose, and its docs say not to mount it. BoxLite and Smol need `/dev/kvm`. Bubblewrap's docs say it isn't a boundary against a hostile agent |
+| E2B, boxd | No | Cloud-hosted, so statements would reach another third party |
+
+### The Monty test, October 31, 2026
+
+A subagent ran parsers in Monty against synthetic files for every document type. The full results
+are in the [report](../research/monty-document-parsing/README.md).
+
+| Documents | Result |
+|---|---|
+| PDFs with text, 9 layouts | All rows right, verified |
+| `.xlsx`, `.xls`, `.ods`, CSV, TSV, TXT, `.docx`, HTML, RTF, OFX, MT940, CAMT, JSON | All rows right. Some need host-side conversion, and statements with no printed opening need one from the ledger |
+| 182 pages, 9,996 rows | 5.6 s. Fails Code Mode's 100-call cap at one call per page, so `doc_words_range` batches them |
+| Clean scan, moderate phone photo | Works through RapidOCR, after 1-2 repairs |
+| Harsh phone photo | 0 rows; needs a vision model |
+| Salary slip, loan letter, mutual fund statement | Correctly identified as not bank statements |
+| `.doc`, `.xlsb` statements, vision models, real Indian bank files, running on Linux | Not tested |
+
+What it changed:
+
+- **The balance check isn't enough.** A day/month swap came out verified with 17 of 18 dates wrong,
+  and a new column came out verified with 0 of 22 narrations right. The checks now add the period,
+  taken from outside the parser, a column-header fingerprint, a row count, and the ledger's opening
+  balance. The review screen stays the last guard, and a parser is saved only after you commit.
+- **Cards are Fin-Agent's job.** Metadata from a tool called inside a script doesn't reach the
+  `VercelAIAdapter` stream, so Fin-Agent emits those cards from the `run_code` return.
+- **The host layer is about 400 lines,** plus a versioned 100-line helper block, written once.
+- **Scripts and replay share one form.** Scripts use `await` and keyword arguments, host functions
+  return JSON-native types, and replay runs in `AsyncMonty` with `os_policy` and a sleep limit set.
+
+**The real test is still to come.** The agent wrote the fixtures, the parsers, and the helper block,
+so these results lean toward success, and it found no real Indian bank PDF or XLS. A fresh model
+writing a parser for real statements is the gate, at the [L3 spike](import.md#the-spike-milestone-21-in-the-plan).
 
 ---
 
@@ -379,6 +478,9 @@ Decided so far; the step itself hasn't been walked.
   ([`design.md`](design.md#untrusted-text-and-write-tiers)).
 - **Exfiltration.** A content security policy allows images only from the app's own origin, and
   links in replies render as plain text ([`platform.md`](platform.md#security)).
+- **Documents.** Statements are parsed in a run with no write or ledger tools
+  ([step 5](#imports-the-agent-writes-the-parser)), and photos by a tool-less call into a typed
+  schema.
 
 ### Identifiers at import, not a scrubbing layer
 
@@ -403,6 +505,8 @@ Parked here:
   2026), so this binding is Fin-Agent's to add.
 - Photo and voice enter through their own endpoints, so the server—never the client—inserts the
   extracted fields and sets the outside-text flag.
+- Limiting where the agent can connect: which hosts the API container may reach beyond the LLM
+  endpoints.
 
 ---
 
@@ -432,7 +536,9 @@ Parked here:
 - A turn finishes even if the client disconnects. By default PydanticAI's adapter cancels the run
   on a disconnect (checked October 27, 2026), so the run has to be detached from the HTTP stream.
   A separate stop endpoint handles the Stop button.
-- The scheduler's job store, and how parsing moves off the chat path.
+- The scheduler's job store, and how parsing moves off the chat path. A candidate for both, and for
+  runs that survive a crash or deploy: DBOS, a library that needs only Postgres and has a native
+  PydanticAI integration, so no extra server.
 
 ---
 
@@ -472,6 +578,21 @@ Parked here, from an API draft of October 27, 2026 that was never agreed:
 - Rate limits, CSP, and other headers; MCP exposure stays parked.
 - Rendering the charts the agent makes ([step 5](#step-5-tools)): one chart component that draws a
   declarative spec, with the citation and "as of" time on every chart.
+- **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason
+  was only that traditional backends deploy this way, so the options were explored. Most sources are
+  vendor blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an
+  agent apart isn't its packaging: durable runs, code isolation, spend, and traces are handled in
+  steps 8, 5, 3, and 9. The following table records the options:
+
+  | Option | Verdict | Why |
+  |---|---|---|
+  | Docker Compose | Yes | One command on Linux, Docker Desktop, or a VPS; a pinned Postgres; the agent's container can't see your other files; backups stay independent of the app |
+  | Native install with systemd | Close second | Lightest, and common for OpenClaw and Hermes, but Postgres must be installed per OS, and the agent runs beside your files |
+  | Coolify, Dokploy | Optional for self-hosters | Dashboards that run Compose files, so nothing extra to build |
+  | One all-in-one container | No | Backups could no longer run when the app is broken |
+  | Kamal, Dokku | No | For a developer shipping to their own server; neither runs Compose files |
+  | Managed runtimes: AWS AgentCore, Azure Foundry, Vertex Agent Engine, Claude Managed Agents, Cloudflare Agents | No | They solve scale for many users; your ledger would leave your machine, and others couldn't self-host |
+  | Kubernetes, Ray | No | One user for each instance |
 
 ---
 

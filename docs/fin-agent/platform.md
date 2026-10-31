@@ -18,8 +18,8 @@ src/fin_agent/
   db/          connection, migrations/*.sql, roles, vendor/pgledger/ (unmodified, with licenses)
   ledger/      plain functions over the DB — the tools live here (no PydanticAI types)
   engine/      projection, affordability, backtest, pattern detection
-  importers/   parser registry, invariant, reconciliation, photo extraction
-  agent/       PydanticAI agent, system prompt, tool wrappers
+  importers/   readers, parse-run host functions, checks, reconciliation, photo extraction
+  agent/       PydanticAI agent, system prompt, tool wrappers, skills/parse-statement/
   api/         FastAPI app, routers, auth
   jobs/        scheduler, briefing, reminders, patterns
   india/       categories, statement parsers, holidays, ₹ formatting, prompt notes
@@ -47,7 +47,7 @@ The API exposes the following surfaces:
 |---|---|
 | Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()`. Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
-| Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `review` → `commit` endpoints; a photo becomes one transaction at once, with undo |
+| Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo |
 | Conversations | List, read, full-text search |
 | Inbox and push | List and read notifications; register a push subscription |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
@@ -72,14 +72,17 @@ The web app has the following parts:
 
 - **Chat (home):** Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
-  verdict and its floor probability, a spending breakdown, an import summary. Citations open the
-  rows behind a number. Voice-note recording and photo upload live in the composer. Links in
+  verdict and its floor probability, a spending breakdown, an import summary, a chart the agent
+  made. The adapter doesn't stream metadata from tools called inside a script, so Fin-Agent emits
+  those cards itself from the `run_code` return. Citations open the rows behind a number.
+  Voice-note recording and photo upload live in the composer. Links in
   agent replies render as plain text, and external images never load ([Security](#security)).
 - **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
-- **Editable screens:** Imports (upload, review, history) and Settings.
-- **Settings:** profile and floor, categories and rules, preferences (the agent's memory),
-  notification times, passkeys and sessions, backup status. Each section lands with its layer.
+- **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
+  Settings.
+- **Settings:** profile and floor, categories and rules, preferences (the agent's memory: turn one
+  on or off, or delete it for good), notification times, passkeys and sessions, backup status. Each section lands with its layer.
 - **PWA:** manifest + service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
@@ -141,7 +144,9 @@ passes through the browser vendor's push service.
 
 ## Deployment
 
-The `compose.yaml` file defines the following services:
+Compose was re-checked on its merits against other ways to deploy an agent on October 31, 2026
+([system design, step 10](system-design.md#step-10-interfaces-and-operations)). The `compose.yaml`
+file defines the following services:
 
 ```yaml
 # compose.yaml — shape, not final
@@ -191,9 +196,10 @@ The following table is the threat model, refreshed at L8:
 | Leaked backup | restic encryption; the password isn't stored with the backups |
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
 | Live host compromise | _Not defended._ Stated in the docs |
-| Prompt injection through statements or photos | Rule 2 in `plan.md` §4: documents go through an isolated, tool-less extraction call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
+| Prompt injection through statements or photos | Rule 2 in `plan.md` §4: statements are parsed in a run with no write or ledger tools, and photos by a tool-less call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
 | Data carried out through rendered output | A content security policy from L0 that allows images only from the app's own origin (`img-src 'self'`); links in agent replies render as plain text |
 | Agent-written SQL | The `agent_ro` role: read-only, no auth tables, statement timeout |
+| Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
 | LLM provider sees data | The self-hoster's choice for each role. Docs state plainly what each role sends |
 | Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI |
 

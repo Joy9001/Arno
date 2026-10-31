@@ -83,6 +83,7 @@ The following capabilities are on from the start:
 | Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
+| Skills, in parse runs only | The know-how for writing a statement parser stays out of the main prompt, and it can grow without code changes. A library shipped with the app, read through a `workspace=` backend, adds one tool, `load_capability` ([`import.md`](import.md)) |
 
 ### Later, with triggers
 
@@ -91,7 +92,7 @@ The following capabilities wait for their triggers:
 | Capability | Adopt when |
 |---|---|
 | Guardrails | Outside text larger than short statement fields reaches the agent (for example, a chat-app bridge forwarding other people's messages), or a tool gains a destructive mode undo can't reverse. Today outside text is limited to statement fields, marked as data, and lasting writes are gated (rule 2 in `plan.md` §4) |
-| Tool Search | The tool count grows past roughly a dozen. At 11, it costs more than it saves |
+| Tool Search | Evals show the model confusing or missing tools. The model sees only seven of the 14, so a tool count isn't the trigger |
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't |
 | System Reminders | Long multiturn sessions show instruction drift |
 | Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds |
@@ -116,7 +117,7 @@ Two consequences are already in the design:
 **The counterargument, kept on the record:** the
 [archived prior-art research](../archive/prior-art/research-2026-05-24.md) says "do not give the
 LLM raw SQL access." That warning was about SQL as the _primary_ interface. As a read-only
-escape hatch beside 10 tested tools, it is a different risk—a wrong query, not wrong
+escape hatch beside the typed tools, it is a different risk—a wrong query, not wrong
 arithmetic. Different, not zero. If the `run_query` tool starts getting chosen over the typed
 tools for questions the typed tools already handle, that is the signal the tool descriptions are
 wrong.

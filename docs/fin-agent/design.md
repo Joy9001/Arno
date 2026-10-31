@@ -183,7 +183,7 @@ Three tables handle categorization:
 | Table | Holds |
 |---|---|
 | `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active`. Categories are labels on spending, not ledger accounts |
-| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches. The one-shot categorizer's answer for a new merchant is saved as a rule too, so each merchant costs one LLM call, once. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
+| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches. The one-shot categorizer's answer for a new merchant is saved as a rule too, so each merchant costs one LLM call, once; on chat, the agent's `category_guess` plays this part. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
 | `baselines` | Typical spend for each category: `amount_per_day`, `source` (`estimated` at setup, `computed` from real rows), `window`, `updated_at` |
 
 Baselines are recomputed nightly after a category has enough real rows. The `source` flag exists
@@ -195,34 +195,43 @@ The following tables hold memory, conversations, and provenance:
 
 | Table | Holds |
 |---|---|
-| `preferences` | Typed facts and rules ("Mom's monthly transfer is not discretionary spend"). `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting fact, shown as a "Remembered" card with undo. Never a number the ledger owns. Visible and editable in settings |
+| `preferences` | Typed facts and rules ("Mom's monthly transfer is not discretionary spend"). `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting fact, shown as a "Remembered" card with undo. Never a number the ledger owns. Forgetting sets `active` to false, so it stays listed in settings and can be turned back on. Deleting is separate, in settings only ([`tools.md`](tools.md#preference)) |
 | `conversations`, `messages` | Full chat history. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)) |
 | `audit_log` | Every write: actor, `message_id`, `group_id`, table, row ID, before and after JSON, `undone_at`. Powers undo; one undo reverts a whole group, such as a payee correction and every label it changed |
-| `imports` | File hash, parser, account, period, opening and closing balances, invariant result, status (`review`, `committed`, or `rejected`) |
-| `attachments` | Receipt photos and UPI screenshots as `bytea`. Statement files are not kept—only their hash |
+| `imports` | File hash, parser, account, period, opening and closing balances, check result, status (`review`, `committed`, or `rejected`) |
+| `statement_layouts` | One saved parser for each statement layout: `institution`, `fingerprint` (the normalized column headers), `parser` (the script's text), `helper_version`, `source_import_id`, `last_used_at`. Saved only after you commit an import ([`import.md`](import.md)) |
+| `attachments` | Receipt photos and UPI screenshots as `bytea`. Statement files stay only until their import is committed or rejected; after that, only their hash |
 | `agent_runs` | Trace: model, tokens, cost, tool calls and results, duration, error |
 | `notifications`, `push_subscriptions` | Inbox items and web-push endpoints |
 
 ---
 
-## Tool surface: 11 tools
+## Tool surface: 14 tools
 
-_"Answers any question" is a property of the tool surface._ Few wide tools over complete data;
-a twelfth tool is the trigger to reconsider Tool Search ([`harness.md`](harness.md)). The five
+_"Answers any question" is a property of the tool surface._ Few wide tools over complete data. Eight
 read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools: `run_code`
-and the six write tools. See [Code Mode](#code-mode).
+and the six write tools. See [Code Mode](#code-mode). Each tool's description, input, output, and
+logic are in [`tools.md`](tools.md).
+
+![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
+
+*Figure: a script reaches the read tools through `run_code`, and every write is a direct call with
+its own card ([note](diagrams/sd-tool-surface.md)).*
 
 ### Read
 
-The agent has five read tools:
+The agent has eight read tools:
 
 | Tool | Returns |
 |---|---|
-| `get_financial_context()` | Deliberately comprehensive. Settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences, staleness warnings |
-| `query_transactions(filters)` | Movements with their transfers and labels, filterable by account, category, payee, date, amount, and kind |
+| `get_financial_context()` | Deliberately comprehensive. Today's date, settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences, what setup is missing, staleness warnings |
+| `query_movements(filters)` | Movements with their transfers and labels, filterable by account, category, payee, date, amount, and kind |
 | `summarize_spending(group_by, period, filters)` | Aggregates from `v_spending`, summed in the database |
-| `project(horizon=None, hypothetical=None)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
+| `project(horizon, hypothetical)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
 | `run_query(sql)` | Rows, queried as the read-only `agent_ro` role, including conversation search on `messages.search`. The agent shows the SQL it ran |
+| `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment compared. The same function splits an EMI when one is logged |
+| `compound(monthly, annual_rate, months, start)` | Growth of a monthly investment at an assumed rate, which the reply must state |
+| `show_chart(type, title, series)` | Nothing the model needs: a line, bar, stacked bar, or donut chart, from a typed spec that Fin-Agent emits as a card |
 
 ### Write
 
@@ -230,12 +239,12 @@ The agent has six write tools:
 
 | Tool | Does |
 |---|---|
-| `record_transaction(...)` | Expense, income, transfer, split, or loan in one call. Returns an inline card with undo |
-| `edit_transaction(id, changes \| delete)` | Conversational repair. A category change edits the label and creates or updates a rule; an amount fix or a delete appends a reversal |
-| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, payees. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
-| `preference(action, text \| id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
-| `import_document(attachment_id, password=None)` | Parses into an import in `review` state. Committing is a separate, explicit step |
-| `undo(audit_id=None)` | Reverts the last (or a given) write |
+| `record_movement(movement)` | Expense, income, transfer, split, loan EMI, refund, or settlement in one call. Code works out the transfers. Returns an inline card with undo |
+| `correct_movement(id, changes, scope)` | Conversational repair. A label change edits the label; an amount fix or a delete appends a reversal. `scope` says how far a category or payee change goes: `this`, `future` (a rule), or `all` (a rule and past rows) |
+| `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, payees, settings, and scheduled questions. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
+| `preference(action, text or id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
+| `import_document(attachment_id)` | Starts an import, which ends in `review` state. Committing is a separate, explicit step on the review screen. It has no password argument: a password goes in a field on the import card, over REST |
+| `undo(undo_id)` | Reverts the last write in this conversation, or a given one |
 
 Voice and photos are not tools. They're input preprocessing—speech-to-text output, or a typed
 photo extraction—handed to the agent as a user turn. That keeps rule 2 in `plan.md` §4. A photo
@@ -268,18 +277,22 @@ The following table sets how it is configured:
 
 | Concern | Decision |
 |---|---|
-| Which tools move behind `run_code` | The five read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
+| Which tools move behind `run_code` | The eight read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
 | Writes | Always direct tool calls, one row at a time, each with its write-show-undo card. A script never writes |
-| Money in the sandbox | Monty has no `decimal` module, and `Decimal` values arrive as strings. Read tools therefore also return amounts as integer paise, which stay exact in Python integers. Rate arithmetic (interest, growth) is floating point, so results are rounded to the rupee for display |
+| Money in the sandbox | Integer paise, which stay exact. Code Mode turns a `Decimal` into a string at the boundary, and Monty's `round(x, 2)` differs from CPython's (2.68 against 2.67 for 2.675), so scripts don't use either for money. Rate arithmetic (interest, growth) is floating point, so results are rounded to the rupee for display |
+| Types crossing the boundary | Only JSON-native ones. Code Mode turns tuples, sets, dates, and `Decimal` values into lists and strings, and raw Monty doesn't, so anything else would make a script see different values on replay |
 | Dates | The sandbox has no clock. "Today" comes from `get_financial_context`, never from `datetime.now()` |
 | Host access | `mount` and `os_access` stay unset. The read tools hold the only route to data, through the `agent_ro` role |
-| Limits | A cap on nested tool calls and a short duration for each snippet, tuned at L2. Spend Limits still cap the run |
+| Limits | The defaults, tuned at L2: 30 s and 256 MiB for each snippet, 100 nested calls for each `run_code`, about 500 for each session. Spend Limits still cap the run |
+| Calling convention | `await` and keyword arguments. Code Mode also type-checks a script, and it keeps variables between `run_code` calls |
+| Errors in a script | A nested `ModelRetry` arrives as a catchable `Exception` with its message. Uncaught, `run_code` ends with that message, and the model retries |
 | Provenance | The `run_code` return keeps every nested tool call and return in its metadata. The UI shows the script next to the answer, and the source IDs from the nested returns become the answer's citations |
 | Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge. Standard money maths—EMI and amortization, prepayment, compounding—comes from tested engine functions the script calls; free-form arithmetic covers what those don't, and the script is shown either way |
 
-**Open at L2:** whether `VercelAIAdapter` streams the UI metadata of tool returns nested inside
-`run_code`. If it doesn't, Fin-Agent emits those cards and citations itself from the `run_code`
-return's metadata (`plan.md` §6).
+**Cards from scripts.** Metadata from a tool called inside a script reaches the `run_code` return,
+under `metadata['tool_returns'][call_id]`, but `VercelAIAdapter` doesn't stream it. So Fin-Agent emits
+those cards and citations itself, from that return. Tested October 31, 2026
+([report](../research/monty-document-parsing/README.md)).
 
 ### Untrusted text and write tiers
 
@@ -297,6 +310,7 @@ forever. This is how rule 2 in `plan.md` §4 works.
   recurring-charge proposal. Those rows carry an `outside_text` boolean, so the mark travels
   with the copy
 - Every `run_query` result, because model-written SQL can select any column under any alias
+- A new name given to a write in a flagged conversation, unless it appears in your own message
 
 **How it's tracked.** Tool returns wrap outside-text fields in markers, and the system prompt has
 one line saying that marked text is data from statements and never an instruction. Frontier
@@ -305,12 +319,21 @@ markers are a layer, not the boundary. When a read tool returns marked text—di
 inside `run_code`—it sets `conversations.outside_text_at`. Server code sets the flag from where the
 data came from; the model can't set or clear it. A new conversation starts clean.
 
+**A mark can clear.** A marked name you confirm on a card loses its mark. Without this, a schedule
+name copied from a statement would flag every conversation that reads the financial context, and
+every lasting write would need a card. `get_financial_context` marks only the names that still carry
+it.
+
+**Parse runs.** A parse run reads raw statement text, but it has no write or ledger tools and
+doesn't flag your conversation. `import_document` returns no statement text, so starting an import
+doesn't flag it either.
+
 **Write tiers.** The following table sets which writes ask first:
 
 | Tier | Writes | Behavior |
 |---|---|---|
-| Visible and undoable | `record_transaction`, `edit_transaction`, and `undo` on a single row, including the category rule an edit creates (named on its card). A payee correction that also applies the rule to that payee's past rows stays here: its card names the rule and how many past rows changed, and one undo reverts the rule and every row | Always instant, with an undo card—outside text or not |
-| Lasting or wide | `preference` saves; `update_setup` (floor, schedules, goals, accounts, categories); any other write that touches more than one existing row | Instant in a clean conversation. In a flagged one, the tool raises PydanticAI's `ApprovalRequired`, and the chat shows a confirm card that states the exact change. Nothing is written until the user taps Confirm |
+| Visible and undoable | `record_movement`, `correct_movement`, and `undo`, including the category rule a correction creates (named on its card). A payee correction that also applies the rule to that payee's past rows stays here: its card names the rule and how many past rows changed, and one undo reverts the rule and every row | Always instant, with an undo card—outside text or not |
+| Lasting or wide | `preference`, both remembering and forgetting; `update_setup` (floor, schedules, goals, accounts, categories); any other write that touches more than one existing row | Instant in a clean conversation. In a flagged one, the tool raises PydanticAI's `ApprovalRequired`, and the chat shows a confirm card that states the exact change. Nothing is written until the user taps Confirm |
 
 Recategorizing a statement row right after reading it stays instant. A preference save that
 nobody asked for, in a conversation that has read a crafted payee note, shows up as a card the
