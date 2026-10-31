@@ -83,7 +83,7 @@ The following table sets what the agent knows, by area:
 | Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
 | Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants. A correction about a payee or UPI ID ("ramesh@okaxis is my landlord") applies to that payee's past and future transactions |
 | Memory | Agent-managed typed preferences. The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
-| Conversations | Kept and searchable. Every ledger write links to the message that caused it |
+| Conversations | Threads you can see, reopen, or start at any time, kept and searchable. Every ledger write links to the message that caused it |
 
 ### How data gets in
 
@@ -336,7 +336,10 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 ### L2: Agent (dogfooding starts)
 
-14. Web chat streams from the PydanticAI agent; conversations stored and full-text searchable.
+14. Web chat streams from the PydanticAI agent; threads listed, stored, and full-text searchable.
+    The server holds each thread's history, with a pinned financial snapshot, a per-turn reminder,
+    compaction, and prompt caching. Instructions tuned by trial and error
+    ([step 6](system-design.md#step-6-context-and-memory)).
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
     Limits; a trace log for each run.
 16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
@@ -417,7 +420,8 @@ Answer each when its layer arrives, not before.
 
 - **L0:** Tailscale on the host, or as a sidecar container in compose?
 - **L2:** enforce rule 1 at the output too—check that every number in a reply matches a tool return—or rely on evals?
-  Which local chat models handle which tasks? The scorecard records it.
+  Which local chat models handle which tasks? The scorecard records it. What are the real token
+  counts, and is a 1-hour prompt cache worth it? Traces answer both.
 - **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
   statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor

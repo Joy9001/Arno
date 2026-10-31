@@ -205,7 +205,7 @@ India code lives in one folder, so extracting an interface later is mechanical.
 
 **Why parked:** memory is agent-managed typed preferences—saved unprompted, but visible and
 undoable. A hidden store that extracts facts from every turn risks a second source of truth beside
-the ledger.
+the ledger. Rechecked in [step 6](system-design.md#memory-no-memory-library), October 31, 2026.
 
 **Shape when it comes:** embeddings over conversations and preferences using `pgvector`, in the
 same database.

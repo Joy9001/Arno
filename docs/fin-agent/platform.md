@@ -45,10 +45,10 @@ The API exposes the following surfaces:
 
 | Surface | Shape |
 |---|---|
-| Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()`. Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
+| Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()` with `manage_message_history="server"`. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
 | Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo |
-| Conversations | List, read, full-text search |
+| Conversations | List, read, and full-text search of threads. A chat request with no thread ID creates one |
 | Inbox and push | List and read notifications; register a push subscription |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
 | Auth | See [Auth](#auth) |
@@ -70,7 +70,8 @@ server output.
 
 The web app has the following parts:
 
-- **Chat (home):** Vercel AI SDK `useChat` + AI Elements. Tool-return metadata renders as cards:
+- **Chat (home):** Vercel AI SDK `useChat` + AI Elements. You see your threads, as in ChatGPT or
+  Claude: open an old one, or start a new chat at any time. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary, a chart the agent
   made. The adapter doesn't stream metadata from tools called inside a script, so Fin-Agent emits

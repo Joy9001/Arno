@@ -32,6 +32,7 @@ every write is a direct call with its own card ([note](diagrams/sd-tool-surface.
 | Writes | `write_group()` is one short transaction whose audit rows share a group, returned as `undo_id`. The message ID and `ctx.tool_call_id` come from context, so they're never inputs |
 | Confirm | `gate(change)`: if the conversation is flagged and `ctx.tool_call_approved` is false, raise `ApprovalRequired`. Approval ends the run and the tool runs again from the top, so it validates again. Server-side binding of the answer is in [step 7](system-design.md#step-7-safety-and-trust) |
 | Tier | Each tool declares its [write tier](design.md#untrusted-text-and-write-tiers) in its tool metadata |
+| Old returns | Compaction can remove an old return, so no tool relies on an ID staying in the chat. `undo` reads `audit_log`, and an unknown ID raises `ModelRetry` ([step 6](system-design.md#compaction)) |
 
 **`run_code`** comes from the harness, so Fin-Agent configures it rather than builds it. The model
 writes Python that calls the read tools inside Monty. See [Code Mode](design.md#code-mode).
@@ -81,6 +82,9 @@ setup_gaps = no income schedule? no floor? an account with no balance?
 warnings   = stale balances + coverage gaps
 mark() only the names whose row still has outside_text = true
 ```
+
+The server also runs this function when a thread starts, and pins the result as the thread's snapshot
+([step 6](system-design.md#what-goes-in-each-request)). A script calls it to re-read.
 
 ### `query_movements`
 

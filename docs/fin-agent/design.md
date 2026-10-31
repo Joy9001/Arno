@@ -196,7 +196,7 @@ The following tables hold memory, conversations, and provenance:
 | Table | Holds |
 |---|---|
 | `preferences` | Typed facts and rules ("Mom's monthly transfer is not discretionary spend"). `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting fact, shown as a "Remembered" card with undo. Never a number the ledger owns. Forgetting sets `active` to false, so it stays listed in settings and can be turned back on. Deleting is separate, in settings only ([`tools.md`](tools.md#preference)) |
-| `conversations`, `messages` | Full chat history. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)) |
+| `conversations`, `messages` | One `conversations` row for each thread you see, and two records of it ([step 6](system-design.md#two-records-both-on-the-server)). `messages` is what you saw, never edited. `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.model_history` (`jsonb`) is what the model gets, and compaction may edit it. `conversations.snapshot_at` records when the pinned snapshot was taken. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)) |
 | `audit_log` | Every write: actor, `message_id`, `group_id`, table, row ID, before and after JSON, `undone_at`. Powers undo; one undo reverts a whole group, such as a payee correction and every label it changed |
 | `imports` | File hash, parser, account, period, opening and closing balances, check result, status (`review`, `committed`, or `rejected`) |
 | `statement_layouts` | One saved parser for each statement layout: `institution`, `fingerprint` (the normalized column headers), `parser` (the script's text), `helper_version`, `source_import_id`, `last_used_at`. Saved only after you commit an import ([`import.md`](import.md)) |
@@ -224,7 +224,7 @@ The agent has eight read tools:
 
 | Tool | Returns |
 |---|---|
-| `get_financial_context()` | Deliberately comprehensive. Today's date, settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences, what setup is missing, staleness warnings |
+| `get_financial_context()` | Deliberately comprehensive, and it loads itself as each thread's pinned snapshot ([step 6](system-design.md#what-goes-in-each-request)). Today's date, settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences, what setup is missing, staleness warnings |
 | `query_movements(filters)` | Movements with their transfers and labels, filterable by account, category, payee, date, amount, and kind |
 | `summarize_spending(group_by, period, filters)` | Aggregates from `v_spending`, summed in the database |
 | `project(horizon, hypothetical)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
@@ -284,7 +284,7 @@ The following table sets how it is configured:
 | Dates | The sandbox has no clock. "Today" comes from `get_financial_context`, never from `datetime.now()` |
 | Host access | `mount` and `os_access` stay unset. The read tools hold the only route to data, through the `agent_ro` role |
 | Limits | The defaults, tuned at L2: 30 s and 256 MiB for each snippet, 100 nested calls for each `run_code`, about 500 for each session. Spend Limits still cap the run |
-| Calling convention | `await` and keyword arguments. Code Mode also type-checks a script, and it keeps variables between `run_code` calls |
+| Calling convention | `await` and keyword arguments. Code Mode also type-checks a script, and it keeps variables between `run_code` calls in a turn, not into the next one |
 | Errors in a script | A nested `ModelRetry` arrives as a catchable `Exception` with its message. Uncaught, `run_code` ends with that message, and the model retries |
 | Provenance | The `run_code` return keeps every nested tool call and return in its metadata. The UI shows the script next to the answer, and the source IDs from the nested returns become the answer's citations |
 | Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge. Standard money maths—EMI and amortization, prepayment, compounding—comes from tested engine functions the script calls; free-form arithmetic covers what those don't, and the script is shown either way |
@@ -317,7 +317,8 @@ one line saying that marked text is data from statements and never an instructio
 models stop most casual attempts this way, but adaptive attacks beat prompt-based defenses, so the
 markers are a layer, not the boundary. When a read tool returns marked text—directly or nested
 inside `run_code`—it sets `conversations.outside_text_at`. Server code sets the flag from where the
-data came from; the model can't set or clear it. A new conversation starts clean.
+data came from; the model can't set or clear it. A new thread starts clean, unless its snapshot holds
+a name that still carries a mark, and the flag then lasts as long as the thread.
 
 **A mark can clear.** A marked name you confirm on a card loses its mark. Without this, a schedule
 name copied from a statement would flag every conversation that reads the financial context, and

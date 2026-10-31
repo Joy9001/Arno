@@ -33,8 +33,8 @@ The following table lists the steps, in order:
 | 3. Agent core | One agent or several; models for each role; the loop, stopping rules, budgets | [Below](#step-3-agent-core); [`harness.md`](harness.md) | Agreed October 28, 2026 |
 | 4. Ground truth | The ledger every answer must agree with: what a record means, how spending is counted | [Below](#step-4-ground-truth); [`design.md`](design.md#the-ledger) | Agreed October 30, 2026 |
 | 5. Tools | What the agent can read and write, through which contracts | [Below](#step-5-tools); [`tools.md`](tools.md) | Agreed October 31, 2026 |
-| 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [`harness.md`](harness.md), [`design.md`](design.md) | Not started; next |
-| 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers) | Partly decided |
+| 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [Below](#step-6-context-and-memory); [`harness.md`](harness.md#context-and-memory) | Agreed October 31, 2026 |
+| 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers) | Partly decided; next |
 | 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability) | Partly decided |
 | 9. Evals and observability | How it's measured, traced, and scored for each model | [`harness.md`](harness.md) | Not started; questions parked |
 | 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; an API draft and a deployment check are parked |
@@ -251,7 +251,7 @@ guards:
 
 | Problem | Guard |
 |---|---|
-| The context grows too large: a long conversation, or a wide `run_query` result | Compaction keeps the history inside the window, and tool output limits spill or trim a big return. Both are on from day one; how they're configured belongs to [step 6](#step-6-context-and-memory) |
+| The context grows too large: a long conversation, or a wide `run_query` result | Compaction keeps the history inside the window, and tool output limits trim a big `run_code` return. Both are on from day one and configured in [step 6](#step-6-context-and-memory) |
 | The loop runs away: it repeats steps or never stops—the failure behind Notion's 17-day runaway agent thread, which a harness bug caused | Circuit breakers: spend and request ceilings set well above what any real turn needs, so they never shape a normal answer |
 
 Compaction and tool output limits don't stop loops or cap spend—they only shrink what's sent—so the
@@ -272,8 +272,8 @@ normal turn never reaches them:
 - **One running turn per conversation.** A message sent while a reply is still running waits.
   Different conversations, and scheduled questions, run independently.
 
-Parked to later steps: what goes in the instructions and how the prompt is ordered
-([step 6](#step-6-context-and-memory)); what happens when the client disconnects
+What goes in the instructions and how the prompt is ordered are in
+[step 6](#step-6-context-and-memory). Parked: what happens when the client disconnects
 ([step 8](#step-8-reliability)).
 
 ---
@@ -459,13 +459,194 @@ writing a parser for real statements is the gate, at the [L3 spike](import.md#th
 
 ## Step 6: Context and memory
 
-Not started. Decided so far: prompt caching orders content from unchanging to changing—
-instructions, tools, and schema first; the date, balances, and the turn last. Parked here:
+What the model sees each turn, and what it remembers. Agreed October 31, 2026. The capability
+configuration and the first instructions are in [`harness.md`](harness.md#context-and-memory).
 
-- Loading the financial context automatically at the start of a conversation.
-- The server owns the conversation history: the client sends only the new message, so it can't
-  inject fake tool results or drop the outside-text marks. PydanticAI's adapter accepts server
-  history as the trusted part (checked October 27, 2026).
+![What the model sees each turn, from unchanging to changing](diagrams/sd-context-stack.png)
+
+*Figure: six blocks, ordered so that what rarely changes comes first and stays cached. The reminder
+and your turn come after the cache ([note](diagrams/sd-context-stack.md)).*
+
+### Threads are yours
+
+You see every thread, as in ChatGPT or Claude. You open an old one or start a new one whenever you
+want, and no time-based rule splits them. Nothing limits how much you chat except the
+[spend ceilings](#the-loop-context-is-managed-runaways-are-stopped).
+
+- **How a message finds its thread.** A thread is one `conversations` row, and each message stores
+  its thread's ID. The app sends that ID with your message, or none for a new chat, and the server
+  creates the row.
+- **The model sees only the open thread.** If you mention something from another one, it searches
+  `messages` through `run_query`.
+- **The cost of a long thread.** Its outside-text flag lasts as long as the thread, so a flagged
+  thread asks for a tap on every lasting write until you start a new chat. Long threads also get
+  compacted more often. Both are accepted: the tap applies only to lasting writes, and compaction
+  has the guards below.
+
+What the app opens to and how threads get their titles belong to
+[step 10](#step-10-interfaces-and-operations).
+
+### What goes in each request
+
+- **The financial snapshot loads itself.** When a thread starts, the server runs
+  `get_financial_context` and adds the result as a pinned part (`pin()`), which compaction keeps.
+  Preferences are the agent's only memory, so a model that forgot to load them would have none. The
+  [harness survey](../research/agent-harness-engineering/context-engineering.md) also calls this
+  hybrid—some data up front, explore the rest—optimal for financial work. It isn't in the
+  instructions, because they sit before the history, so a changed balance would break the cache for
+  the whole thread. It isn't a `SystemPromptPart`, because PydanticAI warns against building one from
+  content you didn't write. Scheduled questions get a snapshot; parse runs don't.
+- **The flag follows what the model read.** The snapshot goes through `mark()` like any read, so a
+  new thread starts flagged only if a name in its snapshot still carries a mark
+  ([write tiers](design.md#untrusted-text-and-write-tiers)).
+- **A fresh snapshot when you come back.** Before a turn, if `prompt_cache_outlook` says the cache
+  has expired and something has changed since `conversations.snapshot_at`, the server swaps in a new
+  snapshot. The history has to be cached again anyway, so the swap costs nothing extra. The rest of
+  the thread stays as it was.
+- **A short reminder each turn.** `SystemReminders` adds a line such as "Today is 2 November. Since
+  your snapshot: 3 writes; re-read before stating a balance." It counts writes from any source in
+  `audit_log`: other threads, imports, and Settings. It sits after the cache, and only the newest
+  reaches the model. While the cache is live or its state is unknown, this is how the model learns
+  the snapshot is old.
+
+### Two records, both on the server
+
+![One thread keeps two records](diagrams/sd-thread-records.png)
+
+*Figure: the client sends a thread's ID and a new message. When the run ends, the model's history and
+your transcript are saved separately ([note](diagrams/sd-thread-records.md)).*
+
+- **`messages` is what you saw.** It's filled from `new_messages()`, never edited, and used for
+  search, export, and citations.
+- **`conversations.model_history` is what the model gets.** It's replaced from `all_messages()` in
+  `on_complete`, stored as JSON through `ModelMessagesTypeAdapter`. The two must be separate because
+  compaction's edits persist in the stored history.
+- **The adapter's own option owns the history.** `manage_message_history="server"` uses only the
+  client's new turn, so a client can't inject history or fake tool results, and a retried message
+  isn't added twice.
+- **The thread's ID is the `conversation_id`,** so traces and summary calls are recorded under it.
+- **Not `conversation=`.** PydanticAI recommends it for saved sessions, but it carries usage across
+  turns, which would turn [step 3](#step-3-agent-core)'s per-turn ceilings into per-thread ones. The
+  adapter doesn't accept it either.
+
+### Output limits apply to `run_code` only
+
+Applied globally, `ToolOutputLimits` also hits tools called inside a script: a nested 2,000-row list
+reached the script as a 4,000-character string, so the script would compute on the wrong data. With
+`tool_filter=["run_code"]`, the nested list arrives whole, and only what returns to the model is cut,
+at 10,000 characters.
+
+Nothing spills to a file. The data is already in Postgres, script variables last for the turn so the
+model can slice them, and the next turn queries again. Spilling would add an eighth tool
+(`read_tool_result`), a workspace, and statement data in temp files.
+
+### Compaction
+
+`TieredCompaction` starts when the history passes one target, and stops as soon as it fits:
+
+| Order | Strategy | Does |
+|---|---|---|
+| 1 | `ClearToolResults` | Clears old tool returns and keeps the newest 5. Write returns stay |
+| 2 | `SummarizingCompaction` | Summarizes older messages. Keeps the newest fifth of the target whole, plus up to 20 older turns of yours word for word |
+| 3 | `SlidingWindowCompaction` | Runs only if the summary call fails, through `FallbackCompaction`, so the turn still answers. Keeps the same newest fifth |
+
+- **The target is half the main model's window, capped at 100,000 tokens.** It's a starting value,
+  tuned from traces. It follows the main model, because a `FallbackModel` reports its smallest
+  window, so `target_fraction` would make a small local backup compact frontier threads far too
+  early. What happens when a backup can't fit a long history belongs to [step 8](#step-8-reliability).
+- **`keep_tokens` is required with `keep_user_messages`.** With `keep_messages` alone, the newest
+  exchanges vanished: they were neither sent nor summarized.
+- **The summary keeps your intent, decisions, and open questions.** It drops amounts and statement
+  text, so a number can't outlive the tool return behind it, and a payee note can't lose its mark.
+  The flag lives on the conversation row, so compaction can't clear it.
+- **`receipts=True` tells the model what's gone,** so it re-verifies rather than pretending to
+  remember.
+- **IDs don't survive every tier.** Write returns survive clearing, but not a summary or the fallback.
+  The summary keeps IDs where it can, but nothing relies on that: `undo` reads `audit_log`, and the
+  model queries for an ID before using an old one.
+
+### Caching
+
+`Caching()` and `WarnOnCacheBusts()` are on from day one. The warning only observes, and one right
+after a compaction is expected. Chats come in bursts, so a 5-minute cache may often expire; L2 traces
+decide whether a 1-hour cache is worth it.
+
+### Memory: no memory library
+
+| What | Where it lives | How it reaches the model | Written by |
+|---|---|---|---|
+| This thread | `conversations.model_history` and the snapshot | Every request | Each turn |
+| Facts about you | `preferences` | Always, in the snapshot | The agent, unprompted, with a card |
+| Past conversations | `messages` | When needed, by keyword search through `run_query`, which flags the thread | Automatically |
+| How to behave | Instructions, category rules, the parse skill, saved parsers | Instructions always; the rest in code or parse runs | Releases, your corrections, and committed imports |
+| Money | The ledger | Through tools; never memorized | Write tools |
+
+Mem0, Graphiti, Letta, Cognee, Memobase, and Supermemory were considered and rejected
+([research](../research/agentic-system-design/retrieval-and-memory.md)):
+
+- Full context beat every memory system on accuracy in Mem0's own published table, and vendor scores
+  for the same product differ by more than 40 points.
+- Each LLM merge can silently corrupt a correct memory, and poisoned memory persists.
+- A hidden store would be a second source of truth beside the ledger.
+
+When facts conflict, the agent forgets the old one and remembers the new one, and both show as cards.
+Semantic search stays [parked](parked.md#hidden-memory-extraction-and-semantic-search-mem0-style) with
+its trigger.
+
+### The instructions are tuned during the build
+
+The [first version](harness.md#the-instructions-first-version) is a starting point, tuned by trial and
+error. The fixed rules each get an eval case; wording, order, and length are free to change.
+Instructions aren't stored in history, so a change reaches existing threads on the next turn, with no
+migration.
+
+### Not taken
+
+The following table records the other options that were considered:
+
+| Option | Why not |
+|---|---|
+| Starting a new thread after 6 idle hours | A hidden rule on top of threads you already control. The swap and reminder keep the snapshot fresh without it |
+| Dynamic instructions for balances | They sit before the history, so each change would break the cache for the whole thread |
+| Reloading the whole context every turn | Uncached on every request, for data that rarely changes between turns |
+| `Spill` for big outputs | Adds a tool, a workspace, and statement data in temp files, when the data is already in Postgres |
+| Provider-native compaction | Opaque, and tied to one provider while a backup model can take over |
+| `RelevanceCompaction`, `CompactOnRequest`, `LLMReminder` | Each adds a model call or a model decision to a problem the tiers already handle |
+| Compacting while the cache is expired (`prompt_cache_outlook`, `compact_now`) | Compaction is rare enough that the saving is tiny. Revisit if traces show otherwise |
+| `ClampOversizedMessages` | A model's output cap should already bound a single response; this isn't tested. Add it if a local model hits the problem |
+| Structured note-taking, sub-agents | Turns are short, and the ledger and `preferences` already hold what lasts |
+
+### The tests, October 31, 2026
+
+Every test ran with `FunctionModel`, with no real LLM, on PydanticAI 2.64.0 and `pydantic-ai-harness`
+0.64.0. The docs don't cover how these features interact.
+
+| Test | Result |
+|---|---|
+| `ToolOutputLimits` applied globally | A nested list of 2,000 rows reached the script as a 4,000-character string |
+| The same, with `tool_filter=["run_code"]` | The list arrived whole; the return to the model was cut to 10,000 characters |
+| Script variables | Last between snippets in one run, not into the next turn |
+| The reminder | Lands last in the request. The last turn's stays in stored history, but isn't sent again |
+| `conversation=` with a per-turn limit | The limit stopped the third turn. With `message_history=`, usage restarted each turn |
+| `pin()` | Survived JSON storage, the adapter, and all three strategies |
+| Swapping the snapshot | The model saw only the new one; pins didn't pile up; earlier chat stayed; the new snapshot survived compaction |
+| `manage_message_history="server"` | A forged history and a fake tool result never reached the model; a retried message wasn't added twice |
+| `new_messages()` when compaction fires | Held only the new question and answer |
+| Clearing is enough | No summary call |
+| A long chat | Clearing wasn't enough, so a summary ran; the snapshot and newest message stayed |
+| `keep_user_messages=True` with `keep_messages` alone | **A trap:** the newest 3 of your turns and the newest 4 replies were neither sent nor summarized |
+| The final configuration, with `keep_tokens` and tool calls | Every turn was either sent or summarized, and tool calls stayed paired with their returns |
+| The summary call fails | The sliding window ran, and the turn still answered |
+| Write IDs | Survived clearing; gone after a summary or the fallback |
+| Typing past an open confirm card | The write didn't run, the call closed as `interrupted`, and the model saw the new message |
+| Changed instructions | Applied to a stored thread on its next turn |
+| Two threads | Neither saw the other's messages |
+
+**Not tested:** real token counts (an estimate of 8,000-10,000 at the start of a thread, measured at
+L2), summary quality (evals, [step 9](#step-9-evals-and-observability)), and `dispatch_request` itself,
+because the tests drove the adapter's `run_stream`. The docs say that moving a history between
+providers is handled, with thinking sent as text and signed data filtered, but no real provider has
+tried it.
 
 ---
 
@@ -502,7 +683,11 @@ Parked here:
 - Confirm answers are bound on the server: each pending confirmation is recorded with its
   conversation, tool call ID, and arguments, and an answer counts once, only for a pending call.
   PydanticAI's adapter trusts confirm answers from the request by default (checked October 27,
-  2026), so this binding is Fin-Agent's to add.
+  2026), so this binding is Fin-Agent's to add. Client tool results are already dropped unless they
+  answer a pending call ([step 6](#two-records-both-on-the-server)).
+- Typing past an open confirm card closes the pending write as `interrupted`, and the write doesn't
+  run (tested in [step 6](#the-tests-october-31-2026)). Should the server send a clearer denial, and
+  how does the old card show that it's closed?
 - Photo and voice enter through their own endpoints, so the server—never the client—inserts the
   extracted fields and sets the outside-text flag.
 - Limiting where the agent can connect: which hosts the API container may reach beyond the LLM
@@ -536,6 +721,10 @@ Parked here:
 - A turn finishes even if the client disconnects. By default PydanticAI's adapter cancels the run
   on a disconnect (checked October 27, 2026), so the run has to be detached from the HTTP stream.
   A separate stop endpoint handles the Stop button.
+- What gets saved when a run fails or is stopped. `on_complete` saves both records, and the adapter
+  also has `on_cancel`.
+- A backup model whose window can't fit a long history. Compaction's target follows the main model
+  ([step 6](#compaction)).
 - The scheduler's job store, and how parsing moves off the chat path. A candidate for both, and for
   runs that survive a crash or deploy: DBOS, a library that needs only Postgres and has a native
   PydanticAI integration, so no extra server.
@@ -550,6 +739,8 @@ Not started. Parked here:
   stream progress first and check the finished draft, or have the model write value placeholders
   that the UI fills from tool returns.
 - The success measures from step 1 become this step's targets.
+- Eval cases for the fixed rules in the [instructions](harness.md#the-instructions-first-version),
+  summary quality, and real token counts ([step 6](#the-tests-october-31-2026)).
 
 ---
 
@@ -578,6 +769,9 @@ Parked here, from an API draft of October 27, 2026 that was never agreed:
 - Rate limits, CSP, and other headers; MCP exposure stays parked.
 - Rendering the charts the agent makes ([step 5](#step-5-tools)): one chart component that draws a
   declarative spec, with the citation and "as of" time on every chart.
+- The thread list ([step 6](#threads-are-yours)). What the app opens to: the default is your last
+  thread, with New chat one tap away, so logging chai six times a day doesn't create six threads.
+  Thread titles: the default is your first message, trimmed.
 - **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason
   was only that traditional backends deploy this way, so the options were explored. Most sources are
   vendor blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an
