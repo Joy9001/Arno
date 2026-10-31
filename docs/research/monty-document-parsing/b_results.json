@@ -1,0 +1,632 @@
+[
+ {
+  "name": "re named groups",
+  "verdict": "SAME",
+  "cpython": "{'d': '05', 'm': '01', 'y': '2026'}",
+  "monty": "{'d': '05', 'm': '01', 'y': '2026'}"
+ },
+ {
+  "name": "re lookbehind",
+  "verdict": "SAME",
+  "cpython": "['1,00,000', '250']",
+  "monty": "['1,00,000', '250']"
+ },
+ {
+  "name": "re negative lookbehind",
+  "verdict": "SAME",
+  "cpython": "['123', '890']",
+  "monty": "['123', '890']"
+ },
+ {
+  "name": "re MULTILINE ^$",
+  "verdict": "SAME",
+  "cpython": "['abc', 'def']",
+  "monty": "['abc', 'def']"
+ },
+ {
+  "name": "re finditer + span",
+  "verdict": "SAME",
+  "cpython": "[('12', 1, 3, (1, 3)), ('345', 4, 7, (4, 7))]",
+  "monty": "[('12', 1, 3, (1, 3)), ('345', 4, 7, (4, 7))]"
+ },
+ {
+  "name": "re sub string",
+  "verdict": "SAME",
+  "cpython": "a b c",
+  "monty": "a b c"
+ },
+ {
+  "name": "re sub backrefs \\1",
+  "verdict": "SAME",
+  "cpython": "34/12",
+  "monty": "34/12"
+ },
+ {
+  "name": "re sub \\g<name>",
+  "verdict": "SAME",
+  "cpython": "34/12",
+  "monty": "34/12"
+ },
+ {
+  "name": "re sub callable",
+  "verdict": "MONTY FAILS",
+  "cpython": "a2 b44",
+  "monty": "MontyRuntimeError: TypeError: callable replacement is not yet supported in re.sub()"
+ },
+ {
+  "name": "re compile IGNORECASE",
+  "verdict": "SAME",
+  "cpython": "True",
+  "monty": "True"
+ },
+ {
+  "name": "re.VERBOSE",
+  "verdict": "MONTY FAILS",
+  "cpython": "True",
+  "monty": "MontyRuntimeError: AttributeError: module 're' has no attribute 'VERBOSE'"
+ },
+ {
+  "name": "re split",
+  "verdict": "SAME",
+  "cpython": "['a', 'b', 'c']",
+  "monty": "['a', 'b', 'c']"
+ },
+ {
+  "name": "re fullmatch",
+  "verdict": "SAME",
+  "cpython": "True",
+  "monty": "True"
+ },
+ {
+  "name": "re match indexing m[0]",
+  "verdict": "SAME",
+  "cpython": "('ab', 'a')",
+  "monty": "('ab', 'a')"
+ },
+ {
+  "name": "re m.groups()",
+  "verdict": "SAME",
+  "cpython": "('a', None)",
+  "monty": "('a', None)"
+ },
+ {
+  "name": "re m.lastindex",
+  "verdict": "MONTY FAILS",
+  "cpython": "2",
+  "monty": "MontyRuntimeError: AttributeError: 're.Match' object has no attribute 'lastindex'"
+ },
+ {
+  "name": "re unicode \\w Devanagari",
+  "verdict": "DIFFERENT",
+  "cpython": "['स', 'व', 'ग', 'UPI']",
+  "monty": "['स्विगी', 'UPI']"
+ },
+ {
+  "name": "re backreference \\1",
+  "verdict": "SAME",
+  "cpython": "True",
+  "monty": "True"
+ },
+ {
+  "name": "re lazy quantifier",
+  "verdict": "SAME",
+  "cpython": "a",
+  "monty": "a"
+ },
+ {
+  "name": "re subn",
+  "verdict": "MONTY FAILS",
+  "cpython": "('bbb', 3)",
+  "monty": "MontyRuntimeError: AttributeError: module 're' has no attribute 'subn'"
+ },
+ {
+  "name": "re.escape",
+  "verdict": "SAME",
+  "cpython": "a\\.b\\*c",
+  "monty": "a\\.b\\*c"
+ },
+ {
+  "name": "date ctor+iso",
+  "verdict": "SAME",
+  "cpython": "('2026-01-05', 2026, 1, 5, 0)",
+  "monty": "('2026-01-05', 2026, 1, 5, 0)"
+ },
+ {
+  "name": "date.fromisoformat",
+  "verdict": "SAME",
+  "cpython": "2026-02-28",
+  "monty": "2026-02-28"
+ },
+ {
+  "name": "timedelta add",
+  "verdict": "SAME",
+  "cpython": "2026-03-02",
+  "monty": "2026-03-02"
+ },
+ {
+  "name": "date diff .days",
+  "verdict": "SAME",
+  "cpython": "28",
+  "monty": "28"
+ },
+ {
+  "name": "strftime %d %b %Y",
+  "verdict": "SAME",
+  "cpython": "05 Jan 2026",
+  "monty": "05 Jan 2026"
+ },
+ {
+  "name": "strftime %B %y %A",
+  "verdict": "SAME",
+  "cpython": "January 26 Monday",
+  "monty": "January 26 Monday"
+ },
+ {
+  "name": "datetime.strptime %d/%m/%Y",
+  "verdict": "SAME",
+  "cpython": "2026-01-05",
+  "monty": "2026-01-05"
+ },
+ {
+  "name": "datetime.strptime %d-%b-%Y",
+  "verdict": "SAME",
+  "cpython": "2026-01-05",
+  "monty": "2026-01-05"
+ },
+ {
+  "name": "datetime.strptime %d %B %Y",
+  "verdict": "SAME",
+  "cpython": "2026-01-05",
+  "monty": "2026-01-05"
+ },
+ {
+  "name": "datetime.strptime %d.%m.%y",
+  "verdict": "SAME",
+  "cpython": "2026-01-05",
+  "monty": "2026-01-05"
+ },
+ {
+  "name": "datetime.strptime with time",
+  "verdict": "SAME",
+  "cpython": "2026-01-05 10:15:00",
+  "monty": "2026-01-05 10:15:00"
+ },
+ {
+  "name": "datetime.strptime %I:%M %p",
+  "verdict": "SAME",
+  "cpython": "2026-01-05 14:15:00",
+  "monty": "2026-01-05 14:15:00"
+ },
+ {
+  "name": "date.strptime (3.14)",
+  "verdict": "MONTY FAILS",
+  "cpython": "2026-01-05",
+  "monty": "MontyRuntimeError: AttributeError: type object 'datetime.date' has no attribute 'strptime'"
+ },
+ {
+  "name": "strptime bad day 31/02",
+  "verdict": "SAME",
+  "cpython": "ValueError",
+  "monty": "ValueError"
+ },
+ {
+  "name": "date(2026,2,30) raises",
+  "verdict": "SAME",
+  "cpython": "ValueError",
+  "monty": "ValueError"
+ },
+ {
+  "name": "date.fromordinal",
+  "verdict": "MONTY FAILS",
+  "cpython": "2024-04-24",
+  "monty": "MontyRuntimeError: AttributeError: type object 'datetime.date' has no attribute 'fromordinal'"
+ },
+ {
+  "name": "excel serial -> date",
+  "verdict": "SAME",
+  "cpython": "2026-01-05",
+  "monty": "2026-01-05"
+ },
+ {
+  "name": "sorted dates",
+  "verdict": "SAME",
+  "cpython": "['2026-01-05', '2026-02-01']",
+  "monty": "['2026-01-05', '2026-02-01']"
+ },
+ {
+  "name": "datetime.now()/today()",
+  "verdict": "SAME",
+  "cpython": "date",
+  "monty": "date"
+ },
+ {
+  "name": "json loads/dumps",
+  "verdict": "SAME",
+  "cpython": "{\"a\": [1, 2.5, null, true], \"b\": {\"c\": \"x\"}}",
+  "monty": "{\"a\": [1, 2.5, null, true], \"b\": {\"c\": \"x\"}}"
+ },
+ {
+  "name": "json loads float amounts",
+  "verdict": "SAME",
+  "cpython": "123456.0",
+  "monty": "123456.0"
+ },
+ {
+  "name": "json dumps indent",
+  "verdict": "SAME",
+  "cpython": "{\n  \"a\": 1\n}",
+  "monty": "{\n  \"a\": 1\n}"
+ },
+ {
+  "name": "json big",
+  "verdict": "SAME",
+  "cpython": "1999",
+  "monty": "1999"
+ },
+ {
+  "name": "math floor/ceil/isclose/fsum",
+  "verdict": "SAME",
+  "cpython": "(-2, 2, True, 1.0)",
+  "monty": "(-2, 2, True, 1.0)"
+ },
+ {
+  "name": "math round half-even",
+  "verdict": "DIFFERENT",
+  "cpython": "(0, 2, 2, 2.67)",
+  "monty": "(0, 2, 2, 2.68)"
+ },
+ {
+  "name": "str split/strip/replace",
+  "verdict": "SAME",
+  "cpython": "(['a', 'b ', ' c'], 'x+y', ['a', 'b', 'c'], ['a:b', 'c'])",
+  "monty": "(['a', 'b ', ' c'], 'x+y', ['a', 'b', 'c'], ['a:b', 'c'])"
+ },
+ {
+  "name": "str isdigit/partition/startswith/zfill",
+  "verdict": "SAME",
+  "cpython": "(True, ('a', '=', 'b=c'), ('a=b', '=', 'c'), True, '005', False)",
+  "monty": "(True, ('a', '=', 'b=c'), ('a=b', '=', 'c'), True, '005', False)"
+ },
+ {
+  "name": "str misc",
+  "verdict": "SAME",
+  "cpython": "('ABC', 'abc', 'A B', 2, 4, 3, ['a', 'b', 'c'], 'x..', '  x', '**x**')",
+  "monty": "('ABC', 'abc', 'A B', 2, 4, 3, ['a', 'b', 'c'], 'x..', '  x', '**x**')"
+ },
+ {
+  "name": "str maketrans/translate",
+  "verdict": "MONTY FAILS",
+  "cpython": "a;b",
+  "monty": "MontyRuntimeError: AttributeError: type object 'str' has no attribute 'maketrans'"
+ },
+ {
+  "name": "str isdecimal/isalpha/isalnum/isspace",
+  "verdict": "SAME",
+  "cpython": "(True, True, True, True, True)",
+  "monty": "(True, True, True, True, True)"
+ },
+ {
+  "name": "str unicode ₹ ops",
+  "verdict": "SAME",
+  "cpython": "(7, 'Rs 500', b'Rs\\xe2\\x82\\xb9 500', 8377)",
+  "monty": "(7, 'Rs 500', b'Rs\\xe2\\x82\\xb9 500', 8377)"
+ },
+ {
+  "name": "str casefold/removeprefix",
+  "verdict": "SAME",
+  "cpython": "('abc', 'x', 'x')",
+  "monty": "('abc', 'x', 'x')"
+ },
+ {
+  "name": "unicodedata.normalize",
+  "verdict": "SAME",
+  "cpython": "12",
+  "monty": "12"
+ },
+ {
+  "name": "bytes decode cp1252",
+  "verdict": "MONTY FAILS",
+  "cpython": "café",
+  "monty": "MontyRuntimeError: LookupError: unknown encoding: cp1252"
+ },
+ {
+  "name": "bytes decode utf-8",
+  "verdict": "SAME",
+  "cpython": "café",
+  "monty": "café"
+ },
+ {
+  "name": "sorted key kw",
+  "verdict": "SAME",
+  "cpython": "['ccc', 'bb', 'a']",
+  "monty": "['ccc', 'bb', 'a']"
+ },
+ {
+  "name": "sorted positional key",
+  "verdict": "SAME (both error)",
+  "cpython": "TypeError: sorted expected 1 argument, got 2",
+  "monty": "MontyRuntimeError: TypeError: sorted expected 1 argument, got 2"
+ },
+ {
+  "name": "sorted reverse tuples",
+  "verdict": "SAME",
+  "cpython": "[(2, 'c'), (2, 'a'), (1, 'b')]",
+  "monty": "[(2, 'c'), (2, 'a'), (1, 'b')]"
+ },
+ {
+  "name": "list.sort key",
+  "verdict": "SAME",
+  "cpython": "[3, 2, 1]",
+  "monty": "[3, 2, 1]"
+ },
+ {
+  "name": "min/max key",
+  "verdict": "SAME",
+  "cpython": "('a', 5)",
+  "monty": "('a', 5)"
+ },
+ {
+  "name": "comprehensions",
+  "verdict": "SAME",
+  "cpython": "([0, 2, 4], {'a': 1, 'b': 2}, True, 6)",
+  "monty": "([0, 2, 4], {'a': 1, 'b': 2}, True, 6)"
+ },
+ {
+  "name": "nested comp + cond",
+  "verdict": "SAME",
+  "cpython": "[[(0, 1)], [(1, 0)]]",
+  "monty": "[[(0, 1)], [(1, 0)]]"
+ },
+ {
+  "name": "walrus + match",
+  "verdict": "SAME",
+  "cpython": "ten",
+  "monty": "ten"
+ },
+ {
+  "name": "tuple unpack/starred",
+  "verdict": "SAME",
+  "cpython": "(1, [2, 3], 4)",
+  "monty": "(1, [2, 3], 4)"
+ },
+ {
+  "name": "simple class",
+  "verdict": "SAME",
+  "cpython": "(4, 'P(3)')",
+  "monty": "(4, 'P(3)')"
+ },
+ {
+  "name": "dataclass",
+  "verdict": "SAME",
+  "cpython": "(0, True)",
+  "monty": "(0, True)"
+ },
+ {
+  "name": "class inheritance",
+  "verdict": "MONTY FAILS",
+  "cpython": "True",
+  "monty": "MontyRuntimeError: NotImplementedError: The monty syntax parser does not yet support class inheritance and metaclasses"
+ },
+ {
+  "name": "class __lt__ in sorted",
+  "verdict": "MONTY FAILS",
+  "cpython": "[1, 2]",
+  "monty": "MontyRuntimeError: TypeError: '<' not supported between instances of 'V' and 'V'"
+ },
+ {
+  "name": "namedtuple",
+  "verdict": "SAME",
+  "cpython": "2",
+  "monty": "2"
+ },
+ {
+  "name": "defaultdict/Counter",
+  "verdict": "SAME",
+  "cpython": "({'a': [1]}, [('a', 2)])",
+  "monty": "({'a': [1]}, [('a', 2)])"
+ },
+ {
+  "name": "itertools/functools",
+  "verdict": "SAME",
+  "cpython": "(1, 6, [0, 1, 2])",
+  "monty": "(1, 6, [0, 1, 2])"
+ },
+ {
+  "name": "try/except/else/finally",
+  "verdict": "SAME",
+  "cpython": "['VE', 'fin']",
+  "monty": "['VE', 'fin']"
+ },
+ {
+  "name": "except multi + raise from",
+  "verdict": "SAME",
+  "cpython": "bad",
+  "monty": "bad"
+ },
+ {
+  "name": "custom exception class",
+  "verdict": "MONTY FAILS",
+  "cpython": "caught",
+  "monty": "MontyRuntimeError: NotImplementedError: The monty syntax parser does not yet support class inheritance and metaclasses"
+ },
+ {
+  "name": "int('1,000') error",
+  "verdict": "SAME",
+  "cpython": "ValueError",
+  "monty": "ValueError"
+ },
+ {
+  "name": "float('abc') error",
+  "verdict": "SAME",
+  "cpython": "VE",
+  "monty": "VE"
+ },
+ {
+  "name": "f-string formats",
+  "verdict": "SAME",
+  "cpython": "('1,234,567.89', '     5|', '000005', '25.6%', 'ff', 'x=1234')",
+  "monty": "('1,234,567.89', '     5|', '000005', '25.6%', 'ff', 'x=1234')"
+ },
+ {
+  "name": "str.format",
+  "verdict": "SAME",
+  "cpython": "       a|b    |12,345",
+  "monty": "       a|b    |12,345"
+ },
+ {
+  "name": "lakh grouping fn",
+  "verdict": "SAME",
+  "cpython": "1,23,456.78",
+  "monty": "1,23,456.78"
+ },
+ {
+  "name": "paise parse int(str)",
+  "verdict": "SAME",
+  "cpython": "10000000",
+  "monty": "10000000"
+ },
+ {
+  "name": "big ints",
+  "verdict": "SAME",
+  "cpython": "(1000000000000000000000000000001, 142857142857142857142857142857, -4, 2, (-4, 1))",
+  "monty": "(1000000000000000000000000000001, 142857142857142857142857142857, -4, 2, (-4, 1))"
+ },
+ {
+  "name": "float pitfalls",
+  "verdict": "SAME",
+  "cpython": "(0.30000000000000004, 114, 115, 123456, 267.5, 123456.0)",
+  "monty": "(0.30000000000000004, 114, 115, 123456, 267.5, 123456.0)"
+ },
+ {
+  "name": "float sum drift",
+  "verdict": "SAME",
+  "cpython": "(0.9999999999999999, False, 100)",
+  "monty": "(0.9999999999999999, False, 100)"
+ },
+ {
+  "name": "float to paise safe",
+  "verdict": "SAME",
+  "cpython": "123456",
+  "monty": "123456"
+ },
+ {
+  "name": "decimal module",
+  "verdict": "SAME",
+  "cpython": "123456.00",
+  "monty": "123456.00"
+ },
+ {
+  "name": "csv module",
+  "verdict": "SAME",
+  "cpython": "[['a', 'b,c', 'd']]",
+  "monty": "[['a', 'b,c', 'd']]"
+ },
+ {
+  "name": "hashlib sha256",
+  "verdict": "SAME",
+  "cpython": "ba7816bf8f01",
+  "monty": "ba7816bf8f01"
+ },
+ {
+  "name": "os.environ / getenv",
+  "verdict": "MONTY FAILS",
+  "cpython": "C:\\Users\\joymr",
+  "monty": "MontyRuntimeError: RuntimeError: 'os.getenv' is not supported in this environment"
+ },
+ {
+  "name": "open file",
+  "verdict": "SAME (both error)",
+  "cpython": "FileNotFoundError: [Errno 2] No such file or directory: '/etc/hosts'",
+  "monty": "MontyRuntimeError: PermissionError: Permission denied: '/etc/hosts'"
+ },
+ {
+  "name": "import socket",
+  "verdict": "MONTY FAILS",
+  "cpython": "None",
+  "monty": "MontyRuntimeError: ModuleNotFoundError: No module named 'socket'"
+ },
+ {
+  "name": "import subprocess",
+  "verdict": "MONTY FAILS",
+  "cpython": "None",
+  "monty": "MontyRuntimeError: ModuleNotFoundError: No module named 'subprocess'"
+ },
+ {
+  "name": "import urllib.request",
+  "verdict": "MONTY FAILS",
+  "cpython": "None",
+  "monty": "MontyRuntimeError: ModuleNotFoundError: No module named 'urllib'"
+ },
+ {
+  "name": "import time; time.time()",
+  "verdict": "SAME",
+  "cpython": "float",
+  "monty": "float"
+ },
+ {
+  "name": "recursion depth",
+  "verdict": "SAME",
+  "cpython": "500",
+  "monty": "500"
+ },
+ {
+  "name": "global/nonlocal",
+  "verdict": "SAME",
+  "cpython": "2",
+  "monty": "2"
+ },
+ {
+  "name": "del statement",
+  "verdict": "MONTY FAILS",
+  "cpython": "[2]",
+  "monty": "MontyRuntimeError: NotImplementedError: The monty syntax parser does not yet support the 'del' statement"
+ },
+ {
+  "name": "generator function",
+  "verdict": "MONTY FAILS",
+  "cpython": "[1]",
+  "monty": "MontyRuntimeError: NotImplementedError: The monty syntax parser does not yet support yield expressions"
+ },
+ {
+  "name": "generator expr",
+  "verdict": "SAME",
+  "cpython": "[0, 1, 2]",
+  "monty": "[0, 1, 2]"
+ },
+ {
+  "name": "lambda/closure",
+  "verdict": "SAME",
+  "cpython": "5",
+  "monty": "5"
+ },
+ {
+  "name": "enumerate/zip/map/filter",
+  "verdict": "SAME",
+  "cpython": "([(1, 'a'), (2, 'b')], [(1, 'a'), (2, 'b')], ['1', '2'], [1])",
+  "monty": "([(1, 'a'), (2, 'b')], [(1, 'a'), (2, 'b')], ['1', '2'], [1])"
+ },
+ {
+  "name": "isinstance/type checks",
+  "verdict": "SAME",
+  "cpython": "(True, True, True, True)",
+  "monty": "(True, True, True, True)"
+ },
+ {
+  "name": "assert",
+  "verdict": "SAME",
+  "cpython": "ok",
+  "monty": "ok"
+ },
+ {
+  "name": "str * and slicing",
+  "verdict": "SAME",
+  "cpython": "('fedcba', 'bcde', 'ef', 'abab')",
+  "monty": "('fedcba', 'bcde', 'ef', 'abab')"
+ },
+ {
+  "name": "dict methods",
+  "verdict": "SAME",
+  "cpython": "([('a', 1), ('b', [2])], 0, True, 1)",
+  "monty": "([('a', 1), ('b', [2])], 0, True, 1)"
+ }
+]
