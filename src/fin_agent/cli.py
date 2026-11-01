@@ -7,11 +7,24 @@ from __future__ import annotations
 
 import logging
 import sys
+import uuid
 from datetime import date
+from pathlib import Path
 
 import typer
 import uvicorn
 
+from fin_agent.agent.builder import build_agent
+from fin_agent.agent.history import (
+    create_thread,
+    ensure_history,
+    get_thread,
+    mark_run_started,
+    record_user_message,
+    refresh_snapshot,
+    save_records,
+    title_for,
+)
 from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.sessions import revoke_all_sessions
 from fin_agent.auth.setup import issue_setup_token, setup_required
@@ -21,6 +34,7 @@ from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
 from fin_agent.demo.persona import seed_demo
 from fin_agent.demo.template import clone_database
+from fin_agent.ledger import export as ledger_export
 
 app = typer.Typer(
     add_completion=False,
@@ -172,6 +186,106 @@ def passkeys_reset() -> None:
                 ),
             )
         )
+
+
+@app.command("chat")
+def chat(
+    thread_id: str | None = typer.Option(None, "--thread", help="Reopen a thread by ID."),
+    message: str | None = typer.Option(None, "--message", help="Send one message and exit."),
+) -> None:
+    """Chat with the agent in the terminal."""
+    settings = _settings()
+    agent = build_agent()
+    conn = connect(settings.database_url)
+    try:
+        thread = get_thread(conn, thread_id) if thread_id else None
+        if thread is None:
+            thread = create_thread(conn, title=title_for(message or "Terminal chat"))
+            conn.commit()
+        thread_id = str(thread["id"])
+        history, _outside = ensure_history(conn, thread)
+        history, _swap = refresh_snapshot(conn, thread, history)
+        conn.commit()
+
+        if message is not None:
+            _run_cli_turn(conn, agent, thread, history, message)
+            return
+
+        typer.echo(f"Fin-Agent chat ({thread_id}). Ctrl-D to leave.")
+        while True:
+            try:
+                text = typer.prompt("you")
+            except EOFError, KeyboardInterrupt:
+                typer.echo()
+                return
+            if not text.strip():
+                continue
+            history = _run_cli_turn(conn, agent, thread, history, text)
+    finally:
+        conn.close()
+
+
+def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
+    from fin_agent.agent.number_check import check_messages
+
+    message_id = f"cli_{uuid.uuid4().hex}"
+    run_id = f"run_{uuid.uuid4().hex}"
+    record_user_message(conn, thread_id=str(thread["id"]), client_id=message_id, text=text)
+    mark_run_started(conn, str(thread["id"]), run_id)
+    conn.commit()
+    result = agent.run_sync(text, message_history=history)
+    turn_messages = result.all_messages()[len(history) :]
+    reply = str(result.output)
+    flags = check_messages(reply, turn_messages)
+    with conn.transaction():
+        save_records(
+            conn,
+            thread_id=str(thread["id"]),
+            run_id=run_id,
+            ui_message_id=message_id,
+            history=history,
+            turn_messages=turn_messages,
+            ending="complete",
+            number_flags=flags,
+            title=thread.get("title"),
+            all_messages=result.all_messages(),
+        )
+    typer.echo(result.output)
+    if flags:
+        typer.echo(f"couldn't trace: {', '.join(flags)}", err=True)
+    return result.all_messages()
+
+
+@app.command("export")
+def export_command(
+    format: str = typer.Option("json", help="json, csv, or sql."),
+    out: Path | None = typer.Option(  # noqa: B008
+        None, "--out", help="Write here instead of stdout."
+    ),
+) -> None:
+    """Export the whole ledger as JSON, a CSV zip, or a pg_dump."""
+    settings = _settings()
+    conn = connect(settings.database_url)
+    try:
+        if format == "json":
+            payload = ledger_export.export_json(conn)
+            data = __import__("json").dumps(payload, indent=2, ensure_ascii=False, default=str)
+        elif format == "csv":
+            data = ledger_export.export_csv_zip(conn)
+        elif format == "sql":
+            data = ledger_export.export_pg_dump(settings.database_url)
+        else:
+            raise typer.BadParameter("format is json, csv, or sql")
+    finally:
+        conn.close()
+    if out is None:
+        if isinstance(data, bytes):
+            sys.stdout.buffer.write(data)
+        else:
+            typer.echo(data)
+    else:
+        out.write_bytes(data) if isinstance(data, bytes) else out.write_text(data, encoding="utf-8")
+        typer.echo(f"wrote {out}")
 
 
 @demo_app.command("seed")

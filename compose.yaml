@@ -81,6 +81,77 @@ services:
         condition: service_healthy
     stop_grace_period: 30s
 
+  # `docker compose --profile local-llm up`: local inference for the CHAT role.
+  ollama:
+    image: ollama/ollama:0.12.6
+    profiles: ["local-llm"]
+    restart: unless-stopped
+    environment:
+      # Must match LLM_CONTEXT_WINDOW; otherwise Ollama truncates long histories silently.
+      OLLAMA_CONTEXT_LENGTH: ${LLM_CONTEXT_WINDOW:-128000}
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+
+  # `docker compose --profile traces up`: Phoenix on its own database and role.
+  phoenix-init:
+    image: postgres:18.6
+    profiles: ["traces"]
+    restart: "no"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PGHOST: db
+      PGUSER: app
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: fin_agent
+      PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-phoenix-local-only}
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        psql -v ON_ERROR_STOP=1 <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'phoenix') THEN
+            CREATE ROLE phoenix LOGIN PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}';
+          ELSE
+            ALTER ROLE phoenix PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}';
+          END IF;
+        END
+        $$;
+        SQL
+        if ! psql -tAc "SELECT 1 FROM pg_database WHERE datname='phoenix'" | grep -q 1; then
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE phoenix OWNER phoenix"
+          psql -v ON_ERROR_STOP=1 -c "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC"
+        fi
+
+  phoenix:
+    image: arizephoenix/phoenix:21.0
+    profiles: ["traces"]
+    restart: unless-stopped
+    environment:
+      PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-phoenix-local-only}@db:5432/phoenix
+      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "90"
+      PHOENIX_WORKING_DIR: /data
+    volumes:
+      - phoenix-data:/data
+    ports:
+      # Loopback only, like the app. Reaching it over the tailnet needs its login.
+      - "127.0.0.1:6006:6006"
+    depends_on:
+      phoenix-init:
+        condition: service_completed_successfully
+
 volumes:
   db-data:
   backup-data:
+  ollama-data:
+  phoenix-data:

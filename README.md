@@ -3,12 +3,13 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L1 (ledger) is built.** Postgres in Compose with numbered SQL migrations, schema
-> v1 on a vendored pgledger, a FastAPI shell serving a Vite/React build under a strict content
-> security policy, passkey login, and CI. L1 adds accounts, balanced movements, schedules,
-> goals, people, categorization rules, group undo, full export, the restic backup sidecar, and
-> the seeded demo persona. The agent and projection engine land in later layers. The
-> authoritative plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
+> **Status: L2 (agent, dogfooding) is built.** L0 and L1 are unchanged: Postgres in Compose,
+> numbered migrations on a vendored pgledger, passkeys, the L1 ledger, group undo, full export,
+> the restic backup sidecar, and the demo persona. L2 adds the web and CLI chat, detached turns,
+> the read and write tools with Code Mode, approval-gated lasting writes, preferences, the
+> setup conversation, spend ceilings, model fallback, and optional Phoenix traces. The projection
+> engine and statement import land in later layers. The authoritative plan is
+> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
 > [`docs/archive/`](docs/archive/) are not authoritative.
 
 ## Built on
@@ -35,6 +36,8 @@ cp .env.example .env
 #   - keep FIN_AGENT_RP_ID=localhost for local use, or
 #   - set FIN_AGENT_RP_ID and FIN_AGENT_RP_ORIGIN to your machine's tailnet name.
 docker compose up -d --build
+# Local models: docker compose --profile local-llm up -d
+# Traces:       docker compose --profile traces up -d  (set PHOENIX_COLLECTOR_ENDPOINT)
 ```
 
 The first start applies the migrations and prints an enrollment link plus a terminal QR code. Scan
@@ -71,6 +74,8 @@ HTTPS name and a stable hostname, so set `FIN_AGENT_RP_ID` to the same `*.ts.net
 ```bash
 fin-agent migrate              # apply pending SQL migrations
 fin-agent serve                # API + built web app (127.0.0.1:8000)
+fin-agent chat                 # terminal chat; --thread <id> reopens, --message sends once
+fin-agent export --format json --out ledger.json   # json, csv, or sql (pg_dump)
 fin-agent setup                # print a fresh first-run enrollment link and QR code
 fin-agent setup-token          # same, kept for scripts
 fin-agent passkeys list        # registered passkeys

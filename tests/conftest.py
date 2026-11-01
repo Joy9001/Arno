@@ -27,6 +27,9 @@ for _role in ("CHAT", "VISION", "STT"):
     os.environ.setdefault(f"{_role}_BASE_URL", "http://127.0.0.1:9/v1")
     os.environ.setdefault(f"{_role}_MODEL", "blocked-in-tests")
 
+# No test can spend money. Only evals turn this on.
+from pydantic_ai import models  # noqa: E402
+
 from fin_agent.api.app import create_app  # noqa: E402
 from fin_agent.auth.setup import issue_setup_token  # noqa: E402
 from fin_agent.config import Settings, get_settings  # noqa: E402
@@ -35,6 +38,8 @@ from fin_agent.db.migrate import run_migrations  # noqa: E402
 from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
 from fin_agent.ledger.categories import ensure_default_categories  # noqa: E402
 from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
+
+models.ALLOW_MODEL_REQUESTS = False
 
 RESET_TABLES = """
 TRUNCATE

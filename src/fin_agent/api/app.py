@@ -12,7 +12,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fin_agent import __version__
-from fin_agent.api import auth, health, ledger, static
+from fin_agent.agent.builder import build_agent
+from fin_agent.agent.history import recover_crashed_runs
+from fin_agent.agent.spend import make_spend_store
+from fin_agent.agent.tracing import build_tracer_provider
+from fin_agent.agent.turns import TurnManager
+from fin_agent.api import auth, chat, health, ledger, static
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
 from fin_agent.auth.enrollment import enrollment_message
@@ -61,7 +66,27 @@ def _bootstrap(settings: Settings) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _bootstrap(app.state.settings)
-    yield
+    conn = connect(app.state.settings.database_url)
+    try:
+        recovered = recover_crashed_runs(conn)
+        conn.commit()
+        if recovered:
+            logger.warning("recovered %d interrupted chat turn(s)", len(recovered))
+    finally:
+        conn.close()
+    spend_store, pool = await make_spend_store(app.state.settings.database_url)
+    tracer_provider = build_tracer_provider()
+    app.state.spend_store = spend_store
+    app.state.spend_pool = pool
+    app.state.tracer_provider = tracer_provider
+    app.state.agent = build_agent(spend_store=spend_store, tracer_provider=tracer_provider)
+    app.state.turns = TurnManager(app.state.agent)
+    try:
+        yield
+    finally:
+        await app.state.turns.drain()
+        if pool is not None:
+            await pool.close()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -88,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(ledger.router)
+    app.include_router(chat.router)
     app.include_router(static.router)
 
     @app.exception_handler(StarletteHTTPException)
