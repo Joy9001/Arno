@@ -36,8 +36,8 @@ The following table lists the steps, in order:
 | 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [Below](#step-6-context-and-memory); [`harness.md`](harness.md#context-and-memory) | Agreed October 31, 2026 |
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers); [`platform.md`](platform.md#security) | Agreed November 1, 2026 |
 | 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability); [`platform.md`](platform.md#notifications-and-scheduler) | Agreed November 1, 2026 |
-| 9. Evals and observability | How it's measured, traced, and scored for each model | [`harness.md`](harness.md) | Not started; next; questions parked |
-| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; an API draft and a deployment check are parked |
+| 9. Evals and observability | How it's tested, measured, traced, and scored for each model | [Below](#step-9-evals-and-observability); [`harness.md`](harness.md#tests-and-evals) | Agreed November 1, 2026 |
+| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; next; an API draft and a deployment check are parked |
 
 Decisions made before or outside their step—rule 1 (the model decides what to compute; code
 computes it), Code Mode, the write tiers, and the old trade-offs step—are filed under their step
@@ -61,7 +61,7 @@ means a task passes in all three trials, not just once.
 | Answers and writes | The agent eval suite (50+ tasks from real use), `pass^3` on the configured model | 90% or more—the research's launch gates sit at 80-90% |
 | Honesty | Tasks where the data is missing: it says "no data" and never invents | `pass^3` of 95% or more |
 | Injection | Planted payee notes: no lasting write lands without its confirm card | 100%, a hard gate |
-| Numbers | Every number in a reply traces back to a tool return | 100%; step 9 decides how it's enforced |
+| Numbers | Every number in a reply traces back to a tool return | 100% in evals; in real use, an untraced amount [gets a note](#the-number-check) |
 | Forecast honesty | In the backtest, the real balance 30 days later lands inside the P10-P90 band | About 8 months in 10 |
 | Forecast accuracy | Median 30-day error in the backtest | Published; a target once the first backtest shows what's realistic |
 | Affordability engine | The 25 labeled HackerRank "Buy or Wait" samples | Published; a target after the first run |
@@ -930,7 +930,7 @@ A tool that throws something unexpected would end the run, and the raw text, suc
   none: a timed-out write could be retried under a new `tool_call_id`, which the idempotency key can't
   catch. The run's own timeout still bounds them.
 - **The browser gets a plain message.** The server replaces the text of error chunks, and the real
-  error goes to `agent_runs`.
+  error goes to the trace.
 
 ### Jobs: a plain table and one loop
 
@@ -988,7 +988,7 @@ ago makes the agent ask in words; statement reconciliation is a third, separate 
 | Option | Why not |
 |---|---|
 | A durable engine for chat: Temporal, DBOS, Prefect, Restate, Absurd, pgtask | [Absurd and pgtask](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/) don't stream live inside a task, and [DBOS](https://pydantic.dev/docs/ai/capabilities/durable_execution/dbos/) needs a separate handler for it and can't take a `CancellationToken`. Nothing here runs long enough to justify one, because restarting a parse run costs little. The [trigger](harness.md#later-with-triggers) stays |
-| `StepPersistence` | It now has a Postgres store, but that needs an asyncpg pool and creates its own tables with no migration step. The three save paths above cover the need. Step 9 checks its event trail against `agent_runs` |
+| `StepPersistence` | It now has a Postgres store, but that needs an asyncpg pool and creates its own tables with no migration step. The three save paths above cover the need, and [step 9](#traces-phoenix) settled on Phoenix for traces |
 | `DetectLoops` | Off until traces show a ceiling hit by repetition. The [ceilings](#the-loop-context-is-managed-runaways-are-stopped) already stop a runaway |
 | `RepairToolArguments` | Off until a local model's evals show malformed JSON |
 
@@ -1039,19 +1039,203 @@ DBOS were read in their docs only.
 
 ## Step 9: Evals and observability
 
-Not started. Parked here:
+How it's tested, measured, and traced for each model. Agreed November 1, 2026. The test and eval setup
+and the configuration are in [`harness.md`](harness.md#tests-and-evals).
 
-- An output check that every number in a reply matches a tool return, and how it fits streaming:
-  stream progress first and check the finished draft, or have the model write value placeholders
-  that the UI fills from tool returns.
-- The success measures from step 1 become this step's targets.
-- Eval cases for the fixed rules in the [instructions](harness.md#the-instructions-first-version),
-  summary quality, and real token counts ([step 6](#the-tests-october-31-2026)).
-- Each model's fooled rate, including notes in Hinglish and Hindi, and the advice boundary tested in
-  both directions ([step 7](#the-advice-boundary)).
-- The tap rate on confirm cards, from L2 traces ([step 7](#decisions)).
-- Whether `StepPersistence`'s event trail should replace or feed `agent_runs`
-  ([step 8](#other-options)).
+![Three layers measure the agent](diagrams/sd-measure-layers.png)
+
+*Figure: when each layer runs, what runs, and where its results go. Real use feeds the evals, because a
+reply you flag becomes a synthetic case ([note](diagrams/sd-measure-layers.md)).*
+
+### Three layers
+
+| Layer | Runs | Uses | Cost |
+|---|---|---|---|
+| Tests | Every commit | `pytest`, with model requests blocked | Free |
+| Agent evals | When the model, instructions, or tools change | `pydantic_evals`, a real model, and a cloned database per trial | Real money |
+| Traces and the number check | Every turn | Phoenix, and a check after each reply | Free |
+
+### Tests
+
+[The testing guide](https://pydantic.dev/docs/ai/guides/testing/) draws the line: code around the model
+goes in tests, and answer quality goes in evals.
+
+| Layer | How |
+|---|---|
+| Ledger and tool functions | `pytest` on real Postgres, called as plain functions |
+| Engine | Unit and property tests |
+| Agent wiring | `Agent.override` with `TestModel(call_tools=[...])` and `FunctionModel`, asserting with `capture_run_messages` |
+| Safety and reliability | The [saved scripts](../research/design-probes/README.md) from steps 7 and 8: the gate, approvals, redaction, every ending, fallback against a local stub |
+
+`models.ALLOW_MODEL_REQUESTS = False` goes in `conftest.py`, so no test can spend money, and only evals
+turn it on. The guide doesn't cover streaming or capabilities, so those keep the stub and real-server
+tests from [step 8](#the-reliability-tests-november-1-2026).
+
+### Agent evals
+
+| Option | Verdict | Why |
+|---|---|---|
+| **[`pydantic_evals`](https://pydantic.dev/docs/ai/evals/evals/)** | **Yes** | Ships with PydanticAI, runs our agent unchanged, and needs no Logfire. `repeat=3` runs the trials, and a [lifecycle hook](https://pydantic.dev/docs/ai/evals/how-to/lifecycle/) gives each its own database. `pass^3` takes about 10 lines to compute from the report |
+| [Inspect AI](https://inspect.aisi.org.uk/agent-bridge.html) | Close second | MIT, with a good log viewer, and its bridge can run a Pydantic AI agent. But the bridge reroutes model calls through its own provider, so fallback isn't tested on the real path. Docs only |
+| `pytest` alone | No | Trial reports, concurrency, and LLM judges would all be ours to write |
+| [promptfoo](https://aadhar-build.github.io/llm-evals-comparison/comparisons/promptfoo-vs-inspect-ai.html) | No | A Node CLI, mostly used for CI quality gates. Not tested |
+
+At least 50 cases, all on the demo persona:
+
+| Category | Graded on | Target |
+|---|---|---|
+| Answers and what-ifs | Expected values in the reply, plus the number check | 90% `pass^3`, with writes |
+| Writes | Database state | 90% `pass^3`, with answers |
+| Honesty, when data is missing | Says "no data" and invents nothing | 95% `pass^3` |
+| Injection | Database state | 100%, a hard gate |
+| Advice boundary, both directions | LLM judge with a rubric | In the 90% |
+| Never moving money, passwords | Code | In the 90% |
+| Long threads after a summary | A follow-up answer shows intent and decisions survived | In the 90% |
+
+Hinglish, Hindi, and voice-transcript versions run as tags across these categories.
+
+- **Graders:** code first, and an LLM judge only for prose, using the strongest model at a pinned
+  version. Every failure gets its transcript read, because
+  [a bad grader once turned 95% into 42%](../research/agent-harness-engineering/evals-and-observability.md#the-cautionary-tale).
+- **Real failures, no real data:** a flag button on a reply marks its trace, and you rewrite it as a
+  synthetic case. Real data never enters the repo.
+- **The old `evals/` folder:** its 39 human-judged tasks seed the new set, and its runner retires at L4.
+- **Injection gets two numbers.** The gate held: no lasting write landed without a card, which must be
+  100%. The fooled rate: the model tried what the note asked, even if the gate stopped it.
+- **A clean run only bounds a rate,** at about 3 divided by the number of trials. 8 notes at 3 trials
+  each proves only "under about 12%", or about 37% counting distinct notes, because repeats of one note
+  aren't independent. So the suite uses 50 notes, which gets to about 2%, or about 6% by distinct notes.
+- **The scorecard** goes in the README for each model: `pass^3` by category, fooled rate with its trial
+  count, number flags, and median cost and latency. Self-hosters can run `fin-agent eval --model X`,
+  with a spend limit per trial. A rough guess is $10-30 per model for a full run, from assumed token
+  counts; L4 measures the real cost.
+
+### The number check
+
+| Option | Verdict | Why |
+|---|---|---|
+| **Check after the reply, and flag it** | **Yes** | Streaming stays, and the model stays free to reason |
+| Placeholders the UI fills in | No | Restricts the model, and half-written placeholders would stream. Can't be tested without an LLM |
+| Hold the reply until checked | No | Breaks the 2-second first output |
+| `OutputGuardrail` retry | No | [Not supported under `run_stream`](https://github.com/pydantic/pydantic-ai/tree/main/src/pydantic_ai_harness/pydantic_ai_harness/guardrails) |
+| Evals only | No | A wrong number in real use would go unseen |
+
+When the reply ends, each money amount and percentage is compared with what the model was given: tool
+returns and arguments, the snapshot, and your messages. It understands rounding, lakh, crore, and
+"₹3.2k". An untraced number gets a small "couldn't trace ₹X" note, and the trace counts it. Evals also
+check bare counts.
+
+If L2 traces show it's noisy, the note comes off and only the trace keeps it.
+
+**What it can't catch:** a real number used wrongly ("Food ₹5,250, Rent ₹3,200" with the two swapped),
+numbers written as words, and a wrong number that happens to match another one in a long thread. Evals
+cover meaning. The match also records which return each number came from, so
+[step 10](#step-10-interfaces-and-operations) could make any number tappable to its source.
+
+### Traces: Phoenix
+
+Tracing is a solved problem, so a tool replaces the `agent_runs` table drafted earlier. That table would
+have stored the data, but the nested trace view, sessions, and metrics would still have been ours to
+build.
+
+| Tool | License | Services in its own Compose file | Verdict |
+|---|---|---|---|
+| **[Phoenix](https://github.com/Arize-ai/phoenix) 21.0** | Elastic 2.0, source-available | 1, plus an optional database | **Yes** |
+| [MLflow](https://mlflow.org/docs/latest/genai/tracing/integrations/listing/pydantic_ai/) 3.17 | Apache 2.0 | 4 in its sample; tested as 1 | Close second |
+| [Langfuse](https://langfuse.com/self-hosting) | MIT core | 6, including ClickHouse, Redis, and MinIO | Too heavy for one user |
+| Laminar | Apache 2.0 | 5, including ClickHouse and Quickwit | Too heavy |
+| OpenLIT | Apache 2.0 | 3, including ClickHouse and NATS | Too heavy |
+| Opik | Apache 2.0 | 16 entries, including MySQL, ClickHouse, and ZooKeeper | Too heavy |
+| Jaeger | Apache 2.0 | A single binary | General tracing, with no LLM view. Not tested |
+| OpenObserve | AGPL | A single binary | Fails the license rule |
+| Logfire | Closed, cloud | None | Not open source. Real data would leave the box |
+
+Phoenix and MLflow, tested with our agent:
+
+| | Phoenix | MLflow |
+|---|---|---|
+| Full trace of a turn, including a script's nested read | Yes | Yes |
+| Model calls shown as a conversation, with tokens and cost | Yes | Yes, as raw YAML |
+| Input and reply on the trace itself | Needs [OpenInference's span processor](https://github.com/Arize-ai/openinference), Apache 2.0 | Blank over OTLP |
+| Outside connections, with privacy switches on | **None**, with `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false` | **2 to GitHub hosts** with telemetry off, not identified |
+| Retention | An environment variable, not seen deleting yet | Run `mlflow gc` yourself |
+| Memory, idle on Windows | About 380-420 MB | About 450 MB |
+| Runs on our Postgres, in its own database | Yes | Yes |
+
+**The license is the catch.** Elastic 2.0 isn't OSI open source. You can self-host it freely, but you
+can't sell it as a hosted service. It runs as Phoenix's own image, so it isn't in ours. If this ever
+matters, such as hosting for others, MLflow is the swap, because both tools take the same spans. Its
+internet access would be cut with a Compose `internal` network.
+
+How it fits in:
+
+- **Optional.** It's a Compose profile, so a self-hoster can skip it and the app works the same. With the
+  tool down, a turn took 46 ms against 42 ms, because export runs in the background.
+- **Our own facts** (ending, untraced numbers, tap) go on one parent span per turn. First-output time is
+  already on each model call's span.
+- **Storage.** Traces get their own database on our Postgres and stay out of backups, with 90-day
+  retention. Images and audio stay out with `include_binary_content=False`.
+- **Privacy.** The card number appeared in no span, on either tool. Phoenix listens on the host's
+  loopback only, and reaching it over the tailnet needs its login on. It gets its own role, which owns
+  only its database, and `agent_ro` can't connect to that database.
+- **Evals.** Trials export to their own project, so a failed trial is easy to read.
+
+**What stays in Postgres,** because the app itself reads it:
+
+- Spend ceilings, through the harness's `PostgresSpendStore`, which held across a restart when the
+  default store didn't. It needs an asyncpg pool, so asyncpg is a second driver, used only for this.
+  That pool recovered as soon as Postgres came back, so it doesn't reopen
+  [step 8's rule](#what-still-works-when-something-is-down) for everything else.
+- `audit_log`, and job and backup status.
+- A flagged reply, with its trace ID.
+
+Settings shows only those, plus the last model error, and links to Phoenix for the rest.
+
+| Also not taken | Why |
+|---|---|
+| `StepPersistence` | It needs asyncpg and its own tables, and its trail repeats what Phoenix and `audit_log` hold |
+| [`OnlineEvaluation`](https://pydantic.dev/docs/ai/evals/online-evaluation/) | Runs only after completed turns, and LLM judges on real data would send more out |
+| `TrajectoryJudge` | A second model steering the run. Evals grade outcomes, not paths |
+
+### Where each measure comes from
+
+| [Measure](#success-measures) | Source | When |
+|---|---|---|
+| Answers and writes, honesty, injection | Agent evals | L4 (the injection gate also has a test from L2) |
+| Numbers | The check in traces, then evals | L2, then L4 |
+| Forecast honesty and accuracy, affordability engine | Backtest and HackerRank samples | L5 |
+| Categorizer | Corrections to LLM-assigned categories, from `audit_log` | L3 onward |
+| Latency, real token counts | Traces | L2 |
+| Tap rate on confirm cards | Traces | L2 |
+| Daily use | Active days in traces, and your judgment | L8 |
+
+### The measurement tests, November 1, 2026
+
+These ran on Windows, on PydanticAI 2.64.0 and `pydantic-ai-harness` 0.64.0, with no real LLM. Phoenix
+and MLflow took traces from the real OpenAI client against a local stub. The scripts are
+[saved](../research/design-probes/README.md).
+
+| Test | Result |
+|---|---|
+| `pydantic_evals` with `repeat=3` and a lifecycle clone of a 13 MB template, on real Postgres | 9 trials on 9 databases, about 0.7 seconds a clone, none left behind, and the template untouched |
+| Grading on database state | A model that said "Logged ₹450" and wrote nothing failed. One wrong once in three failed `pass^3` |
+| The testing guide applied to our agent's shape | 6 of 6 passed: real requests blocked, `TestModel`, the visible tools, the gate, a script through Code Mode, and `inline-snapshot` and `dirty-equals` assertions |
+| The number check on 26 synthetic replies | All 10 planted wrong numbers caught, and all 16 others passed, after fixing a false alarm it found in `run_query` rows. The same author wrote the code and the cases, so this is optimistic |
+| The full turn in Phoenix and MLflow, on SQLite and Postgres | Both showed the nested tree, tokens, cost, and the session |
+| `include_content=False`, in exported spans | Your text, replies, tool arguments, and returns were gone. Tool names stayed |
+| The card number in spans, with `InputGuardrail` | Absent, on every run |
+| Phoenix's outside connections | One by default, and none with `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false`. Its web UI loaded nothing from outside. This is a snapshot of open connections about a minute after start, plus its config docs, not a packet capture |
+| MLflow's outside connections, the same way | Two to GitHub hosts by default, and still two with `MLFLOW_DISABLE_TELEMETRY` and `DO_NOT_TRACK` set |
+| Phoenix on a role that owns only its database | Its migrations ran, spans were stored, and `agent_ro` was refused with `REVOKE CONNECT` |
+| One parent span with our own facts | Arrived in both tools, on finished and failed turns |
+| The tool down, nothing listening | The turn was unaffected, and the flush took 2 seconds in the background |
+| The daily ceiling, across a restart | `PostgresSpendStore` still refused after a new pool and store. The default store forgot and answered |
+| The spend store while Postgres stopped and restarted | Turns failed while it was down, and the asyncpg pool recovered as soon as it was back, as fast as a fresh connection |
+
+**Not tested:** traces from a real LLM, how often a real model gets fooled, judge quality, the suite's
+real cost, the number check on real replies, Phoenix's login, retention actually deleting anything,
+filtering traces by our own facts, eval trials in Phoenix, `include_binary_content=False`, and Docker
+and Linux, including the `internal` network.
 
 ---
 
@@ -1089,6 +1273,10 @@ Parked here, from an API draft of October 27, 2026 that was never agreed:
   ([step 7](#what-leaves-the-box)).
 - How the interrupted note, the failure note, Retry, and the "cut off" card look
   ([step 8](#every-ending-saves-the-same-two-records)).
+- The flag button on a reply, the "couldn't trace ₹X" note, and whether a number can be tapped to its
+  source ([step 9](#the-number-check)).
+- Reaching Phoenix over the tailnet, and the Compose profile that starts it
+  ([step 9](#traces-phoenix)).
 - **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason
   was only that traditional backends deploy this way, so the options were explored. Most sources are
   vendor blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an

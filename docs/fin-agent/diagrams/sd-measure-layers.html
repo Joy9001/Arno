@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Three layers measure the agent</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Fin-Agent system design, step 9</p>
+    <h1>Three layers measure the agent</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-measure-layers-title sd-measure-layers-desc">
+        <title id="sd-measure-layers-title">Three layers measure the agent</title>
+        <desc id="sd-measure-layers-desc">Every commit runs tests with no model calls, and they decide the CI result. A change to the model, instructions, or tools runs agent evals with a real model, which fill the scorecard. Every turn runs the agent with a number check after each reply, and exports spans to Phoenix. Failed eval trials go to Phoenix too, and a reply you flag gets rewritten as a synthetic eval case.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Arrows (drawn before boxes) -->
+        <path d="M 200,68 H 288" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 512,68 H 640" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 200,188 H 288" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 512,172 H 640" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 200,308 H 288" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 512,328 H 640" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 512,204 H 568 Q 576,204 576,212 V 280 Q 576,288 584,288 H 640" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+        <path d="M 400,272 V 224" fill="none" stroke="#bf4520" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+
+        <!-- Arrow labels -->
+        <rect x="552" y="150" width="56" height="12" fill="#f5f5f5"/>
+        <text x="580" y="159" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">PASS^3</text>
+        <rect x="552" y="306" width="56" height="12" fill="#f5f5f5"/>
+        <text x="580" y="315" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SPANS</text>
+        <rect x="584" y="236" width="76" height="12" fill="#f5f5f5"/>
+        <text x="622" y="245" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">FAILED TRIALS</text>
+        <rect x="408" y="242" width="84" height="12" fill="#f5f5f5"/>
+        <text x="450" y="251" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">REWRITTEN CASE</text>
+
+        <!-- Triggers -->
+        <rect x="40" y="32" width="160" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="32" width="160" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="120" y="72" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Every commit</text>
+
+        <rect x="40" y="152" width="160" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="152" width="160" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="120" y="184" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">A change</text>
+        <text x="120" y="202" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">model, instructions, tools</text>
+
+        <rect x="40" y="272" width="160" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="272" width="160" height="72" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="120" y="312" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Every turn</text>
+
+        <!-- Layers -->
+        <rect x="288" y="32" width="224" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="288" y="32" width="224" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="400" y="60" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tests</text>
+        <text x="400" y="78" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">pytest, TestModel, FunctionModel;</text>
+        <text x="400" y="91" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">model requests blocked</text>
+
+        <rect x="288" y="152" width="224" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="288" y="152" width="224" height="72" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="400" y="180" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Agent evals</text>
+        <text x="400" y="198" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">pydantic_evals and a real model;</text>
+        <text x="400" y="211" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">a cloned database per trial</text>
+
+        <rect x="288" y="272" width="224" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="288" y="272" width="224" height="72" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
+        <text x="400" y="300" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Agent run</text>
+        <text x="400" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">a number check after each reply;</text>
+        <text x="400" y="331" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">you can flag any reply</text>
+
+        <!-- Results -->
+        <rect x="640" y="32" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="640" y="32" width="280" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="780" y="72" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">CI result</text>
+
+        <rect x="640" y="136" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="640" y="136" width="280" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="780" y="164" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Scorecard</text>
+        <text x="780" y="182" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">in the README, for each model</text>
+
+        <rect x="640" y="272" width="280" height="72" rx="6" fill="#f5f5f5"/>
+        <rect x="640" y="272" width="280" height="72" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="780" y="300" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Phoenix</text>
+        <text x="780" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">local and optional; outside requests off;</text>
+        <text x="780" y="331" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">traces kept 90 days</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="372" x2="920" y2="372" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="400" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="390" width="16" height="10" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="144" y="399" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">when it runs</text>
+        <rect x="240" y="390" width="16" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="264" y="399" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">what runs</text>
+        <rect x="352" y="390" width="16" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="376" y="399" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">real use, which feeds the evals</text>
+        <rect x="608" y="390" width="16" height="10" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="632" y="399" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">where results go</text>
+        <line x1="760" y1="395" x2="784" y2="395" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4"/>
+        <text x="792" y="399" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">to read a failure</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

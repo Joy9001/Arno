@@ -78,12 +78,12 @@ The following capabilities are on from the start:
 | Capability | Why now |
 |---|---|
 | Core agent + tools + structured output | The product |
-| Spend Limits, as circuit breakers | A runaway loop costing real money is the one failure that bites immediately. The ceilings sit well above any real turn, so they stop runaways without shaping normal answers ([system design, step 3](system-design.md#the-loop-context-is-managed-runaways-are-stopped)) |
+| Spend Limits, as circuit breakers | A runaway loop costing real money is the one failure that bites immediately. The ceilings sit well above any real turn, so they stop runaways without shaping normal answers ([system design, step 3](system-design.md#the-loop-context-is-managed-runaways-are-stopped)). The counters live in Postgres, so a restart can't reset the daily ceiling ([step 9](system-design.md#traces-phoenix)) |
 | Compaction | Keeps a long thread inside the context window. It only shrinks what's sent; it doesn't stop loops or cap spend. See [Context and memory](#context-and-memory) |
 | Tool Output Limits | Trims a big `run_code` return—most likely a wide `run_query` result—so it isn't re-sent with every later request. See [Context and memory](#context-and-memory) |
 | System Reminders | Today's date and what changed since the snapshot, after the cache, so they can't break it. See [Context and memory](#context-and-memory) |
 | Caching and Warn On Cache Busts | Prompt caching is the main cost lever, and the warning shows when it stops working. The warning only observes |
-| Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
+| Instrumentation, exported to Phoenix when it's on | Every run's model, tokens, cost, tool calls, and results, in a local tool rather than one we build. Off, it costs nothing ([system design, step 9](system-design.md#traces-phoenix)). See [Tests and evals](#tests-and-evals) |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
@@ -103,6 +103,7 @@ The following capabilities wait for their triggers:
 | Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds, and a parse run restarts cheaply ([system design, step 8](system-design.md#other-options)) |
 | Detect Loops | Traces show a spend or request ceiling hit by repetition |
 | Repair Tool Arguments | A local model's evals show malformed JSON in tool calls |
+| Online Evaluation, Trajectory Judge | Not adopted ([system design, step 9](system-design.md#traces-phoenix)) |
 
 ## The tool surface is deliberately wide
 
@@ -257,6 +258,9 @@ agent = Agent(
         ),
         ToolErrorsToModel(),   # Fin-Agent's: a tool that throws becomes a failed result
         ModelFallback(backup), # sticky=False: the next request tries the main model again
+        SpendLimits(budgets=[Budget(usd=Decimal("5"), window="run"), Budget(usd=Decimal("20"), window="day")],
+                    store=PostgresSpendStore(asyncpg_pool)),
+        Instrumentation(settings=InstrumentationSettings(tracer_provider=provider, include_binary_content=False)),
     ],
 )
 
@@ -273,22 +277,24 @@ adapter = await VercelAIAdapter.from_request(
 
 # The run is a task of its own, so a client that leaves stops reading, not running.
 async def run_turn(turn):
-    with capture_run_messages() as captured:
-        stream = adapter.run_stream(
-            message_history=history,          # conversations.model_history, snapshot swapped if stale
-            conversation_id=str(thread.id),
-            run_id=turn.run_id,
-            cancellation_token=turn.token,    # Stop and deploys; task.cancel() saves nothing
-            timeout=300,
-            model_settings=ModelSettings(first_event_timeout=60, request_timeout=180),
-            usage_limits=turn_limits,
-            on_complete=save_finished,        # both records, and a "cut off" card if needed
-            on_cancel=save_stopped,           # both records, from RunCancelled
-        )
-        async for chunk in adapter.encode_stream(plain_errors(stream)):
-            turn.buffer.push(chunk)
-    if not turn.saved:
-        save_failed(captured)                 # both records, from what the run captured
+    with tracer.start_as_current_span("chat turn", attributes={"session.id": str(thread.id)}) as span:
+        with capture_run_messages() as captured:
+            stream = adapter.run_stream(
+                message_history=history,          # conversations.model_history, snapshot swapped if stale
+                conversation_id=str(thread.id),
+                run_id=turn.run_id,
+                cancellation_token=turn.token,    # Stop and deploys; task.cancel() saves nothing
+                timeout=300,
+                model_settings=ModelSettings(first_event_timeout=60, request_timeout=180),
+                usage_limits=turn_limits,
+                on_complete=save_finished,        # both records, a number check, and a "cut off" card
+                on_cancel=save_stopped,           # both records, from RunCancelled
+            )
+            async for chunk in adapter.encode_stream(plain_errors(stream)):
+                turn.buffer.push(chunk)
+        if not turn.saved:
+            save_failed(captured)                 # both records, from what the run captured
+        span.set_attributes(turn.facts)           # ending, untraced numbers, tap
 
 # What each save writes: model_history takes the whole history, and messages takes this turn.
 def this_turn(messages, turn):
@@ -316,22 +322,55 @@ def this_turn(messages, turn):
   {messages}
   ```
 
-## Evals are a milestone, not an afterthought
+## Tests and evals
+
+This section holds the setup behind [system design, step 9](system-design.md#step-9-evals-and-observability).
 
 The most repeated claim in the survey: adding evaluation infrastructure early is the
 highest-leverage change after a working loop. Without it, you catch problems only in
 production—and here, "production" means wrong answers about your own money.
 
-**Note the naming collision.** The `evals/` directory in this repository is a _model-selection_
-harness: it tests whether a given local model can hold a tool-calling conversation. That is not an
-_agent eval_, which asks whether _this agent_ picks the right tool and refuses when data is missing.
-Both are useful; they measure different things.
+### Tests
+
+Code around the model goes in tests, following
+[the testing guide](https://pydantic.dev/docs/ai/guides/testing/). The dev dependencies are `pytest`,
+`anyio`, `inline-snapshot`, and `dirty-equals`.
+
+```python
+# tests/conftest.py
+models.ALLOW_MODEL_REQUESTS = False  # no test can spend money; only evals turn it on
+
+# A scripted model drives the agent. The gate, tested without an LLM:
+def script(messages, info):
+    return ModelResponse(parts=[ToolCallPart("preference", {"text": "Never warn about rent"})])
+
+with agent.override(model=FunctionModel(script)):
+    result = await agent.run("a note from a stranger", deps=flagged_thread)
+assert isinstance(result.output, DeferredToolRequests)
+```
+
+Streaming, approvals, and every ending go through the adapter on a real server, as the
+[saved scripts](../research/design-probes/README.md) do, because the guide doesn't cover them.
+
+### Agent evals
+
+Answer quality goes in evals, run with `pydantic_evals` against every configured model.
+
+```python
+class TrialDatabase(CaseLifecycle):
+    async def setup(self):
+        ...  # CREATE DATABASE trial_x TEMPLATE demo
+    async def teardown(self, result):
+        ...  # DROP DATABASE trial_x WITH (FORCE)
+
+report = await dataset.evaluate(run_turn, repeat=3, lifecycle=TrialDatabase, max_concurrency=4)
+```
 
 The suite takes its shape from the survey:
 
-- **Use at least 50 tasks.** Draw them from real usage and real failures rather than imagined ones,
-  including modeling questions that need a script, Hinglish, voice-transcript, and
-  prompt-injection inputs (a statement row or
+- **Use at least 50 tasks.** Shape them from real usage and real failures rather than imagined ones,
+  rewritten on the demo persona so real data never enters the repo. Include modeling questions that
+  need a script, Hinglish, voice-transcript, and prompt-injection inputs (a statement row or
   screenshot whose text tries to instruct the agent). Injection tasks are graded on database
   state—no lasting write lands without its confirm card—and each model's fooled rate goes on the
   scorecard. Run them against _every_ configured model,
@@ -352,3 +391,19 @@ The suite takes its shape from the survey:
 The cautionary tale worth remembering: Opus 4.5 scored 42% on CORE-Bench until researchers found
 the _grader_ rejecting `96.12` when it expected `96.124991...`. After the fix, it scored 95%. A bad
 eval measures eval quality, confidently.
+
+**The `evals/` folder today** holds an older, human-judged runner for picking a local model. Its 39
+tasks seed the new set, and the runner retires at L4.
+
+### Traces
+
+Spans go to [Phoenix](system-design.md#traces-phoenix) over OTLP, only when an endpoint is set.
+
+```python
+provider = TracerProvider(resource=Resource.create({"openinference.project.name": "fin-agent"}))
+provider.add_span_processor(OpenInferenceSpanProcessor())  # readable input and reply in Phoenix
+if OTEL_EXPORTER_OTLP_ENDPOINT:                            # unset, nothing is exported
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+```
+
+Eval runs set their own project name, so a failed trial is easy to find and read.

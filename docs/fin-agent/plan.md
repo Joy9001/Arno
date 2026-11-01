@@ -208,6 +208,8 @@ it to each piece:
 | Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Fin-Agent doesn't invent its own security code |
 | Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
 | Off-site backup | Buy: restic | Encrypts, dedupes, any S3-compatible target, zero app code |
+| Agent evals | Buy: `pydantic_evals` | Ships with PydanticAI, and runs the agent unchanged. [System design, step 9](system-design.md#agent-evals) |
+| Tracing | Buy: Phoenix, optional | One local container, outside requests switched off, and the trace view is already built. [System design, step 9](system-design.md#traces-phoenix) |
 | Double-entry ledger core | Buy: pgledger, vendored | MIT, pure Postgres SQL, built-in idempotency. Credited in `THIRD_PARTY_NOTICES.md` and the README. Fit check in [system design, step 4](system-design.md#step-4-ground-truth) |
 | Mapping extracted rows → the Fin-Agent schema | Build | No library knows the Fin-Agent data model |
 | Projection and affordability engine | Build | This _is_ the product |
@@ -226,12 +228,12 @@ The following table records the choice for each layer:
 | API | FastAPI | Built on Pydantic; OpenAPI is the contract every client shares. Also serves the static web build |
 | LLM | Switchable for each role | Chat, vision, and STT each take `*_BASE_URL`, `*_API_KEY`, and `*_MODEL`. Any OpenAI-compatible endpoint, local (Ollama) or cloud. Cost is not a constraint; Spend Limits still meter it |
 | Database | PostgreSQL 18, pinned | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
-| Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
+| Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL. asyncpg is a second driver, used only by the harness's spend store |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
-| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
-| License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive |
+| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama, speaches, and Phoenix | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
+| License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive. Phoenix is Elastic 2.0, but it's optional and runs as its own image |
 
 ### Provider switch
 
@@ -273,7 +275,7 @@ The following diagram shows the processes and how requests flow between them:
  CLI (on host) ──┘                            REST, chat (Vercel AI stream)
                                               PydanticAI agent ─> tools ─> ledger / engine
                                               job loop: parsing, briefing, reminders, patterns, risk
-                                                    │
+                                                    │  └──spans──> [Phoenix, optional, local]
                                                     v
                                               [Postgres] ──pg_dump──> [backup sidecar] ──restic──> off-site
 ```
@@ -287,7 +289,8 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
 1. **The model decides what to compute; code computes it.** The model reasons freely: it decides
    what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
    tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
-   its own head. Affordability verdicts come only from the tested engine.
+   its own head. A check after each reply notes any amount it can't trace. Affordability verdicts come
+   only from the tested engine.
 2. **Untrusted text never makes a lasting change unseen.** Statements are parsed in a run with no
    write or ledger tools, and photos by an isolated, tool-less model call into a typed schema.
    Fields that still carry other people's words—payee names, UPI notes—reach the agent marked as
@@ -320,7 +323,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    HTTPS through `tailscale serve`. The web shell ships with a content security policy that
    blocks images from other origins.
 5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
-6. CI: ruff, pytest against a Postgres service container, web lint and build.
+6. CI: ruff, pytest against a Postgres service container with model requests blocked, web lint and
+   build.
 
 ### L1: Ledger
 
@@ -346,12 +350,15 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     leave, reattach, or stop it, and every ending saves both records
     ([step 8](system-design.md#every-ending-saves-the-same-two-records)).
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
-    Limits; a backup model and timeouts; a trace log for each run.
+    Limits with counters in Postgres; a backup model and timeouts; traces in Phoenix, on a Compose
+    profile. The scripts in [`design-probes`](../research/design-probes/README.md) become the first
+    tests.
 16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
     `amortize` and `compound` functions, and `show_chart`; zero versus unknown, data age, and source
     IDs (for citations) in every return. Code Mode over the read tools, so the agent can run
     multistep modeling in the sandbox; write tools stay direct calls. Fin-Agent emits cards from
-    the `run_code` return. Specs in [`tools.md`](tools.md).
+    the `run_code` return. A check after each reply notes any amount it can't trace, and any reply
+    can be flagged. Specs in [`tools.md`](tools.md).
 17. Write tools with inline write-show-undo cards; corrections learn rules. Outside text is
     marked in tool returns, and lasting or wide writes ask first in a conversation that has read
     it ([`design.md`](design.md#untrusted-text-and-write-tiers)).
@@ -373,11 +380,13 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 ### L4: Evals (gate: engine work starts when this exists)
 
-25. At least 50 agent-eval tasks from real usage: a balance of answer and refuse cases, Hinglish,
-    modeling questions that need a script, prompt-injection cases, a fresh database for each
-    trial cloned from the demo template, `pass^k`, run against every configured model. Shape in
-    [`harness.md`](harness.md).
-26. Model scorecard: `pass^k` for each configured model, cloud and local, published in the README.
+25. At least 50 agent-eval tasks in `pydantic_evals`, shaped by real usage and rewritten on the demo
+    persona: a balance of answer and refuse cases, Hinglish, modeling questions that need a script,
+    50 prompt-injection notes, a fresh database for each trial cloned from the demo template,
+    `pass^3`, run against every configured model. Shape in [`harness.md`](harness.md#tests-and-evals).
+26. Model scorecard: `pass^3` by category, fooled rate, number flags, and median cost and latency for
+    each configured model, cloud and local, published in the README. `fin-agent eval --model X` runs
+    it for a self-hoster.
 
 ### L5: Engine
 
@@ -426,7 +435,8 @@ Answer each when its layer arrives, not before.
 
 - **L0:** Tailscale on the host, or as a sidecar container in compose? Do Compose restarts and the
   30-second grace period behave on Linux?
-- **L2:** enforce rule 1 at the output too—check that every number in a reply matches a tool return—or rely on evals?
+- **L2:** is the [number check](system-design.md#the-number-check) noisy on real replies? If so, its
+  note comes off and only the trace keeps it.
   Which local chat models handle which tasks? The scorecard records it. What are the real token
   counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
   Traces answer all three. Does `useChat` reattach cleanly, and are the model timeouts right for a
