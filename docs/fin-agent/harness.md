@@ -34,7 +34,7 @@ The following table maps each survey finding to the capability that implements i
 | Human-in-the-loop approval | Tool approval and deferred tool calls (core) |
 | Sandboxed code execution | Code Mode: one script calling many tools in a Monty sandbox |
 | Instruction fade on long runs | System Reminders: cache-safe mid-run reinjection |
-| Durable, resumable runs | Step Persistence (SQLite backend) and core durable execution |
+| Durable, resumable runs | Step Persistence (SQLite, Postgres, and other stores) and core durable execution |
 
 Provider switching is core: `OllamaProvider(base_url=...)` and
 `OpenAIProvider(base_url=..., api_key=...)` are both fully supported, so the one-code-path
@@ -42,9 +42,10 @@ requirement for local and cloud in `plan.md` §3 holds exactly as written.
 
 **Second reason, since the web app became the main face:** PydanticAI ships `VercelAIAdapter`, which
 turns an agent run into the Vercel AI UI stream that the `useChat` hook consumes—text, tool calls,
-custom data parts for cards, and tool-approval requests. The chat endpoint is one call
-(`VercelAIAdapter.dispatch_request(request, agent=agent)`), not a streaming protocol that Fin-Agent
-has to write.
+custom data parts for cards, and tool-approval requests. The chat endpoint is a few calls
+(`from_request`, `run_stream`, and `encode_stream`, so the run can
+[outlive its connection](system-design.md#a-turn-outlives-its-connection)), not a streaming protocol
+that Fin-Agent has to write.
 
 **Why not LangChain (rechecked October 15, 2026).** LangChain v1's `create_agent` is the right
 LangChain layer for one tool loop. Deep Agents puts file tools beside the ledger, and a raw
@@ -85,6 +86,7 @@ The following capabilities are on from the start:
 | Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
+| Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
 | Skills, in parse runs only | The know-how for writing a statement parser stays out of the main prompt, and it can grow without code changes. A library shipped with the app, read through a `workspace=` backend, adds one tool, `load_capability` ([`import.md`](import.md)) |
 
@@ -98,7 +100,9 @@ The following capabilities wait for their triggers:
 | Prompt Injection Defender, Approval Reviewer, Tool Call Judge, Artifact Scanner | Not adopted ([system design, step 7](system-design.md#options-not-taken)). Revisit Tool Call Judge if the eval fooled rate is high |
 | Tool Search | Evals show the model confusing or missing tools. The model sees only seven of the 14, so a tool count isn't the trigger |
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't. No memory library either ([system design, step 6](system-design.md#memory-no-memory-library)) |
-| Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds |
+| Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds, and a parse run restarts cheaply ([system design, step 8](system-design.md#other-options)) |
+| Detect Loops | Traces show a spend or request ceiling hit by repetition |
+| Repair Tool Arguments | A local model's evals show malformed JSON in tool calls |
 
 ## The tool surface is deliberately wide
 
@@ -209,15 +213,17 @@ Categories: {the user's list}
 
 This section holds the configuration behind
 [system design, step 6](system-design.md#step-6-context-and-memory) and
-[step 7](system-design.md#decisions), which record why. Every value is a starting point, tuned from
-traces.
+[step 7](system-design.md#decisions), and [step 8](system-design.md#step-8-reliability), which record
+why. Every value is a starting point, tuned from traces.
 
 ```python
 target = min(100_000, primary_window // 2)  # primary_window: the main model's, or LLM_CONTEXT_WINDOW
 keep = target // 5
+backup = WindowLimited(raw_backup, CHAT_FALLBACK_CONTEXT_WINDOW)  # Fin-Agent's: raises before sending what won't fit
+read_tools = FunctionToolset(tools=READ_TOOLS, timeout=60)        # write tools get no timeout
 
 agent = Agent(
-    FallbackModel(primary, backup),
+    primary,
     instructions=instructions,
     toolsets=[read_tools.with_metadata(code_mode=True), write_tools],
     capabilities=[
@@ -240,7 +246,8 @@ agent = Agent(
             tiers=[
                 ClearToolResults(max_tokens=1, keep_pairs=5, exclude_tools=WRITE_TOOLS),
                 FallbackCompaction(fallback_chain=[
-                    SummarizingCompaction(max_messages=1, keep_tokens=keep, keep_messages=20,
+                    SummarizingCompaction(model=FallbackModel(primary, backup),
+                                          max_messages=1, keep_tokens=keep, keep_messages=20,
                                           keep_user_messages=True, receipts=True,
                                           summary_prompt=SUMMARY_PROMPT),
                     SlidingWindowCompaction(max_messages=1, keep_tokens=keep, receipts=True),
@@ -248,23 +255,44 @@ agent = Agent(
             ],
             target_tokens=target,
         ),
+        ToolErrorsToModel(),   # Fin-Agent's: a tool that throws becomes a failed result
+        ModelFallback(backup), # sticky=False: the next request tries the main model again
     ],
 )
 
 # A new thread's history. The snapshot is its own exchange, so redaction can replace your message.
 history = [ModelRequest(parts=[pin(snapshot)]), ModelResponse(parts=[TextPart("Snapshot read.")])]
 
-VercelAIAdapter.dispatch_request(
+adapter = await VercelAIAdapter.from_request(
     request,
     agent=agent,
     sdk_version=6,                    # the default, 5, silently ignores approvals
     manage_message_history="server",
-    message_history=history,          # conversations.model_history, snapshot swapped if stale
-    conversation_id=str(thread.id),
-    usage_limits=turn_limits,
     allowed_file_url_schemes=frozenset(),  # uploads use attachments
-    on_complete=save_both_records,    # all_messages() and new_messages()
 )
+
+# The run is a task of its own, so a client that leaves stops reading, not running.
+async def run_turn(turn):
+    with capture_run_messages() as captured:
+        stream = adapter.run_stream(
+            message_history=history,          # conversations.model_history, snapshot swapped if stale
+            conversation_id=str(thread.id),
+            run_id=turn.run_id,
+            cancellation_token=turn.token,    # Stop and deploys; task.cancel() saves nothing
+            timeout=300,
+            model_settings=ModelSettings(first_event_timeout=60, request_timeout=180),
+            usage_limits=turn_limits,
+            on_complete=save_finished,        # both records, and a "cut off" card if needed
+            on_cancel=save_stopped,           # both records, from RunCancelled
+        )
+        async for chunk in adapter.encode_stream(plain_errors(stream)):
+            turn.buffer.push(chunk)
+    if not turn.saved:
+        save_failed(captured)                 # both records, from what the run captured
+
+# What each save writes: model_history takes the whole history, and messages takes this turn.
+def this_turn(messages, turn):
+    return [m for m in messages if m.run_id == turn.run_id or ui_message_id(m) == turn.message_id]
 ```
 
 - A tier's own trigger is ignored inside `TieredCompaction`, which is why they read `max_tokens=1` and
@@ -272,7 +300,12 @@ VercelAIAdapter.dispatch_request(
 - `keep_tokens` protects the newest messages, and `keep_messages` then only caps the older turns kept
   word for word. Without `keep_tokens`, the newest exchanges vanish
   ([tested](system-design.md#the-tests-october-31-2026)).
-- The summary uses the run's model, so it can fall back like any other call.
+- The summary call happens outside the run, so `ModelFallback` doesn't cover it. `FallbackModel` is
+  the way to get the same behavior from a bare model. Without it, the sliding window dropped older
+  turns whenever the main model was down ([tested](system-design.md#the-reliability-tests-november-1-2026)).
+- With no backup configured, the summary takes `primary`, and `ModelFallback` is left out.
+- `this_turn` needs both tests, because the adapter adds your request before the run starts. It
+  carries the UI message ID and no `run_id`, and `new_messages()` leaves it out.
 - The first summary prompt, tuned with evals:
 
   ```text

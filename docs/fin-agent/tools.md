@@ -23,6 +23,7 @@ every write is a direct call with its own card ([note](diagrams/sd-tool-surface.
 | Money in | The field name carries the unit. Read tools take `*_paise`, because scripts compute in paise. Write tools take `*_rupees`, as you said it, and code converts, so the model never multiplies by 100 |
 | Names | Accounts, payees, and categories go in by name, and `resolve()` finds them. Movements go in by ID |
 | Errors teach | An unknown or ambiguous name raises `ModelRetry`, listing the candidates. Inside a script it arrives as a catchable `Exception` with the same message; uncaught, the model gets the message and retries |
+| Unexpected errors | A tool that throws anything else becomes a failed result the model can read, through `on_tool_execute_error`, and the real error goes to `agent_runs`. Read tools have a 60-second timeout, as a starting value; write tools have none ([step 8](system-design.md#when-a-tool-fails)) |
 | Two payloads | Short content for the model; cards, curves, and source IDs for the UI, as `ToolReturn` metadata. Metadata from a tool called inside a script isn't streamed, so Fin-Agent emits those cards itself from the `run_code` return |
 | Read returns | Only JSON-native types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`. Dates are ISO strings, and every balance has an `as_of` |
 | Calling from a script | `await` and keyword arguments only: `await amortize(loan="Home loan")` |
@@ -581,10 +582,11 @@ with the password field and the review link.
 
 ```
 if this file's hash is already imported: return that import
-create the import (status = parsing); run off the chat path (how: step 8)
+in one transaction: create the import (status = parsing) and its job
+the job loop runs the rest off the chat path (step 8); a restart runs it from the top
     open the file by its contents; if locked: status = needs_password and stop
         the password arrives over REST on the card, stays in memory,
-        is never stored and never reaches the model
+        is never stored and never reaches the model; after a crash, the card asks again
     fingerprint = the column headers, normalized
     if a saved layout matches: rerun its parser in Monty; if the checks pass: go to review
     otherwise: start a parse run (below)

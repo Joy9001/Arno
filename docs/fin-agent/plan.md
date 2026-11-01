@@ -228,6 +228,7 @@ The following table records the choice for each layer:
 | Database | PostgreSQL 18, pinned | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
 | Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
+| Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
 | Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama and speaches | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
 | License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive |
@@ -242,6 +243,7 @@ CHAT_MODEL=qwen3:4b                       # or a cloud model id
 VISION_BASE_URL=...  VISION_MODEL=...     # photos, statement pages with no text
 STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
 CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails
+CHAT_FALLBACK_CONTEXT_WINDOW=...                      # the window the backup's server really uses
 ```
 
 No reversible PII-scrubbing layer: identifiers the product doesn't use are dropped at import
@@ -270,7 +272,7 @@ The following diagram shows the processes and how requests flow between them:
  (future Android)├── HTTPS over tailnet ──>   FastAPI: static web app, auth,      local or cloud
  CLI (on host) ──┘                            REST, chat (Vercel AI stream)
                                               PydanticAI agent ─> tools ─> ledger / engine
-                                              scheduler: briefing, reminders, patterns, risk
+                                              job loop: parsing, briefing, reminders, patterns, risk
                                                     │
                                                     v
                                               [Postgres] ──pg_dump──> [backup sidecar] ──restic──> off-site
@@ -330,7 +332,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    plans—recurrence rules, holiday-aware "last working day."
 10. Goals with fenced savings; categories with a reducible flag; learned categorization rules.
 11. Audit log with undo for every write; full export (CSV, JSON, and `pg_dump`).
-12. Backup sidecar: nightly `pg_dump` shipped off-site by restic; a restore tested locally.
+12. Backup sidecar: `pg_dump` shipped off-site by restic whenever the last success is over 24 hours
+    old; a restore tested locally.
 13. Demo persona: a seeded synthetic ledger—the demo instance, the test fixtures, and the
     template database every eval trial clones.
 
@@ -339,9 +342,11 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 14. Web chat streams from the PydanticAI agent; threads listed, stored, and full-text searchable.
     The server holds each thread's history, with a pinned financial snapshot, a per-turn reminder,
     compaction, and prompt caching. Instructions tuned by trial and error
-    ([step 6](system-design.md#step-6-context-and-memory)).
+    ([step 6](system-design.md#step-6-context-and-memory)). A turn outlives its connection: you can
+    leave, reattach, or stop it, and every ending saves both records
+    ([step 8](system-design.md#every-ending-saves-the-same-two-records)).
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
-    Limits; a trace log for each run.
+    Limits; a backup model and timeouts; a trace log for each run.
 16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
     `amortize` and `compound` functions, and `show_chart`; zero versus unknown, data age, and source
     IDs (for citations) in every return. Code Mode over the read tools, so the agent can run
@@ -360,7 +365,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 21. **Spike:** a fresh model writes a parser for my real SBI, Union Bank, and Slice statements in
     Monty. Output is a decision for each bank. Protocol in [`import.md`](import.md).
 22. Pipeline: upload → read → saved parser or parse run → checks → dedupe and reconcile against
-    logged rows → review screen → commit.
+    logged rows → review screen → commit. The `jobs` table and its loop land here, to run this off
+    the chat path.
 23. Parse runs: the `parse-statement` skill and host functions; parsers saved in
     `statement_layouts` after commit, and rerun with no LLM.
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
@@ -387,7 +393,7 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 ### L6: Watch
 
-32. Scheduler, notification inbox, web push from the installed PWA.
+32. Job schedules, notification inbox, web push from the installed PWA; an alert when backups stop.
 33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
     Your own scheduled questions, run by the agent read-only, with a spend limit for each run.
 34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never
@@ -418,11 +424,13 @@ something has crept in—check it against [`parked.md`](parked.md).
 
 Answer each when its layer arrives, not before.
 
-- **L0:** Tailscale on the host, or as a sidecar container in compose?
+- **L0:** Tailscale on the host, or as a sidecar container in compose? Do Compose restarts and the
+  30-second grace period behave on Linux?
 - **L2:** enforce rule 1 at the output too—check that every number in a reply matches a tool return—or rely on evals?
   Which local chat models handle which tasks? The scorecard records it. What are the real token
   counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
-  Traces answer all three.
+  Traces answer all three. Does `useChat` reattach cleanly, and are the model timeouts right for a
+  real provider?
 - **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
   statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor

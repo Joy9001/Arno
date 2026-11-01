@@ -35,8 +35,8 @@ The following table lists the steps, in order:
 | 5. Tools | What the agent can read and write, through which contracts | [Below](#step-5-tools); [`tools.md`](tools.md) | Agreed October 31, 2026 |
 | 6. Context and memory | What the model sees each turn: prompt, context, history, memory, cache order | [Below](#step-6-context-and-memory); [`harness.md`](harness.md#context-and-memory) | Agreed October 31, 2026 |
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers); [`platform.md`](platform.md#security) | Agreed November 1, 2026 |
-| 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability) | Partly decided; next |
-| 9. Evals and observability | How it's measured, traced, and scored for each model | [`harness.md`](harness.md) | Not started; questions parked |
+| 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability); [`platform.md`](platform.md#notifications-and-scheduler) | Agreed November 1, 2026 |
+| 9. Evals and observability | How it's measured, traced, and scored for each model | [`harness.md`](harness.md) | Not started; next; questions parked |
 | 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; an API draft and a deployment check are parked |
 
 Decisions made before or outside their step—rule 1 (the model decides what to compute; code
@@ -236,10 +236,11 @@ The following table lists the three model roles:
   research shows an alias can change behavior silently. Any model change re-runs the eval
   scorecard before it counts as done.
 - **A backup chat model.** Each role may name an optional backup endpoint, and PydanticAI's
-  `FallbackModel` switches to it when the main one fails—typically cloud first, a local model
+  `ModelFallback` switches to it when the main one fails—typically cloud first, a local model
   second. Replies the backup produced carry a badge, so a weaker answer is never silent. Tools
   aren't restricted on the backup: its eval scorecard already says what it handles, and
-  `FallbackModel` switches for each request inside a run. `plan.md` §3 records the switch.
+  `ModelFallback` switches for each request inside a run ([step 8](#when-a-model-fails)). `plan.md`
+  §3 records the switch.
 - **Reasoning effort.** Where the model supports thinking or effort levels, the provider's
   adaptive or default level applies, so it thinks harder on a what-if than on "paid 450". Thinking
   counts toward the spend ceilings.
@@ -273,8 +274,8 @@ normal turn never reaches them:
   Different conversations, and scheduled questions, run independently.
 
 What goes in the instructions and how the prompt is ordered are in
-[step 6](#step-6-context-and-memory). Parked: what happens when the client disconnects
-([step 8](#step-8-reliability)).
+[step 6](#step-6-context-and-memory). What happens when the client disconnects is in
+[step 8](#a-turn-outlives-its-connection).
 
 ---
 
@@ -517,15 +518,18 @@ What the app opens to and how threads get their titles belong to
 *Figure: the client sends a thread's ID and a new message. When the run ends, the model's history and
 your transcript are saved separately ([note](diagrams/sd-thread-records.md)).*
 
-- **`messages` is what you saw.** It's filled from `new_messages()`, never edited, and used for
+- **`messages` is what you saw.** It takes each turn's messages
+  ([how it finds them](#every-ending-saves-the-same-two-records)), is never edited, and is used for
   search, export, and citations.
 - **`conversations.model_history` is what the model gets.** It's replaced from `all_messages()` in
   `on_complete`, stored as JSON through `ModelMessagesTypeAdapter`. The two must be separate because
   compaction's edits persist in the stored history.
 - **The adapter's own option owns the history.** `manage_message_history="server"` uses only the
   client's new turn, so a client can't inject history or fake tool results, and a retried message
-  isn't added twice.
+  isn't added twice. A repeated ID does redo the turn, so the server
+  [guards it](#every-ending-saves-the-same-two-records).
 - **The thread's ID is the `conversation_id`,** so traces and summary calls are recorded under it.
+- **Every ending saves both,** not only a finished run ([step 8](#every-ending-saves-the-same-two-records)).
 - **Not `conversation=`.** PydanticAI recommends it for saved sessions, but it carries usage across
   turns, which would turn [step 3](#step-3-agent-core)'s per-turn ceilings into per-thread ones. The
   adapter doesn't accept it either.
@@ -552,9 +556,8 @@ model can slice them, and the next turn queries again. Spilling would add an eig
 | 3 | `SlidingWindowCompaction` | Runs only if the summary call fails, through `FallbackCompaction`, so the turn still answers. Keeps the same newest fifth |
 
 - **The target is half the main model's window, capped at 100,000 tokens.** It's a starting value,
-  tuned from traces. It follows the main model, because a `FallbackModel` reports its smallest
-  window, so `target_fraction` would make a small local backup compact frontier threads far too
-  early. What happens when a backup can't fit a long history belongs to [step 8](#step-8-reliability).
+  tuned from traces. It follows the main model, so a small local backup can't make frontier threads
+  compact far too early. A backup that can't fit a long history refuses ([step 8](#when-a-model-fails)).
 - **`keep_tokens` is required with `keep_user_messages`.** With `keep_messages` alone, the newest
   exchanges vanished: they were neither sent nor summarized.
 - **The summary keeps your intent, decisions, and open questions.** It drops amounts and statement
@@ -632,7 +635,7 @@ Every test ran with `FunctionModel`, with no real LLM, on PydanticAI 2.64.0 and 
 | `pin()` | Survived JSON storage, the adapter, and all three strategies |
 | Swapping the snapshot | The model saw only the new one; pins didn't pile up; earlier chat stayed; the new snapshot survived compaction |
 | `manage_message_history="server"` | A forged history and a fake tool result never reached the model; a retried message wasn't added twice |
-| `new_messages()` when compaction fires | Held only the new question and answer |
+| `new_messages()` when compaction fires | Held only the new question and answer, through `agent.run`. Through the adapter, it leaves out your message ([step 8](#the-reliability-tests-november-1-2026)) |
 | Clearing is enough | No summary call |
 | A long chat | Clearing wasn't enough, so a summary ran; the snapshot and newest message stayed |
 | `keep_user_messages=True` with `keep_messages` alone | **A trap:** the newest 3 of your turns and the newest 4 replies were neither sent nor summarized |
@@ -645,7 +648,8 @@ Every test ran with `FunctionModel`, with no real LLM, on PydanticAI 2.64.0 and 
 
 **Not tested:** real token counts (an estimate of 8,000-10,000 at the start of a thread, measured at
 L2), summary quality (evals, [step 9](#step-9-evals-and-observability)), and `dispatch_request` itself,
-because the tests drove the adapter's `run_stream`. The docs say that moving a history between
+because the tests drove the adapter's `run_stream`. [Step 8](#a-turn-outlives-its-connection) then
+replaced `dispatch_request`. The docs say that moving a history between
 providers is handled, with thinking sent as text and signed data filtered, but no real provider has
 tried it.
 
@@ -838,14 +842,114 @@ noted.
 
 **Not tested:** how often a real model gets fooled (the fooled rate, [step 9](#step-9-evals-and-observability)),
 the content security policy, `mark()`'s cap and character stripping (not built yet), the defender's ML
-tier, and `dispatch_request` over real HTTP, because the tests drove `run_stream`. No real LLM was
-involved.
+tier, and `dispatch_request` over real HTTP, because the tests drove `run_stream`.
+[Step 8](#a-turn-outlives-its-connection) then replaced `dispatch_request`. No real LLM was involved.
 
 ---
 
 ## Step 8: Reliability
 
-Decided so far; the step itself hasn't been walked.
+What fails, and how each failure recovers. Agreed November 1, 2026. The configuration is in
+[`harness.md`](harness.md#context-and-memory), and the job loop is in
+[`platform.md`](platform.md#notifications-and-scheduler).
+
+![A turn outlives its connection](diagrams/sd-detached-turn.png)
+
+*Figure: the run is a task of its own that writes to a buffer any client can read. Every ending saves
+both records, and a check at boot catches the one ending that can't
+([note](diagrams/sd-detached-turn.md)).*
+
+### A turn outlives its connection
+
+With plain `dispatch_request`, a client that left stopped the run, and neither `on_complete` nor
+`on_cancel` fired. Locking your phone mid-reply would lose the turn, while any write it had made
+stayed in the ledger with no record in the chat. So the endpoint uses the adapter's parts instead:
+
+- **The run gets its own task.** It writes encoded chunks to an in-memory buffer, and the response
+  reads from that buffer. Leaving stops the reading, not the run.
+- **Reopening the app reattaches.** The AI SDK's
+  [`resume`](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-resume-streams) option calls
+  `GET /api/chat/{thread}/stream`, which replays from the start, or returns 204 if nothing is running.
+  The AI SDK's recipe uses Redis, which one process doesn't need.
+- **Stop has its own endpoint,** because a client abort looks the same as a disconnect. It calls the
+  run's `CancellationToken`.
+- **One running turn per thread** ([step 3](#the-loop-context-is-managed-runaways-are-stopped)) is a
+  lock keyed by thread ID, so a message sent during a reply waits.
+
+### Every ending saves the same two records
+
+| How the turn ends | What saves it | What you see |
+|---|---|---|
+| Finished | `on_complete` | The answer. A reply that hit the output cap gets a "cut off" card |
+| Stop or timeout | `on_cancel`, through the `CancellationToken` | The partial reply |
+| Model or provider failure | Core's `capture_run_messages()` | The partial reply, a plain failure note, and Retry |
+| Process crash | Nothing can save it | A note on the next load, saying whether any write landed |
+
+- **A failure saves what the run did.** The captured history keeps your message, a write's return, and
+  the partial reply, with redaction intact, so the next turn can see the write.
+- **The transcript is built the same way on every ending:** the messages tagged with this run's
+  `run_id`, plus your request, found by its UI message ID. The adapter adds your request before the
+  run starts, so it carries no `run_id`, and `new_messages()` leaves it out.
+- **`run_started_at` catches the rest.** It's set when a run starts, and cleared in the transaction
+  that saves both records. If it's still set at boot, the thread gets a note, which reads `audit_log`
+  to say whether a write landed. A save that fails ends up here too. Your unsaved message is lost in
+  this one case, which is accepted because crashes should be rare.
+- **Deploys drain.** A starting value of 20 seconds for runs to finish, then the token stops the rest,
+  inside a `stop_grace_period` of 30 seconds. A plain `task.cancel()` saved nothing in the tests.
+- **A message ID starts one turn, ever.** Server mode treats a repeated ID as a redo: it dropped the
+  earlier turn, including its write, and ran again. That write would get a new `tool_call_id`, which
+  the idempotency key can't catch. So the server keeps the ID: a repeat during the turn reattaches, and
+  a repeat after it ended returns the saved turn. Retry sends a new ID, so the model sees what was
+  done.
+- **An open confirm card survives a restart.** Its pending call lives in `model_history`. If the run
+  fails right after an approved write, the captured history records that write, so the card doesn't
+  return. If that save fails too, a repeated approval reuses the same `tool_call_id`, which the
+  idempotency key catches.
+
+### When a model fails
+
+| Failure | Decision |
+|---|---|
+| The main model errors | `ModelFallback` replaces `FallbackModel`, which [its source](https://github.com/pydantic/pydantic-ai/blob/main/pydantic_ai_slim/pydantic_ai/capabilities/model_fallback.py) prefers inside an agent. The SDK's own retries run first, and the failed attempts on the response supply the badge |
+| The main model hangs | `first_event_timeout=60`, `request_timeout=180`, and a run `timeout=300`, all starting values. [Without a limit](https://pydantic.dev/docs/ai/core-concepts/timeouts/), a hung call can wait 10 minutes |
+| It dies mid-reply | No fallback, by design, because part of the reply has already reached you. The partial reply stays, and Retry is a new turn |
+| It recovers | `sticky=False`, so the next request tries the main model again. With `sticky=True`, the thread stayed on the backup after the main model recovered. The cost during an outage is retries on each request step |
+| A bad API key | Falls back like any error, so Settings shows the last model error. Otherwise the badge is the only sign |
+| A reply hits the output cap | It looks like a normal finish, so `on_complete` checks `finish_reason` and adds a "cut off" card |
+| A backup too small for the thread | A wrapper on the backup model raises before sending, using a window from config (`CHAT_FALLBACK_CONTEXT_WINDOW`) rather than the model's advertised one. So `ModelFallback` and the summary's `FallbackModel` both skip it, compaction falls through to the sliding window, and the request then fits or you get "couldn't answer." [Open WebUI's docs](https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-ollama.md) and [a third-party write-up](https://www.betterclaw.io/blog/ollama-context-window-truncates-agent-config) say Ollama otherwise cuts long prompts silently, which isn't confirmed with Ollama itself |
+| The summary call | It's a call outside the run, so `ModelFallback` doesn't cover it. `SummarizingCompaction(model=FallbackModel(primary, backup))` keeps it falling back, as [step 6](#compaction) intended |
+
+### When a tool fails
+
+A tool that throws something unexpected would end the run, and the raw text, such as
+`db down at 10.0.0.5:5432`, reached the browser. So:
+
+- **`on_tool_execute_error` turns it into a failed result** the model can read and explain. `ModelRetry`
+  keeps its job for errors that teach the model something.
+- **Read tools get a 60-second timeout,** as a starting value, set on their toolset. Write tools get
+  none: a timed-out write could be retried under a new `tool_call_id`, which the idempotency key can't
+  catch. The run's own timeout still bounds them.
+- **The browser gets a plain message.** The server replaces the text of error chunks, and the real
+  error goes to `agent_runs`.
+
+### Jobs: a plain table and one loop
+
+A `jobs` table and one loop in the API process replace APScheduler
+([`platform.md`](platform.md#notifications-and-scheduler)). With one process, anything marked `running`
+at boot was interrupted, so recovery is one `UPDATE`. A job can commit in the same transaction as its
+data, so an import and its parse job exist together or not at all. A due schedule creates one job and
+moves on from now, so any downtime collapses to one run.
+
+A restart runs a job again from the top, which is cheap for everything here. Statement passwords stay
+out of the table, so after a crash the import card asks again.
+
+| Option | Verdict | Why |
+|---|---|---|
+| **A plain table** | **Yes** | About 80 lines in the prototype, and no new dependency. It's in every dump |
+| APScheduler 3 | No | Its store needs SQLAlchemy and doesn't track a job that was running when the process died, so this table would still be needed |
+| [Procrastinate](https://procrastinate.readthedocs.io/en/stable/howto/advanced/cron.html) | Close second | Mature and uses psycopg. But it skips runs over 10 minutes late by default, wants a per-minute task for your own schedules, and [leaves stalled-job retry to you](https://procrastinate.readthedocs.io/en/stable/howto/production/retry_stalled_jobs.html). Docs only |
+| [pgtask](https://github.com/Kludex/pgtask) | Not yet | The best fit on paper, with a built-in "latest" catch-up and a harness capability. But it's marked Pre-Alpha, its Python client has no schedule API, and its migration failed on a fresh Postgres 18.6 on Windows, which may be platform-specific. [Parked](parked.md#a-job-library) |
+| [DBOS](https://docs.dbos.dev/python/tutorials/scheduled-workflows) | No | Replay machinery that isn't needed, and its backfill runs every missed occurrence rather than one. Docs only |
 
 ### Idempotency, not a workflow engine
 
@@ -858,26 +962,78 @@ ago makes the agent ask in words; statement reconciliation is a third, separate 
 ([note](diagrams/sd-duplicate-writes.md)).*
 
 - Scheduled jobs carry a key for the job and its period, so a restart can't send a briefing twice.
-- Job state lives in Postgres, so a run missed while the machine slept fires once on wake
-  ([`platform.md`](platform.md#notifications-and-scheduler)).
 - No database transaction stays open across an LLM call; each write and its audit entry commit in
   one short transaction.
-- Heavy statement parsing runs off the chat request path.
 
-Parked here:
+### What still works when something is down
 
-- A turn finishes even if the client disconnects. By default PydanticAI's adapter cancels the run
-  on a disconnect (checked October 27, 2026), so the run has to be detached from the HTTP stream.
-  A separate stop endpoint handles the Stop button.
-- What gets saved when a run fails or is stopped. `on_complete` saves both records, and the adapter
-  also has `on_cancel`.
-- A backup model whose window can't fit a long history. Compaction's target follows the main model
-  ([step 6](#compaction)).
-- A pending confirm card across a restart or a failed run. The pending call lives in
-  `conversations.model_history`, so it should survive, but this isn't tested.
-- The scheduler's job store, and how parsing moves off the chat path. A candidate for both, and for
-  runs that survive a crash or deploy: DBOS, a library that needs only Postgres and has a native
-  PydanticAI integration, so no extra server.
+| What's down | What still works | What you see |
+|---|---|---|
+| The main model | Everything, on the backup if one is set | A badge on replies the backup wrote |
+| All LLMs | Panels, undo, saved parsers, reminders, risk checks, template briefings | "Couldn't answer" |
+| Vision or speech-to-text | The file is saved first | A retry card |
+| Postgres | Nothing | A plain "database unreachable", with no LLM spend |
+| Machine asleep | Nothing until it wakes | Jobs fire once on wake |
+| Backup target | Everything else | An alert after 48 hours |
+
+- **Backups run when they're due, not at a set time.** The sidecar checks hourly and runs whenever its
+  last success is over 24 hours old, because a nightly cron misses a sleeping laptop
+  ([`platform.md`](platform.md#backups)).
+- **One connection per use, not a pool,** at 10-50 turns a day. A pool hadn't recovered 14 seconds after
+  a Postgres restart on Windows, so that result is inconclusive. A new connection has nothing to
+  recover. Add a pool if traces show connection time matters.
+
+### Other options
+
+| Option | Why not |
+|---|---|
+| A durable engine for chat: Temporal, DBOS, Prefect, Restate, Absurd, pgtask | [Absurd and pgtask](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/) don't stream live inside a task, and [DBOS](https://pydantic.dev/docs/ai/capabilities/durable_execution/dbos/) needs a separate handler for it and can't take a `CancellationToken`. Nothing here runs long enough to justify one, because restarting a parse run costs little. The [trigger](harness.md#later-with-triggers) stays |
+| `StepPersistence` | It now has a Postgres store, but that needs an asyncpg pool and creates its own tables with no migration step. The three save paths above cover the need. Step 9 checks its event trail against `agent_runs` |
+| `DetectLoops` | Off until traces show a ceiling hit by repetition. The [ceilings](#the-loop-context-is-managed-runaways-are-stopped) already stop a runaway |
+| `RepairToolArguments` | Off until a local model's evals show malformed JSON |
+
+### The reliability tests, November 1, 2026
+
+These ran on Windows, on PydanticAI 2.64.0 and `pydantic-ai-harness` 0.64.0, with no real LLM. Chat
+tests used a real uvicorn server with `FunctionModel`, or the real OpenAI client against a local stub.
+Job tests used real Postgres 18.6.
+
+| Test | Result |
+|---|---|
+| Plain `dispatch_request`, the client leaves | **A trap:** neither `on_complete` nor `on_cancel` fired, so nothing was saved |
+| A run in its own task, the client leaves | The run finished and saved. A second reader replayed all 20 words |
+| Stop through the token, mid-text | `on_cancel` fired with the partial reply marked `interrupted`, and the next turn answered from that history |
+| Stop after a write | The write's return stayed in the history |
+| A plain `task.cancel()` | **A trap:** neither callback fired, so nothing was saved |
+| The provider dies mid-stream after a write | **A trap:** neither callback fired. `capture_run_messages()` held your message, the write's return, and the partial reply. The next turn answered and could see the write |
+| The provider is down on the first request | Your message was kept, and the next request sent it. The empty response wasn't sent |
+| Failure with redaction, a pin, reminders, and compaction configured | No card number in the captured history, and the snapshot stayed |
+| `new_messages()` through the adapter | **A trap:** it left out your message, on a finished turn and on Stop. The `run_id` tag plus the UI message ID found the whole turn when it finished, when it failed, when compaction fired, and after a confirm card |
+| A tool throws | Without the hook, the run died and the raw error reached the browser. With it, the model read a failed result and explained |
+| A toolset timeout on a read called from a script | With a 1-second limit, it stopped the call at 1.2 seconds, and the model saw the error |
+| A confirm card, a new `Agent`, and history read from JSON | The approval ran. A second approval of the same stored card reused the `tool_call_id`, and saving the captured history stopped the card returning |
+| Retry with the same message ID | **A trap:** the earlier turn and its write's return were dropped. A new ID kept them |
+| 500 twice, then fine | 3 attempts, then the answer |
+| 500 or 429 every time, with a backup | 3 attempts, then the backup, with the failed model named on the response |
+| A bad API key | One attempt, then the backup, with no error shown |
+| A hang before headers, or a silent open stream | Fell back at `first_event_timeout` (2 seconds in the test) |
+| A stream cut mid-chunk | "Connection error", `interrupted`, no fallback |
+| A clean close with no finish reason | Looks complete, with `finish_reason` `stop`. It can't be detected at this level, and it should be rare over chunked HTTPS |
+| A stream ending with `finish_reason` `length` | Looks like a normal finish. `on_complete` can add a card to the stream |
+| `sticky=True`, the main model recovers | Stayed on the backup. `sticky=False` returned to the main model |
+| A backup smaller than the history | The wrapper refused the summary call, and the sliding window ran. The shorter request was then answered if it fit, or refused, and the turn said so |
+| The main model down, a long thread | The summary uses the main model only, so the sliding window dropped older turns. With `FallbackModel` as the summary's model, the backup wrote the summary |
+| A plain `jobs` table, a killed worker | The job restarted 0.8 seconds after the worker came back |
+| The same, a failing job | Stopped after 3 attempts, with backoff, and recorded the error |
+| The same, a schedule every 5 seconds with about 4 missed | 1 catch-up run, and no duplicate keys |
+| The same, the same key twice and a rolled-back insert | One job, and no rolled-back job |
+| pgtask's `migrate()` on a fresh Postgres 18.6 on Windows | Failed in migration 3. Not investigated further |
+| A `psycopg_pool` pool across a Postgres restart | Hadn't recovered 14 seconds after the restart. Inconclusive; backoff or Windows may explain it |
+| Data checksums on a fresh Postgres 18.6 | On by default |
+
+**Not tested:** the AI SDK's `useChat` reattaching, real providers, Linux and Docker (Compose restarts
+and grace periods), the crash note, the deploy drain, and the 24-hour backup rule. Procrastinate and
+DBOS were read in their docs only.
 
 ---
 
@@ -894,6 +1050,8 @@ Not started. Parked here:
 - Each model's fooled rate, including notes in Hinglish and Hindi, and the advice boundary tested in
   both directions ([step 7](#the-advice-boundary)).
 - The tap rate on confirm cards, from L2 traces ([step 7](#decisions)).
+- Whether `StepPersistence`'s event trail should replace or feed `agent_runs`
+  ([step 8](#other-options)).
 
 ---
 
@@ -903,14 +1061,15 @@ Not started. Decided so far, from the old trade-offs step:
 
 - **Consistency over availability:** one Postgres database; when the machine is down, so is the
   app, and backups keep the data.
-- **Simplicity over scale:** one process, one database, the scheduler inside the API process; no
-  queue, cache, or vector database.
+- **Simplicity over scale:** one process, one database, the job loop inside the API process; no
+  broker, cache, or vector database.
 - **Depth over speed:** replies stream, so the first output arrives in about 2 s, and a what-if can
   take about 15 s.
 
 Parked here, from an API draft of October 27, 2026 that was never agreed:
 
-- An endpoint map: chat with a stop endpoint; conversations; ledger reads and writes; imports that
+- An endpoint map: chat with stop and reattach endpoints ([step 8](#a-turn-outlives-its-connection));
+  conversations; ledger reads and writes; imports that
   return `202` and are polled; photo and voice endpoints; inbox; instance and auth.
 - The undo button calls REST, not a chat turn, so undo works without an LLM.
 - Conventions: integer paise; `null` means unknown, never `0`; balances carry `as_of`; RFC 9457
@@ -928,6 +1087,8 @@ Parked here, from an API draft of October 27, 2026 that was never agreed:
 - How an old confirm card shows that it's closed after you type past it ([step 7](#decisions)).
 - A read-only Settings panel showing the host each role connects to
   ([step 7](#what-leaves-the-box)).
+- How the interrupted note, the failure note, Retry, and the "cut off" card look
+  ([step 8](#every-ending-saves-the-same-two-records)).
 - **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason
   was only that traditional backends deploy this way, so the options were explored. Most sources are
   vendor blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an

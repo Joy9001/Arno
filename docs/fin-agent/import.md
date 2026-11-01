@@ -57,6 +57,12 @@ Each stage works as follows:
 A parser is saved only after you commit. One that failed the checks, or came from an import you
 rejected, isn't saved. A committed import is undone from the Imports screen, not by the agent.
 
+Stages 1-6 run as a [job](platform.md#notifications-and-scheduler), off the chat path. A crash or a
+failed attempt runs the job again from the top, which costs little, because nothing reaches the ledger
+before commit. The password isn't stored, so after a crash the card asks for it again. After the last
+attempt, the import is marked `failed`, with the reason on its card, and the file stays so you can
+retry ([step 8](system-design.md#jobs-a-plain-table-and-one-loop)).
+
 A file that isn't a statement, such as a salary slip or a loan letter, gets a plain "this isn't a
 statement," and nothing is imported.
 
@@ -197,10 +203,12 @@ what later matches the row to its statement line. Line items are not extracted.
 
 The photo endpoint runs this call, so the server adds the extracted fields to the thread's
 `model_history` as a marked entry and sets the outside-text flag. The client can't touch either
-([step 7](system-design.md#decisions)).
+([step 7](system-design.md#decisions)). The photo is saved first, so a failed vision call leaves a
+retry card rather than a lost photo.
 
 **Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
-→ text → the normal chat path. A transcript is your own words, so it doesn't flag the thread.
+→ text → the normal chat path. A transcript is your own words, so it doesn't flag the thread. The
+audio is saved first, so a failed transcription leaves a retry card.
 Hinglish accuracy is an eval category ([L7](plan.md#6-open-questions)).
 
 A dictation app such as [Hex](https://github.com/anomalyco/hex) needs no code from us: it pastes into

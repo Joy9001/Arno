@@ -21,7 +21,7 @@ src/fin_agent/
   importers/   readers, parse-run host functions, checks, reconciliation, photo extraction
   agent/       PydanticAI agent, system prompt, tool wrappers, skills/parse-statement/
   api/         FastAPI app, routers, auth
-  jobs/        scheduler, briefing, reminders, patterns
+  jobs/        job loop, briefing, reminders, patterns
   india/       categories, statement parsers, holidays, ₹ formatting, prompt notes
   cli.py
 web/           Next.js app (static export)
@@ -37,15 +37,15 @@ Folders get created when their layer starts, not before.
 
 ## API
 
-FastAPI, one process, _one worker_ (the scheduler runs in-process; a second worker duplicates
-jobs). OpenAPI is the contract every client shares. The API also serves the static web build, so
+FastAPI, one process, _one worker_ (running turns and the job loop live in that process, and recovery
+at boot assumes there's only one). OpenAPI is the contract every client shares. The API also serves the static web build, so
 web and API share one origin.
 
 The API exposes the following surfaces:
 
 | Surface | Shape |
 |---|---|
-| Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()` with `manage_message_history="server"`, `sdk_version=6`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
+| Chat | `POST /api/chat`—PydanticAI's `VercelAIAdapter` with `manage_message_history="server"`, `sdk_version=6`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). The run is a task of its own, so `GET /api/chat/{thread}/stream` can reattach and `POST /api/chat/{thread}/stop` stops it ([step 8](system-design.md#a-turn-outlives-its-connection)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
 | Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo |
 | Conversations | List, read, and full-text search of threads. A chat request with no thread ID creates one |
@@ -70,7 +70,7 @@ server output.
 
 The web app has the following parts:
 
-- **Chat (home):** Vercel AI SDK `useChat` + AI Elements. You see your threads, as in ChatGPT or
+- **Chat (home):** Vercel AI SDK `useChat`, with `resume` on, + AI Elements. You see your threads, as in ChatGPT or
   Claude: open an old one, or start a new chat at any time. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary, a chart the agent
@@ -117,7 +117,8 @@ are parked with public-internet access ([`parked.md`](parked.md)).
 
 ## Notifications and scheduler
 
-An in-process scheduler (APScheduler) in the API process runs the following jobs:
+A `jobs` table and one loop in the API process run the following jobs, plus statement parsing
+([system design, step 8](system-design.md#jobs-a-plain-table-and-one-loop)):
 
 | Job | When |
 |---|---|
@@ -131,11 +132,21 @@ An in-process scheduler (APScheduler) in the API process runs the following jobs
 Every job except your scheduled questions is fixed code with at most one LLM call, so it still runs
 when the LLM is down.
 
-Job state lives in Postgres, so a run missed while the machine slept or restarted fires once when
-it's back. Each run carries a key for its job and period (for example, one week's briefing), so a
-restart can't send it twice.
+The loop works as follows:
 
-Backups are not a scheduler job. They run in their own sidecar, so they keep running when the
+- **A due schedule creates one job and moves on from now.** A run missed while the machine slept or
+  restarted fires once when it's back, however many were missed. Times are computed in India time.
+- **Each job carries a key for its job and period,** such as one week's briefing, so a restart can't
+  send it twice.
+- **At boot, anything marked `running` goes back to `pending`.** There's one process, so it was
+  interrupted. A job runs again from the top, so every handler is safe to rerun.
+- **A failing job retries with backoff, up to 3 attempts.** After the last one, it's marked `failed`
+  and you get an inbox item.
+- **At most two jobs run at once,** so a long parse run can't hold up a reminder. Each has a time limit.
+- **A job can commit in the same transaction as its data,** so an import and its parse job exist
+  together or not at all.
+
+Backups are not a job. They run in their own sidecar, so they keep running when the
 app is broken.
 
 Numbers in briefings come from the engine; the LLM writes only the prose. If the LLM endpoint is
@@ -156,7 +167,7 @@ file defines the following services:
 ```yaml
 # compose.yaml — shape, not final
 services:
-  api:        # FastAPI + agent + scheduler + static web build
+  api:        # FastAPI + agent + job loop + static web build; stop_grace_period: 30s
   db:         # postgres, one pinned major version; volume for its data
   backup:     # nightly pg_dump → restic → off-site
   ollama:     # profile: local-llm
@@ -173,14 +184,27 @@ A deployment works as follows:
 - Host disk encryption (BitLocker, LUKS, FileVault) is an install requirement, stated in the
   docs—it's what protects the database at rest.
 - Images are amd64; arm64 is parked.
+- Every service restarts unless stopped, and `api` waits for a `pg_isready` health check on `db`. On a
+  deploy, running turns get 20 seconds to finish, then a `CancellationToken` stops and saves the rest
+  ([step 8](system-design.md#every-ending-saves-the-same-two-records)).
+- `CHAT_FALLBACK_CONTEXT_WINDOW` and, for a local main model, `LLM_CONTEXT_WINDOW` must match what the
+  server really uses, such as Ollama's `OLLAMA_CONTEXT_LENGTH`. The install docs say so
+  ([step 8](system-design.md#when-a-model-fails)).
+- The API opens one database connection per use rather than a pool, so a Postgres restart leaves
+  nothing to recover. While Postgres is down, the API answers with a plain "database unreachable" and
+  spends nothing on the LLM.
 
 ---
 
 ## Backups
 
-- The `backup` sidecar runs `pg_dump` nightly and hands it to restic, which encrypts, dedupes,
-  and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent of
-  the API process.
+- The `backup` sidecar checks hourly and runs `pg_dump` whenever its last success is over 24 hours
+  old, because a nightly cron misses a sleeping laptop. It hands the dump to restic, which encrypts,
+  dedupes, and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent
+  of the API process.
+- The sidecar records each success in Postgres, through its own role, which can read for `pg_dump` and
+  write only that record. A daily job checks it, and no success for 48
+  hours sends an inbox item and a push.
 - Backups exist from L1—before real money goes in at L2.
 - A restore drill is a milestone (L8). On a fresh machine, given the backup and the restic
   password, the ledger comes back.

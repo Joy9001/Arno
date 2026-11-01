@@ -210,6 +210,18 @@ tested: Docker's engine wasn't running when this was checked.
 
 **Trigger:** any tool or bridge that reaches the network, or a supply-chain incident.
 
+### A job library
+
+**Why parked:** one process and a plain table cover the jobs in about 80 lines
+([step 8](system-design.md#jobs-a-plain-table-and-one-loop)). A library earns its place with several
+workers, which this product doesn't have.
+
+**Shape when it comes:** re-check [pgtask](https://github.com/Kludex/pgtask) once it leaves Pre-Alpha:
+it needs only Postgres, works with psycopg, and has a harness capability. Otherwise, Procrastinate. The
+handlers stay, because they're already safe to rerun.
+
+**Trigger:** a second worker, or the loop's edge cases start costing time.
+
 ---
 
 ## Agent

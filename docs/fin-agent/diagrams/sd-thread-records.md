@@ -3,7 +3,7 @@
 **What it shows:** One chat turn. The client sends the thread's ID and a new message, never its
 history. The server loads the thread's model history, swaps in a new snapshot if the old one is
 stale, and runs the agent. When the run ends, `all_messages()` replaces the model history, which
-compaction may have edited, and `new_messages()` is added to `messages`, which is never edited.
+compaction may have edited, and this turn's messages are added to `messages`, which is never edited.
 
 **Diagram type:** Architecture. No semantic pattern matched.
 
