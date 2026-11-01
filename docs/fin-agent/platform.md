@@ -45,7 +45,7 @@ The API exposes the following surfaces:
 
 | Surface | Shape |
 |---|---|
-| Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()` with `manage_message_history="server"`. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
+| Chat | `POST /api/chat`—PydanticAI `VercelAIAdapter.dispatch_request()` with `manage_message_history="server"`, `sdk_version=6`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
 | Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo |
 | Conversations | List, read, and full-text search of threads. A chat request with no thread ID creates one |
@@ -78,6 +78,10 @@ The web app has the following parts:
   those cards itself from the `run_code` return. Citations open the rows behind a number.
   Voice-note recording and photo upload live in the composer. Links in
   agent replies render as plain text, and external images never load ([Security](#security)).
+  The AI SDK's major version is pinned to match the adapter's `sdk_version`, because at a mismatch
+  approvals are silently ignored and the card just comes back
+  ([tested](system-design.md#the-safety-tests-october-31-2026) with the adapter's default, 5). The
+  adapter also accepts 7, but only 6 is tested, so changing it means rerunning that test.
 - **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
 - **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
@@ -198,14 +202,53 @@ The following table is the threat model, refreshed at L8:
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
 | Live host compromise | _Not defended._ Stated in the docs |
 | Prompt injection through statements or photos | Rule 2 in `plan.md` §4: statements are parsed in a run with no write or ledger tools, and photos by a tool-less call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
-| Data carried out through rendered output | A content security policy from L0 that allows images only from the app's own origin (`img-src 'self'`); links in agent replies render as plain text |
-| Agent-written SQL | The `agent_ro` role: read-only, no auth tables, statement timeout |
+| A forged or replayed confirm answer | Server-held history: an answer counts once, only for a pending call, with the stored arguments ([tested](system-design.md#the-safety-tests-october-31-2026)) |
+| Secrets typed into chat | `InputGuardrail` removes API keys, card numbers, PAN, and spaced Aadhaar before the model or storage sees them. Passwords, OTPs, and bank account numbers can't be detected, so a statement password has its own field on the import card |
+| Data carried out through rendered output | A content security policy from L0 that allows images only from the app's own origin (`img-src 'self'`); links in agent replies render as plain text. Client file URLs are off, so a client can't make the model fetch one |
+| Agent-written SQL | The `agent_ro` grants are the boundary: `SELECT` only, no auth tables. The read-only default, the timeout, one statement through the extended protocol, and a transaction that's always rolled back are extra layers ([`tools.md`](tools.md#run_query)). `TEMP` is revoked, and no network extension such as `dblink` is installed |
 | Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
-| LLM provider sees data | The self-hoster's choice for each role. Docs state plainly what each role sends |
-| Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI |
+| LLM provider sees data | The self-hoster's choice for each role. See [What each role sends](#what-each-role-sends) |
+| Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
 
 Logs never contain amounts, merchants, or message content—only IDs and timings. Traces that
 include content live in the `agent_runs` table in the database.
+
+The `agent_ro` setup, tested on Postgres 18.6:
+
+```sql
+ALTER ROLE agent_ro SET default_transaction_read_only = on;
+ALTER ROLE agent_ro SET statement_timeout = '2s';
+GRANT SELECT ON <the ledger, plan, people, categorization, and conversation tables and views> TO agent_ro;
+REVOKE TEMP ON DATABASE fin_agent FROM PUBLIC;
+```
+
+### What each role sends
+
+The following table lists what leaves the box, by role:
+
+| Role | Sends | When |
+|---|---|---|
+| Chat | Snapshot (balances, names, preferences), thread history, tool returns | Every turn |
+| Parse run | Sample statement rows, including payee names and notes | New layouts only |
+| Vision | The photo, or statement pages with no text | Each photo or such page |
+| Speech-to-text | Your audio | Each voice note |
+| Backups, push | Encrypted backups; contentless pings | Nightly; on notification |
+| Never | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
+
+There are no analytics. A local model for a role means nothing leaves for that role.
+
+### What providers keep
+
+Checked October 31, 2026. Which provider runs each role is your choice, and the install docs repeat
+this table with its date:
+
+| Provider | Trains on it | Keeps it |
+|---|---|---|
+| [Anthropic API](https://privacy.claude.com/en/articles/7996868-is-my-data-used-for-model-training) | No, by default | [Up to 30 days](https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-my-organization-s-data). [Fable 5 and 5.1, Mythos 5 and 5.1](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention) require 30 days, with no zero-retention option. Flagged content can stay up to 2 years |
+| [OpenAI API](https://developers.openai.com/api/docs/guides/your-data) | No, by default | Abuse-monitoring logs, up to 30 days, longer if legally required or to prevent harm |
+| [Gemini paid](https://ai.google.dev/gemini-api/terms) | No | Limited abuse-monitoring logs |
+| [Gemini unpaid](https://ai.google.dev/gemini-api/terms) | **Yes, with human review.** Google's terms say not to send personal information | Don't use it for any role |
+| Local models (Ollama, `speaches`) | Nothing leaves | |
 
 ---
 

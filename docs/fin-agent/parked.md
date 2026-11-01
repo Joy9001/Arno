@@ -197,6 +197,19 @@ India code lives in one folder, so extracting an interface later is mechanical.
 
 **Trigger:** someone asks to run it on a Raspberry Pi or an ARM VPS.
 
+### An egress proxy
+
+**Why parked:** the agent has no network path of its own, so this only guards against a malicious
+dependency, and such code could still send data out through an allowed LLM host with an attacker's
+key. Chosen against on November 1, 2026 ([step 7](system-design.md#options-not-taken)).
+
+**Shape when it comes:** an internal Compose network plus an allowlisting proxy sidecar, as
+[Hermes documents](https://hermes-agent.nousresearch.com/docs/user-guide/egress/network-isolation).
+The allowlist needs the LLM, speech, and vision hosts, browser push, Tailscale, and backups. Not
+tested: Docker's engine wasn't running when this was checked.
+
+**Trigger:** any tool or bridge that reaches the network, or a supply-chain incident.
+
 ---
 
 ## Agent

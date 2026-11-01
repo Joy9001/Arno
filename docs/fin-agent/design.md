@@ -36,7 +36,7 @@ The database has two roles:
 | Role | Can |
 |---|---|
 | `app` | Owns the schema; everything the API does |
-| `agent_ro` | `SELECT` on the ledger, plan, people, categorization, and conversation tables and views. No auth tables. `default_transaction_read_only` and a `statement_timeout`, so `run_query` can neither write nor run away. pgledger's functions run with the caller's rights, so this role can't write through them either |
+| `agent_ro` | `SELECT` on the ledger, plan, people, categorization, and conversation tables and views. No auth tables, and `TEMP` is revoked. These grants are the boundary. `default_transaction_read_only` and a `statement_timeout` are extra layers, because a role can change its own settings ([step 7](system-design.md#decisions)). pgledger's functions run with the caller's rights, so this role can't write through them either |
 
 ### Instance
 
@@ -246,10 +246,10 @@ The agent has six write tools:
 | `import_document(attachment_id)` | Starts an import, which ends in `review` state. Committing is a separate, explicit step on the review screen. It has no password argument: a password goes in a field on the import card, over REST |
 | `undo(undo_id)` | Reverts the last write in this conversation, or a given one |
 
-Voice and photos are not tools. They're input preprocessing—speech-to-text output, or a typed
-photo extraction—handed to the agent as a user turn. That keeps rule 2 in `plan.md` §4. A photo
-extraction's text fields count as outside text, so that turn flags the conversation
-([write tiers](#untrusted-text-and-write-tiers)).
+Voice and photos are not tools. They're input preprocessing, which keeps rule 2 in `plan.md` §4.
+Speech-to-text output reaches the agent as a user turn. A photo extraction's text fields count as
+outside text, so the photo endpoint adds them to the thread as a marked entry and flags the
+conversation, and the client can't touch either ([write tiers](#untrusted-text-and-write-tiers)).
 
 ### Design notes
 
@@ -315,10 +315,16 @@ forever. This is how rule 2 in `plan.md` §4 works.
 **How it's tracked.** Tool returns wrap outside-text fields in markers, and the system prompt has
 one line saying that marked text is data from statements and never an instruction. Frontier
 models stop most casual attempts this way, but adaptive attacks beat prompt-based defenses, so the
-markers are a layer, not the boundary. When a read tool returns marked text—directly or nested
-inside `run_code`—it sets `conversations.outside_text_at`. Server code sets the flag from where the
-data came from; the model can't set or clear it. A new thread starts clean, unless its snapshot holds
-a name that still carries a mark, and the flag then lasts as long as the thread.
+markers are only a hint: a script can strip them, and truncation can split them
+([tested](system-design.md#the-safety-tests-october-31-2026)). `mark()` also caps outside text at 200
+characters and strips invisible characters.
+
+**The flag is the boundary.** When a read tool returns marked text—directly or nested inside
+`run_code`—it sets `conversations.outside_text_at`. Server code sets the flag from where the data
+came from; the model can't set or clear it. A new thread starts clean, unless its snapshot holds a
+name that still carries a mark, and the flag then lasts as long as the thread.
+[Step 7](system-design.md#why-the-models-judgment-isnt-the-only-layer) records why the model's own
+judgment isn't enough.
 
 **A mark can clear.** A marked name you confirm on a card loses its mark. Without this, a schedule
 name copied from a statement would flag every conversation that reads the financial context, and

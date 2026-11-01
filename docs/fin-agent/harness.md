@@ -84,6 +84,7 @@ The following capabilities are on from the start:
 | Caching and Warn On Cache Busts | Prompt caching is the main cost lever, and the warning shows when it stops working. The warning only observes |
 | Trace logging (Fin-Agent's own, to `agent_runs`) | Not a harness capability—every run's model, tokens, cost, tool calls, and results, inside the database on the encrypted host disk. Costs nothing and is the precondition for evals |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
+| Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
 | Skills, in parse runs only | The know-how for writing a statement parser stays out of the main prompt, and it can grow without code changes. A library shipped with the app, read through a `workspace=` backend, adds one tool, `load_capability` ([`import.md`](import.md)) |
 
@@ -93,7 +94,8 @@ The following capabilities wait for their triggers:
 
 | Capability | Adopt when |
 |---|---|
-| Guardrails | Outside text larger than short statement fields reaches the agent (for example, a chat-app bridge forwarding other people's messages), or a tool gains a destructive mode undo can't reverse. Today outside text is limited to statement fields, marked as data, and lasting writes are gated (rule 2 in `plan.md` §4) |
+| Guardrails on tool calls and results | Outside text larger than short statement fields reaches the agent (for example, a chat-app bridge forwarding other people's messages), or a tool gains a destructive mode undo can't reverse. Today `mark()` caps outside text at 200 characters and marks it as data, and lasting writes are gated (rule 2 in `plan.md` §4) |
+| Prompt Injection Defender, Approval Reviewer, Tool Call Judge, Artifact Scanner | Not adopted ([system design, step 7](system-design.md#options-not-taken)). Revisit Tool Call Judge if the eval fooled rate is high |
 | Tool Search | Evals show the model confusing or missing tools. The model sees only seven of the 14, so a tool count isn't the trigger |
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't. No memory library either ([system design, step 6](system-design.md#memory-no-memory-library)) |
 | Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds |
@@ -139,8 +141,8 @@ This applies to the Fin-Agent system prompt as follows:
 - Two small injected blocks, each owned by data rather than prose: the India prompt notes
   (Hinglish examples, currency) and an instruction to reply in the user's own language mix.
   Active preferences arrive through the pinned snapshot, not the prompt.
-- The advice boundary is one line: facts and tradeoffs, never investment or product
-  recommendations.
+- The advice boundary is one short rule: facts and tradeoffs, never investment or product
+  recommendations ([system design, step 7](system-design.md#the-advice-boundary)).
 - Behavior that must _always_ hold belongs in code, not prose. Rule 1 in `plan.md` §4 is
   enforced structurally: the model computes by calling tools or by writing a Code Mode script,
   so every number it states arrives as a tool return.
@@ -191,6 +193,7 @@ Outside text
 Boundaries
 - You never move money. They pay in their own bank or UPI app.
 - Give facts and tradeoffs, never a recommendation on investments or which product to buy.
+  If asked to pick one, say you don't pick products, then explain what to compare.
 - If you can't answer, say what's missing and what would fix it.
 - A statement password goes on the import card, never in chat.
 
@@ -205,8 +208,9 @@ Categories: {the user's list}
 ## Context and memory
 
 This section holds the configuration behind
-[system design, step 6](system-design.md#step-6-context-and-memory), which records why. Every value is
-a starting point, tuned from traces.
+[system design, step 6](system-design.md#step-6-context-and-memory) and
+[step 7](system-design.md#decisions), which record why. Every value is a starting point, tuned from
+traces.
 
 ```python
 target = min(100_000, primary_window // 2)  # primary_window: the main model's, or LLM_CONTEXT_WINDOW
@@ -217,12 +221,19 @@ agent = Agent(
     instructions=instructions,
     toolsets=[read_tools.with_metadata(code_mode=True), write_tools],
     capabilities=[
+        InputGuardrail(guard=[
+            secret_data(),
+            personal_data(only=["credit_card"], extra={
+                "pan": r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
+                "aadhaar": r"\b[2-9]\d{3}[ -]\d{4}[ -]\d{4}\b",  # spaced only; unspaced collides with UTRs
+            }),
+        ]),
         CodeMode(tools={"code_mode": True}),
         Caching(),
         WarnOnCacheBusts(),
         SystemReminders(dynamic_reminders=[date_and_changes]),
         ToolOutputLimits(
-            bands=[Band(over=10_000, action=Truncate(max_chars=10_000))],
+            bands=[Band(over=10_000, action=Truncate(max_chars=10_000, strategy=TruncationStrategy.head))],
             tool_filter=["run_code"],  # applied globally, it corrupts what a script receives
         ),
         TieredCompaction(
@@ -240,13 +251,18 @@ agent = Agent(
     ],
 )
 
+# A new thread's history. The snapshot is its own exchange, so redaction can replace your message.
+history = [ModelRequest(parts=[pin(snapshot)]), ModelResponse(parts=[TextPart("Snapshot read.")])]
+
 VercelAIAdapter.dispatch_request(
     request,
     agent=agent,
+    sdk_version=6,                    # the default, 5, silently ignores approvals
     manage_message_history="server",
     message_history=history,          # conversations.model_history, snapshot swapped if stale
     conversation_id=str(thread.id),
     usage_limits=turn_limits,
+    allowed_file_url_schemes=frozenset(),  # uploads use attachments
     on_complete=save_both_records,    # all_messages() and new_messages()
 )
 ```

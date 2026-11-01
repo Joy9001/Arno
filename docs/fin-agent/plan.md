@@ -421,14 +421,21 @@ Answer each when its layer arrives, not before.
 - **L0:** Tailscale on the host, or as a sidecar container in compose?
 - **L2:** enforce rule 1 at the output too—check that every number in a reply matches a tool return—or rely on evals?
   Which local chat models handle which tasks? The scorecard records it. What are the real token
-  counts, and is a 1-hour prompt cache worth it? Traces answer both.
+  counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
+  Traces answer all three.
 - **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
   statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor
   probability makes a "yes"—90% or 95%? Card share of variable spend—learned from history or set
   for each account?
 - **L6:** briefing time, reminder lead days, and recurring-charge thresholds—tune on real data.
-- **L7:** which STT endpoint passes the Hinglish evals—cloud or local?
+- **L7:** which STT endpoint passes the Hinglish evals—cloud or local? Test Qwen3-ASR beside Whisper:
+  [Hex's benchmark](https://github.com/anomalyco/hex/blob/HEAD/docs/plans/language-recommendations.md)
+  gives Hindi word error rates of 18.85% for Whisper turbo, 12.68% for Qwen3-ASR 0.6B, and 7.84% for
+  Qwen3-ASR 1.7B. Those are Hex's numbers on clean, read-aloud Hindi, so they say nothing about
+  Hinglish or phone audio, and neither its licence nor an OpenAI-compatible server for it is checked.
+  Does passing payee names as a context prompt help recognition? With a cloud endpoint, those names
+  reach that provider too.
 - **L8:** MIT or Apache-2.0?
 
 ---

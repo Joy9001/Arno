@@ -27,10 +27,10 @@ every write is a direct call with its own card ([note](diagrams/sd-tool-surface.
 | Read returns | Only JSON-native types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`. Dates are ISO strings, and every balance has an `as_of` |
 | Calling from a script | `await` and keyword arguments only: `await amortize(loan="Home loan")` |
 | Coverage | `coverage()` reports which dates have statements. A gap is reported, never summed as zero |
-| Outside text | `mark()` wraps the text in markers, strips any closing marker inside it, and sets `conversations.outside_text_at`. The model can't set or clear this ([write tiers](design.md#untrusted-text-and-write-tiers)) |
+| Outside text | `mark()` wraps the text in markers, strips any closing marker and invisible character inside it, caps it at 200 characters, and sets `conversations.outside_text_at`. The model can't set or clear this. The flag is the boundary, and the markers are only a hint ([write tiers](design.md#untrusted-text-and-write-tiers)) |
 | Lists | 50 rows by default, with a cursor |
 | Writes | `write_group()` is one short transaction whose audit rows share a group, returned as `undo_id`. The message ID and `ctx.tool_call_id` come from context, so they're never inputs |
-| Confirm | `gate(change)`: if the conversation is flagged and `ctx.tool_call_approved` is false, raise `ApprovalRequired`. Approval ends the run and the tool runs again from the top, so it validates again. Server-side binding of the answer is in [step 7](system-design.md#step-7-safety-and-trust) |
+| Confirm | `gate(change)`: if the conversation is flagged and `ctx.tool_call_approved` is false, raise `ApprovalRequired`. Approval ends the run and the tool runs again from the top, so it validates again. Stored history binds the answer: it counts once, only for a pending call, with the stored arguments ([step 7](system-design.md#decisions)) |
 | Tier | Each tool declares its [write tier](design.md#untrusted-text-and-write-tiers) in its tool metadata |
 | Old returns | Compaction can remove an old return, so no tool relies on an ID staying in the chat. `undo` reads `audit_log`, and an unknown ID raises `ModelRetry` ([step 6](system-design.md#compaction)) |
 
@@ -237,14 +237,20 @@ UI: the SQL, shown next to the answer.
 
 ```
 connect as agent_ro                    # SELECT only, no auth tables
-under statement_timeout and a client-side deadline:
-    run one statement; fetch up to 1,001 rows
+in a read-only transaction, under a client-side deadline:
+    SET LOCAL statement_timeout = '2s'
+    run the SQL with prepare=True      # the extended protocol rejects a second statement
+    fetch up to 1,001 rows
+    always roll back                   # undoes anything the statement set
 truncated = got 1,001
 whole NUMERIC values → int             # Code Mode would turn a Decimal into a string
 mark() every text value; always set the flag
 on SQL error: ModelRetry(Postgres's message)
-reset the connection's session settings
 ```
+
+The grants are the boundary. Everything else here is an extra layer, because the role can change its
+own settings ([step 7](system-design.md#decisions)). `mark()`'s cap applies here too, so a message
+search returns snippets, and the model can use `substr` to read further.
 
 ### `amortize`
 

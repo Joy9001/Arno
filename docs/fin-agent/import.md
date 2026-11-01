@@ -195,8 +195,18 @@ the extracted fields, so a misread digit is easy to spot and undo. On Android, t
 target, so a screenshot goes straight from the UPI app to Fin-Agent. The UPI reference number is
 what later matches the row to its statement line. Line items are not extracted.
 
+The photo endpoint runs this call, so the server adds the extracted fields to the thread's
+`model_history` as a marked entry and sets the outside-text flag. The client can't touch either
+([step 7](system-design.md#decisions)).
+
 **Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
-→ text → the normal chat path. Hinglish accuracy is an eval category (L7).
+→ text → the normal chat path. A transcript is your own words, so it doesn't flag the thread.
+Hinglish accuracy is an eval category ([L7](plan.md#6-open-questions)).
+
+A dictation app such as [Hex](https://github.com/anomalyco/hex) needs no code from us: it pastes into
+the chat box as typed text, skipping the `STT_*` endpoint, and its transcription stays on your machine.
+A phone keyboard's voice typing should work the same way, but it isn't tested, and where its audio
+goes isn't checked.
 
 ---
 
