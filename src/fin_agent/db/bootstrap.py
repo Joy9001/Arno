@@ -10,15 +10,26 @@ from psycopg import sql
 logger = logging.getLogger(__name__)
 
 
-def set_agent_ro_password(conn: psycopg.Connection, password: str | None) -> None:
-    """Set `agent_ro`'s password from the environment.
+def set_role_password(conn: psycopg.Connection, role: str, password: str | None) -> None:
+    """Set a login role's password from the environment.
 
     The role has no password until this runs, so it cannot log in by accident. A missing
-    AGENT_RO_PASSWORD is not fatal at L0: nothing connects as `agent_ro` until the read tools
-    land at L2.
+    environment value is not fatal: the boundary role simply cannot connect.
     """
     if not password:
-        logger.info("AGENT_RO_PASSWORD is not set; agent_ro has no password")
+        logger.info("%s password is not set; the role has no password", role)
         return
     with conn.transaction():
-        conn.execute(sql.SQL("ALTER ROLE agent_ro WITH PASSWORD {}").format(sql.Literal(password)))
+        conn.execute(
+            sql.SQL("ALTER ROLE {} WITH PASSWORD {}").format(
+                sql.Identifier(role), sql.Literal(password)
+            )
+        )
+
+
+def set_agent_ro_password(conn: psycopg.Connection, password: str | None) -> None:
+    set_role_password(conn, "agent_ro", password)
+
+
+def set_backup_password(conn: psycopg.Connection, password: str | None) -> None:
+    set_role_password(conn, "backup", password)

@@ -6,6 +6,7 @@ Admin commands never go over HTTP. Anyone with a shell on the host already has t
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import typer
 import uvicorn
@@ -13,9 +14,11 @@ import uvicorn
 from fin_agent.auth.sessions import revoke_all_sessions
 from fin_agent.auth.setup import issue_setup_token, setup_required
 from fin_agent.config import ConfigurationError, get_settings
-from fin_agent.db.bootstrap import set_agent_ro_password
+from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
+from fin_agent.demo.persona import seed_demo
+from fin_agent.demo.template import clone_database
 
 app = typer.Typer(
     add_completion=False,
@@ -23,7 +26,9 @@ app = typer.Typer(
     help="Fin-Agent administration and development.",
 )
 passkeys_app = typer.Typer(no_args_is_help=True, help="Passkey recovery.")
+demo_app = typer.Typer(no_args_is_help=True, help="The synthetic demo persona.")
 app.add_typer(passkeys_app, name="passkeys")
+app.add_typer(demo_app, name="demo")
 
 logger = logging.getLogger("fin_agent")
 
@@ -44,6 +49,7 @@ def migrate() -> None:
     try:
         applied = run_migrations(conn)
         set_agent_ro_password(conn, settings.agent_ro_password)
+        set_backup_password(conn, settings.backup_password)
     finally:
         conn.close()
     if applied:
@@ -142,6 +148,65 @@ def passkeys_reset() -> None:
             f"First-run setup is open. Enter this setup token (valid "
             f"{settings.setup_token_ttl_hours}h): {token}"
         )
+
+
+@demo_app.command("seed")
+def demo_seed(
+    today: str | None = typer.Option(None, help="Anchor date (YYYY-MM-DD). Defaults to today."),
+    reset: bool = typer.Option(
+        False, "--reset/--no-reset", help="Clear the L1 tables before seeding."
+    ),
+    force: bool = typer.Option(False, "--force", help="Skip the reset confirmation."),
+) -> None:
+    """Seed the synthetic Indian persona: the demo instance and the test fixture."""
+    anchor = date.fromisoformat(today) if today else None
+    settings = _settings()
+    if (
+        reset
+        and not force
+        and not typer.confirm("This clears the L1 tables in the current database. Continue?")
+    ):
+        raise typer.Exit(code=1)
+    conn = connect(settings.database_url)
+    try:
+        run_migrations(conn)
+        set_agent_ro_password(conn, settings.agent_ro_password)
+        set_backup_password(conn, settings.backup_password)
+        summary = seed_demo(conn, today=anchor, reset=reset)
+    finally:
+        conn.close()
+    typer.echo(
+        "Seeded demo persona: "
+        f"{summary['accounts']} accounts, {summary['categories']} categories, "
+        f"{summary['schedules']} schedules, {summary['goals']} goals, "
+        f"{summary['movements']} movements, {summary['people']} people "
+        f"(today={summary['today']})."
+    )
+
+
+@demo_app.command("template")
+def demo_template(
+    target: str = typer.Option("fin_agent_demo_template", help="Template database name to create."),
+    today: str | None = typer.Option(None, help="Anchor date (YYYY-MM-DD). Defaults to today."),
+    force: bool = typer.Option(False, "--force", help="Skip the reset confirmation."),
+) -> None:
+    """Seed the current database, then clone it as a Postgres template for eval trials."""
+    anchor = date.fromisoformat(today) if today else None
+    settings = _settings()
+    if not force and not typer.confirm("This reseeds and clones the current database. Continue?"):
+        raise typer.Exit(code=1)
+    conn = connect(settings.database_url)
+    try:
+        run_migrations(conn)
+        summary = seed_demo(conn, today=anchor, reset=True)
+        source = conn.info.dbname
+    finally:
+        conn.close()
+    clone_database(settings.database_url, source=source, target=target)
+    typer.echo(
+        f"Seeded {source} ({summary['movements']} movements) and created template {target}. "
+        f"Clone a trial with CREATE DATABASE <trial> TEMPLATE {target}."
+    )
 
 
 if __name__ == "__main__":

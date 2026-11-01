@@ -35,6 +35,7 @@ class Settings:
     setup_token_ttl_hours: int
     auto_migrate: bool
     agent_ro_password: str | None
+    backup_password: str | None
 
     @property
     def cookie_name(self) -> str:
@@ -80,6 +81,7 @@ class Settings:
             setup_token_ttl_hours=int(os.environ.get("FIN_AGENT_SETUP_TOKEN_TTL_HOURS", "24")),
             auto_migrate=_flag("FIN_AGENT_AUTO_MIGRATE", True),
             agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,
+            backup_password=os.environ.get("BACKUP_PASSWORD") or None,
         )
 
 

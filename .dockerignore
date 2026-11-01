@@ -16,7 +16,6 @@ web/dist
 docs
 evals
 tests
-backup
 .env
 .env.*
 !.env.example

@@ -3,11 +3,12 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L0 (foundations) is built.** Postgres in Compose with numbered SQL migrations, schema
+> **Status: L1 (ledger) is built.** Postgres in Compose with numbered SQL migrations, schema
 > v1 on a vendored pgledger, a FastAPI shell serving a Vite/React build under a strict content
-> security policy, passkey login, and CI. The ledger endpoints, agent, and projection engine land
-> in later layers. The authoritative plan is
-> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
+> security policy, passkey login, and CI. L1 adds accounts, balanced movements, schedules,
+> goals, people, categorization rules, group undo, full export, the restic backup sidecar, and
+> the seeded demo persona. The agent and projection engine land in later layers. The
+> authoritative plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
 > [`docs/archive/`](docs/archive/) are not authoritative.
 
 ## Built on
@@ -19,8 +20,9 @@ question about it — including whether you can afford something, and what it wo
   (BSD-3-Clause, © 2021 Scoville). License texts are in
   [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and ship in the image. No endorsement is
   implied.
-- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, psycopg 3, Vite and React, and
-  Tailscale. Full choices are in [plan §3](docs/fin-agent/plan.md#3-stack).
+- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, psycopg 3, Vite and React,
+  Tailscale, `python-dateutil` and `holidays` for schedules, and restic for encrypted off-site
+  backups. Full choices are in [plan §3](docs/fin-agent/plan.md#3-stack).
 
 ## Run it
 
@@ -70,10 +72,23 @@ fin-agent setup                 # issue a first-run setup token
 fin-agent setup-token          # same, kept for scripts
 fin-agent passkeys list        # registered passkeys
 fin-agent passkeys reset       # delete every passkey and session, reopen setup
+fin-agent demo seed            # seed an empty demo instance
+fin-agent demo seed --reset    # reseed (asks first; add --force in scripts)
+fin-agent demo template        # clone as an eval template (asks first)
 ```
 
 Admin commands run on the host, never over HTTP. A passkey reset needs a shell on the host, which
 already has the data.
+
+## Backups
+
+Compose starts a `backup` sidecar with its own `backup` database role. It checks hourly and runs
+`pg_dump` whenever the last success is over 24 hours old, then `restic` encrypts and ships the
+dump to `RESTIC_REPOSITORY`. Each attempt is recorded in `backup_runs`, which the Settings panel
+shows. The default repository is the local `backup-data` volume; set an S3/B2/R2 or rclone
+repository to go off-site. `RESTIC_PASSWORD` is the one secret that must live somewhere other
+than this machine. The restore steps and the tested round-trip are in
+[`backup/README.md`](backup/README.md).
 
 ## Develop
 
@@ -105,7 +120,7 @@ Checks:
 ```bash
 uv run ruff check . && uv run ruff format --check .
 DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
-AGENT_RO_PASSWORD=<password> uv run pytest -q
+AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
 pnpm --dir web lint && pnpm --dir web build
 ```
 
@@ -120,15 +135,18 @@ src/fin_agent/
   api/         FastAPI app, auth, static web build, security headers
   auth/        passkeys, sessions, first-run setup
   db/          connection, migrations/*.sql, vendor/pgledger/
+  ledger/      plain functions over Postgres: accounts, movements, schedules, goals, people
+  india/       categories, RRULEs, the working-day calendar, rupee formatting
+  demo/        the seeded synthetic persona and template clone
   cli.py
-web/           Vite and React app (a static build)
+web/           Vite and React app (a static build): read-only panels and Settings
+backup/        pg_dump + restic sidecar
 tests/         pytest, including a software WebAuthn authenticator
 compose.yaml
 ```
 
-Folders for later layers (`ledger/`, `engine/`, `importers/`, `agent/`, `jobs/`, `india/`) are
-created when their layer starts. The old eval harness in `evals/` predates this plan and retires at
-L4.
+Folders for later layers (`engine/`, `importers/`, `agent/`, `jobs/`) are created when their layer
+starts. The old eval harness in `evals/` predates this plan and retires at L4.
 
 ## Security
 
@@ -141,9 +159,10 @@ L4.
   only from the app's own origin.
 - `TrustedHost` accepts loopback and `*.ts.net` by default; widen it with
   `FIN_AGENT_TRUSTED_HOSTS`.
-- The database has two roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
+- The database has three roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
   people, categorization, settings, and conversation tables and views, no auth tables, no `TEMP`,
-  read-only by default, and a two-second statement timeout.
+  read-only by default, and a two-second statement timeout; `backup` can `SELECT` for `pg_dump`
+  and `INSERT` into `backup_runs` only.
 - Secrets live in `.env`, never in the database. Host disk encryption is an install requirement.
 
 ## The one rule

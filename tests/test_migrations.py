@@ -43,6 +43,7 @@ EXPECTED_TABLES = {
     "push_subscriptions",
     "jobs",
     "job_schedules",
+    "backup_runs",
 }
 
 EXPECTED_VIEWS = {"v_spending", "v_cashflow", "v_balances", "v_owed"}
@@ -62,7 +63,7 @@ def test_every_migration_is_recorded_once(db):
     assert versions == list(range(1, len(discover()) + 1))
     assert current_version(db) == len(discover())
     assert rows[0]["name"] == "pgledger"
-    assert [row["name"] for row in rows][-2:] == ["views", "grants"]
+    assert [row["name"] for row in rows][-3:] == ["views", "grants", "ledger_l1"]
 
 
 def test_migrations_are_idempotent(db):

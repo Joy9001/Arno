@@ -1,8 +1,43 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "./api";
 import { logout, type Health, type User } from "./auth";
+import { AccountsPanel } from "./panels/Accounts";
+import { GoalsPanel } from "./panels/Goals";
+import { LedgerPanel } from "./panels/Ledger";
+import { PeoplePanel } from "./panels/People";
+import { SchedulesPanel } from "./panels/Schedules";
+import { SettingsPanel } from "./panels/Settings";
+
+const TABS = [
+  { id: "ledger", label: "Ledger" },
+  { id: "accounts", label: "Accounts and cards" },
+  { id: "schedules", label: "Schedules" },
+  { id: "goals", label: "Goals" },
+  { id: "people", label: "People" },
+  { id: "settings", label: "Settings" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+function Panel({ tab }: { tab: TabId }) {
+  switch (tab) {
+    case "ledger":
+      return <LedgerPanel />;
+    case "accounts":
+      return <AccountsPanel />;
+    case "schedules":
+      return <SchedulesPanel />;
+    case "goals":
+      return <GoalsPanel />;
+    case "people":
+      return <PeoplePanel />;
+    case "settings":
+      return <SettingsPanel />;
+  }
+}
 
 export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: () => void }) {
+  const [tab, setTab] = useState<TabId>("ledger");
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,52 +65,42 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   }
 
   return (
-    <div className="app">
+    <div className="app wide">
       <header className="topbar">
         <div>
           <p className="eyebrow">Fin-Agent</p>
           <h1>{user?.display_name ?? "Fin-Agent"}</h1>
         </div>
-        <button type="button" className="ghost" onClick={() => void signOut()}>
-          Sign out
-        </button>
+        <div className="topbar-actions">
+          {health && <span className="fine">schema v{health.schema_version}</span>}
+          <button type="button" className="ghost" onClick={() => void signOut()}>
+            Sign out
+          </button>
+        </div>
       </header>
 
-      <main className="content">
-        <section className="card">
-          <h2>Foundations</h2>
-          <p className="muted">
-            The shell, the database, and passkey login are in place. Accounts, movements, chat,
-            and the projection land in the layers after this one.
-          </p>
-          <dl className="status">
-            <div>
-              <dt>API</dt>
-              <dd>{health ? health.status : error ? "unreachable" : "checking…"}</dd>
-            </div>
-            <div>
-              <dt>Database</dt>
-              <dd>{health ? health.database : "—"}</dd>
-            </div>
-            <div>
-              <dt>Schema</dt>
-              <dd>{health ? `v${health.schema_version}` : "—"}</dd>
-            </div>
-          </dl>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-        </section>
+      <nav className="tabs" aria-label="Panels">
+        {TABS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={tab === item.id ? "tab active" : "tab"}
+            aria-current={tab === item.id ? "page" : undefined}
+            onClick={() => setTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
 
-        <section className="card">
-          <h2>Reached over your tailnet</h2>
-          <p className="muted">
-            Nothing is exposed to the open internet. The API listens on loopback, and
-            <code> tailscale serve</code> gives it HTTPS on your private network.
-          </p>
-        </section>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+
+      <main className="content">
+        <Panel tab={tab} />
       </main>
     </div>
   );

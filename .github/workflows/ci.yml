@@ -18,6 +18,10 @@ jobs:
       # A scratch database. conftest refuses any name that doesn't end in _test.
       DATABASE_URL: postgresql://app:app@127.0.0.1:5432/fin_agent_test
       AGENT_RO_PASSWORD: agent_ro_test_password
+      BACKUP_PASSWORD: backup_test_password
+      # The runner may also have an older client; pin the one matching the server.
+      PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
+      PSQL: /usr/lib/postgresql/18/bin/psql
       FIN_AGENT_RP_ID: localhost
       FIN_AGENT_RP_ORIGIN: http://localhost:8000
       FIN_AGENT_COOKIE_SECURE: "0"
@@ -53,6 +57,15 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --dev
+
+      - name: Install PostgreSQL 18 client and restic
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-18 restic
 
       - name: Ruff check
         run: uv run ruff check .

@@ -11,11 +11,28 @@ RUN pnpm build
 
 FROM ghcr.io/astral-sh/uv:0.13.6 AS uv
 
+# pg_dump 18 lives in the Postgres image. The API's export endpoint needs a client matching the
+# server's major version, and Python's slim image does not ship one.
+FROM postgres:18.6 AS pgclient
+
 FROM python:3.14-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
+
+COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libpq.so.5 /usr/local/lib/libpq.so.5
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libldap.so.2 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libsasl2.so.2 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libkrb5.so.3 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libk5crypto.so.3 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libkrb5support.so.0 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/liblber.so.2 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libkeyutils.so.1 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libcom_err.so.2 /usr/local/lib/
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./

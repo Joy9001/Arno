@@ -12,14 +12,17 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fin_agent import __version__
-from fin_agent.api import auth, health, static
+from fin_agent.api import auth, health, ledger, static
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
 from fin_agent.auth.setup import issue_setup_token, setup_required
 from fin_agent.config import Settings, get_settings
-from fin_agent.db.bootstrap import set_agent_ro_password
+from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
+from fin_agent.ledger.accounts import ensure_system_accounts
+from fin_agent.ledger.categories import ensure_default_categories
+from fin_agent.ledger.errors import LedgerError
 
 logger = logging.getLogger("fin_agent")
 
@@ -32,6 +35,9 @@ def _bootstrap(settings: Settings) -> None:
             if applied:
                 logger.info("applied migrations %s", applied)
         set_agent_ro_password(conn, settings.agent_ro_password)
+        set_backup_password(conn, settings.backup_password)
+        ensure_default_categories(conn)
+        ensure_system_accounts(conn)
         if setup_required(conn):
             # Every start while setup is open prints a fresh token and replaces the old hash, so
             # the line in the current container log always works.
@@ -74,6 +80,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(ledger.router)
     app.include_router(static.router)
 
     @app.exception_handler(StarletteHTTPException)
@@ -89,5 +96,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def database_unreachable(request: Request, exc: psycopg.OperationalError):
         logger.warning("database unreachable while serving %s", request.url.path)
         return problem(503, detail="The database is unreachable.")
+
+    @app.exception_handler(LedgerError)
+    async def ledger_rule(request: Request, exc: LedgerError):
+        return problem(exc.status, title=exc.title, detail=exc.message, extra=exc.details)
 
     return app

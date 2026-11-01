@@ -30,8 +30,11 @@ for _role in ("CHAT", "VISION", "STT"):
 from fin_agent.api.app import create_app  # noqa: E402
 from fin_agent.auth.setup import issue_setup_token  # noqa: E402
 from fin_agent.config import Settings, get_settings  # noqa: E402
-from fin_agent.db.bootstrap import set_agent_ro_password  # noqa: E402
+from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
 from fin_agent.db.migrate import run_migrations  # noqa: E402
+from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
+from fin_agent.ledger.categories import ensure_default_categories  # noqa: E402
+from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 
 RESET_TABLES = """
 TRUNCATE
@@ -42,7 +45,7 @@ TRUNCATE
     schedules, goals, scheduled_questions,
     category_rules, baselines,
     conversations, messages, preferences, audit_log,
-    notifications, push_subscriptions, jobs, job_schedules
+    notifications, push_subscriptions, jobs, job_schedules, backup_runs
 RESTART IDENTITY CASCADE
 """
 
@@ -121,6 +124,7 @@ def migrated() -> list[int]:
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
         applied = run_migrations(conn)
         set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
+        set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
     return applied
 
 
@@ -161,3 +165,37 @@ def setup_token(client: TestClient) -> str:
 def db():
     with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
         yield conn
+
+
+@pytest.fixture
+def ledger(db):
+    """A database with the Indian categories and the three system accounts."""
+    ensure_default_categories(db)
+    ensure_system_accounts(db)
+    return db
+
+
+@pytest.fixture
+def demo_ledger(db):
+    """The seeded synthetic persona, as a fixture (today fixed for deterministic tests)."""
+    from datetime import date
+
+    from fin_agent.demo.persona import seed_demo
+
+    seed_demo(db, today=date(2026, 11, 1), reset=True)
+    return db
+
+
+@pytest.fixture
+def authed_client(client, setup_token, settings):
+    """A TestClient with a registered passkey and an active session cookie."""
+    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
+    begin = client.post("/api/auth/setup/begin", json={"token": setup_token})
+    assert begin.status_code == 200, begin.text
+    credential = authenticator.registration_credential(begin.json()["options"])
+    verified = client.post(
+        "/api/auth/setup/verify",
+        json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
+    )
+    assert verified.status_code == 200, verified.text
+    return client

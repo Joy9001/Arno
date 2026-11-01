@@ -55,5 +55,32 @@ services:
       retries: 3
       start_period: 20s
 
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    image: fin-agent-backup:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Its own role: SELECT for pg_dump, INSERT into backup_runs only.
+      DATABASE_URL: postgresql://backup:${BACKUP_PASSWORD:?set BACKUP_PASSWORD in .env}@db:5432/fin_agent
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backups/restic}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-86400}
+    volumes:
+      - backup-data:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        # The API boot sets the backup role's password from BACKUP_PASSWORD.
+        condition: service_healthy
+    stop_grace_period: 30s
+
 volumes:
   db-data:
+  backup-data:
