@@ -16,6 +16,8 @@ class AgentDeps:
     user_texts: tuple[str, ...] = ()
     # Charts and cards a tool produced inside this turn, for the post-run extractor.
     cards: list[dict[str, object]] = field(default_factory=list)
+    # How many lasting writes the user approved in this turn, for the trace's tap rate.
+    approvals: int = 0
 
 
 __all__ = ["AgentDeps"]

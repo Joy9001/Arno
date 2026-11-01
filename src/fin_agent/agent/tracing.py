@@ -15,8 +15,6 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from fin_agent import __version__
-
 
 def _endpoint() -> str | None:
     return (
@@ -32,7 +30,7 @@ def build_tracer_provider(*, span_exporter: Any = None) -> TracerProvider:
     provider = TracerProvider(
         resource=Resource.create(
             {
-                "openinference.project.name": f"fin-agent-{__version__}",
+                "openinference.project.name": "fin-agent",
                 "service.name": "fin-agent",
             }
         )

@@ -382,6 +382,7 @@ class TurnManager:
             span.set_attribute("fin_agent.ending", turn.ending or "unknown")
             span.set_attribute("fin_agent.number_flags", len(turn.number_flags))
             span.set_attribute("fin_agent.flagged_thread", turn.deps.flagged)
+            span.set_attribute("fin_agent.approvals", turn.deps.approvals)
             span.end()
             await turn.finish()
             async with self._guard:

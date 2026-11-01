@@ -261,9 +261,24 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
 # Writes --------------------------------------------------------------------------------------
 
 
+def _conversation_flagged(ctx: RunContext[AgentDeps]) -> bool:
+    if ctx.deps.flagged:
+        return True
+    with closing(connect()) as conn:
+        row = conn.execute(
+            "SELECT outside_text_at FROM conversations WHERE id = %s",
+            (ctx.deps.conversation_id,),
+        ).fetchone()
+    return bool(row and row["outside_text_at"] is not None)
+
+
 def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
-    """Lasting or wide writes ask first once the thread has read outside text."""
-    if ctx.deps.flagged and not ctx.tool_call_approved:
+    """Lasting or wide writes ask first once the thread has read outside text.
+
+    The flag can be set by a read earlier in the same turn, so it is read from the conversation
+    row, not only from the snapshot taken when the turn started.
+    """
+    if _conversation_flagged(ctx) and not ctx.tool_call_approved:
         raise ApprovalRequired(
             {
                 "change": change,
@@ -272,6 +287,8 @@ def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
                 ),
             }
         )
+    if ctx.tool_call_approved:
+        ctx.deps.approvals += 1
 
 
 def _call_write(fn: Callable[[psycopg.Connection], dict[str, Any]]) -> dict[str, Any]:
@@ -327,7 +344,7 @@ async def record_movement(
             movement=movement,
             message_id=ctx.deps.message_id,
             conversation_id=ctx.deps.conversation_id,
-            flagged=ctx.deps.flagged,
+            flagged=_conversation_flagged(ctx),
             user_texts=ctx.deps.user_texts,
             not_duplicate=not_duplicate,
         )

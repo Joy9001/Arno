@@ -226,14 +226,24 @@ def chat(
 
 
 def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
+    from fin_agent.agent.deps import AgentDeps
     from fin_agent.agent.number_check import check_messages
 
     message_id = f"cli_{uuid.uuid4().hex}"
     run_id = f"run_{uuid.uuid4().hex}"
-    record_user_message(conn, thread_id=str(thread["id"]), client_id=message_id, text=text)
+    user_row = record_user_message(
+        conn, thread_id=str(thread["id"]), client_id=message_id, text=text
+    )
     mark_run_started(conn, str(thread["id"]), run_id)
     conn.commit()
-    result = agent.run_sync(text, message_history=history)
+    deps = AgentDeps(
+        conversation_id=str(thread["id"]),
+        message_id=str(user_row["id"]),
+        run_id=run_id,
+        flagged=thread.get("outside_text_at") is not None,
+        user_texts=(text,),
+    )
+    result = agent.run_sync(text, message_history=history, deps=deps)
     turn_messages = result.all_messages()[len(history) :]
     reply = str(result.output)
     flags = check_messages(reply, turn_messages)
