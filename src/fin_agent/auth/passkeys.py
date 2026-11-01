@@ -24,6 +24,8 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
+from fin_agent.auth.setup import ADD_DEVICE, FIRST_RUN, consume_setup_token, setup_required
+
 CHALLENGE_TTL = timedelta(minutes=5)
 VALID_TRANSPORTS = {"usb", "nfc", "ble", "internal", "hybrid", "smart-card"}
 
@@ -38,6 +40,7 @@ class Challenge:
     challenge: bytes
     user_handle: bytes | None
     user_id: str | None
+    setup_token_id: str | None
 
 
 def b64url_decode(value: str) -> bytes:
@@ -52,15 +55,25 @@ def _insert_challenge(
     challenge: bytes,
     user_handle: bytes | None,
     user_id: str | None,
+    setup_token_id: str | None = None,
 ) -> str:
     conn.execute("DELETE FROM webauthn_challenges WHERE expires_at < now()")
     row = conn.execute(
         """
-        INSERT INTO webauthn_challenges (kind, challenge, user_handle, user_id, expires_at)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO webauthn_challenges (
+            kind, challenge, user_handle, user_id, setup_token_id, expires_at
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (kind, challenge, user_handle, user_id, datetime.now(UTC) + CHALLENGE_TTL),
+        (
+            kind,
+            challenge,
+            user_handle,
+            user_id,
+            setup_token_id,
+            datetime.now(UTC) + CHALLENGE_TTL,
+        ),
     ).fetchone()
     conn.commit()
     return row["id"]
@@ -73,7 +86,7 @@ def _pop_challenge(conn: psycopg.Connection, challenge_id: str, kind: str) -> Ch
         UPDATE webauthn_challenges
         SET consumed_at = now()
         WHERE id = %s AND kind = %s AND consumed_at IS NULL AND expires_at > now()
-        RETURNING id, challenge, user_handle, user_id
+        RETURNING id, challenge, user_handle, user_id, setup_token_id
         """,
         (challenge_id, kind),
     ).fetchone()
@@ -85,6 +98,7 @@ def _pop_challenge(conn: psycopg.Connection, challenge_id: str, kind: str) -> Ch
         challenge=row["challenge"],
         user_handle=row["user_handle"],
         user_id=row["user_id"],
+        setup_token_id=row["setup_token_id"],
     )
 
 
@@ -96,6 +110,7 @@ def begin_registration(
     user_handle: bytes,
     user_id: str | None,
     exclude_credential_ids: list[bytes],
+    setup_token_id: str,
 ) -> tuple[str, dict[str, Any]]:
     options = generate_registration_options(
         rp_id=rp_id,
@@ -118,6 +133,7 @@ def begin_registration(
         challenge=options.challenge,
         user_handle=user_handle,
         user_id=user_id,
+        setup_token_id=setup_token_id,
     )
     return challenge_id, json.loads(options_to_json(options))
 
@@ -129,10 +145,38 @@ def finish_registration(
     rp_origin: str,
     challenge_id: str,
     credential: dict[str, Any],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], str]:
     challenge = _pop_challenge(conn, challenge_id, "setup")
-    if challenge.user_handle is None:
-        raise PasskeyError("This sign-in attempt expired. Start again.")
+    if challenge.user_handle is None or challenge.setup_token_id is None:
+        raise PasskeyError("This enrollment link expired. Start again.")
+
+    token = conn.execute(
+        """
+        SELECT id, kind, user_id
+        FROM setup_tokens
+        WHERE id = %s AND consumed_at IS NULL AND expires_at > now()
+        """,
+        (challenge.setup_token_id,),
+    ).fetchone()
+    if token is None:
+        raise PasskeyError("This enrollment link expired or was already used.")
+
+    setup_open = setup_required(conn)
+    if token["kind"] == FIRST_RUN:
+        if not setup_open:
+            raise PasskeyError(
+                "Setup is already complete. Open Settings → Passkeys on a signed-in device "
+                "to add this one."
+            )
+        if token["user_id"] is not None:
+            raise PasskeyError("This enrollment link is not valid for first-run setup.")
+    elif token["kind"] == ADD_DEVICE:
+        if setup_open:
+            raise PasskeyError("First-run setup is not complete yet.")
+        if token["user_id"] is None or challenge.user_id != token["user_id"]:
+            raise PasskeyError("This enrollment link is not valid for this user.")
+    else:
+        raise PasskeyError("This enrollment link is not valid.")
 
     try:
         verified = verify_registration_response(
@@ -183,9 +227,9 @@ def finish_registration(
             "Passkey",
         ),
     )
-    conn.execute("UPDATE setup_tokens SET consumed_at = now() WHERE consumed_at IS NULL")
+    consume_setup_token(conn, token["id"])
     conn.commit()
-    return dict(user)
+    return dict(user), token["kind"]
 
 
 def begin_authentication(

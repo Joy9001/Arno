@@ -9,6 +9,8 @@ from typing import Any
 
 import psycopg
 
+from fin_agent.auth.setup import ADD_DEVICE
+
 COOKIE_NAME = "fin_agent_session"
 
 
@@ -78,9 +80,21 @@ def revoke_session(conn: psycopg.Connection, token: str) -> None:
 
 
 def revoke_all_sessions(conn: psycopg.Connection, user_id: str | None = None) -> int:
+    """Revoke sessions and the matching add-device links.
+
+    A link created from a session is cancelled when that user's sessions are revoked, so a
+    logged-out or reset instance can't still be joined by an old QR code.
+    """
     with conn.transaction():
         if user_id is None:
             cur = conn.execute("UPDATE sessions SET revoked_at = now() WHERE revoked_at IS NULL")
+            conn.execute(
+                """
+                UPDATE setup_tokens SET consumed_at = now()
+                WHERE kind = %s AND consumed_at IS NULL
+                """,
+                (ADD_DEVICE,),
+            )
         else:
             cur = conn.execute(
                 """
@@ -88,5 +102,12 @@ def revoke_all_sessions(conn: psycopg.Connection, user_id: str | None = None) ->
                 WHERE user_id = %s AND revoked_at IS NULL
                 """,
                 (user_id,),
+            )
+            conn.execute(
+                """
+                UPDATE setup_tokens SET consumed_at = now()
+                WHERE kind = %s AND user_id = %s AND consumed_at IS NULL
+                """,
+                (ADD_DEVICE, user_id),
             )
     return cur.rowcount

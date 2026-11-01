@@ -39,12 +39,15 @@ def _login(client: TestClient, authenticator: SoftwareAuthenticator):
 
 def _issue_token(dsn: str) -> str:
     with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        return issue_setup_token(conn, ttl_hours=1)
+        return issue_setup_token(conn, ttl_hours=1).token
 
 
 def test_first_run_setup_then_passkey_login(client, setup_token, settings):
     state = client.get("/api/auth/state").json()
-    assert state == {"setup_required": True, "authenticated": False, "user": None}
+    assert state["setup_required"] is True
+    assert state["authenticated"] is False
+    assert state["user"] is None
+    assert state["rp_origin"] == settings.rp_origin
 
     wrong = client.post("/api/auth/setup/begin", json={"token": "not-the-token"})
     assert wrong.status_code == 401
@@ -154,6 +157,6 @@ def test_only_the_session_hash_is_stored(client, setup_token, settings, db):
 
 def test_setup_token_can_be_reissued_while_setup_is_open(client, settings):
     with psycopg.connect(client.app.state.settings.database_url, row_factory=dict_row) as conn:
-        token = issue_setup_token(conn, ttl_hours=1)
+        token = issue_setup_token(conn, ttl_hours=1).token
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, token, authenticator).status_code == 200

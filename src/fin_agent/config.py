@@ -56,7 +56,9 @@ class Settings:
             raise ConfigurationError(f"DATABASE_URL is not a valid libpq URI: {exc}") from exc
 
         rp_id = os.environ.get("FIN_AGENT_RP_ID", "localhost").strip()
-        rp_origin = os.environ.get("FIN_AGENT_RP_ORIGIN", f"http://{rp_id}:8000").strip()
+        rp_origin = (
+            os.environ.get("FIN_AGENT_RP_ORIGIN", f"http://{rp_id}:8000").strip().rstrip("/")
+        )
         if not rp_origin.startswith(("http://", "https://")):
             raise ConfigurationError("FIN_AGENT_RP_ORIGIN must be an http(s) origin")
 

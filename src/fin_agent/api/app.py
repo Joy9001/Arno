@@ -15,7 +15,8 @@ from fin_agent import __version__
 from fin_agent.api import auth, health, ledger, static
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
-from fin_agent.auth.setup import issue_setup_token, setup_required
+from fin_agent.auth.enrollment import enrollment_message
+from fin_agent.auth.setup import ensure_setup_token, setup_required
 from fin_agent.config import Settings, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
@@ -39,14 +40,20 @@ def _bootstrap(settings: Settings) -> None:
         ensure_default_categories(conn)
         ensure_system_accounts(conn)
         if setup_required(conn):
-            # Every start while setup is open prints a fresh token and replaces the old hash, so
-            # the line in the current container log always works.
-            token = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-            logger.warning(
-                "First-run setup is open. Open %s and enter this setup token: %s",
-                settings.rp_origin,
-                token,
-            )
+            token = ensure_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+            if token:
+                logger.warning(
+                    "%s",
+                    enrollment_message(
+                        settings.rp_origin,
+                        token,
+                        title="First-run setup is open.",
+                    ),
+                )
+            else:
+                logger.warning(
+                    "First-run setup is open. Run `fin-agent setup` for a fresh enrollment link."
+                )
     finally:
         conn.close()
 

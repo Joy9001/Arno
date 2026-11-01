@@ -4,6 +4,7 @@ import { api, errorMessage } from "../api";
 import { formatMoment } from "../format";
 import type { BackupStatus, CategoryTree, Settings as SettingsPayload } from "../types";
 import { useApi } from "../useApi";
+import { PasskeysCard } from "./Passkeys";
 
 function BackupCard({ status }: { status: BackupStatus }) {
   return (
@@ -179,6 +180,8 @@ export function SettingsPanel() {
         </div>
 
         {backup.data ? <BackupCard status={backup.data} /> : <div className="settings-block" />}
+
+        <PasskeysCard />
 
         <div className="settings-block wide">
           <h3>Categories</h3>

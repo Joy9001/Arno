@@ -108,13 +108,53 @@ The following table lists the choice for each piece of auth:
 
 | Piece | Choice |
 |---|---|
-| First run | Setup token printed in the API log (or `fin-agent setup` on the host) creates the one user and registers a passkey. Setup closes after that |
+| First run | The host prints an [enrollment link](#enrollment-links) and a terminal QR code when it creates one: in the API log while setup is open, or from `fin-agent setup`. A restart keeps a valid link and tells you to run `fin-agent setup` if the printed link is gone. Opening it creates the one user and registers a passkey. Setup closes after that |
+| More devices | Settings → Passkeys → _Add a device_ creates an enrollment link and QR code for the signed-in user. The new device opens it and registers its own passkey. Settings also lists, renames, and deletes passkeys, but never the last one |
 | Login | Passkeys through `py_webauthn`. They need HTTPS and a stable hostname; the tailnet `*.ts.net` name gives both |
-| Recovery | `fin-agent passkeys reset` on the host. Anyone who has a shell on the host already has the data, so this opens no new door |
+| Recovery | `fin-agent passkeys reset` on the host deletes every passkey and session, reopens setup, and prints a fresh enrollment link and QR code. Anyone who has a shell on the host already has the data, so this opens no new door |
 | Sessions | Opaque token, hashed in the database. Browser: `HttpOnly; Secure; SameSite=Strict` cookie. Future Android app: same token as a bearer header |
 
 Same-origin (the API serves the web app), so no CORS. Password + TOTP fallback and login lockout
 are parked with public-internet access ([`parked.md`](parked.md)).
+
+### Enrollment links
+
+First-run setup, adding a device, and recovery all use the same thing: a single-use link that
+registers one passkey. Every link starts from something only the owner has, either a shell on the
+host or a signed-in session. The owner never has to copy a token out of `docker compose logs`.
+
+```text
+https://<machine>.<tailnet>.ts.net/setup#t=<token>
+```
+
+- **Built from `FIN_AGENT_RP_ORIGIN`, never `localhost`.** A passkey registered on
+  `localhost:8000` only works on `localhost` and won't work on the `*.ts.net` name. The link takes
+  the owner to the right origin. If the setup page is opened on any origin other than
+  `FIN_AGENT_RP_ORIGIN`, it says so and doesn't start the ceremony, instead of letting the browser
+  fail with a `SecurityError`.
+- **The token goes in the fragment.** Browsers never send the part after `#` to the server, so
+  the token stays out of request logs and the `Referer` header. The page reads it, posts it to
+  the API, and removes it from the address bar with `history.replaceState`. A paste box remains
+  as a fallback.
+- **Terminal QR code.** The CLI and the startup log print the link as a QR code (`segno`) as well,
+  so the owner can set up from their phone. The log only carries one when it had to issue a token;
+  a restart with a live link tells you to run `fin-agent setup`. The Settings page draws the
+  add-device QR in the browser (`qrcode.react`) instead of an inline image, so `img-src 'self'`
+  stays intact. Registering the phone's passkey first is the easiest path. Synced passkeys
+  (iCloud Keychain, Google Password Manager) appear on the owner's other devices on the same
+  account, and a desktop browser can sign in with the phone over the browser's own cross-device
+  QR flow.
+- **Tokens and lifetimes.** Tokens are stored as SHA-256 hashes and can each be used once. Each
+  kind has one active token at a time. The first-run token lasts `FIN_AGENT_SETUP_TOKEN_TTL_HOURS`
+  (24 hours by default) and is kept across restarts while it's valid, so a restart doesn't break a
+  link the owner already copied. An _Add a device_ token lasts 10 minutes, is tied to the user who
+  created it, and is cancelled when that user's sessions are revoked.
+- **Rejected:** first visitor wins (anyone on the tailnet could claim the instance before the
+  owner does), a long-lived setup secret in `.env`, and approving a browser code from the host
+  (it still needs a host shell). Trusting the `Tailscale-User-Login` header that `tailscale serve`
+  adds would remove the token entirely. That only works once nothing can reach the API without
+  going through `tailscale serve`, and today other containers on the Docker network can, so it's
+  parked.
 
 ---
 

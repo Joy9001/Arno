@@ -177,6 +177,19 @@ fallback, recovery codes, login lockout, CSP hardening, and most of the threat m
 
 **Trigger:** someone needs access without Tailscale.
 
+### Setup through Tailscale identity
+
+**Why parked:** `tailscale serve` adds a `Tailscale-User-Login` header, so setup could check
+`FIN_AGENT_OWNER` and skip the [enrollment link](platform.md#enrollment-links). The header can
+only be trusted if every request reaches the API through `tailscale serve`, and today other
+containers on the Docker network can reach the API directly and fake it.
+
+**Shape when it comes:** a Tailscale sidecar in Compose that is the only path to the API, plus an
+owner check on `/setup/*`. Enrollment links stay as the fallback.
+
+**Trigger:** the API is reachable only through Tailscale, and the setup link still feels like
+friction.
+
 ### Encryption inside the database
 
 **Why parked:** host disk encryption covers a stolen disk, and restic covers a leaked backup.

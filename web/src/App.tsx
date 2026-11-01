@@ -61,8 +61,10 @@ export function App() {
     );
   }
 
-  if (state.setup_required) {
-    return <Setup onDone={refresh} />;
+  const onSetupPath = window.location.pathname.replace(/\/+$/, "") === "/setup";
+
+  if (onSetupPath || state.setup_required) {
+    return <Setup authState={state} />;
   }
 
   if (!state.authenticated) {

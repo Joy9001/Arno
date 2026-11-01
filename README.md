@@ -37,16 +37,19 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The first start applies the migrations and prints a setup token. Every start while setup is open
-prints a fresh token, so read the current log line:
+The first start applies the migrations and prints an enrollment link plus a terminal QR code. Scan
+the code, or open the link, on a device on your tailnet:
 
 ```bash
-docker compose logs api | Select-String "setup token"   # PowerShell
-docker compose logs api | grep "setup token"            # bash
+docker compose logs api                      # the link and QR code are in this log
+docker compose logs --no-log-prefix api      # a QR with no per-line "api-1 |" prefix
+docker compose exec api fin-agent setup      # rotate it and print a fresh one
 ```
 
-Open the app, enter the token, and create the passkey. The token is also available with
-`docker compose exec api fin-agent setup-token`.
+The raw token is printed under the link as a paste fallback. A restart keeps a valid link; only
+`fin-agent setup` rotates it, so the link in the log stays usable until it expires or is used.
+Open the app, enter the token if needed, and create the passkey. Add more devices later with
+**Settings → Passkeys → Add a device**.
 
 Local: <http://localhost:8000>. The API publishes on loopback only.
 
@@ -68,10 +71,10 @@ HTTPS name and a stable hostname, so set `FIN_AGENT_RP_ID` to the same `*.ts.net
 ```bash
 fin-agent migrate              # apply pending SQL migrations
 fin-agent serve                # API + built web app (127.0.0.1:8000)
-fin-agent setup                 # issue a first-run setup token
+fin-agent setup                # print a fresh first-run enrollment link and QR code
 fin-agent setup-token          # same, kept for scripts
 fin-agent passkeys list        # registered passkeys
-fin-agent passkeys reset       # delete every passkey and session, reopen setup
+fin-agent passkeys reset       # delete every passkey and session, reopen setup with a new link
 fin-agent demo seed            # seed an empty demo instance
 fin-agent demo seed --reset    # reseed (asks first; add --force in scripts)
 fin-agent demo template        # clone as an eval template (asks first)

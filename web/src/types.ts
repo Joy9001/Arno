@@ -192,3 +192,22 @@ export type BackupStatus = {
   overdue: boolean;
   checked_at: string;
 };
+
+export type User = {
+  id: string;
+  display_name: string;
+};
+
+export type Passkey = {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+};
+
+export type Enrollment = {
+  id: string;
+  link: string;
+  expires_at: string;
+  kind: "add_device";
+};

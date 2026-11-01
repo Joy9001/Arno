@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from typer.testing import CliRunner
 
 from fin_agent.auth.setup import setup_required
@@ -7,8 +9,12 @@ from fin_agent.cli import app as cli_app
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 
+TOKEN_RE = re.compile(r"/setup#t=([A-Za-z0-9_\-]+)")
 
-def test_passkeys_reset_reopens_setup_with_a_fresh_token(client, setup_token, settings, db):
+
+def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
+    client, setup_token, settings, db
+):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
@@ -16,7 +22,8 @@ def test_passkeys_reset_reopens_setup_with_a_fresh_token(client, setup_token, se
 
     assert result.exit_code == 0, result.output
     assert "Deleted 1 passkey(s) and revoked 1 session(s)." in result.output
-    assert "setup token" in result.output
+    assert "/setup#t=" in result.output
+    assert "Setup token (paste fallback):" in result.output
 
     assert setup_required(db)
     assert db.execute("SELECT count(*) AS n FROM users").fetchone()["n"] == 1
@@ -26,7 +33,7 @@ def test_passkeys_reset_reopens_setup_with_a_fresh_token(client, setup_token, se
         == 0
     )
 
-    token = result.output.strip().rsplit(": ", 1)[-1]
+    token = TOKEN_RE.search(result.output).group(1)
     replacement = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, token, replacement).status_code == 200
 
@@ -38,11 +45,13 @@ def test_passkey_list_is_empty_before_setup(client):
     assert "No passkeys are registered." in result.output
 
 
-def test_setup_token_alias_issues_a_token(client):
+def test_setup_alias_prints_an_enrollment_link(client):
     result = CliRunner().invoke(cli_app, ["setup"])
 
     assert result.exit_code == 0, result.output
-    assert "First-run setup token" in result.output
+    assert "First-run setup is open" in result.output
+    assert "/setup#t=" in result.output
+    assert "Setup token (paste fallback):" in result.output
 
 
 def test_migrate_reports_already_up_to_date(client):
@@ -59,7 +68,7 @@ def test_setup_token_command_refuses_when_setup_is_complete(client, setup_token,
     result = CliRunner().invoke(cli_app, ["setup-token"])
 
     assert result.exit_code == 0
-    assert "nothing to do" in result.output
+    assert "use Settings" in result.output
 
 
 def test_cli_requires_a_database_url(monkeypatch):

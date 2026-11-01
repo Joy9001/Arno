@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^14.0.0",
+    "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
@@ -31,6 +32,8 @@
     "vite": "^8.0.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

@@ -322,7 +322,9 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 4. The `docker compose up` command serves the web shell and an API health check, reached over
    HTTPS through `tailscale serve` on the host. The web shell ships with a strict content security
    policy, which blocks inline scripts and images from other origins.
-5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
+5. Auth: first-run setup through an enrollment link and terminal QR code, passkey login, sessions,
+   adding a device from Settings, passkey reset from the host CLI
+   ([platform](platform.md#enrollment-links)).
 6. CI: ruff, pytest against a Postgres service container with model requests blocked, web lint and
    build.
 

@@ -6,11 +6,13 @@ Admin commands never go over HTTP. Anyone with a shell on the host already has t
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import date
 
 import typer
 import uvicorn
 
+from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.sessions import revoke_all_sessions
 from fin_agent.auth.setup import issue_setup_token, setup_required
 from fin_agent.config import ConfigurationError, get_settings
@@ -39,6 +41,16 @@ def _settings():
     except ConfigurationError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
+
+
+def _echo_enrollment(text: str) -> None:
+    """Print a QR code even on a console whose stdout is not UTF-8 yet."""
+    try:
+        typer.echo(text)
+    except UnicodeEncodeError:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        typer.echo(text)
 
 
 @app.command()
@@ -88,17 +100,23 @@ def setup() -> None:
 
 @app.command("setup-token")
 def setup_token() -> None:
-    """Issue a new first-run setup token, for when the log line is gone."""
+    """Issue a fresh first-run enrollment link (rotates the previous one)."""
     settings = _settings()
     conn = connect(settings.database_url)
     try:
         if not setup_required(conn):
-            typer.echo("Setup is complete; there is nothing to do.")
+            typer.echo("Setup is complete; use Settings → Passkeys to add a device.")
             raise typer.Exit(code=0)
-        token = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+        issued = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
     finally:
         conn.close()
-    typer.echo(f"First-run setup token (valid {settings.setup_token_ttl_hours}h): {token}")
+    _echo_enrollment(
+        enrollment_message(
+            settings.rp_origin,
+            issued.token,
+            title=f"First-run setup is open (link valid {settings.setup_token_ttl_hours}h).",
+        )
+    )
 
 
 @passkeys_app.command("list")
@@ -127,7 +145,7 @@ def passkeys_list() -> None:
 
 @passkeys_app.command("reset")
 def passkeys_reset() -> None:
-    """Delete every passkey and session, then reopen setup with a fresh token."""
+    """Delete every passkey and session, then reopen setup with a fresh enrollment link."""
     settings = _settings()
     conn = connect(settings.database_url)
     try:
@@ -136,17 +154,23 @@ def passkeys_reset() -> None:
             conn.execute("DELETE FROM webauthn_challenges")
         revoked = revoke_all_sessions(conn)
         if setup_required(conn):
-            token = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+            issued = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
         else:
-            token = None
+            issued = None
     finally:
         conn.close()
 
     typer.echo(f"Deleted {deleted} passkey(s) and revoked {revoked} session(s).")
-    if token:
-        typer.echo(
-            f"First-run setup is open. Enter this setup token (valid "
-            f"{settings.setup_token_ttl_hours}h): {token}"
+    if issued:
+        _echo_enrollment(
+            enrollment_message(
+                settings.rp_origin,
+                issued.token,
+                title=(
+                    "First-run setup is open. Scan this QR code or open the link "
+                    f"(valid {settings.setup_token_ttl_hours}h)."
+                ),
+            )
         )
 
 

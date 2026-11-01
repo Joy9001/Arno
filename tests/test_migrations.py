@@ -62,8 +62,9 @@ def test_every_migration_is_recorded_once(db):
 
     assert versions == list(range(1, len(discover()) + 1))
     assert current_version(db) == len(discover())
-    assert rows[0]["name"] == "pgledger"
-    assert [row["name"] for row in rows][-3:] == ["views", "grants", "ledger_l1"]
+    names = [row["name"] for row in rows]
+    assert names[0] == "pgledger"
+    assert {"views", "grants", "ledger_l1", "enrollment_tokens"} <= set(names)
 
 
 def test_migrations_are_idempotent(db):

@@ -158,7 +158,7 @@ def client(app):
 @pytest.fixture
 def setup_token(client: TestClient) -> str:
     with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        return issue_setup_token(conn, ttl_hours=1)
+        return issue_setup_token(conn, ttl_hours=1).token
 
 
 @pytest.fixture

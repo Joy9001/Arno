@@ -683,3 +683,69 @@ button.small {
     text-align: left;
   }
 }
+
+.enrollment-card {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: #0d131b;
+}
+
+.qr-frame {
+  display: inline-flex;
+  padding: 10px;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.enrollment-details {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.enrollment-link {
+  display: block;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow-wrap: anywhere;
+}
+
+.passkey-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.passkey-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: #0d131b;
+}
+
+.passkey-meta {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.passkey-meta input {
+  width: 100%;
+}
+
+.passkey-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
