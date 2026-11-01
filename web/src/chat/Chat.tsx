@@ -312,7 +312,14 @@ function Conversation({
           />
         ))}
         {status === "submitted" && <p className="muted fine">Thinking…</p>}
-        {error && <p className="error">{errorMessage(error)}</p>}
+        {error && (
+          <div className="chat-card">
+            <p className="error">{errorMessage(error)}</p>
+            <button type="button" className="ghost small" onClick={() => void sendMessage({ text: "Try again" })}>
+              Retry
+            </button>
+          </div>
+        )}
         <div ref={bottom} />
       </div>
 
