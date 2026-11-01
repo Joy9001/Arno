@@ -147,8 +147,23 @@ def check(
     ]
 
 
+def _text_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        pieces: list[str] = []
+        for item in value:
+            content = getattr(item, "content", None)
+            if isinstance(content, str):
+                pieces.append(content)
+        return "\n".join(pieces)
+    return ""
+
+
 def check_messages(reply: str, messages: list[Any]) -> list[str]:
     """Run the check over a turn's model messages: returns, arguments, and user text."""
+    import json
+
     from pydantic_ai.messages import (
         ModelRequest,
         ToolCallPart,
@@ -164,8 +179,17 @@ def check_messages(reply: str, messages: list[Any]) -> list[str]:
                 if isinstance(part, ToolReturnPart):
                     returns.append(part.content)
                 elif isinstance(part, UserPromptPart):
-                    if isinstance(part.content, str):
-                        texts.append(part.content)
+                    text = _text_content(part.content)
+                    if not text:
+                        continue
+                    stripped = text.strip()
+                    if stripped.startswith(("{", "[")):
+                        try:
+                            returns.append(json.loads(stripped))
+                            continue
+                        except json.JSONDecodeError:
+                            pass
+                    texts.append(text)
                 elif isinstance(part, ToolCallPart):
                     returns.append(part.args_as_dict())
     return check(reply, returns, tuple(texts))

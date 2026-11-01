@@ -140,3 +140,13 @@ def test_all_number_check_cases_with_bare_counts():
 def test_money_and_percent_only_ignores_bare_numbers():
     assert check("2 of those were Swiggy.", ROWS, kinds=("money", "percent")) == []
     assert check("You have about ₹1.52 lakh.", BAL, kinds=("money", "percent")) == ["₹1.52 lakh"]
+
+
+def test_a_pinned_snapshot_counts_as_a_source():
+    from pydantic_ai.messages import ModelRequest
+    from pydantic_ai_harness.compaction import pin
+
+    from fin_agent.agent.number_check import check_messages
+
+    snapshot = ModelRequest(parts=[pin('{"balance": {"paise": 12487350}}')])
+    assert check_messages("Your SBI balance is ₹1,24,873.50.", [snapshot]) == []

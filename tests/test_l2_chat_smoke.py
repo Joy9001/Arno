@@ -80,6 +80,56 @@ def test_the_stream_endpoint_is_204_when_nothing_runs(authed_client):
     assert response.status_code == 204
 
 
+def test_a_stored_approval_merges_into_a_closed_card():
+    from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, ToolReturnPart
+    from pydantic_ai.ui.vercel_ai.response_types import DataChunk
+
+    from fin_agent.api.chat import _merge_saved_state
+
+    history = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="preference",
+                    content={"status": "remembered", "text": "No rent warnings"},
+                    tool_call_id="call-1",
+                    metadata=[
+                        DataChunk(
+                            type="data-card",
+                            data={
+                                "card": "preference",
+                                "title": "Remembered",
+                                "text": "No rent warnings",
+                            },
+                        )
+                    ],
+                )
+            ]
+        )
+    ]
+    thread = {"model_history": ModelMessagesTypeAdapter.dump_python(history, mode="json")}
+    messages = [
+        {
+            "id": "msg-1",
+            "role": "assistant",
+            "parts": [
+                {
+                    "type": "tool-preference",
+                    "state": "approval-requested",
+                    "toolCallId": "call-1",
+                    "input": {"action": "remember"},
+                    "approval": {"id": "call-1"},
+                }
+            ],
+        }
+    ]
+    merged = _merge_saved_state(messages, thread)
+    part = merged[0]["parts"][0]
+    assert part["state"] == "output-available"
+    assert part["toolCallId"] == "call-1"
+    assert any(p.get("type") == "data-card" for p in merged[0]["parts"])
+
+
 def test_preferences_can_be_turned_off_and_deleted_for_good(authed_client, demo_ledger):
     demo_ledger.execute(
         "INSERT INTO preferences (id, body, created_by) "

@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from fin_agent.agent import history as history_mod
+from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
 from fin_agent.api.deps import Database, current_session
@@ -282,6 +283,80 @@ def list_threads(
     }
 
 
+def _merge_saved_state(
+    messages: list[dict[str, Any]], thread: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Merge cards and tool outcomes from `model_history` back into the transcript.
+
+    `dump_messages` drops a tool card from an earlier turn, and a resumed approval's tool return
+    may live without its original call. The stored model history still has both, so the thread
+    view closes the card and restores the card that the live stream showed.
+    """
+    from pydantic_ai.messages import (
+        ModelMessagesTypeAdapter,
+        ModelRequest,
+        ToolReturnPart,
+    )
+
+    history = thread.get("model_history")
+    if not history:
+        return messages
+    try:
+        model_messages = ModelMessagesTypeAdapter.validate_python(history)
+    except Exception:  # noqa: BLE001 - a bad row must not make the thread unreadable
+        return messages
+
+    returns: dict[str, ToolReturnPart] = {}
+    for message in model_messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                returns[part.tool_call_id] = part
+
+    for message in messages:
+        for part in message.get("parts", []):
+            if not isinstance(part, dict):
+                continue
+            tool_call_id = part.get("toolCallId") or part.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or tool_call_id not in returns:
+                continue
+            if part.get("state") == "approval-requested":
+                ret = returns[tool_call_id]
+                part["state"] = "output-available"
+                part["output"] = ret.content
+                part["toolCallId"] = tool_call_id
+                approval = part.get("approval")
+                if isinstance(approval, dict):
+                    approval["approved"] = True
+                part["callProviderMetadata"] = {
+                    **(
+                        part.get("callProviderMetadata") or part.get("call_provider_metadata") or {}
+                    ),
+                    "pydantic_ai": {"outcome": "approved"},
+                }
+
+    cards = cards_for_transcript(model_messages)
+    if cards:
+        last_assistant = next(
+            (message for message in reversed(messages) if message.get("role") == "assistant"),
+            None,
+        )
+        if last_assistant is not None:
+            existing = {
+                json.dumps(part.get("data"), sort_keys=True, default=str)
+                for part in last_assistant.get("parts", [])
+                if isinstance(part, dict) and part.get("type") == "data-card"
+            }
+            parts = last_assistant.setdefault("parts", [])
+            for card in cards:
+                key = json.dumps(card.data, sort_keys=True, default=str)
+                if key not in existing:
+                    parts.append(data_part(card))
+                    existing.add(key)
+    return messages
+
+
 @router.get("/threads/{thread_id}/messages")
 def get_thread_messages(request: Request, conn: Database, thread_id: str) -> dict[str, Any]:
     thread = history_mod.get_thread(conn, thread_id)
@@ -316,6 +391,7 @@ def get_thread_messages(request: Request, conn: Database, thread_id: str) -> dic
         # Fix 1 from step 10: the running turn's message is already stored at the start, so it is
         # in `messages`; mark the thread as running so the client can resume the stream.
         pass
+    messages = _merge_saved_state(messages, thread)
     return {
         "thread": {
             "id": thread["id"],

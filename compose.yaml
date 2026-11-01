@@ -116,17 +116,11 @@ services:
       - -c
       - |
         set -eu
-        psql -v ON_ERROR_STOP=1 <<'SQL'
-        DO $$
-        BEGIN
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'phoenix') THEN
-            CREATE ROLE phoenix LOGIN PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}';
-          ELSE
-            ALTER ROLE phoenix PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}';
-          END IF;
-        END
-        $$;
-        SQL
+        if psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='phoenix'" | grep -q 1; then
+          psql -v ON_ERROR_STOP=1 -c "ALTER ROLE phoenix PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}'"
+        else
+          psql -v ON_ERROR_STOP=1 -c "CREATE ROLE phoenix LOGIN PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}'"
+        fi
         if ! psql -tAc "SELECT 1 FROM pg_database WHERE datname='phoenix'" | grep -q 1; then
           psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE phoenix OWNER phoenix"
           psql -v ON_ERROR_STOP=1 -c "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC"
@@ -139,6 +133,8 @@ services:
     environment:
       PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-phoenix-local-only}@db:5432/phoenix
       PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+      # Loopback only. To expose Phoenix over the tailnet, turn auth on and use its login.
+      PHOENIX_ENABLE_AUTH: "false"
       PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "90"
       PHOENIX_WORKING_DIR: /data
     volumes:

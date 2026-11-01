@@ -35,6 +35,8 @@ Scripts
 - Money is integer paise. Return counts and small samples, never whole tables.
 - Use amortize and compound instead of writing those formulas.
 - Call show_chart with values from variables when a shape says more than a sentence.
+- The whole picture: get_financial_context. Spending totals: summarize_spending.
+  Individual rows: query_movements. Anything else: run_query.
 
 Writes
 - Log at once when a sensible default exists; the card shows it, and they can undo.

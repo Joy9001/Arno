@@ -16,6 +16,19 @@ from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 RUN_CODE_TOOL_NAME = "run_code"
 
 
+def _as_data_chunk(item: Any) -> DataChunk | None:
+    if isinstance(item, DataChunk):
+        return item
+    if isinstance(item, dict) and str(item.get("type", "")).startswith("data-"):
+        return DataChunk(
+            type=str(item["type"]),
+            id=item.get("id"),
+            data=item.get("data"),
+            transient=item.get("transient"),
+        )
+    return None
+
+
 def nested_cards(part: ToolReturnPart) -> list[DataChunk]:
     """Data chunks from every tool return nested in a `run_code` result."""
     metadata = part.metadata
@@ -33,8 +46,9 @@ def nested_cards(part: ToolReturnPart) -> list[DataChunk]:
             nested_metadata if isinstance(nested_metadata, (list, tuple)) else [nested_metadata]
         )
         for item in candidates:
-            if isinstance(item, DataChunk) and item.type.startswith("data-"):
-                cards.append(item)
+            chunk = _as_data_chunk(item)
+            if chunk is not None:
+                cards.append(chunk)
     return cards
 
 
@@ -49,10 +63,28 @@ def cards_from_messages(messages: list[ModelMessage]) -> list[DataChunk]:
     return cards
 
 
+def cards_for_transcript(messages: list[ModelMessage]) -> list[DataChunk]:
+    """Every card in stored history, including a direct write whose call was in an earlier turn."""
+    cards = cards_from_messages(messages)
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart) or part.tool_name == RUN_CODE_TOOL_NAME:
+                continue
+            metadata = part.metadata
+            candidates = metadata if isinstance(metadata, (list, tuple)) else [metadata]
+            for item in candidates:
+                chunk = _as_data_chunk(item)
+                if chunk is not None:
+                    cards.append(chunk)
+    return cards
+
+
 def ui_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
     """The persisted transcript for one turn, as Vercel AI UI messages."""
     return [
-        message.model_dump(mode="json")
+        message.model_dump(mode="json", by_alias=True)
         for message in VercelAIAdapter.dump_messages(messages, sdk_version=7)
     ]
 
@@ -89,6 +121,7 @@ def with_data(
 
 __all__ = [
     "attach_to_last_assistant",
+    "cards_for_transcript",
     "cards_from_messages",
     "data_part",
     "nested_cards",

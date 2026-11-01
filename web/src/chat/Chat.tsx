@@ -348,6 +348,7 @@ export function ChatHome() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string>(() => newThreadId());
   const [initial, setInitial] = useState<ChatMessage[]>([]);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -368,6 +369,8 @@ export function ChatHome() {
         if (!alive) return;
         if (list.length > 0) {
           setActiveId(list[0].id);
+        } else {
+          setLoadedFor(activeId);
         }
       } catch (caught) {
         if (alive) setError(errorMessage(caught));
@@ -390,7 +393,10 @@ export function ChatHome() {
     }
     api<ThreadBody>(`/api/threads/${activeId}/messages`)
       .then((body) => {
-        if (alive) setInitial(body.messages);
+        if (alive) {
+          setInitial(body.messages);
+          setLoadedFor(activeId);
+        }
       })
       .catch((caught: unknown) => {
         if (alive) setError(errorMessage(caught));
@@ -429,20 +435,27 @@ export function ChatHome() {
         onQuery={setQuery}
         onSelect={(id) => {
           setInitial([]);
+          setLoadedFor(null);
           setActiveId(id);
         }}
         onNew={() => {
+          const id = newThreadId();
           setInitial([]);
-          setActiveId(newThreadId());
+          setLoadedFor(id);
+          setActiveId(id);
         }}
       />
       {error && <p className="error chat-error">{error}</p>}
-      <Conversation
-        key={activeId}
-        threadId={activeId}
-        initialMessages={initial}
-        onThreadChanged={() => void refresh()}
-      />
+      {loadedFor === activeId ? (
+        <Conversation
+          key={activeId}
+          threadId={activeId}
+          initialMessages={initial}
+          onThreadChanged={() => void refresh()}
+        />
+      ) : (
+        <p className="muted chat-loading">Loading conversation…</p>
+      )}
     </div>
   );
 }
