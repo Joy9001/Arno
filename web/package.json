@@ -15,7 +15,6 @@
     "@ai-sdk/react": "4.0.163",
     "@simplewebauthn/browser": "^14.0.0",
     "ai": "7.0.159",
-    "clsx": "^2.1.1",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
