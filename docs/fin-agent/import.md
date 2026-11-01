@@ -207,8 +207,9 @@ The photo endpoint runs this call, so the server adds the extracted fields to th
 retry card rather than a lost photo.
 
 **Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
-→ text → the normal chat path. A transcript is your own words, so it doesn't flag the thread. The
-audio is saved first, so a failed transcription leaves a retry card.
+→ text → the normal chat path, sent at once with the transcript shown. A transcript is your own
+words, so it doesn't flag the thread. The audio is saved first, so a failed transcription leaves a
+retry card.
 Hinglish accuracy is an eval category ([L7](plan.md#6-open-questions)).
 
 A dictation app such as [Hex](https://github.com/anomalyco/hex) needs no code from us: it pastes into

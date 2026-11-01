@@ -270,7 +270,7 @@ history = [ModelRequest(parts=[pin(snapshot)]), ModelResponse(parts=[TextPart("S
 adapter = await VercelAIAdapter.from_request(
     request,
     agent=agent,
-    sdk_version=6,                    # the default, 5, silently ignores approvals
+    sdk_version=7,                    # matches AI SDK 7; the default, 5, silently ignores approvals
     manage_message_history="server",
     allowed_file_url_schemes=frozenset(),  # uploads use attachments
 )

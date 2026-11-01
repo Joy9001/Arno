@@ -24,7 +24,7 @@ src/fin_agent/
   jobs/        job loop, briefing, reminders, patterns
   india/       categories, statement parsers, holidays, ₹ formatting, prompt notes
   cli.py
-web/           Next.js app (static export)
+web/           Vite and React app (a static build)
 backup/        sidecar image: pg_dump + restic on a schedule
 evals/         agent evals: dataset, graders, scorecard (the old model-selection runner retires at L4)
 tests/
@@ -45,13 +45,15 @@ The API exposes the following surfaces:
 
 | Surface | Shape |
 |---|---|
-| Chat | `POST /api/chat`—PydanticAI's `VercelAIAdapter` with `manage_message_history="server"`, `sdk_version=6`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). The run is a task of its own, so `GET /api/chat/{thread}/stream` can reattach and `POST /api/chat/{thread}/stop` stops it ([step 8](system-design.md#a-turn-outlives-its-connection)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
+| Chat | `POST /api/chat`—PydanticAI's `VercelAIAdapter` with `manage_message_history="server"`, `sdk_version=7`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). The run is a task of its own, so `GET /api/chat/{thread}/stream` can reattach and `POST /api/chat/{thread}/stop` stops it ([step 8](system-design.md#a-turn-outlives-its-connection)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
-| Uploads | `POST /api/attachments` (statement, photo, audio). Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo |
-| Conversations | List, read, and full-text search of threads. A chat request with no thread ID creates one |
+| Uploads | `POST /api/attachments` (statement, photo, audio), up to 25 MB. Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo; a voice note sends at once and shows its transcript |
+| Conversations | List, read, rename, and full-text search of threads, and flag a reply. A chat request with no thread ID creates one. Reading a thread also returns a running turn's message and merges saved cards back in ([step 10](system-design.md#the-chat-contract)) |
 | Inbox and push | List and read notifications; register a push subscription |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
 | Auth | See [Auth](#auth) |
+
+The endpoint map and conventions are in [system design, step 10](system-design.md#api).
 
 Chat and settings converge on the same ledger functions and the same audit log, so an edit made
 in settings is undoable from chat, and an edit made in chat is undoable from settings.
@@ -64,13 +66,13 @@ when that client exists.
 
 ## Web app
 
-Next.js with `output: 'export'`—a static bundle the API serves. No Node server in production;
-all data and auth live in the API. If server rendering is ever needed, switch to the standalone
-server output.
+Vite and React—a static bundle the API serves. No Node server in production; all data and auth live
+in the API ([why](system-design.md#web-stack)).
 
 The web app has the following parts:
 
-- **Chat (home):** Vercel AI SDK `useChat`, with `resume` on, + AI Elements. You see your threads, as in ChatGPT or
+- **Chat (home):** Vercel AI SDK `useChat`, with `resume` on, shadcn/ui's chat patterns, and Streamdown
+  for markdown. You see your threads, as in ChatGPT or
   Claude: open an old one, or start a new chat at any time. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
   verdict and its floor probability, a spending breakdown, an import summary, a chart the agent
@@ -80,17 +82,16 @@ The web app has the following parts:
   agent replies render as plain text, and external images never load ([Security](#security)). An
   amount the [number check](system-design.md#the-number-check) can't trace gets a small note, and any
   reply can be flagged.
-  The AI SDK's major version is pinned to match the adapter's `sdk_version`, because at a mismatch
-  approvals are silently ignored and the card just comes back
-  ([tested](system-design.md#the-safety-tests-october-31-2026) with the adapter's default, 5). The
-  adapter also accepts 7, but only 6 is tested, so changing it means rerunning that test.
+  The AI SDK's major version, 7, is pinned to match the adapter's `sdk_version`, because with the
+  adapter's default, 5, approvals are silently ignored and the card just comes back
+  ([tested](system-design.md#the-safety-tests-october-31-2026)). Changing it means rerunning that test.
 - **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
   Changes go through chat.
 - **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
   Settings.
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory: turn one
   on or off, or delete it for good), notification times, passkeys and sessions, backup and job status, the last model error, and a link to Phoenix for everything else. Each section lands with its layer.
-- **PWA:** manifest + service worker for install, push, and a _share target_—on Android, sharing
+- **PWA:** `vite-plugin-pwa`, with a manifest and service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
 - **Language:** the UI is English only and isn't translated. The chat mirrors the user's language
@@ -171,7 +172,7 @@ file defines the following services:
 services:
   api:        # FastAPI + agent + job loop + static web build; stop_grace_period: 30s
   db:         # postgres, one pinned major version; volume for its data
-  backup:     # nightly pg_dump → restic → off-site
+  backup:     # pg_dump → restic → off-site, when the last success is over 24 hours old
   ollama:     # profile: local-llm
   speaches:   # profile: local-stt  (OpenAI-compatible faster-whisper)
   phoenix:    # profile: traces  (its own image and database; loopback only)
@@ -182,8 +183,12 @@ A deployment works as follows:
 - Running `docker compose up` with the default profile needs a cloud LLM API key, and the
   `--profile local-llm` flag also starts Ollama. Each role's endpoint is set by an environment
   variable.
-- Access is through Tailscale, with `tailscale serve` proxying HTTPS on the tailnet to the API.
-  Host install versus sidecar container is an open question (`plan.md` §6, L0).
+- Access is through Tailscale on the host: `tailscale serve --bg` proxies HTTPS on the tailnet to the
+  API, which Compose publishes on loopback only. A sidecar stays an option for a VPS
+  ([step 10](system-design.md#running-it)).
+- Updating is `docker compose pull`, then `up -d`. The API runs `pg_dump` before any migration, and
+  migrations run in a transaction. A Postgres major upgrade is a documented dump and restore.
+- API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB.
 - Host disk encryption (BitLocker, LUKS, FileVault) is an install requirement, stated in the
   docs—it's what protects the database at rest.
 - Images are amd64; arm64 is parked.
@@ -227,7 +232,7 @@ The following table is the threat model, refreshed at L8:
 
 | Threat | Defense |
 |---|---|
-| Internet attacker | Not reachable: the instance is only on the tailnet. Passkeys, security headers, single origin |
+| Internet attacker | Not reachable: the instance is only on the tailnet. Passkeys, security headers, single origin, `SameSite=Strict` cookies, and `TrustedHost` |
 | Stolen laptop or disk | Host disk encryption, an install requirement |
 | Leaked backup | restic encryption; the password isn't stored with the backups |
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
@@ -235,7 +240,7 @@ The following table is the threat model, refreshed at L8:
 | Prompt injection through statements or photos | Rule 2 in `plan.md` §4: statements are parsed in a run with no write or ledger tools, and photos by a tool-less call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
 | A forged or replayed confirm answer | Server-held history: an answer counts once, only for a pending call, with the stored arguments ([tested](system-design.md#the-safety-tests-october-31-2026)) |
 | Secrets typed into chat | `InputGuardrail` removes API keys, card numbers, PAN, and spaced Aadhaar before the model or storage sees them. Passwords, OTPs, and bank account numbers can't be detected, so a statement password has its own field on the import card |
-| Data carried out through rendered output | A content security policy from L0 that allows images only from the app's own origin (`img-src 'self'`); links in agent replies render as plain text. Client file URLs are off, so a client can't make the model fetch one |
+| Data carried out through rendered output | A [strict content security policy](system-design.md#security) from L0, with no inline scripts and images only from the app's own origin; links in agent replies render as plain text. Client file URLs are off, so a client can't make the model fetch one |
 | Agent-written SQL | The `agent_ro` grants are the boundary: `SELECT` only, no auth tables. The read-only default, the timeout, one statement through the extended protocol, and a transaction that's always rolled back are extra layers ([`tools.md`](tools.md#run_query)). `TEMP` is revoked, and no network extension such as `dblink` is installed |
 | Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
 | LLM provider sees data | The self-hoster's choice for each role. See [What each role sends](#what-each-role-sends) |

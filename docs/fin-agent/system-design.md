@@ -37,11 +37,13 @@ The following table lists the steps, in order:
 | 7. Safety and trust | Trust boundaries, prompt injection, data leaving the box, privacy, the advice boundary | [Below](#step-7-safety-and-trust); [`design.md`](design.md#untrusted-text-and-write-tiers); [`platform.md`](platform.md#security) | Agreed November 1, 2026 |
 | 8. Reliability | What fails, and how it recovers | [Below](#step-8-reliability); [`platform.md`](platform.md#notifications-and-scheduler) | Agreed November 1, 2026 |
 | 9. Evals and observability | How it's tested, measured, traced, and scored for each model | [Below](#step-9-evals-and-observability); [`harness.md`](harness.md#tests-and-evals) | Agreed November 1, 2026 |
-| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Not started; next; an API draft and a deployment check are parked |
+| 10. Interfaces and operations | API and streaming contract, auth, deployment, cost and latency | [Below](#step-10-interfaces-and-operations); [`platform.md`](platform.md) | Agreed November 1, 2026 |
 
 Decisions made before or outside their step—rule 1 (the model decides what to compute; code
 computes it), Code Mode, the write tiers, and the old trade-offs step—are filed under their step
 and re-checked when that step is walked.
+
+All ten steps were agreed by November 1, 2026. The build starts at L0 ([`plan.md`](plan.md#5-build-order)).
 
 ---
 
@@ -692,7 +694,7 @@ you notice its card or reconcile, or skew the wording of a reply.
 | Scripts reach nothing | Monty ([step 5](#the-monty-test-october-31-2026)) | Enforced |
 | A saved parser can only produce wrong rows | Monty, the checks, the review screen ([step 5](#imports-the-agent-writes-the-parser)) | Enforced |
 | Nothing else leaves the box | No outbound tools; client file URLs off | Enforced by absence |
-| Replies can't carry data out | Content security policy; links as plain text | Enforced from L0, not tested yet |
+| Replies can't carry data out | Content security policy; links as plain text | Enforced from L0; [tested in step 10](#the-interface-tests-november-1-2026) |
 | Passwords stay out of chat | A field on the import card | By design; a password typed into chat can't be detected |
 | Card numbers and keys typed in chat don't reach the model | `InputGuardrail` | Enforced for known patterns |
 | Outside text is data, not instructions | Markers and one instruction line | Interpreted; eval case |
@@ -755,7 +757,7 @@ afterwards.
 
 | Change | Why |
 |---|---|
-| `sdk_version=6` | The default, 5, silently ignores approvals, so the card just comes back. The frontend's AI SDK major version must match |
+| `sdk_version=6` | The default, 5, silently ignores approvals, so the card just comes back. The frontend's AI SDK major version must match. [Step 10](#the-chat-contract) moved both to 7, the same wire |
 | `allowed_file_url_schemes=frozenset()` | By default, a file URL from the client reached the model. Uploads use attachments instead |
 | `Truncate(strategy=TruncationStrategy.head)` | `head_tail` and `tail` can split a marker. `head` at worst leaves one open, which over-marks and is the safe direction |
 | The snapshot is its own exchange, followed by "Snapshot read." | `InputGuardrail` errors on a two-part prompt, so a card number in a thread's first message would have failed the turn |
@@ -1031,7 +1033,7 @@ Job tests used real Postgres 18.6.
 | A `psycopg_pool` pool across a Postgres restart | Hadn't recovered 14 seconds after the restart. Inconclusive; backoff or Windows may explain it |
 | Data checksums on a fresh Postgres 18.6 | On by default |
 
-**Not tested:** the AI SDK's `useChat` reattaching, real providers, Linux and Docker (Compose restarts
+**Not tested:** the AI SDK's `useChat` reattaching ([since tested](#the-interface-tests-november-1-2026)), real providers, Linux and Docker (Compose restarts
 and grace periods), the crash note, the deploy drain, and the 24-hour backup rule. Procrastinate and
 DBOS were read in their docs only.
 
@@ -1241,7 +1243,15 @@ and Linux, including the `internal` network.
 
 ## Step 10: Interfaces and operations
 
-Not started. Decided so far, from the old trade-offs step:
+What you touch, and how it runs. Agreed November 1, 2026. The surfaces and deployment are in
+[`platform.md`](platform.md).
+
+![One way in, and only two ways out](diagrams/sd-deployment.png)
+
+*Figure: your device reaches the API over the tailnet only. Data leaves only for the LLM endpoints you
+chose and for encrypted backups ([note](diagrams/sd-deployment.md)).*
+
+These three stay from the old trade-offs step:
 
 - **Consistency over availability:** one Postgres database; when the machine is down, so is the
   app, and backups keep the data.
@@ -1250,48 +1260,153 @@ Not started. Decided so far, from the old trade-offs step:
 - **Depth over speed:** replies stream, so the first output arrives in about 2 s, and a what-if can
   take about 15 s.
 
-Parked here, from an API draft of October 27, 2026 that was never agreed:
+### Web stack
 
-- An endpoint map: chat with stop and reattach endpoints ([step 8](#a-turn-outlives-its-connection));
-  conversations; ledger reads and writes; imports that
-  return `202` and are polled; photo and voice endpoints; inbox; instance and auth.
-- The undo button calls REST, not a chat turn, so undo works without an LLM.
-- Conventions: integer paise; `null` means unknown, never `0`; balances carry `as_of`; RFC 9457
+The app is private, behind a passkey, and reads all its data from the API, so server rendering adds
+nothing. A static build keeps it to one process and one origin, with no Node server in production.
+
+| Option | Verdict | Why |
+|---|---|---|
+| **Vite and React** | **Yes** | No inline scripts, so `script-src 'self'` just works. 81 MB of dependencies, and it built in under 3 s |
+| Next.js static export | No | 3 inline scripts were blocked, and the page stayed blank. It would [need `unsafe-inline`, nonces, or experimental hashes](https://nextjs.org/docs/app/guides/content-security-policy). 378 MB and 11 s, for server features this app doesn't use |
+| Next.js with its Node server | No | Nonces would fix the policy, but it adds a container and a second runtime, and every page load would pass through a server handling your session cookie |
+
+- **Chat UI:** the [AI Elements package](https://github.com/vercel/ai-elements) gets deprecated at the
+  end of November 2026, so the app uses its replacement,
+  [shadcn/ui's copy-in patterns](https://ui.shadcn.com/docs/ai-elements), which shadcn's
+  [Vite guide](https://ui.shadcn.com/docs/installation/vite) can install. The close second is
+  [assistant-ui](https://www.assistant-ui.com/docs/runtimes/ai-sdk/v6), MIT, with a runtime over the AI
+  SDK. The app stays directly on `useChat`, because reattach, Stop, and cards already work there.
+- **The rest:** AI SDK 7, Streamdown for markdown, Recharts, `vite-plugin-pwa`, and `openapi-typescript`
+  to generate the API types.
+
+### The chat contract
+
+`useChat` on AI SDK 7 ran in a real browser against the
+[detached turn](#a-turn-outlives-its-connection), with `sdk_version=7`. The adapter documents 7 as the
+same wire as 6.
+
+The test found four things the build must handle:
+
+1. **Your message would vanish on a reload mid-reply,** because it's saved only when the turn ends. So
+   the thread endpoint also returns the running turn's message.
+2. **Undo cards disappear on reload.** `dump_messages` drops them, although the stored history keeps
+   them in `ToolReturnPart.metadata`, so the thread endpoint merges them back in.
+3. **A closed card still looks open.** After you type past a card, clicking it sends nothing, but it has
+   to look closed. After a reload it shows as `output-available`, and the real state is in
+   `callProviderMetadata.pydantic_ai.outcome`.
+4. **Saved threads split one reply into several messages.** The UI groups consecutive assistant
+   messages, so a reload looks like the live view.
+
+### API
+
+| Area | Endpoints |
+|---|---|
+| Chat | `POST /api/chat`, `GET /api/chat/{thread}/stream`, `POST /api/chat/{thread}/stop` |
+| Threads | List and search, `GET /api/threads/{id}/messages`, rename, `POST /api/messages/{id}/flag` |
+| Ledger | Read endpoints for the panels, `POST /api/undo/{id}`, so undo works without an LLM |
+| Settings | Preferences, categories and rules, notification times |
+| Imports | `POST /api/attachments`, `POST /api/imports` returning `202` and polled, then password, commit, reject, undo |
+| Photos and voice | `POST /api/chat/{thread}/photo`, `POST /api/transcribe` |
+| Inbox and push | List, mark read, subscribe |
+| Instance | `/api/health`, auth, export |
+
+- **Conventions:** integer paise; `null` means unknown, never `0`; balances carry `as_of`; RFC 9457
   errors; cursor pagination.
-- The CLI uses a named, revocable token created on the host; admin commands never go over HTTP; a
-  fresh passkey check only for export and passkey changes.
-- No `/v1` in URLs while the web app and CLI ship in the same image. Tool names and argument shapes
-  are part of the contract, because stored conversations replay old tool calls.
-- Rate limits, CSP, and other headers; MCP exposure stays parked.
-- Rendering the charts the agent makes ([step 5](#step-5-tools)): one chart component that draws a
-  declarative spec, with the citation and "as of" time on every chart.
-- The thread list ([step 6](#threads-are-yours)). What the app opens to: the default is your last
-  thread, with New chat one tap away, so logging chai six times a day doesn't create six threads.
-  Thread titles: the default is your first message, trimmed.
-- How an old confirm card shows that it's closed after you type past it ([step 7](#decisions)).
-- A read-only Settings panel showing the host each role connects to
-  ([step 7](#what-leaves-the-box)).
-- How the interrupted note, the failure note, Retry, and the "cut off" card look
-  ([step 8](#every-ending-saves-the-same-two-records)).
-- The flag button on a reply, the "couldn't trace ₹X" note, and whether a number can be tapped to its
-  source ([step 9](#the-number-check)).
-- Reaching Phoenix over the tailnet, and the Compose profile that starts it
-  ([step 9](#traces-phoenix)).
-- **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason
-  was only that traditional backends deploy this way, so the options were explored. Most sources are
-  vendor blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an
-  agent apart isn't its packaging: durable runs, code isolation, spend, and traces are handled in
-  steps 8, 5, 3, and 9. The following table records the options:
+- **Versioning:** no `/v1` in URLs while the web app and CLI ship in the same image. Tool names and
+  argument shapes are part of the contract, because stored conversations replay old tool calls.
+- **MCP** exposure stays [parked](parked.md).
+- **Voice:** a voice note sends at once and shows its transcript, because a wrong log is visible and
+  undoable.
 
-  | Option | Verdict | Why |
-  |---|---|---|
-  | Docker Compose | Yes | One command on Linux, Docker Desktop, or a VPS; a pinned Postgres; the agent's container can't see your other files; backups stay independent of the app |
-  | Native install with systemd | Close second | Lightest, and common for OpenClaw and Hermes, but Postgres must be installed per OS, and the agent runs beside your files |
-  | Coolify, Dokploy | Optional for self-hosters | Dashboards that run Compose files, so nothing extra to build |
-  | One all-in-one container | No | Backups could no longer run when the app is broken |
-  | Kamal, Dokku | No | For a developer shipping to their own server; neither runs Compose files |
-  | Managed runtimes: AWS AgentCore, Azure Foundry, Vertex Agent Engine, Claude Managed Agents, Cloudflare Agents | No | They solve scale for many users; your ledger would leave your machine, and others couldn't self-host |
-  | Kubernetes, Ray | No | One user for each instance |
+### Security
+
+- **Headers:** `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'
+  blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`, plus
+  `nosniff` and `no-referrer`. Inline styles stay allowed for the UI kit, and they can't fetch outside
+  images under `img-src`.
+- **Cross-site requests:** `SameSite=Strict` cookies, one origin, and Starlette's `TrustedHost` for the
+  tailnet name.
+- **No rate limits:** there's one user behind passkeys, one running turn per thread, and spend ceilings.
+  The only cap is 25 MB on uploads.
+- **CLI:** a named, revocable token created on the host. Admin commands never go over HTTP. Export and
+  passkey changes need a fresh passkey check.
+
+### What you see
+
+| Question | Decision |
+|---|---|
+| What the app opens to | Your last thread, with New chat one tap away, so logging chai six times a day doesn't create six threads |
+| Thread titles | Your first message, trimmed |
+| Failure | A note and Retry, which sends "Try again" as a new message so the model sees what was done |
+| Interrupted by a restart | A note saying whether a write landed |
+| Reply hit the output cap | A "cut off" card |
+| Untraced amount | A small "couldn't trace ₹X" note under the reply |
+| Tappable numbers | Yes, once L2 shows the number check is quiet, reusing its match and the citations |
+| Flag | A button on each reply |
+| Settings | Each role's host (read-only), the last model error, job and backup status, and a link to Phoenix |
+| Charts | One component that draws the `show_chart` spec, always with its citation and "as of" time |
+
+### Running it
+
+- **Tailscale, settling L0's question:** on the host with
+  [`tailscale serve --bg`](https://tailscale.com/kb/1242/tailscale-serve), and Compose publishes the API
+  on loopback only. It's one command, on a machine that's already on your tailnet. A sidecar stays an
+  option for a VPS.
+- **Phoenix:** loopback by default. Tailnet access means its login on, and a `tailscale serve` on another
+  port.
+- **Updates:** `docker compose pull`, then `up -d`. The API runs `pg_dump` before any migration, and
+  migrations run in a transaction.
+- **Postgres major upgrades:** a documented dump and restore, the same path as the restore drill.
+- **Secrets and logs:** API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB, so
+  they can't fill the disk.
+
+**Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason was
+only that traditional backends deploy this way, so the options were explored. Most sources are vendor
+blogs, with no head-to-head comparison, and Podman Quadlet wasn't evaluated. What sets an agent apart
+isn't its packaging: durable runs, code isolation, spend, and traces are handled in steps 8, 5, 3, and 9.
+
+| Option | Verdict | Why |
+|---|---|---|
+| Docker Compose | Yes | One command on Linux, Docker Desktop, or a VPS; a pinned Postgres; the agent's container can't see your other files; backups stay independent of the app |
+| Native install with systemd | Close second | Lightest, and common for OpenClaw and Hermes, but Postgres must be installed per OS, and the agent runs beside your files |
+| Coolify, Dokploy | Optional for self-hosters | Dashboards that run Compose files, so nothing extra to build |
+| One all-in-one container | No | Backups could no longer run when the app is broken |
+| Kamal, Dokku | No | For a developer shipping to their own server; neither runs Compose files |
+| Managed runtimes: AWS AgentCore, Azure Foundry, Vertex Agent Engine, Claude Managed Agents, Cloudflare Agents | No | They solve scale for many users; your ledger would leave your machine, and others couldn't self-host |
+| Kubernetes, Ray | No | One user for each instance |
+
+### Latency and cost
+
+- **Latency:** the 2 s, 5 s, and 15 s targets stay, and traces measure them at L2. The server added under
+  7 ms before the first chunk in the spike, with no capabilities on, so the provider will set the real
+  number.
+- **Cost:** a rough guess is $0.02 a turn, from assumed token counts at GPT-5.4 prices with caching. 30
+  turns a day would be about $18 a month, far below the $20 daily ceiling.
+
+### The interface tests, November 1, 2026
+
+These ran in the browser pane on Windows, with PydanticAI 2.64.0, AI SDK 7.0.159, a real uvicorn server,
+and a scripted model. The code is [saved](../research/design-probes/README.md).
+
+| Test | Result |
+|---|---|
+| Streaming, tool parts, an undo card | Worked with `sdk_version=7` |
+| Confirm and Cancel | The write ran once on Confirm, and not at all on Cancel |
+| [Step 7's approval test](#the-safety-tests-october-31-2026) rerun at `sdk_version=7` | The same results: a real approval ran once. A replay, a forged ID, an approval after typing past, and a non-boolean `approved` were refused, and changed arguments were ignored |
+| Reload mid-reply | Reattached with all 40 words, once each |
+| Stop, then a new message | The partial reply stayed, and the next message worked |
+| Provider failure | The partial reply stayed, and the browser got a plain message rather than the raw error |
+| A confirm card after a reload | It came back from the saved thread, and Confirm ran the write |
+| Clicking a card after typing past it | Sent nothing to the server, and no write ran |
+| A markdown image and link in a reply | Neither rendered as an image or a live link, with Streamdown's `a` and `img` overridden |
+| An external image and an inline script, injected on Vite | Both blocked by the policy |
+| The same app as a Next.js static export, same policy | The page stayed blank, and the console named 3 blocked inline scripts |
+| A card's data after a JSON round trip | Kept in `ToolReturnPart.metadata`, and dropped by `dump_messages` |
+
+**Not tested:** shadcn's patterns on Vite; the service worker, share target, and push under this policy;
+passkeys, Tailscale, Docker, and Linux; a real phone and a real LLM; `dump_messages` output after
+compaction; and the 25 MB cap, `TrustedHost`, and pre-migration dump, which aren't built yet.
 
 ---
 

@@ -1,7 +1,7 @@
 # Design probes
 
 These throwaway scripts tested the claims behind [system design](../../fin-agent/system-design.md) steps
-7, 8, and 9. They run no real LLM, and every value in them is synthetic. They become the first tests at
+7, 8, 9, and 10. They run no real LLM, and every value in them is synthetic. They become the first tests at
 L2, so they're kept here until then.
 
 | Scripts | Tested | Results |
@@ -17,7 +17,12 @@ L2, so they're kept here until then.
 | `step9_probe3` to `step9_probe5` | A trace row from messages (dropped for Phoenix), a full turn exported to a tracing tool, and our own facts on a parent span | Step 9 |
 | `step9_probe7`, `step9_probe8` | The daily spend ceiling across a restart, and the spend store while Postgres stops and restarts | Step 9 |
 
-To run them, you need these packages in one environment: `pydantic-ai`, `pydantic-ai-harness`,
+| `web-spike/`, `step10_probe2` | A real `useChat` client against the detached turn, the same app as a Next.js static export under a strict content security policy, and where a card's data survives a reload | [Step 10](../../fin-agent/system-design.md#the-interface-tests-november-1-2026) |
+
+To run the web spike, run `pnpm install` and `pnpm build` in `vite-app` or `next-app`, then
+`python server.py <its dist or out folder> 7 18800`, and open `http://127.0.0.1:18800/?thread=a`.
+
+To run the others, you need these packages in one environment: `pydantic-ai`, `pydantic-ai-harness`,
 `pydantic-monty`, `pydantic-evals`, `psycopg`, `psycopg-pool`, `asyncpg`, `pgtask`, `uvicorn`,
 `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`,
 `openinference-instrumentation-pydantic-ai`, `pytest`, `anyio`, `inline-snapshot`, and `dirty-equals`.

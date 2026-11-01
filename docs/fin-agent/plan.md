@@ -165,9 +165,9 @@ The following table states what each requirement demands:
 | Requirement | Target |
 |---|---|
 | Scale | One user for each instance, and the data is small ([assumptions](system-design.md#scale-assumptions)) |
-| Latency | Targets that step 10 re-checks: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
+| Latency | Targets that traces measure from L2: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
-| Durability | Do not lose the ledger. Nightly `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
+| Durability | Do not lose the ledger. A daily `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
 | Privacy | Inference provider is switchable for each role; nothing else leaves the box except encrypted backups and contentless push pings |
 | Honesty | Tools distinguish _zero_ from _unknown_, and every number carries its age and source |
@@ -231,7 +231,7 @@ The following table records the choice for each layer:
 | Data access | Plain SQL through psycopg 3, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL. asyncpg is a second driver, used only by the harness's spend store |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
-| Web app | React and Next.js, static export, Vercel AI SDK `useChat` + AI Elements | Best chat-UI ecosystem; static export means no Node server in production |
+| Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
 | Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama, speaches, and Phoenix | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
 | License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive. Phoenix is Elastic 2.0, but it's optional and runs as its own image |
 
@@ -320,8 +320,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    `THIRD_PARTY_NOTICES.md`, and a "Built on" credit in the README; then every table in
    [`design.md`](design.md), money as whole paise.
 4. The `docker compose up` command serves the web shell and an API health check, reached over
-   HTTPS through `tailscale serve`. The web shell ships with a content security policy that
-   blocks images from other origins.
+   HTTPS through `tailscale serve` on the host. The web shell ships with a strict content security
+   policy, which blocks inline scripts and images from other origins.
 5. Auth: first-run setup, passkey login, sessions, passkey reset from the host CLI.
 6. CI: ruff, pytest against a Postgres service container with model requests blocked, web lint and
    build.
@@ -433,14 +433,13 @@ something has crept in—check it against [`parked.md`](parked.md).
 
 Answer each when its layer arrives, not before.
 
-- **L0:** Tailscale on the host, or as a sidecar container in compose? Do Compose restarts and the
-  30-second grace period behave on Linux?
+- **L0:** do Compose restarts and the 30-second grace period behave on Linux?
 - **L2:** is the [number check](system-design.md#the-number-check) noisy on real replies? If so, its
-  note comes off and only the trace keeps it.
+  note comes off and only the trace keeps it. If it's quiet, numbers become tappable to their source.
   Which local chat models handle which tasks? The scorecard records it. What are the real token
   counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
-  Traces answer all three. Does `useChat` reattach cleanly, and are the model timeouts right for a
-  real provider?
+  Traces answer all three. Are the model timeouts right for a real provider, and do the latency
+  targets hold?
 - **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
   statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
 - **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor
