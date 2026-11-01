@@ -92,7 +92,11 @@ export function LedgerPanel() {
           />
           Show reversed rows
         </label>
-        {data && <span className="fine">{data.total_count} movements</span>}
+        {data && (
+          <span className="fine">
+            {data.items.length} shown · {data.total_count} total
+          </span>
+        )}
       </div>
 
       {loading && !data && <p className="muted">Loading the ledger…</p>}

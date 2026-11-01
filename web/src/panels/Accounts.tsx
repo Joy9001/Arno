@@ -73,7 +73,7 @@ export function AccountsPanel() {
   const cards = data.accounts.filter((account) => account.kind === "card");
   const loans = data.accounts.filter((account) => account.kind === "loan");
   const others = data.accounts.filter(
-    (account) => account.kind !== "card" && account.kind !== "loan",
+    (account) => !["card", "loan", "person", "goal"].includes(account.kind),
   );
 
   return (

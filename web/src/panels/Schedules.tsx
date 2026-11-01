@@ -44,7 +44,12 @@ export function SchedulesPanel() {
                   <td>{formatDate(event.date)}</td>
                   <td>
                     {event.name}
-                    {!event.confirmed && <span className="badge muted">expected</span>}
+                    {!event.confirmed && (
+                      <>
+                        {" "}
+                        <span className="badge muted">expected</span>
+                      </>
+                    )}
                   </td>
                   <td>
                     <span className="badge muted">{event.subtype ?? event.kind}</span>
@@ -79,8 +84,18 @@ export function SchedulesPanel() {
                 <tr key={schedule.id}>
                   <td>
                     {schedule.name}
-                    {!schedule.confirmed && <span className="badge muted">expected</span>}
-                    {!schedule.active && <span className="badge danger">archived</span>}
+                    {!schedule.confirmed && (
+                      <>
+                        {" "}
+                        <span className="badge muted">expected</span>
+                      </>
+                    )}
+                    {!schedule.active && (
+                      <>
+                        {" "}
+                        <span className="badge danger">archived</span>
+                      </>
+                    )}
                   </td>
                   <td>
                     <span className="badge muted">{schedule.subtype ?? schedule.kind}</span>
