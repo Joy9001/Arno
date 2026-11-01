@@ -4,35 +4,50 @@ version = "0.1.0"
 description = "Private, self-hosted personal finance agent"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.118.0",
-    "pydantic-ai>=1.0.0",
-    "sqlalchemy[asyncio]>=2.0.0",
     "asyncpg>=0.30.0",
-    "pgvector>=0.3.0",
-    "mem0ai>=0.1.0",
-    "pdfplumber>=0.11.0",
-    "pymupdf4llm>=0.0.17",
-    "pikepdf>=9.0.0",
-    "pytesseract>=0.3.13",
-    "signalbot>=0.2.0",
-    "apscheduler>=3.11.0",
-    "ollama>=0.6.2",
-    "rich>=15.0.0",
+    "fastapi>=0.118.0",
+    "holidays>=0.80.0",
+    "pydantic>=2.11.0",
+    "pydantic-ai>=2.64.0",
+    "pydantic-ai-harness>=0.64.0",
+    "pypdfium2>=5.0.0",
+    "psycopg[binary,pool]>=3.2.0",
+    "python-calamine>=0.5.0",
+    "python-dateutil>=2.9.0",
+    "pywebpush>=2.0.0",
+    "typer>=0.19.0",
+    "uvicorn[standard]>=0.37.0",
+    "webauthn>=3.0.0",
 ]
+
+[project.scripts]
+fin-agent = "fin_agent.cli:app"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.14.0",
+    "cbor2>=5.6.0",
+    "cryptography>=44.0.0",
+    "httpx>=0.28.0",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.0.0",
+    "ruff>=0.14.0",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fin_agent"]
 
 [tool.ruff]
 line-length = 100
-extend-exclude = ["*.md"]
+# docs/ holds research probes that become tests at L2; they are not shipped code.
+extend-exclude = ["*.md", "docs", "evals", ".venv", "web"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]

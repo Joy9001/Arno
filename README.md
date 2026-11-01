@@ -3,66 +3,148 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: full-product plan written 2026-10-07, revised 2026-10-08; no application code yet.** The plan is
-> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md) — read that first, it's the only authoritative document. The May 2026 design docs are in
-> [`docs/archive/`](docs/archive/) and are not authoritative. No application code exists yet.
+> **Status: L0 (foundations) is built.** Postgres in Compose with numbered SQL migrations, schema
+> v1 on a vendored pgledger, a FastAPI shell serving a Vite/React build under a strict content
+> security policy, passkey login, and CI. The ledger endpoints, agent, and projection engine land
+> in later layers. The authoritative plan is
+> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
+> [`docs/archive/`](docs/archive/) are not authoritative.
+
+## Built on
+
+- [**pgledger**](https://github.com/pgr0ss/pgledger) — MIT, © 2025 Paul Gross. The double-entry
+  core is vendored unmodified at commit `fee1aa0` in
+  [`src/fin_agent/db/vendor/pgledger/`](src/fin_agent/db/vendor/pgledger/), together with its
+  ULID helpers from [`scoville/pgsql-ulid`](https://github.com/scoville/pgsql-ulid)
+  (BSD-3-Clause, © 2021 Scoville). License texts are in
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and ship in the image. No endorsement is
+  implied.
+- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, psycopg 3, Vite and React, and
+  Tailscale. Full choices are in [plan §3](docs/fin-agent/plan.md#3-stack).
+
+## Run it
+
+Requirements: Docker with Compose, and a host that is already on your Tailscale network for
+remote access.
+
+```bash
+cp .env.example .env
+# Set POSTGRES_PASSWORD and AGENT_RO_PASSWORD, then either:
+#   - keep FIN_AGENT_RP_ID=localhost for local use, or
+#   - set FIN_AGENT_RP_ID and FIN_AGENT_RP_ORIGIN to your machine's tailnet name.
+docker compose up -d --build
+```
+
+The first start applies the migrations and prints a setup token. Every start while setup is open
+prints a fresh token, so read the current log line:
+
+```bash
+docker compose logs api | Select-String "setup token"   # PowerShell
+docker compose logs api | grep "setup token"            # bash
+```
+
+Open the app, enter the token, and create the passkey. The token is also available with
+`docker compose exec api fin-agent setup-token`.
+
+Local: <http://localhost:8000>. The API publishes on loopback only.
+
+Over Tailscale, on the host:
+
+```bash
+tailscale serve --bg 8000
+tailscale serve status
+```
+
+That proxies `https://<machine>.<tailnet>.ts.net` to `http://127.0.0.1:8000`. Passkeys need that
+HTTPS name and a stable hostname, so set `FIN_AGENT_RP_ID` to the same `*.ts.net` name and
+`FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net`, then `docker compose up -d`.
+
+`/api/health` reports the database and schema version. Nothing is exposed to the public internet.
+
+## Commands
+
+```bash
+fin-agent migrate              # apply pending SQL migrations
+fin-agent serve                # API + built web app (127.0.0.1:8000)
+fin-agent setup                 # issue a first-run setup token
+fin-agent setup-token          # same, kept for scripts
+fin-agent passkeys list        # registered passkeys
+fin-agent passkeys reset       # delete every passkey and session, reopen setup
+```
+
+Admin commands run on the host, never over HTTP. A passkey reset needs a shell on the host, which
+already has the data.
+
+## Develop
+
+Python 3.14, managed by [uv](https://docs.astral.sh/uv/). Web: Node 24 with pnpm.
+
+```bash
+uv sync --dev
+docker compose up -d db
+docker compose exec db createdb -U app fin_agent_test   # once
+```
+
+Use the host database URL from `.env.example` (`127.0.0.1:5433`), then:
+
+```bash
+uv run fin-agent migrate
+uv run fin-agent serve
+```
+
+Web development (Vite proxies `/api` to the API):
+
+```bash
+pnpm --dir web install
+pnpm --dir web dev
+pnpm --dir web build      # what the API serves from web/dist
+```
+
+Checks:
+
+```bash
+uv run ruff check . && uv run ruff format --check .
+DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
+AGENT_RO_PASSWORD=<password> uv run pytest -q
+pnpm --dir web lint && pnpm --dir web build
+```
+
+Tests refuse to touch a database whose name doesn't end in `_test`. They also block every
+non-loopback socket and DNS lookup, and point each model role at a closed loopback port, so CI can
+never call a model.
 
 ## Layout
 
 ```
-.
-├── docs/            all documentation — see docs/README.md
-│   ├── fin-agent/   the project: plan, design, tools, platform, harness, import, parked
-│   ├── research/    independent surveys (agent-harness-engineering)
-│   └── archive/     superseded May 2026 design docs — historical only
-└── evals/           human-judged eval harness for local models (+ recorded runs)
+src/fin_agent/
+  api/         FastAPI app, auth, static web build, security headers
+  auth/        passkeys, sessions, first-run setup
+  db/          connection, migrations/*.sql, vendor/pgledger/
+  cli.py
+web/           Vite and React app (a static build)
+tests/         pytest, including a software WebAuthn authenticator
+compose.yaml
 ```
 
-[`docs/README.md`](docs/README.md) indexes everything. `docs/fin-agent/plan.md` owns decisions;
-other project docs own detail. If they disagree, the plan wins.
+Folders for later layers (`ledger/`, `engine/`, `importers/`, `agent/`, `jobs/`, `india/`) are
+created when their layer starts. The old eval harness in `evals/` predates this plan and retires at
+L4.
 
-Application code will land in `src/fin_agent/`, the web app in `web/`, tests in `tests/`.
+## Security
 
-## Development
-
-Python 3.14, managed by [uv](https://docs.astral.sh/uv/).
-
-```bash
-uv sync --dev
-```
-
-```bash
-uv run ruff check . && uv run ruff format --check .
-```
-
-Optional: `uv run pre-commit install` to run ruff on commit.
-CI runs the same two ruff commands on every push and PR to `main`.
-
-## Configuration
-
-Each LLM role (chat, vision, speech-to-text) is three env vars. Local and cloud are the same code
-path — any OpenAI-compatible endpoint works.
-
-```bash
-CHAT_BASE_URL=http://localhost:11434/v1  # or a cloud provider's /v1
-CHAT_API_KEY=ollama                      # or a real key
-CHAT_MODEL=qwen3:4b                      # or a cloud model id
-```
-
-`VISION_*` and `STT_*` follow the same pattern. Details in
-[`docs/fin-agent/platform.md`](docs/fin-agent/platform.md).
-
-## Eval harness
-
-Drives each task in [`evals/eval_tasks.py`](evals/eval_tasks.py) as a multi-turn
-conversation against a local Ollama model, with you as the judge.
-
-```bash
-uv run evals/eval_finagent.py --models granite4.1:3b --buckets critical
-```
-
-Results land in `evals/results/`. Predates the current plan but is stack-independent and
-still useful for checking whether a given local model can hold a tool-calling conversation.
+- Private network only. Compose publishes both ports on `127.0.0.1`; Tailscale provides HTTPS.
+- One user, passkey login through `py_webauthn`. Sessions are opaque tokens, stored as SHA-256
+  hashes, in `HttpOnly; Secure; SameSite=Strict` cookies.
+- The content security policy is `default-src 'self'; script-src 'self'; style-src 'self'
+  'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action
+  'self'; frame-ancestors 'none'`, plus `nosniff` and `no-referrer`. No inline scripts, and images
+  only from the app's own origin.
+- `TrustedHost` accepts loopback and `*.ts.net` by default; widen it with
+  `FIN_AGENT_TRUSTED_HOSTS`.
+- The database has two roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
+  people, categorization, settings, and conversation tables and views, no auth tables, no `TEMP`,
+  read-only by default, and a two-second statement timeout.
+- Secrets live in `.env`, never in the database. Host disk encryption is an install requirement.
 
 ## The one rule
 
