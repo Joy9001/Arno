@@ -249,6 +249,30 @@ def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, d
     assert any("failed" in str(part.content).lower() for part in returns)
 
 
+def test_nested_read_results_are_not_truncated_inside_a_script(demo_ledger):
+    agent = build_agent()
+    code = (
+        'rows = await run_query(sql="SELECT generate_series(1, 900) AS n")\n'
+        'result = [len(rows["rows"]), type(rows["rows"]).__name__]\n'
+        "result"
+    )
+    model = _model(
+        ModelResponse(parts=[ToolCallPart("run_code", {"code": code})]),
+        ModelResponse(parts=[TextPart("done")]),
+    )
+    with agent.override(model=model):
+        result = run_agent(agent, "check the nested list", AgentDeps(conversation_id="cnv_nested"))
+    part = next(
+        part
+        for message in result.all_messages()
+        for part in getattr(message, "parts", [])
+        if getattr(part, "tool_name", None) == "run_code"
+        and getattr(part, "content", None) is not None
+    )
+    assert "900" in str(part.content)
+    assert "list" in str(part.content)
+
+
 def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
     floor = write_tools.update_setup_item(
         demo_ledger,

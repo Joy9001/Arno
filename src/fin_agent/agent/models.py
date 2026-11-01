@@ -8,6 +8,7 @@ history, because Ollama otherwise truncates silently.
 from __future__ import annotations
 
 import os
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -65,14 +66,31 @@ def chat_config(*, fallback: bool = False) -> RoleConfig:
 
 def build_model(config: RoleConfig) -> Model:
     """One code path for local and cloud: an OpenAI-compatible endpoint."""
+    http_client = None
+    if "opencode.ai" in config.base_url:
+        # OpenCode Go asks clients to identify themselves and keep a stable session for routing
+        # and prompt caching. Override OPENCODE_SESSION_ID to share one across restarts.
+        import httpx2
+
+        session = os.environ.get("OPENCODE_SESSION_ID") or f"fin-agent-{uuid.uuid4()}"
+        http_client = httpx2.AsyncClient(
+            headers={
+                "User-Agent": "fin-agent/0.1",
+                "x-opencode-session": session,
+            }
+        )
     if "ollama" in config.base_url or os.environ.get("CHAT_PROVIDER", "").lower() == "ollama":
         from pydantic_ai.providers.ollama import OllamaProvider
 
-        provider = OllamaProvider(base_url=config.base_url, api_key=config.api_key)
+        provider = OllamaProvider(
+            base_url=config.base_url, api_key=config.api_key, http_client=http_client
+        )
     else:
         from pydantic_ai.providers.openai import OpenAIProvider
 
-        provider = OpenAIProvider(base_url=config.base_url, api_key=config.api_key)
+        provider = OpenAIProvider(
+            base_url=config.base_url, api_key=config.api_key, http_client=http_client
+        )
     from pydantic_ai.models.openai import OpenAIChatModel
 
     return OpenAIChatModel(config.model, provider=provider)

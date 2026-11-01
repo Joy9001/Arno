@@ -38,6 +38,7 @@ MONTHS = (
 )
 DATE = re.compile(
     rf"\b\d{{4}}-\d{{2}}-\d{{2}}\b"
+    rf"|\b\d{{4}}-\d{{2}}\b"
     rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{MONTHS})\b(?:\s+\d{{4}})?"
     rf"|\b(?:{MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}})?"
     rf"|\b(?:{MONTHS})\s+\d{{4}}\b"
@@ -64,6 +65,8 @@ def _unit(text: str, scale: float = 1.0) -> float:
 
 def extract(text: str) -> list[tuple[str, float, float, str]]:
     """Return `(kind, value, unit, shown)` for each number, leaving out dates, times, and lists."""
+    # Models often use a narrow no-break space before a percent sign.
+    text = text.replace("\u202f", " ").replace("\u00a0", " ").replace("\u2009", " ")
     blanked = DATE.sub(lambda m: " " * len(m.group()), text)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LIST_MARKER.sub(lambda m: " " * len(m.group()), blanked)
@@ -96,6 +99,8 @@ def sources(returns: Any, user_texts: tuple[str, ...] = ()) -> set[float]:
 
     def walk(obj: Any, key: str = "") -> None:
         if isinstance(obj, bool):
+            if "complete" in key.lower():
+                values.add(0.0 if not obj else 100.0)
             return
         if isinstance(obj, (int, float)):
             values.add(float(obj))

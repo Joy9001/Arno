@@ -150,3 +150,9 @@ def test_a_pinned_snapshot_counts_as_a_source():
 
     snapshot = ModelRequest(parts=[pin('{"balance": {"paise": 12487350}}')])
     assert check_messages("Your SBI balance is ₹1,24,873.50.", [snapshot]) == []
+
+
+def test_month_dates_and_narrow_spaces_are_not_bare_numbers():
+    assert check("October 2026 and 2026-10 are the period.", {}) == []
+    assert check("Coverage is 0\u202f%.", {}) == ["0 %"]
+    assert check("Coverage is 0\u202f%.", {"coverage": {"complete": False}}) == []
