@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { api, errorMessage } from "../api";
+import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
 import type { BackupStatus, CategoryTree, Settings as SettingsPayload } from "../types";
 import { useApi } from "../useApi";
@@ -45,6 +46,7 @@ export function SettingsPanel() {
   const settings = useApi<SettingsPayload>("/api/settings");
   const tree = useApi<CategoryTree>("/api/categories");
   const backup = useApi<BackupStatus>("/api/backup/status");
+  const preferences = useApi<PreferenceList>("/api/preferences");
 
   const [displayNameDraft, setDisplayNameDraft] = useState<string | null>(null);
   const [floorDraft, setFloorDraft] = useState<string | null>(null);
@@ -177,11 +179,84 @@ export function SettingsPanel() {
               {settings.data.default_horizon_days} days
             </p>
           )}
+          {settings.data?.last_model_error_type && (
+            <p className="error fine">
+              Last model error: {settings.data.last_model_error_type}
+              {settings.data.last_model_error_at
+                ? ` · ${formatMoment(settings.data.last_model_error_at)}`
+                : ""}
+            </p>
+          )}
         </div>
 
         {backup.data ? <BackupCard status={backup.data} /> : <div className="settings-block" />}
 
         <PasskeysCard />
+
+        <div className="settings-block wide">
+          <h3>Preferences (the agent's memory)</h3>
+          <p className="muted">
+            Remembered facts and rules. The agent saves these unprompted with a card and undo.
+            Turning one off keeps it listed and reversible; deleting it for good blanks the text in
+            the audit log too, and can't be undone.
+          </p>
+          {preferences.data?.preferences.length === 0 && (
+            <p className="muted">Nothing remembered yet.</p>
+          )}
+          <div className="preference-list">
+            {preferences.data?.preferences.map((item: Preference) => (
+              <div key={item.id} className={item.active ? "preference" : "preference off"}>
+                <div>
+                  <p>{item.body || "(deleted)"}</p>
+                  <p className="fine">
+                    {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
+                    {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
+                  </p>
+                </div>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    onClick={async () => {
+                      try {
+                        await api(`/api/preferences/${item.id}`, {
+                          method: "PATCH",
+                          body: JSON.stringify({ active: !item.active }),
+                        });
+                        preferences.reload();
+                      } catch (caught) {
+                        setError(errorMessage(caught));
+                      }
+                    }}
+                  >
+                    {item.active ? "Turn off" : "Turn on"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost small danger"
+                    onClick={async () => {
+                      if (
+                        !window.confirm(
+                          "Delete this preference for good? Its text is blanked in the audit log and this can't be undone."
+                        )
+                      ) {
+                        return;
+                      }
+                      try {
+                        await api(`/api/preferences/${item.id}`, { method: "DELETE" });
+                        preferences.reload();
+                      } catch (caught) {
+                        setError(errorMessage(caught));
+                      }
+                    }}
+                  >
+                    Delete for good
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         <div className="settings-block wide">
           <h3>Categories</h3>

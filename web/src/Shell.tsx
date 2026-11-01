@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "./api";
 import { logout, type Health, type User } from "./auth";
+import { ChatHome } from "./chat/Chat";
 import { AccountsPanel } from "./panels/Accounts";
 import { GoalsPanel } from "./panels/Goals";
 import { LedgerPanel } from "./panels/Ledger";
@@ -9,6 +10,7 @@ import { SchedulesPanel } from "./panels/Schedules";
 import { SettingsPanel } from "./panels/Settings";
 
 const TABS = [
+  { id: "chat", label: "Chat" },
   { id: "ledger", label: "Ledger" },
   { id: "accounts", label: "Accounts and cards" },
   { id: "schedules", label: "Schedules" },
@@ -21,6 +23,8 @@ type TabId = (typeof TABS)[number]["id"];
 
 function Panel({ tab }: { tab: TabId }) {
   switch (tab) {
+    case "chat":
+      return <ChatHome />;
     case "ledger":
       return <LedgerPanel />;
     case "accounts":
@@ -37,7 +41,7 @@ function Panel({ tab }: { tab: TabId }) {
 }
 
 export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: () => void }) {
-  const [tab, setTab] = useState<TabId>("ledger");
+  const [tab, setTab] = useState<TabId>("chat");
   const [health, setHealth] = useState<Health | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +103,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
         </p>
       )}
 
-      <main className="content">
+      <main className={tab === "chat" ? "content chat-content" : "content"}>
         <Panel tab={tab} />
       </main>
     </div>

@@ -749,3 +749,269 @@ button.small {
   gap: 8px;
   flex-wrap: wrap;
 }
+
+/* Chat ------------------------------------------------------------------------------------- */
+
+.chat-content {
+  display: block;
+}
+
+.chat-home {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px;
+  min-height: 68vh;
+}
+
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  max-height: 72vh;
+}
+
+.new-chat {
+  width: 100%;
+}
+
+.thread-search {
+  width: 100%;
+}
+
+.thread-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+}
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread:hover {
+  background: #18212c;
+}
+
+.thread.active {
+  border-color: #2c3d51;
+  background: #18212c;
+}
+
+.thread-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-snippet {
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  min-height: 68vh;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.conversation-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.conversation-head h2 {
+  margin: 0;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 60vh;
+}
+
+.bubble {
+  max-width: 88%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: #0f151d;
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: #15271f;
+  border-color: #244636;
+}
+
+.bubble-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.markdown {
+  line-height: 1.55;
+}
+
+.markdown p {
+  margin: 6px 0;
+}
+
+.plain-link {
+  color: var(--text);
+  text-decoration: underline dotted;
+}
+
+.chat-card {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: #121a23;
+}
+
+.chat-card p {
+  margin: 6px 0;
+}
+
+.chat-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.chat-card.confirm {
+  border-color: #6b5a2b;
+  background: #1b1a12;
+}
+
+.chart-card {
+  margin: 10px 0 0;
+}
+
+.chart-box {
+  width: 100%;
+  min-height: 240px;
+}
+
+.money {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sql {
+  white-space: pre-wrap;
+  overflow-x: auto;
+  font-size: 0.78rem;
+  color: #c7d3e0;
+}
+
+.tool-line {
+  margin: 4px 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.note {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 2px solid #f6c85f;
+  background: #1b1a12;
+  color: #e8d9a8;
+  font-size: 0.82rem;
+}
+
+.composer {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--panel-border);
+  background: #0f151d;
+}
+
+.composer textarea {
+  flex: 1;
+  resize: vertical;
+}
+
+.empty-chat {
+  margin: auto;
+  text-align: center;
+  max-width: 520px;
+}
+
+.chat-error {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  z-index: 10;
+}
+
+.preference-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preference {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+}
+
+.preference.off {
+  opacity: 0.65;
+}
+
+.danger {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .chat-home {
+    grid-template-columns: 1fr;
+  }
+  .chat-sidebar {
+    max-height: 30vh;
+  }
+  .bubble {
+    max-width: 100%;
+  }
+}
