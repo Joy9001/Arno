@@ -300,3 +300,10 @@ def test_correct_prose_arithmetic_is_derived_not_invented():
     assert classify(reply, goal) == [("₹40,000", "derived")]
     assert check(reply, goal) == ["₹40,000"]  # still a flag: the rule says compute in a script
     assert classify("Saved ₹30,000, so ₹45,000 by March.", goal) == [("₹45,000", "untraced")]
+
+
+def test_a_whole_rupee_amount_may_be_rounded_from_paise():
+    assert check("Interest saved: ₹15,37,547.", {"saved": {"paise": 153754754}}) == []
+    assert check("Interest saved: ₹15,37,548.", {"saved": {"paise": 153754754}}) == []
+    # Counts keep the tighter tolerance, so an off-by-one month is still a flag.
+    assert check("It ends 18 months early.", {"months": 8}) == ["18"]

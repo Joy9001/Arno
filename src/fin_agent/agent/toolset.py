@@ -90,9 +90,9 @@ def _finish_read(ctx: RunContext[AgentDeps], payload: dict[str, Any]) -> ToolRet
 
 
 async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
-    """The user's whole picture: today's date, settings, accounts with balances and ages, the next
-    30 days of scheduled events, goals, who owes what, remembered preferences, what setup is
-    missing, and data warnings. The sandbox has no clock, so get today's date here."""
+    """The user's whole picture: today's date, settings, accounts with balances and ages, the
+    schedules behind the next 30 days, goals, who owes what, remembered preferences, what setup
+    is missing, and data warnings. The sandbox has no clock, so get today's date here."""
     payload = _read_call(read_tools.get_financial_context)
     return _finish_read(ctx, payload)
 

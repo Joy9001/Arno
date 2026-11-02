@@ -208,6 +208,26 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         for row in goal_rows
     ]
 
+    schedules: list[dict[str, Any]] = []
+    for row in schedules_mod.list_schedules(conn):
+        name = row["name"]
+        if row["outside_text"]:
+            name = mark(name) or name
+            outside = True
+        schedules.append(
+            {
+                "id": row["id"],
+                "name": name,
+                "kind": row["kind"],
+                "subtype": row["subtype"],
+                "amount": money(row["amount_paise"]),
+                "rule": row["rule"],
+                "next_date": row["next_date"],
+                "confirmed": row["confirmed"],
+                "active": row["active"],
+            }
+        )
+
     owed_rows = list(
         conn.execute(
             """
@@ -287,6 +307,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         "accounts": accounts,
         "liquid_total": liquid_total,
         "upcoming": upcoming,
+        "schedules": schedules,
         "goals": goals,
         "owed": owed,
         "preferences": preferences,
@@ -294,7 +315,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         "warnings": warnings,
         "source_ids": {
             "accounts": [row["id"] for row in account_rows],
-            "schedules": [event["source_id"] for event in upcoming if event["source_id"]],
+            "schedules": [row["id"] for row in schedules],
             "goals": [row["id"] for row in goal_rows],
             "payees": [row["payee_id"] for row in owed_rows],
         },

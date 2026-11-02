@@ -55,6 +55,8 @@ def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
     assert context["accounts"]
     assert all("as_of" in account for account in context["accounts"])
     assert context["source_ids"]["accounts"]
+    assert context["source_ids"]["schedules"]
+    assert any(schedule["name"] == "Rent" for schedule in context["schedules"])
     assert context["liquid_total"]["paise"] > 0
     assert isinstance(context["setup_gaps"], list)
 

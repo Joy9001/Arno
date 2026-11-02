@@ -193,12 +193,15 @@ def sources(returns: Any, user_texts: tuple[str, ...] = (), scripted: Any = ()) 
 
 
 def traced(kind: str, value: float, unit: float, known: set[float]) -> bool:
+    # A whole-rupee amount may be rounded or truncated from a paise source, so allow one
+    # rupee there. Counts keep the tighter shown-precision tolerance.
+    slack = 1.0 if kind == "money" and unit == 1.0 else unit / 2 + 1e-9
     for candidate in known:
-        if abs(candidate - value) <= unit / 2 + 1e-9:
+        if abs(candidate - value) <= slack:
             return True
-        if kind == "percent" and abs(candidate * 100 - value) <= unit / 2 + 1e-9:
+        if kind == "percent" and abs(candidate * 100 - value) <= slack:
             return True
-        if candidate < 0 and abs(-candidate - value) <= unit / 2 + 1e-9:
+        if candidate < 0 and abs(-candidate - value) <= slack:
             return True
     return False
 
