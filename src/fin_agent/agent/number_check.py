@@ -6,10 +6,10 @@ crore, percentages, and values shown without their sign. An untraced number gets
 trace counts it. The check is deliberately permissive about labels: a real number used wrongly is
 an eval's job, not this check's.
 
-Dates, times, list markers, and labels such as "Top 3" or "Form 16" are not quantities, so they
-are never checked. An untraced number that is the sum or difference of two traced numbers in the
-same reply is classified as derived: prose arithmetic, which the rules still forbid, kept apart
-from a number that has no source at all.
+Dates, times, list markers, labels such as "Top 3" or "Form 16", and ages such as "3 mahine
+purana" are not quantities, so they are never checked. An untraced number that is the sum or
+difference of two traced numbers in the same reply is classified as derived: prose arithmetic,
+which the rules still forbid, kept apart from a number that has no source at all.
 """
 
 from __future__ import annotations
@@ -77,6 +77,21 @@ DAY_RANGE = re.compile(
     rf"|\b\d{{1,2}}\s*[-–—]\s*\d{{1,2}}\s*(?:{MONTHS})\b",
     re.I,
 )
+# A range that names only the closing day after a full date ("2026-10-01 se 31") is a date too.
+SHORT_RANGE = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}\s*(?:se|to|tak|through|thru|[-–—])\s*\d{1,2}\b",
+    re.I,
+)
+# An age written as a duration ("(1 din)", "3 mahine purana", "550 days old") is a date, not a
+# quantity. The unit must carry an age word, so "8 months, under 1 year" is still a count.
+AGE = re.compile(
+    r"\(\s*\d+\s*(?:din|days?|hafte?|weeks?|mahine?|mahina|months?|saal|years?|"
+    r"दिन|महीने?|महीना|हफ्ते|साल|वर्ष)\s*\)"
+    r"|\b\d+\s*(?:din|days?|hafte?|weeks?|mahine?|mahina|months?|saal|years?)\s+"
+    r"(?:old|purana|purane|puraana|ago)\b"
+    r"|\d+\s*(?:दिन|महीने?|महीना|हफ्ते|साल|वर्ष)\s*(?:पुराना|पुराने|पहले)",
+    re.I,
+)
 
 
 def _value(text: str) -> float:
@@ -98,11 +113,13 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     # Models often use a narrow no-break space before a percent sign.
     text = text.replace("\u202f", " ").replace("\u00a0", " ").replace("\u2009", " ")
     blanked = DAY_RANGE.sub(lambda m: " " * len(m.group()), text)
+    blanked = SHORT_RANGE.sub(lambda m: " " * len(m.group()), blanked)
     blanked = DATE.sub(lambda m: " " * len(m.group()), blanked)
     blanked = YEAR.sub(lambda m: " " * len(m.group()), blanked)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LIST_MARKER.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LABEL.sub(lambda m: " " * len(m.group()), blanked)
+    blanked = AGE.sub(lambda m: " " * len(m.group()), blanked)
     found: list[tuple[str, float, float, str]] = []
 
     def take(pattern: re.Pattern[str], handler: Any) -> list[tuple[str, float, float, str]]:

@@ -281,10 +281,15 @@ def test_dates_times_lists_and_labels_are_not_quantities():
         "Ledger sirf last 4 digits store karta hai (e.g. •••• 1234), 16-digit number nahi.",
         "Woh payee 2026-11-02 14:28:52 par bana, ya 2026-11-02T14:39:54Z.",
         "Last year matlab calendar 2025, ya FY 2025-26 (Apr 2025–Mar 2026).",
+        "October (2026-10-01 se 31) ka data hai.",
+        "HDFC 31 Oct ka hai (1 din), SBI 30 Oct (3 din), par Cash 3 mahine purana hai.",
+        "The loan figure is 550 days old.",
+        "कैश का बैलेंस 3 महीने पुराना है।",
     ]
     for reply in replies:
         assert check(reply, {}) == [], reply
     assert check("Ramesh ko ₹16 ko diya?", {}) == ["₹16"]
+    assert check("Woh 18 months early ho jayega.", {}) == ["18"]
 
 
 def test_correct_prose_arithmetic_is_derived_not_invented():
