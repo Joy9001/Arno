@@ -372,6 +372,55 @@ def eval_command(
         raise typer.Exit(code=1)
 
 
+@app.command("backtest")
+def backtest_command(
+    source: str = typer.Option("auto", help="auto, db, or synthetic."),
+    runs: int = typer.Option(1_000, help="Seeded walks for each month."),
+    publish: bool = typer.Option(
+        True, "--publish/--no-publish", help="Replace the README backtest section."
+    ),
+) -> None:
+    """Run project() as of each month's first day and compare with the balance 30 days later."""
+    from fin_agent.engine.backtest import backtest as run_backtest
+    from fin_agent.engine.backtest import format_report, publish_report
+
+    settings = _settings()
+    conn = connect(settings.database_url)
+    try:
+        result = run_backtest(conn, source=source, runs=runs)
+    except ValueError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    finally:
+        conn.close()
+    typer.echo(format_report(result))
+    if publish:
+        publish_report(result, REPO_ROOT / "README.md")
+        typer.echo("README.md updated.")
+
+
+@app.command("hackerrank")
+def hackerrank_command(
+    dataset: Path | None = typer.Option(  # noqa: B008
+        None, "--dataset", help="The local dataset folder. It is never committed."
+    ),
+    runs: int = typer.Option(1_000, help="Seeded walks for each sample."),
+    publish: bool = typer.Option(
+        True, "--publish/--no-publish", help="Replace the README HackerRank section."
+    ),
+) -> None:
+    """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""
+    from fin_agent.engine.hackerrank import format_report, publish_report, score
+
+    result = score(dataset, runs=runs)
+    typer.echo(format_report(result))
+    if publish:
+        publish_report(result, REPO_ROOT / "README.md")
+        typer.echo("README.md updated.")
+    if not result.get("available"):
+        raise typer.Exit(code=3)
+
+
 @app.command("export")
 def export_command(
     format: str = typer.Option("json", help="json, csv, or sql."),

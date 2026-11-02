@@ -22,6 +22,7 @@ from fin_agent.engine.money import amortize, compound
 from fin_agent.ledger import accounts as accounts_mod
 from fin_agent.ledger.accounts import LoanTermsError, loan_terms
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.tools import projection as projection_tools
 from fin_agent.tools import read as read_tools
 
 from evals.models import CheckResult, EvalMeta, EvalOutput, InjectionSpec, ToolAttempt
@@ -68,6 +69,42 @@ def _has_count(reply: str, count: int | None) -> bool:
     if count is None:
         return False
     return any(abs(value - count) <= 0.01 for value in _bare_values(reply))
+
+
+def _has_percent(reply: str, fraction: float | None) -> bool:
+    if fraction is None:
+        return False
+    expected = fraction * 100
+    return any(
+        abs(value - expected) <= 1.0
+        for kind, value, _unit, _shown in extract(reply)
+        if kind == "percent"
+    )
+
+
+def _has_verdict(reply: str, verdict: str) -> bool:
+    normalized = reply.lower()
+    if verdict == "yes":
+        return bool(re.search(r"\byes\b", normalized)) and not any(
+            phrase in normalized for phrase in ("yes, but", "yes-but", "yes but")
+        )
+    if verdict == "yes-but":
+        return any(
+            phrase in normalized
+            for phrase in ("yes, but", "yes-but", "yes but", "with a change", "with changes")
+        )
+    return any(
+        phrase in normalized
+        for phrase in (
+            "no,",
+            "no.",
+            "not affordable",
+            "cannot afford",
+            "can't afford",
+            "can not afford",
+            "not safely",
+        )
+    )
 
 
 def _has_any(reply: str, alternatives: list[str]) -> bool:
@@ -454,6 +491,57 @@ def grade_answers(
                     abs(value - result) <= 2 for value in _bare_values(output.reply)
                 ),
                 reason=f"expected about {result} months",
+            )
+        )
+    elif check == "projection":
+        result = projection_tools.project(conn)
+        results.append(
+            CheckResult(
+                name="floor_probability",
+                passed=_has_percent(output.reply, result["floor_probability"]),
+                reason=f"expected {result['floor_probability']:.0%}",
+            )
+        )
+        results.append(
+            _money_check(
+                "median_low", output.reply, int(result["median_low"]["paise"])
+            )
+        )
+        results.append(
+            CheckResult(
+                name="data_quality_note",
+                passed=_has_any(
+                    output.reply,
+                    ["old", "days", "stale", "no statement", "estimate", "no data"],
+                ),
+                reason="the reply should state a balance age or a data-quality gap",
+            )
+        )
+    elif check == "affordability":
+        hypothetical = {
+            "amount_paise": int(expected["amount_paise"]),
+            "date": (
+                ledger_today().isoformat()
+                if expected.get("date") == "today"
+                else expected["date"]
+            ),
+            "method": expected.get("method", "account"),
+            "emi_months": expected.get("emi_months"),
+            "account": expected.get("account"),
+        }
+        result = projection_tools.project(conn, hypothetical=hypothetical)
+        results.append(
+            CheckResult(
+                name="verdict",
+                passed=_has_verdict(output.reply, result["verdict"]),
+                reason=f"expected the {result['verdict']} verdict from the engine",
+            )
+        )
+        results.append(
+            CheckResult(
+                name="affordability_floor_probability",
+                passed=_has_percent(output.reply, result["floor_probability"]),
+                reason=f"expected {result['floor_probability']:.0%}",
             )
         )
     elif check == "affordability_numbers":

@@ -6,7 +6,7 @@ from datetime import date as Date
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +22,7 @@ from fin_agent.ledger import (
     settings,
 )
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.tools import projection as projection_tools
 
 router = APIRouter(
     prefix="/api",
@@ -490,6 +491,34 @@ def patch_goal(goal_id: str, body: GoalUpdate, conn: Database) -> dict[str, Any]
 @router.delete("/goals/{goal_id}")
 def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
     return goals.archive_goal(conn, goal_id)
+
+
+@router.get("/projection")
+def get_projection(
+    conn: Database,
+    horizon_days: int | None = Query(default=None, ge=1, le=3650),
+    amount_paise: int | None = Query(default=None, gt=0),
+    date: Date | None = None,
+    method: Literal["account", "card", "emi"] | None = None,
+    emi_months: int | None = Query(default=None, ge=2, le=48),
+    account: str | None = None,
+) -> dict[str, Any]:
+    """The read-only projection panel and the inline projection card share this payload."""
+    hypothetical = None
+    if amount_paise is not None:
+        if date is None:
+            raise HTTPException(status_code=422, detail="A hypothetical needs a date.")
+        hypothetical = {
+            "amount_paise": amount_paise,
+            "date": date,
+            "method": method or "account",
+            "emi_months": emi_months,
+            "account": account,
+        }
+    try:
+        return projection_tools.project(conn, horizon_days=horizon_days, hypothetical=hypothetical)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/people")

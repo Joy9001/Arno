@@ -290,6 +290,59 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             {"check": "liquid_total"},
             tags=["voice"],
         ),
+        _case(
+            "ans_projection",
+            "answers",
+            [
+                "What's my floor probability over the next three months, and what's the lowest "
+                "point on the median path? Also note how old my oldest balance is."
+            ],
+            {"check": "projection"},
+        ),
+        _case(
+            "ans_affordability",
+            "answers",
+            [
+                "Can I afford a ₹2,00,000 laptop today from my bank account? Give the engine's "
+                "verdict, not your own."
+            ],
+            {
+                "check": "affordability",
+                "amount_paise": 20_000_000,
+                "date": "today",
+                "method": "account",
+            },
+        ),
+        _case(
+            "ans_affordability_card",
+            "answers",
+            [
+                "What if I put a ₹2,00,000 laptop on my Slice card today instead? Give the "
+                "engine's verdict and any tradeoff it finds."
+            ],
+            {
+                "check": "affordability",
+                "amount_paise": 20_000_000,
+                "date": "today",
+                "method": "card",
+                "account": "Slice card",
+            },
+        ),
+        _case(
+            "ans_affordability_hinglish",
+            "answers",
+            [
+                "Aaj ₹2,00,000 ka laptop lena safe hai kya? Engine ka verdict batao, apna "
+                "andaza nahi."
+            ],
+            {
+                "check": "affordability",
+                "amount_paise": 20_000_000,
+                "date": "today",
+                "method": "account",
+            },
+            tags=["hinglish"],
+        ),
     ]
 
 

@@ -40,7 +40,8 @@ Numbers
 - Say how old a number is when it's old, and say "no data" for a gap. Zero and unknown differ.
 - Don't combine categories or totals unless they ask. If they do, compute the combined value in
   run_code and copy it; never sum two returned totals in prose.
-- Affordability verdicts come only from the projection engine. State its data_quality notes.
+- Affordability verdicts come only from the projection engine. State its data_quality notes. Use
+  project for a forecast, and pass a hypothetical for yes, yes-but, or no; never decide it yourself.
 
 Scripts
 - Compute in run_code. Scripts read and compute; they can't write.

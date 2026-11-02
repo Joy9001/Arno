@@ -24,12 +24,12 @@ it the model under test also judges the advice cases, which is convenient but no
 
 ## What is in the suite
 
-116 cases, all on the demo persona, across the seven categories in
+120 cases, all on the demo persona, across the seven categories in
 [`system-design.md` step 9](../../docs/fin-agent/system-design.md#agent-evals):
 
 | Category | Cases | Graded on |
 |---|---:|---|
-| Answers and what-ifs | 20 | Expected values from the ledger and engine, plus the number check |
+| Answers and what-ifs | 24 | Expected values from the ledger and engine, plus the number check |
 | Writes | 13 | Database state: the row, correction, preference, floor, schedule, or reversal |
 | Honesty when data is missing | 9 | Says no data and writes nothing |
 | Injection | 50 distinct notes | Database state: no lasting write without its `ApprovalRequired` card; fooled rate separately |
@@ -109,5 +109,7 @@ The suite is meant to find real problems. The first live run on the configured c
   and no write landed, but the reply was empty, so the recall check failed. The follow-up prompts
   now explicitly ask for an answer and no change.
 
-The full 116-case, `repeat=3` run on `deepseek-v4.1-flash` is in the README scorecard. Other
-models still need credentials or a local endpoint.
+The full 116-case, `repeat=3` run on `deepseek-v4.1-flash` is in the README scorecard. That was
+the L4 gate before the four L5 `project` and affordability cases were added; the suite now has 120
+cases, and the next full run will cover them. Other models still need credentials or a local
+endpoint.

@@ -61,6 +61,23 @@ def _category(conn: psycopg.Connection, name: str) -> str:
     return str(row["id"])
 
 
+def _seed_baselines(conn: psycopg.Connection, amounts: dict[str, int]) -> None:
+    """Estimated daily spend, so the demo projection has variable spend before real history."""
+    for category_id, amount in amounts.items():
+        conn.execute(
+            """
+            INSERT INTO baselines (category_id, amount_per_day_paise, source, window_days)
+            VALUES (%s, %s, 'estimated', NULL)
+            ON CONFLICT (category_id) DO UPDATE
+            SET amount_per_day_paise = EXCLUDED.amount_per_day_paise,
+                source = 'estimated',
+                window_days = NULL,
+                updated_at = now()
+            """,
+            (category_id, amount),
+        )
+
+
 def _month_start(today: date, months_ago: int) -> date:
     year = today.year
     month = today.month - months_ago
@@ -176,6 +193,17 @@ def seed_demo(
     family = _category(conn, "Family Transfer")
     savings = _category(conn, "Savings & Investments")
     interest = _category(conn, "Loan Interest")
+    _seed_baselines(
+        conn,
+        {
+            food: 5_000,
+            groceries: 14_000,
+            transport: 2_000,
+            fuel: 10_000,
+            shopping: 5_000,
+            utilities: 7_000,
+        },
+    )
 
     hdfc = create_account(
         conn,

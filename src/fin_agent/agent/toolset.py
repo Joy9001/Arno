@@ -26,6 +26,7 @@ from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
 from fin_agent.ledger.accounts import LoanTermsError, loan_terms
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.tools import projection as projection_tools
 from fin_agent.tools import read as read_tools
 from fin_agent.tools import write as write_tools
 from fin_agent.tools.mark import clear_mark, flag_outside_text
@@ -67,6 +68,24 @@ class Prepay(BaseModel):
     )
     reduce: Literal["tenure", "emi"] = Field(
         default="tenure", description="tenure: same EMI, finish sooner. emi: lower EMI."
+    )
+
+
+class ProjectHypothetical(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount_paise: int = Field(gt=0, description="The purchase amount, in paise.")
+    date: str = Field(description="The purchase date, YYYY-MM-DD.")
+    method: Literal["account", "card", "emi"] = Field(
+        default="account",
+        description="account: pay from a bank account now. card: put it on a card. "
+        "emi: split it into card instalments.",
+    )
+    emi_months: int | None = Field(
+        default=None, ge=2, le=48, description="Instalments for method=emi; 3 if omitted."
+    )
+    account: str | None = Field(
+        default=None, description="A card name for card or emi; the best card if omitted."
     )
 
 
@@ -158,6 +177,33 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
         "row_count": payload["row_count"],
         "truncated": payload["truncated"],
     }
+    return _finish_read(ctx, payload)
+
+
+async def project(
+    ctx: RunContext[AgentDeps],
+    horizon_days: int | None = None,
+    hypothetical: ProjectHypothetical | None = None,
+) -> ToolReturn:
+    """Forecast the user's cash against their floor (the minimum balance they want to keep).
+    Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
+    data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict
+    and the tradeoffs. Never give your own verdict: the engine decides. State the data_quality
+    notes in your answer. horizon_days is a minimum; the engine always looks at least 90 days and
+    as far as a goal deadline."""
+    if horizon_days is not None and not 1 <= horizon_days <= 3650:
+        raise ModelRetry("horizon_days is 1 to 3650")
+    try:
+        with closing(connect()) as conn:
+            result = projection_tools.project(
+                conn,
+                horizon_days=horizon_days,
+                hypothetical=(hypothetical.model_dump(exclude_none=True) if hypothetical else None),
+            )
+    except ValueError as exc:
+        raise ModelRetry(str(exc)) from exc
+    payload = projection_tools.summary(result)
+    payload["_card"] = projection_tools.card(result)
     return _finish_read(ctx, payload)
 
 
@@ -282,6 +328,7 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
             get_financial_context,
             query_movements,
             summarize_spending,
+            project,
             run_query,
             amortize,
             compound,
