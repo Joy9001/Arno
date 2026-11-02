@@ -472,6 +472,24 @@ def test_cli_dry_run_counts_the_suite():
     assert " cases" in result.output
 
 
+def test_cli_dry_run_filters_by_case():
+    result = CliRunner().invoke(
+        app,
+        [
+            "eval",
+            "--model",
+            "x",
+            "--dry-run",
+            "--case",
+            "ans_prepay",
+            "--case",
+            "wr_schedule",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "2 cases" in result.output
+
+
 def test_cli_eval_wires_the_model_and_publish_flag(monkeypatch):
     calls = {}
 

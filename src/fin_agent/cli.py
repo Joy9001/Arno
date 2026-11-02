@@ -279,6 +279,9 @@ def eval_command(
         help="answers, writes, honesty, injection, advice, never_moves, long_threads",
     ),
     tag: list[str] = typer.Option([], "--tag", help="Only cases with any of these tags."),  # noqa: B008
+    case_id: list[str] = typer.Option(  # noqa: B008
+        [], "--case", help="Only these case IDs. Repeat for several."
+    ),
     limit: int | None = typer.Option(None, help="Run only the first N cases after filtering."),
     per_category: int | None = typer.Option(
         None, "--per-category", help="Keep at most N cases from each category."
@@ -317,9 +320,14 @@ def eval_command(
                 f"choose from {', '.join(CATEGORY_LABELS)}"
             )
     tags = set(tag) or None
+    case_ids = set(case_id) or None
     if dry_run:
         counts = list_cases(
-            categories=categories, tags=tags, limit=limit, per_category=per_category
+            categories=categories,
+            tags=tags,
+            case_ids=case_ids,
+            limit=limit,
+            per_category=per_category,
         )
         total = sum(counts.values())
         typer.echo(f"{total} cases")
@@ -342,6 +350,7 @@ def eval_command(
         judge_model=judge_model,
         categories=categories,
         tags=tags,
+        case_ids=case_ids,
         limit=limit,
         per_category=per_category,
         max_concurrency=concurrency,

@@ -349,6 +349,7 @@ def build_dataset(
     judge: Judge | None,
     categories: set[str] | None = None,
     tags: set[str] | None = None,
+    case_ids: set[str] | None = None,
     limit: int | None = None,
     per_category: int | None = None,
 ) -> tuple[Dataset[EvalInput, EvalOutput, EvalMeta], dict[str, EvalMeta]]:
@@ -357,6 +358,8 @@ def build_dataset(
         cases = [case for case in cases if case.metadata.category in categories]
     if tags:
         cases = [case for case in cases if tags & set(case.metadata.tags)]
+    if case_ids:
+        cases = [case for case in cases if case.inputs.case_id in case_ids]
     if per_category is not None:
         kept: list[Case[EvalInput, None, EvalMeta]] = []
         counts: dict[str, int] = {}
@@ -390,6 +393,7 @@ async def evaluate_model(
     max_concurrency: int = 2,
     categories: set[str] | None = None,
     tags: set[str] | None = None,
+    case_ids: set[str] | None = None,
     limit: int | None = None,
     per_category: int | None = None,
     run_budget_usd: Decimal = Decimal("2"),
@@ -400,6 +404,7 @@ async def evaluate_model(
         judge=judge,
         categories=categories,
         tags=tags,
+        case_ids=case_ids,
         limit=limit,
         per_category=per_category,
     )
@@ -881,6 +886,7 @@ def run_eval(
     judge_model: str | None = None,
     categories: set[str] | None = None,
     tags: set[str] | None = None,
+    case_ids: set[str] | None = None,
     limit: int | None = None,
     per_category: int | None = None,
     max_concurrency: int = 2,
@@ -929,6 +935,7 @@ def run_eval(
                     max_concurrency=max_concurrency,
                     categories=categories,
                     tags=tags,
+                    case_ids=case_ids,
                     limit=limit,
                     per_category=per_category,
                     run_budget_usd=run_budget_usd,
@@ -981,6 +988,7 @@ def dry_run(
     *,
     categories: set[str] | None = None,
     tags: set[str] | None = None,
+    case_ids: set[str] | None = None,
     limit: int | None = None,
     per_category: int | None = None,
 ) -> dict[str, int]:
@@ -989,6 +997,8 @@ def dry_run(
         cases = [case for case in cases if case.metadata.category in categories]
     if tags:
         cases = [case for case in cases if tags & set(case.metadata.tags)]
+    if case_ids:
+        cases = [case for case in cases if case.inputs.case_id in case_ids]
     if per_category is not None:
         kept = []
         counts: dict[str, int] = {}
