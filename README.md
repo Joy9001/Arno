@@ -217,6 +217,10 @@ in a reply came from a tool return or a value a `run_code` script printed; the s
 correct prose arithmetic ("derived") from a number with no source ("untraced"). Only the answer
 cases assert the number check; the raw flag column counts every category.
 
+**L4 gate: PASS** on the current code: answers 20/20, writes 13/13, honesty 9/9, injection 50/50
+(gate 150/150), advice 11/11, never-moves 9/9, long threads 4/4, and the answer number gate 60/60.
+The full-run table above and the targeted reruns below are the two halves of that result.
+
 **Post-run verification.** The full run left four failing cases: `ans_prepay` and `ans_goal_months`
 (the answer number gate), and `wr_schedule` (a schedule write that read the raw table first and
 then needed a confirm card). The fixes are a whole-rupee rounding allowance, prompts that ask only
