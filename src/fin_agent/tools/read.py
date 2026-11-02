@@ -7,6 +7,7 @@ number is `None` rather than zero, and source IDs travel beside the values they 
 
 from __future__ import annotations
 
+import calendar
 import threading
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -64,17 +65,34 @@ def coverage(
         ).fetchall()
     )
     gaps: list[str] = []
+    intervals = sorted(
+        (row["period_start"], row["period_end"])
+        for row in rows
+        if row["period_start"] is not None and row["period_end"] is not None
+    )
+    merged: list[list[date]] = []
+    for interval_start, interval_end in intervals:
+        if merged and interval_start <= merged[-1][1] + timedelta(days=1):
+            merged[-1][1] = max(merged[-1][1], interval_end)
+        else:
+            merged.append([interval_start, interval_end])
     for key in _month_keys(start, end):
         year, month = (int(part) for part in key.split("-"))
         month_start = date(year, month, 1)
-        month_end = date(year, month, 28)
+        month_end = date(year, month, calendar.monthrange(year, month)[1])
+        # A month counts as covered only for the part of it that was asked about, and only when
+        # one statement (or adjacent statements) covers that whole part. A statement for the
+        # first five days must not make the rest of the month look known.
+        required_start = max(month_start, start)
+        required_end = min(month_end, end)
         covered = any(
-            row["period_start"] <= month_end and row["period_end"] >= month_start for row in rows
+            interval_start <= required_start and interval_end >= required_end
+            for interval_start, interval_end in merged
         )
         if not covered:
             gaps.append(key)
-    covered_from = min(max(row["period_start"], start) for row in rows) if rows else None
-    covered_to = max(min(row["period_end"], end) for row in rows) if rows else None
+    covered_from = max(merged[0][0], start) if merged else None
+    covered_to = min(merged[-1][1], end) if merged else None
     return {
         "complete": not gaps,
         "gaps": gaps,

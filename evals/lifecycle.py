@@ -15,6 +15,7 @@ from typing import Any
 from pydantic_evals.evaluators.context import EvaluatorContext
 from pydantic_evals.lifecycle import CaseLifecycle
 
+from evals.models import EvalInput, EvalMeta, EvalOutput, InjectionSpec
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect, reset_database_url, use_database_url
 from fin_agent.db.migrate import run_migrations
@@ -25,10 +26,9 @@ from fin_agent.demo.template import (
     database_dsn,
     drop_database,
 )
+from fin_agent.importers.synthetic import seed_injection_statement
 from fin_agent.ledger.movements import record_lending
 from fin_agent.ledger.payees import create_payee
-
-from evals.models import EvalInput, EvalMeta, EvalOutput, InjectionSpec
 
 DEFAULT_TEMPLATE = "fin_agent_eval_template"
 TRIAL_PREFIX = "fin_agent_eval_trial"
@@ -69,12 +69,24 @@ def build_eval_template(
     return template
 
 
-def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> None:
+async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> None:
     hdfc = conn.execute(
         "SELECT id FROM accounts WHERE kind = 'bank' AND active ORDER BY name LIMIT 1"
     ).fetchone()
     if hdfc is None:
         raise RuntimeError("The demo template has no bank account")
+    if spec.source == "statement":
+        # The malicious note travels the real L3 path: reader, parser, checks, reconcile,
+        # commit, outside_text, capture, and layout. No import or statement row is hand-built.
+        await seed_injection_statement(
+            conn,
+            account_id=str(hdfc["id"]),
+            narration=spec.text,
+            day=today - timedelta(days=1),
+            period_start=today - timedelta(days=30),
+            period_end=today,
+        )
+        return
     payee = create_payee(
         conn,
         display_name=spec.text,
@@ -93,37 +105,7 @@ def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> None:
         actor="system",
     )
     movement_id = str(lending["id"])
-    if spec.source == "statement":
-        imported = conn.execute(
-            """
-            INSERT INTO imports
-                (file_hash, account_id, period_start, period_end, status)
-            VALUES (%s, %s, %s, %s, 'committed')
-            RETURNING id
-            """,
-            (
-                f"eval-{spec.note_id}",
-                str(hdfc["id"]),
-                today - timedelta(days=30),
-                today,
-            ),
-        ).fetchone()
-        conn.execute(
-            """
-            INSERT INTO statement_lines
-                (import_id, date, description_raw, amount_paise, content_hash,
-                 match_state, movement_id, outside_text)
-            VALUES (%s, %s, %s, 100, %s, 'merged', %s, true)
-            """,
-            (
-                str(imported["id"]),
-                today - timedelta(days=1),
-                spec.text,
-                f"eval-line-{spec.note_id}",
-                movement_id,
-            ),
-        )
-    elif spec.source == "photo":
+    if spec.source == "photo":
         conn.execute(
             """
             INSERT INTO captures (movement_id, kind, ref)
@@ -165,7 +147,7 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         if meta is not None and meta.injection is not None:
             conn = connect()
             try:
-                _seed_injection(conn, meta.injection, today=date.today())
+                await _seed_injection(conn, meta.injection, today=date.today())
             finally:
                 conn.close()
 
