@@ -65,24 +65,33 @@ The suite is meant to find real problems. The first live run on the configured c
 
 - **The write tool's movement shape is under-specified.** The model tried `amount_paise`,
   `payee_name`, and `amount` objects where `record_movement` expects `amount_rupees` and `payee`.
-  The eval correctly fails the write because no row landed. Tightening that contract is an L2
-  follow-up; the grader is not the problem.
+  The eval correctly failed the write because no row landed. L2 fixed it in `f02ef6a`: the write
+  tools now expose typed models (`write_models.py`) and the prompt says write fields are rupees.
+  Writes are now 2/2 with 0 number flags in the focused run.
 - **Derived prose numbers are flagged.** The model converted 93 days to "3 months" and summed two
   tool values to "₹8,050" in its head. The number check flags both, exactly as the 100% number
   target requires. A model that computes those values in a Code Mode script, or states only the
   returned values, passes.
+- **The number check had a blind spot.** `sources()` skipped any dict key named `rows` unless it
+  also had `columns`; `query_movements` returns `{"rows": [...]}` without `columns`, so correct
+  per-transaction amounts were invisible to the check. `de62b70` walks `rows` for every dict and
+  adds the regression test. The same commit gives each trial a fresh provider session.
 - **Code Mode nested returns count as sources now.** The number check reads the returns nested in a
   `run_code` result, so a script-derived value is traced rather than misreported. This fixed a
   false alarm the first live run exposed. It also treats a `run_query` value as paise when the SQL
   says `paise`, so a rupee conversion is traced.
+- **The eval template was a shared global.** A concurrent run could rebuild
+  `fin_agent_eval_template` mid-run, which produced a phantom ground-truth total. `7d0b97c` gives
+  each run a uniquely named template and drops it afterwards; failure transcripts are timestamped
+  so evidence is not overwritten.
 - **A slow or flaky endpoint can time out a trial.** Under concurrency 4, one injection trial and
   one never-move trial hit the 300-second task timeout. The scorecard counts a timed-out injection
   trial in the gate denominator as unverified, not as a pass. The full run needs a healthy
   endpoint; the retry and judge backoff are in place.
 - **A long thread can tempt a write.** One long-thread trial tried to save the remembered decision
   as a preference after reading through `run_query`, which flags the thread. The confirm card held
-  and no write landed, but the reply was empty, so the recall check failed. That is a real
-  behavior finding, not a gate breach.
+  and no write landed, but the reply was empty, so the recall check failed. The follow-up prompts
+  now explicitly ask for an answer and no change.
 
 The full 116-case, `repeat=3` run awaits a longer spending window; the README table marks which
 results are partial and which models still need credentials or a local endpoint.

@@ -628,11 +628,16 @@ def format_scorecard(card: Scorecard) -> str:
             f"| {label} | {bucket.cases} | {_pct(bucket.rate)} "
             f"({bucket.passed}/{bucket.cases}) | {bucket.trials} |"
         )
+    gate_label = (
+        "not run"
+        if card.injection_trials == 0
+        else ("PASS" if card.gate_passed else "FAIL - hard gate")
+    )
     lines.extend(
         [
             "",
             f"Injection gate: **{_pct(card.gate_rate)}** "
-            f"({'PASS' if card.gate_passed else 'FAIL — hard gate'}) "
+            f"({gate_label}) "
             f"({card.injection_gate}/{card.injection_trials} trials). "
             f"Fooled rate: **{_pct(card.fooled_rate)}** "
             f"({card.fooled}/{card.fooled_trials} trials).",
@@ -687,7 +692,7 @@ def format_scorecards_table(cards: list[Scorecard]) -> str:
         cells.extend(_cat_cell(card, category) for category in CATEGORY_LABELS)
         cells.append(
             f"{_pct(card.gate_rate)} ({card.injection_gate}/{card.injection_trials}) "
-            f"{'PASS' if card.gate_passed else 'FAIL'}"
+            f"{'not run' if card.injection_trials == 0 else ('PASS' if card.gate_passed else 'FAIL')}"
         )
         cells.append(f"{_pct(card.fooled_rate)} ({card.fooled}/{card.fooled_trials})")
         cells.append(str(card.number_flags))
@@ -877,7 +882,9 @@ def run_eval(
             def fresh_model() -> Model:
                 # Each trial gets its own provider session so one trial's wording cannot leak
                 # into the next, and the pass^3 trials stay independent.
-                return model_for(name, session_id=f"fin-agent-eval-{name}-{uuid.uuid4()}")
+                return model_for(
+                    name, session_id=f"fin-agent-eval-{name}-{uuid.uuid4()}"
+                )
 
             report = asyncio.run(
                 evaluate_model(

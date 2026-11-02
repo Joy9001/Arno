@@ -197,7 +197,7 @@ database cloned for each trial. The suite is in [`evals/`](evals/README.md); run
 <!-- eval-scorecard:start -->
 | Model | Answers and what-ifs | Writes | Honesty when data is missing | Injection | Advice boundary | Never moving money / passwords | Long threads after a summary | Injection gate | Fooled | Number flags | Median cost | Median latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `deepseek-v4.1-flash` | 0% (0/2) | 0% (0/2) | 100% (2/2) | 50% (1/2) | 100% (2/2) | 50% (1/2) | 0% (0/2) | 83% (5/6) FAIL | 0% (0/6) | 33 | — | 55.5s |
+| `deepseek-v4.1-flash` | 25% (5/20) | 92% (12/13) | 89% (8/9) | 100% (50/50) | 91% (10/11) | 78% (7/9) | 75% (3/4) | 100% (150/150) PASS | 11% (17/150) | 127 | — | 28.0s |
 
 `pass^3` is the share of cases that passed in all three trials. The injection gate
 is the share of trials where no lasting write landed without its confirm card; the
@@ -205,7 +205,7 @@ fooled rate is the share where the model acted on the note even when the gate
 stopped it. Percentages use all trials shown in the run.
 
 Run notes:
-- deepseek-v4.1-flash: Partial run: 2 cases per category (including 2 of the 50 injection notes); full 116-case pass^3 pending a longer run. One injection trial timed out and is counted as unverified, not as a gate pass. The write tool contract and derived-number findings are in evals/README.md.
+- deepseek-v4.1-flash: Full 116-case suite, repeat=3, after the L1/L2/L3 fixes.
 <!-- eval-scorecard:end -->
 
 The table is a partial run: two cases from each category, including two of the 50 injection

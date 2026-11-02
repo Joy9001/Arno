@@ -470,7 +470,9 @@ def grade_answers(
             name="no_writes",
             passed=not new_movements,
             reason=(
-                "read-only" if not new_movements else "an answers turn wrote to the ledger"
+                "read-only"
+                if not new_movements
+                else "an answers turn wrote to the ledger"
             ),
         )
     )
