@@ -85,7 +85,11 @@ class EvalOutput(BaseModel):
     message_ids: list[str] = Field(default_factory=list)
     run_ids: list[str] = Field(default_factory=list)
     number_flags: list[str] = Field(default_factory=list)
+    # The subset of number_flags that is correct prose arithmetic over traced numbers.
+    derived_flags: list[str] = Field(default_factory=list)
     money_flags: list[str] = Field(default_factory=list)
+    # Confirm cards the simulated user approved for the write the case asked for.
+    cards_approved: int = 0
     cost_usd: float | None = None
     latency_s: float = 0.0
     started_at: str = ""

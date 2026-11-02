@@ -213,7 +213,9 @@ class TurnManager:
                 break
         if finish_reason == "length" and note is None:
             note = "The reply hit the output cap. Ask for the rest."
-        flags = check_messages(reply, messages) if reply else []
+        # Real use notes money and percentages only; bare counts are an eval-only check
+        # (system-design step 9), so a day or a list size never earns a "couldn't trace" note.
+        flags = check_messages(reply, messages, kinds=("money", "percent")) if reply else []
         badge = None
         primary = getattr(getattr(self.agent, "model", None), "model_name", None)
         if failed_attempts or (primary and model_name and model_name != primary):

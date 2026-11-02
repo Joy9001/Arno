@@ -220,3 +220,78 @@ def test_money_only_ignores_hindi_style_days_and_months():
     reply = "No data for August 2025. The next EMI is on 10 tareekh, about 30 din away."
     assert check(reply, {}, kinds=("money",)) == []
     assert check(reply, {"days": 30, "day": 10}, kinds=("money",)) == []
+
+
+# Regressions from the first full L4 run on the demo persona (November 2, 2026). Each reply or
+# script output below is the real text that was flagged, and none of these numbers was invented.
+
+
+def test_script_output_values_survive_month_words_on_the_next_line():
+    output = "Aug per day: ₹46.77\nSep per day: ₹48.33\nOct per day: ₹50.0\n"
+    reply = "Per-day rough average: ₹46.77 (Aug), ₹48.33 (Sep), ₹50.00 (Oct)."
+    assert check(reply, [], scripted=[{"output": output}]) == []
+    output = "oct vs sep pct 6.9\ntotal 4450.0\navg 1483.33\noct gross before refund 1850.0\n"
+    assert (
+        check("3-month average ₹1,483.33, total ₹4,450.", [], scripted=[{"output": output}]) == []
+    )
+
+
+def test_a_script_s_negative_and_paise_values_are_traced():
+    scripted = [{"output": "net worth: -1804797.0\navg paise 5943233.333333333\n"}]
+    assert check("Net worth **-₹18,04,797**.", [], scripted=scripted) == []
+    assert check("Average ₹59,432/month.", [], scripted=scripted) == []
+    # Only a script's output is read as paise; a tool's plain string is not.
+    assert check("Average ₹59,432/month.", [{"note": "avg 5943233.33"}]) == ["₹59,432"]
+
+
+def test_tool_arguments_are_sources_but_script_code_is_not():
+    from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
+
+    from fin_agent.agent.number_check import check_messages
+
+    direct = ModelResponse(
+        parts=[ToolCallPart("compound", {"monthly_paise": 500000, "months": 60}, "c1")]
+    )
+    assert check_messages("₹5,000 a month for 60 months.", [direct]) == []
+
+    nested_call = ToolCallPart("compound", {"months": 86, "start_paise": 3000000}, "c2__1")
+    script = ModelRequest(
+        parts=[
+            ToolReturnPart(
+                "run_code",
+                {"output": "done"},
+                "c2",
+                metadata={"tool_calls": {"c2__1": nested_call}, "tool_returns": {}},
+            )
+        ]
+    )
+    assert check_messages("It crosses ₹12 lakh in 86 months.", [script]) == ["₹12 lakh"]
+
+    typed = ModelResponse(parts=[ToolCallPart("run_code", {"code": "x = 40000\nx"}, "c3")])
+    assert check_messages("You will have ₹40,000.", [typed]) == ["₹40,000"]
+
+
+def test_dates_times_lists_and_labels_are_not_quantities():
+    replies = [
+        "Chaho to 9 November ko Ravi ke liye, 16 ko Amit ke liye reminder set kar du?",
+        "Aapka monthly contribution har mahine ki 7 tarikh ko hai.",
+        "Top 3:\n- Rent\n- Family Transfer\n- Groceries",
+        "**1. Six months ka expense**\n### 2. Kab tak",
+        "Form 16 ya AIS/26AS ho to woh bhi daalo; section 24(b) ka claim bhi.",
+        "Ledger sirf last 4 digits store karta hai (e.g. •••• 1234), 16-digit number nahi.",
+        "Woh payee 2026-11-02 14:28:52 par bana, ya 2026-11-02T14:39:54Z.",
+        "Last year matlab calendar 2025, ya FY 2025-26 (Apr 2025–Mar 2026).",
+    ]
+    for reply in replies:
+        assert check(reply, {}) == [], reply
+    assert check("Ramesh ko ₹16 ko diya?", {}) == ["₹16"]
+
+
+def test_correct_prose_arithmetic_is_derived_not_invented():
+    from fin_agent.agent.number_check import classify
+
+    goal = {"saved": {"paise": 3_000_000}, "monthly": {"paise": 1_000_000}}
+    reply = "Saved ₹30,000; after the next ₹10,000 it becomes ₹40,000."
+    assert classify(reply, goal) == [("₹40,000", "derived")]
+    assert check(reply, goal) == ["₹40,000"]  # still a flag: the rule says compute in a script
+    assert classify("Saved ₹30,000, so ₹45,000 by March.", goal) == [("₹45,000", "untraced")]

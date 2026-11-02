@@ -5,6 +5,11 @@ returns and arguments, the snapshot, and the user's messages. It understands rou
 crore, percentages, and values shown without their sign. An untraced number gets a note, and the
 trace counts it. The check is deliberately permissive about labels: a real number used wrongly is
 an eval's job, not this check's.
+
+Dates, times, list markers, and labels such as "Top 3" or "Form 16" are not quantities, so they
+are never checked. An untraced number that is the sum or difference of two traced numbers in the
+same reply is classified as derived: prose arithmetic, which the rules still forbid, kept apart
+from a number that has no source at all.
 """
 
 from __future__ import annotations
@@ -36,20 +41,36 @@ MONTHS = (
     "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|"
     "june|july|august|september|october|november|december"
 )
+_YEAR = r"(?:19|20)\d{2}"
+# A day can't start mid-number ("1483.33\noct" is not the 33rd of October), and a date never
+# crosses a line break: printed script output puts a value and the next label on new lines.
+_DAY = r"(?<![\d.,])\b\d{1,2}(?:st|nd|rd|th)?"
 DATE = re.compile(
-    rf"\b\d{{4}}-\d{{2}}-\d{{2}}\b"
+    rf"\b\d{{4}}-\d{{2}}-\d{{2}}(?:T\d{{2}}:\d{{2}}(?::\d{{2}})?(?:\.\d+)?Z?)?\b"
     rf"|\b\d{{4}}-\d{{2}}\b"
-    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{MONTHS})\b(?:\s+\d{{4}})?"
-    rf"|\b(?:{MONTHS})\s+\d{{1,2}}(?:st|nd|rd|th)?\b(?:,?\s+\d{{4}})?"
-    rf"|\b(?:{MONTHS})\s+\d{{4}}\b"
-    rf"|\b\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?\b",
+    rf"|{_DAY}[ \t]+(?:{MONTHS})\b(?:,?[ \t]+{_YEAR}\b)?"
+    rf"|\b(?:{MONTHS})[ \t]+\d{{1,2}}(?:st|nd|rd|th)?\b(?![.,]\d)(?:,?[ \t]+{_YEAR}\b)?"
+    rf"|\b(?:{MONTHS})[ \t]+{_YEAR}\b(?![.,]\d)"
+    rf"|\b\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?\b"
+    # Hindi and Hinglish day phrases: "16 ko" (on the 16th), "30 tareekh", "5 तारीख".
+    rf"|(?<![₹\w.,])(?:[1-9]|[12]\d|3[01])[ \t]+"
+    rf"(?:ko|tarikh|tareekh|taarikh|tarik|tareek|को|तारीख)(?!\w)",
     re.I,
 )
 # A bare year (with no amount attached) is a date, not an amount or a count. Bold markdown
 # can separate it from its month ("August **2025**"), so the DATE pattern above may miss it.
-YEAR = re.compile(r"(?<![\d.,])(?:19|20)\d{2}(?![\d.,])")
-LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.M)
-TIME = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b", re.I)
+# Trailing punctuation still ends a year ("calendar 2025, ..."); a rupee sign makes it money.
+YEAR = re.compile(r"(?<![\d.,₹])(?<!₹ )(?:19|20)\d{2}(?!\d|[.,]\d)")
+LIST_MARKER = re.compile(r"^\s*(?:[*_#>]+\s*)?\d+[.)]\s", re.M)
+TIME = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b\d{1,2}\s?(?:am|pm)\b", re.I)
+# Names and labels that carry a digit but claim no quantity: "Top 3", "Form 16", "section 24",
+# "last 4 digits", "16-digit", and a masked card "•••• 1234".
+LABEL = re.compile(
+    r"\b(?:top|form|section|sec\.)\s+\d+[a-z]?\b|\b\d+[-\s]?digits?\b|[•*xX]{2,}\s?\d{4}\b",
+    re.I,
+)
+# A minus sign in a script's printed output: "-1804797.0" is the number 1804797.
+SIGNED = re.compile(rf"(?<![\w.,])-({NUM})(?![\w/]|[.,]\d)")
 # A day range tied to a month ("October (1–31)", "1–31 October") is a date, not a count.
 DAY_RANGE = re.compile(
     rf"\b(?:{MONTHS})\s*\(?\s*\d{{1,2}}\s*[-–—]\s*\d{{1,2}}\s*\)?"
@@ -81,6 +102,7 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     blanked = YEAR.sub(lambda m: " " * len(m.group()), blanked)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LIST_MARKER.sub(lambda m: " " * len(m.group()), blanked)
+    blanked = LABEL.sub(lambda m: " " * len(m.group()), blanked)
     found: list[tuple[str, float, float, str]] = []
 
     def take(pattern: re.Pattern[str], handler: Any) -> list[tuple[str, float, float, str]]:
@@ -104,46 +126,50 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     return found
 
 
-def sources(returns: Any, user_texts: tuple[str, ...] = ()) -> set[float]:
-    """Every value the model was given: tool returns, tool arguments, and the user's messages."""
+def sources(returns: Any, user_texts: tuple[str, ...] = (), scripted: Any = ()) -> set[float]:
+    """Every value the model was given: tool returns, tool arguments, and the user's messages.
+
+    `scripted` holds `run_code` returns. Scripts compute in integer paise and the reply speaks
+    rupees, so each number a script printed or returned also counts at a hundredth of itself.
+    """
     values: set[float] = set()
 
-    def walk(obj: Any, key: str = "") -> None:
+    def walk(obj: Any, key: str = "", paise: bool = False) -> None:
+        here = paise or "paise" in key
         if isinstance(obj, bool):
             if "complete" in key.lower():
                 values.add(0.0 if not obj else 100.0)
             return
         if isinstance(obj, (int, float)):
             values.add(float(obj))
-            if "paise" in key:
+            if here:
                 values.add(obj / 100)
         elif isinstance(obj, str):
-            for _kind, value, _unit_value, _shown in extract(obj):
+            found = [value for _kind, value, _unit_value, _shown in extract(obj)]
+            found += [_value(match.group(1)) for match in SIGNED.finditer(obj)]
+            for value in found:
                 values.add(value)
+                if here:
+                    values.add(value / 100)
         elif isinstance(obj, dict):
             is_table = isinstance(obj.get("columns"), list) and isinstance(obj.get("rows"), list)
             if is_table:
                 # `run_query` returns raw paise columns. Its SQL names the unit, so a value
                 # summed under an alias like `spend` is still paise; add the rupee form too.
                 sql = str(obj.get("sql") or "").lower()
-                paise_context = "paise" in sql
+                paise_context = paise or "paise" in sql
                 for row in obj["rows"]:
                     for column, cell in zip(obj["columns"], row, strict=False):
-                        walk(cell, str(column))
-                        if (
-                            paise_context
-                            and isinstance(cell, (int, float))
-                            and not isinstance(cell, bool)
-                        ):
-                            values.add(float(cell) / 100)
+                        walk(cell, str(column), paise_context)
             for key_name, value in obj.items():
                 if not (is_table and key_name == "rows"):
-                    walk(value, str(key_name))
+                    walk(value, str(key_name), paise)
         elif isinstance(obj, (list, tuple)):
             for value in obj:
-                walk(value, key)
+                walk(value, key, paise)
 
     walk(returns)
+    walk(scripted, paise=True)
     for text in user_texts:
         walk(text)
     return values
@@ -160,18 +186,55 @@ def traced(kind: str, value: float, unit: float, known: set[float]) -> bool:
     return False
 
 
+def classify(
+    reply: str,
+    returns: Any,
+    user_texts: tuple[str, ...] = (),
+    kinds: tuple[str, ...] = ("money", "percent", "bare"),
+    *,
+    scripted: Any = (),
+) -> list[tuple[str, str]]:
+    """Each untraced number in reply order, as `(shown, "untraced" | "derived")`.
+
+    Derived means the sum or difference of two traced numbers of the same kind in this reply,
+    such as "₹40,000 (₹30,000 + ₹10,000)": correct arithmetic, done in prose instead of a script.
+    """
+    known = sources(returns, user_texts, scripted)
+    numbers = [item for item in extract(reply) if item[0] in kinds]
+    # ponytail: sums and differences of two reply numbers only; products and ratios stay
+    # untraced. With many small counts in one reply a coincidental match is possible, so the
+    # label is for reporting and never clears a flag.
+    operands: dict[str, list[float]] = {}
+    flags: list[tuple[str, float, float, str]] = []
+    for kind, value, unit, shown in numbers:
+        if traced(kind, value, unit, known):
+            operands.setdefault(kind, []).append(value)
+        else:
+            flags.append((kind, value, unit, shown))
+    result: list[tuple[str, str]] = []
+    for kind, value, unit, shown in flags:
+        pool = operands.get(kind, [])
+        derived = any(
+            abs(abs(a + sign * b) - value) <= unit / 2 + 1e-9
+            for index, a in enumerate(pool)
+            for b in pool[index + 1 :]
+            for sign in (1, -1)
+        )
+        result.append((shown, "derived" if derived else "untraced"))
+    return result
+
+
 def check(
     reply: str,
     returns: Any,
     user_texts: tuple[str, ...] = (),
     kinds: tuple[str, ...] = ("money", "percent", "bare"),
+    *,
+    scripted: Any = (),
 ) -> list[str]:
-    known = sources(returns, user_texts)
-    return [
-        shown
-        for kind, value, unit, shown in extract(reply)
-        if kind in kinds and not traced(kind, value, unit, known)
-    ]
+    """Every untraced number, derived or not: prose arithmetic still breaks the rule."""
+    flags = classify(reply, returns, user_texts, kinds, scripted=scripted)
+    return [shown for shown, _label in flags]
 
 
 def _text_content(value: Any) -> str:
@@ -187,54 +250,87 @@ def _text_content(value: Any) -> str:
     return ""
 
 
-def check_messages(
+def classify_messages(
     reply: str,
     messages: list[Any],
     kinds: tuple[str, ...] = ("money", "percent", "bare"),
-) -> list[str]:
-    """Run the check over a turn's model messages: returns, arguments, and user text."""
+) -> list[tuple[str, str]]:
+    """Classify over a turn's model messages: returns, tool arguments, and user text."""
     import json
 
     from pydantic_ai.messages import (
         ModelRequest,
+        ModelResponse,
         ToolCallPart,
         ToolReturnPart,
         UserPromptPart,
     )
 
     returns: list[Any] = []
+    scripted: list[Any] = []
     texts: list[str] = []
     for message in messages:
-        if isinstance(message, ModelRequest):
+        if isinstance(message, ModelResponse):
             for part in message.parts:
-                if isinstance(part, ToolReturnPart):
-                    returns.append(part.content)
-                    # A tool called inside `run_code` keeps its return in the top-level
-                    # ToolReturnPart's metadata. The model computes from those values, so
-                    # the check must see them or every script-derived number looks invented.
-                    metadata = getattr(part, "metadata", None)
-                    if isinstance(metadata, dict):
-                        nested = metadata.get("tool_returns")
-                        if isinstance(nested, dict):
-                            for item in nested.values():
-                                nested_content = getattr(item, "content", None)
-                                if nested_content is not None:
-                                    returns.append(nested_content)
-                elif isinstance(part, UserPromptPart):
-                    text = _text_content(part.content)
-                    if not text:
-                        continue
-                    stripped = text.strip()
-                    if stripped.startswith(("{", "[")):
-                        try:
-                            returns.append(json.loads(stripped))
-                            continue
-                        except json.JSONDecodeError:
-                            pass
-                    texts.append(text)
-                elif isinstance(part, ToolCallPart):
+                # A script's code is not a source: a literal typed into it would trace any
+                # number. What it printed or returned is, through its ToolReturnPart.
+                if isinstance(part, ToolCallPart) and part.tool_name != "run_code":
                     returns.append(part.args_as_dict())
-    return check(reply, returns, tuple(texts), kinds=kinds)
+            continue
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart):
+                if part.tool_name == "run_code":
+                    scripted.append(part.content)
+                else:
+                    returns.append(part.content)
+                # A tool called inside `run_code` keeps its call and return in the top-level
+                # ToolReturnPart's metadata. The model computes from those values, so the check
+                # must see them or every script-derived number looks invented.
+                metadata = getattr(part, "metadata", None)
+                if isinstance(metadata, dict):
+                    for nested_key in ("tool_returns", "tool_calls"):
+                        nested = metadata.get(nested_key)
+                        if not isinstance(nested, dict):
+                            continue
+                        for item in nested.values():
+                            if isinstance(item, ToolCallPart):
+                                returns.append(item.args_as_dict())
+                                continue
+                            nested_content = getattr(item, "content", None)
+                            if nested_content is not None:
+                                returns.append(nested_content)
+            elif isinstance(part, UserPromptPart):
+                text = _text_content(part.content)
+                if not text:
+                    continue
+                stripped = text.strip()
+                if stripped.startswith(("{", "[")):
+                    try:
+                        returns.append(json.loads(stripped))
+                        continue
+                    except json.JSONDecodeError:
+                        pass
+                texts.append(text)
+    return classify(reply, returns, tuple(texts), kinds=kinds, scripted=scripted)
 
 
-__all__ = ["check", "check_messages", "extract", "sources", "traced"]
+def check_messages(
+    reply: str,
+    messages: list[Any],
+    kinds: tuple[str, ...] = ("money", "percent", "bare"),
+) -> list[str]:
+    """Run the check over a turn's model messages: returns, arguments, and user text."""
+    return [shown for shown, _label in classify_messages(reply, messages, kinds)]
+
+
+__all__ = [
+    "check",
+    "check_messages",
+    "classify",
+    "classify_messages",
+    "extract",
+    "sources",
+    "traced",
+]

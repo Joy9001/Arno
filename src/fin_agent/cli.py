@@ -247,7 +247,7 @@ def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
     result = agent.run_sync(text, message_history=history, deps=deps)
     turn_messages = result.all_messages()[len(history) :]
     reply = str(result.output)
-    flags = check_messages(reply, turn_messages)
+    flags = check_messages(reply, turn_messages, kinds=("money", "percent"))
     with conn.transaction():
         save_records(
             conn,
