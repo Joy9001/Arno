@@ -307,8 +307,10 @@ function CitationDetail({
     if (!endpoint) return;
     api<unknown>(endpoint)
       .then((value) => {
-        if (source.kind === "payee" && Array.isArray(value)) {
-          const rows = value as { id?: string }[];
+        if (source.kind === "payee") {
+          const rows = Array.isArray(value)
+            ? (value as { id?: string }[])
+            : ((value as { items?: { id?: string }[] }).items ?? []);
           setDetail(rows.find((row) => row.id === source.id) ?? value);
         } else {
           setDetail(value);
