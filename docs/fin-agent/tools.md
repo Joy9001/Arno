@@ -109,6 +109,11 @@ class MovementFilters:
     include_reversed: bool = False
 ```
 
+`MovementFilters` is a typed model with `extra="forbid"`, so a script sees its keys and an unknown
+key, such as `categories` or `date_from`, fails with the list of real ones. A dropped key would
+answer a different question: a silently ignored `categories` filter once returned the whole month
+as food spending.
+
 **Output**
 
 ```python
@@ -127,7 +132,8 @@ period = resolve_period(filters.period, today)     # on the host, which has a cl
 names  = resolve() to IDs
 rows   = movements + transfers (by movement_id in metadata) + labels + captures,
          filtered, newest first, paged
-hide reversed pairs unless include_reversed
+hide reversed pairs unless include_reversed, in SQL, so total_count, the page, and
+  next_cursor agree
 mark() the description and payee on outside rows
 return rows, total_count, next_cursor, coverage(account, period)
 ```
@@ -142,7 +148,13 @@ twice."
 
 ```python
 summarize_spending(group_by: Literal["category", "payee", "account", "month", "week", "none"],
-                   period: str, filters: MovementFilters | None = None)
+                   period: str, filters: SpendFilters | None = None)
+
+class SpendFilters:                 # what the sum honors; any other key is an error
+    account: str | None
+    category: str | None
+    payee: str | None
+    text: str | None
 ```
 
 **Output**
@@ -160,7 +172,8 @@ UI: breakdown card and source row IDs.
 period = resolve_period(period, today)
 cov    = coverage(filters.account, period)
 if nothing logged and no statement covers the period: return total = null with the gaps
-groups = SELECT key, SUM(amount), COUNT(*) FROM v_spending ... GROUP BY key   # the database sums
+groups = SELECT key, SUM(amount), COUNT(effective movements) FROM v_spending ... GROUP BY key
+         # the sum nets a reversal against its original; the count leaves the pair out
 if group_by == payee: mark() outside names         # grouping by category flags nothing
 return groups, total, cov                          # complete = false when part has no statement
 ```
@@ -288,7 +301,10 @@ class Prepay:
 **Logic**
 
 ```
-if loan: P = ledger balance; r = rate / 1200; emi = its EMI schedule's amount
+if loan: P = loan_terms(): the outstanding balance (the loan account's negated ledger balance),
+         its rate, its tenure as the cap, and its EMI schedule's amount. The eval grader reads
+         the same terms
+prepay is a typed Prepay; an unknown key is an error, never ignored
 else:    r = annual_rate / 1200; emi = P·r·(1+r)^n / ((1+r)^n − 1); if r == 0: emi = P / n
 if emi <= first month's interest: ModelRetry("this EMI never repays the loan")
 schedule = each month: interest = round(balance·r)

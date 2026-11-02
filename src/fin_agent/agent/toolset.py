@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, Literal
 
 import psycopg
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import RunContext, ToolReturn
 from pydantic_ai.exceptions import ApprovalRequired, ModelRetry
 from pydantic_ai.toolsets import FunctionToolset
@@ -23,11 +24,50 @@ from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
 from fin_agent.db.conn import connect
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
-from fin_agent.ledger.common import ledger_balance
+from fin_agent.ledger.accounts import LoanTermsError, loan_terms
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
 from fin_agent.tools import write as write_tools
 from fin_agent.tools.mark import clear_mark, flag_outside_text
+
+
+# Typed read arguments, so a script sees the keys and a misspelled one fails instead of being
+# silently ignored (a dropped `categories` filter once returned the whole month as "food").
+class SpendFilters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account: str | None = Field(default=None, description="Account name.")
+    category: str | None = Field(default=None, description="One exact category name.")
+    payee: str | None = Field(default=None, description="Payee name or UPI ID.")
+    text: str | None = Field(default=None, description="Searches descriptions and notes.")
+
+
+class MovementFilters(SpendFilters):
+    period: str | None = Field(
+        default=None,
+        description='"this_month", "last_month", "2026-09", or a range "2026-09-01..2026-09-15".',
+    )
+    kind: str | None = Field(default=None, description="expense, income, transfer, split, ...")
+    min_paise: int | None = Field(default=None, description="Smallest transfer amount, paise.")
+    max_paise: int | None = Field(default=None, description="Largest transfer amount, paise.")
+    include_reversed: bool = Field(
+        default=False, description="Also list corrected-away entries and their reversals."
+    )
+
+
+class Prepay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount_paise: int = Field(gt=0, description="The lump sum, in paise.")
+    at_emi: int = Field(
+        default=1,
+        ge=1,
+        description="Paid before this EMI, counting from the next one: 1 is now, 13 is after "
+        "12 more EMIs.",
+    )
+    reduce: Literal["tenure", "emi"] = Field(
+        default="tenure", description="tenure: same EMI, finish sooner. emi: lower EMI."
+    )
 
 
 def _card_data(card: dict[str, Any]) -> list[DataChunk]:
@@ -59,17 +99,17 @@ async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
 
 async def query_movements(
     ctx: RunContext[AgentDeps],
-    filters: dict[str, Any] | None = None,
+    filters: MovementFilters | None = None,
     limit: int = 50,
     cursor: str | None = None,
 ) -> ToolReturn:
     """List individual movements with their transfers, category, payee, and evidence. Use it to
-    find a row or see what's behind a number. For totals, use summarize_spending."""
+    find a row or see what's behind a number. For totals, use summarize_spending. A corrected
+    entry and its reversal are hidden and not counted."""
+    plain = filters.model_dump(exclude_none=True) if filters else None
     try:
         payload = _read_call(
-            lambda conn: read_tools.query_movements(
-                conn, filters=filters, limit=limit, cursor=cursor
-            )
+            lambda conn: read_tools.query_movements(conn, filters=plain, limit=limit, cursor=cursor)
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
@@ -80,15 +120,17 @@ async def summarize_spending(
     ctx: RunContext[AgentDeps],
     group_by: Literal["category", "payee", "account", "month", "week", "none"],
     period: str,
-    filters: dict[str, Any] | None = None,
+    filters: SpendFilters | None = None,
 ) -> ToolReturn:
     """Totals of money spent, net of refunds, grouped however you need. Loan principal, card
     bills, investments, and money others owe never count as spending. To compare periods, call it
-    twice."""
+    twice. period is "last_month", "2026-09", or a range "2026-09-01..2026-09-15". count is the
+    number of entries, with a corrected entry and its reversal left out."""
+    plain = filters.model_dump(exclude_none=True) if filters else None
     try:
         payload = _read_call(
             lambda conn: read_tools.summarize_spending(
-                conn, group_by=group_by, period=period, filters=filters
+                conn, group_by=group_by, period=period, filters=plain
             )
         )
     except ValueError as exc:
@@ -125,34 +167,24 @@ async def amortize(
     principal_paise: int | None = None,
     annual_rate: float | None = None,
     months: int | None = None,
-    prepay: dict[str, Any] | None = None,
+    prepay: Prepay | None = None,
 ) -> ToolReturn:
     """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name
-    or its terms. Add prepay to compare a lump-sum prepayment. Use this instead of writing the
-    formula."""
+    to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to compare
+    a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
+    instead of writing the formula."""
     del ctx
     start: date | None = ledger_today()
     if loan:
         with closing(connect()) as conn:
-            row = conn.execute(
-                "SELECT * FROM accounts WHERE lower(name) = lower(%s) AND kind = 'loan' LIMIT 1",
-                (loan,),
-            ).fetchone()
-            if row is None:
-                raise ModelRetry(f"No loan named {loan!r}")
-            principal_paise = max(ledger_balance(conn, row["ledger_account_id"]), 0)
-            annual_rate = (row["rate_bps"] or 0) / 100
-            months = row["tenure_months"]
-            emi_paise = None
-            if row["emi_schedule_id"]:
-                schedule = conn.execute(
-                    "SELECT amount_paise FROM schedules WHERE id = %s", (row["emi_schedule_id"],)
-                ).fetchone()
-                emi_paise = schedule["amount_paise"] if schedule else None
-            if principal_paise <= 0:
-                raise ModelRetry("That loan has no outstanding balance")
-            if not months:
-                raise ModelRetry("That loan has no tenure; pass the terms instead")
+            try:
+                terms = loan_terms(conn, loan)
+            except LoanTermsError as exc:
+                raise ModelRetry(exc.message) from exc
+        principal_paise = terms["principal_paise"]
+        annual_rate = terms["annual_rate"]
+        months = terms["months"]
+        emi_paise = terms["emi_paise"]
     else:
         emi_paise = None
         if principal_paise is None or annual_rate is None or months is None:
@@ -164,7 +196,7 @@ async def amortize(
             int(months),
             emi_paise=emi_paise,
             start_date=start,
-            prepay=prepay,
+            prepay=prepay.model_dump() if prepay else None,
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc

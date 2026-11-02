@@ -446,13 +446,50 @@ def account_summary(conn: psycopg.Connection) -> dict[str, Any]:
     }
 
 
+class LoanTermsError(InvalidLedgerError):
+    """A named loan can't be amortized as it stands."""
+
+
+def loan_terms(conn: psycopg.Connection, name: str) -> dict[str, Any]:
+    """The terms `amortize` uses for a named loan: today's outstanding balance, its rate, its
+    tenure as the cap, and the EMI its schedule really charges. The eval grader reads the same
+    terms, so an expected value can't drift from what the tool computes."""
+    row = conn.execute(
+        "SELECT * FROM accounts WHERE lower(name) = lower(%s) AND kind = 'loan' LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row is None:
+        raise LoanTermsError(f"No loan named {name!r}")
+    # A loan is a liability: its ledger balance is negative, as in `account_payload`. Reading it
+    # unsigned made every named loan look paid off, so scripts re-derived the terms by hand.
+    principal = max(-ledger_balance(conn, row["ledger_account_id"]), 0)
+    if principal <= 0:
+        raise LoanTermsError("That loan has no outstanding balance")
+    if not row["tenure_months"]:
+        raise LoanTermsError("That loan has no tenure; pass the terms instead")
+    emi = None
+    if row["emi_schedule_id"]:
+        schedule = conn.execute(
+            "SELECT amount_paise FROM schedules WHERE id = %s", (row["emi_schedule_id"],)
+        ).fetchone()
+        emi = int(schedule["amount_paise"]) if schedule else None
+    return {
+        "principal_paise": principal,
+        "annual_rate": (row["rate_bps"] or 0) / 100,
+        "months": int(row["tenure_months"]),
+        "emi_paise": emi,
+    }
+
+
 __all__ = [
+    "LoanTermsError",
     "archive_account",
     "balance_as_of",
     "create_account",
     "ensure_system_accounts",
     "get_account",
     "list_accounts",
+    "loan_terms",
     "account_summary",
     "set_statement_balance",
     "update_account",

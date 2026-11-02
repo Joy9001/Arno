@@ -142,6 +142,12 @@ def amortize(
     }
 
     if prepay:
+        unknown = sorted(set(prepay) - {"amount_paise", "at_emi", "reduce"})
+        if unknown:
+            # An ignored timing key once priced "after 12 EMIs" as "now" without a word.
+            raise ValueError(
+                f"prepay takes amount_paise, at_emi, and reduce, not {', '.join(unknown)}"
+            )
         amount = int(prepay.get("amount_paise") or 0)
         if amount <= 0:
             raise ValueError("a prepayment must be positive")

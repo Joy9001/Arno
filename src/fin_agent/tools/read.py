@@ -329,6 +329,45 @@ def _resolve_named(conn: psycopg.Connection, table: str, value: str | None) -> s
     return str(row["id"])
 
 
+MOVEMENT_FILTERS = frozenset(
+    {
+        "period",
+        "account",
+        "category",
+        "payee",
+        "kind",
+        "min_paise",
+        "max_paise",
+        "text",
+        "include_reversed",
+    }
+)
+SPEND_FILTERS = frozenset({"account", "category", "payee", "text"})
+
+
+def _check_filters(filters: dict[str, Any], allowed: frozenset[str], period_hint: str) -> None:
+    """An unknown key is an error, never ignored: a dropped filter answers a different question."""
+    unknown = sorted(set(filters) - allowed)
+    if unknown:
+        raise ValueError(
+            f"Unknown filter {', '.join(map(repr, unknown))}. Filters take "
+            f"{', '.join(sorted(allowed))}. {period_hint}"
+        )
+
+
+def _reversed_ids(conn: psycopg.Connection) -> list[str]:
+    """Movements a live reversal cancels. A corrected entry and its reversal are bookkeeping, not
+    activity, so lists and counts leave both out. Few exist, so one pass covers the ledger."""
+    ids = [
+        str(row["id"])
+        for row in conn.execute(
+            "SELECT DISTINCT reverses_id AS id FROM movements WHERE reverses_id IS NOT NULL"
+        ).fetchall()
+    ]
+    states = movements_mod._reversal_state(conn, ids)  # noqa: SLF001
+    return [movement_id for movement_id in ids if states[movement_id]["reversed"]]
+
+
 def query_movements(
     conn: psycopg.Connection,
     *,
@@ -338,6 +377,11 @@ def query_movements(
 ) -> dict[str, Any]:
     """List individual movements with their transfers, labels, and evidence."""
     filters = filters or {}
+    _check_filters(
+        filters,
+        MOVEMENT_FILTERS,
+        'A date range goes in period as "YYYY-MM-DD..YYYY-MM-DD".',
+    )
     day = ledger_today()
     start = end = None
     if filters.get("period"):
@@ -405,7 +449,13 @@ def query_movements(
             params.extend([date.fromisoformat(cursor_date), cursor_id])
         except (ValueError, TypeError) as exc:
             raise ValueError("Invalid cursor") from exc
-    clauses.append("m.kind <> 'reversal'")
+    if not filters.get("include_reversed"):
+        # In SQL, not after LIMIT, so total_count, the page, and next_cursor agree.
+        clauses.append("m.kind <> 'reversal'")
+        hidden = _reversed_ids(conn)
+        if hidden:
+            clauses.append("NOT (m.id = ANY(%s))")
+            params.append(hidden)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     total = int(
         conn.execute(
@@ -424,9 +474,8 @@ def query_movements(
         ).fetchall()
     )
     states = movements_mod._reversal_state(conn, [str(row["id"]) for row in rows])  # noqa: SLF001
-    visible = [row for row in rows if not states[str(row["id"])]["reversed"]]
-    has_more = len(visible) > limit
-    visible = visible[:limit]
+    has_more = len(rows) > limit
+    visible = rows[:limit]
 
     outside = False
     items: list[dict[str, Any]] = []
@@ -491,6 +540,11 @@ def summarize_spending(
     if group_by not in {"category", "payee", "account", "month", "week", "none"}:
         raise ValueError("group_by is category, payee, account, month, week, or none")
     filters = filters or {}
+    _check_filters(
+        filters,
+        SPEND_FILTERS,
+        'The period is its own argument: "last_month", "2026-09", or "YYYY-MM-DD..YYYY-MM-DD".',
+    )
     day = ledger_today()
     start, end = resolve_period(period, day)
     account_id = _resolve_named(conn, "accounts", filters.get("account"))
@@ -508,7 +562,9 @@ def summarize_spending(
         "none": "'total'",
     }[group_by]
 
-    params: list[Any] = [start, end]
+    # The sum keeps every row, since a reversal nets its original to zero; the count leaves the
+    # pair out, so three grocery trips with one corrected entry count as three, not five.
+    params: list[Any] = [_reversed_ids(conn), start, end]
     clauses = [
         "t.metadata ->> 'movement_id' = m.id",
         "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
@@ -536,7 +592,9 @@ def summarize_spending(
                        CASE WHEN t.to_account_id = sp.ledger_account_id
                             THEN t.amount ELSE -t.amount END
                    )::bigint AS amount_paise,
-                   count(*)::bigint AS n,
+                   count(DISTINCT m.id) FILTER (
+                       WHERE m.kind <> 'reversal' AND NOT (m.id = ANY(%s))
+                   )::bigint AS n,
                    (array_agg(tl.payee_id) FILTER (WHERE tl.payee_id IS NOT NULL))[1] AS payee_id
             FROM pgledger_transfers t
             JOIN movements m ON m.id = t.metadata ->> 'movement_id'

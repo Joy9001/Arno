@@ -299,19 +299,112 @@ def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
 
 
 def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):
+    # The tool's own return is asserted: this test once passed while every named loan failed.
     agent = build_agent()
     model = _model(
         ModelResponse(
             parts=[
                 ToolCallPart(
                     "run_code",
-                    {"code": "result = await amortize(loan='Car loan')\nprint(result['emi'])"},
+                    {"code": "result = await amortize(loan='Home loan')\nresult['emi']"},
                 )
             ]
         ),
         ModelResponse(parts=[TextPart("The EMI is in the tool result.")]),
     )
     with agent.override(model=model):
-        result = run_agent(agent, "what is my car loan EMI", AgentDeps(conversation_id="cnv_x"))
-    assert result.output.startswith("The EMI")
-    assert amortize_fn(10_000_00, 9, 24)["emi"]["paise"] > 0
+        result = run_agent(agent, "what is my home loan EMI", AgentDeps(conversation_id="cnv_x"))
+    returns = [
+        part.content
+        for message in result.all_messages()
+        for part in getattr(message, "parts", [])
+        if getattr(part, "part_kind", "") == "tool-return"
+    ]
+    assert {"paise": 3_150_000, "text": "₹31,500"} in returns
+
+
+def test_read_filters_reject_unknown_keys(demo_ledger):
+    # A dropped `categories` filter once answered "food last month" with the whole month.
+    with pytest.raises(ValueError, match="Unknown filter 'categories'"):
+        read_tools.summarize_spending(
+            demo_ledger,
+            group_by="none",
+            period="2026-10",
+            filters={"categories": ["Food & Dining"]},
+        )
+    with pytest.raises(ValueError, match="The period is its own argument"):
+        read_tools.summarize_spending(
+            demo_ledger, group_by="none", period="2026-10", filters={"period": "2026-09"}
+        )
+    with pytest.raises(ValueError, match=r"YYYY-MM-DD\.\.YYYY-MM-DD"):
+        read_tools.query_movements(demo_ledger, filters={"date_from": "2026-10-01"})
+
+
+def test_a_script_sees_the_typed_filters_and_a_wrong_key_fails(demo_ledger):
+    seen: dict[str, str] = {}
+    code = (
+        "r = await summarize_spending(group_by='none', period='2026-10', "
+        "filters={'categories': ['Food & Dining']})\nr"
+    )
+
+    def script(messages, info: AgentInfo) -> ModelResponse:
+        seen.setdefault("catalog", info.instructions or "")
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    agent = build_agent()
+    with agent.override(model=FunctionModel(script)):
+        result = run_agent(agent, "food last month?", AgentDeps(conversation_id="cnv_x"))
+    for field in ("class MovementFilters", "include_reversed", "class Prepay", "at_emi"):
+        assert field in seen["catalog"]
+    feedback = " ".join(
+        str(getattr(part, "content", ""))
+        for message in result.all_messages()
+        for part in getattr(message, "parts", [])
+        if getattr(part, "part_kind", "") in {"tool-return", "retry-prompt"}
+    )
+    assert "categories" in feedback
+    assert "60,999" not in feedback
+
+
+def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
+    groceries = read_tools.summarize_spending(
+        demo_ledger, group_by="category", period="2026-10", filters={"category": "Groceries"}
+    )
+    assert groceries["total"]["paise"] == 650_000  # the sum is unchanged
+    assert groceries["groups"][0]["count"] == 3  # three trips, not five rows
+    raw = demo_ledger.execute(
+        "SELECT count(*) AS n FROM movements WHERE date BETWEEN '2026-10-01' AND '2026-10-31'"
+    ).fetchone()["n"]
+    october = read_tools.query_movements(demo_ledger, filters={"period": "2026-10"}, limit=200)
+    assert october["total_count"] == len(october["rows"]) == raw - 2
+    everything = read_tools.query_movements(
+        demo_ledger, filters={"period": "2026-10", "include_reversed": True}, limit=200
+    )
+    assert everything["total_count"] == len(everything["rows"]) == raw
+
+    seen: list[str] = []
+    cursor = None
+    while True:
+        page = read_tools.query_movements(
+            demo_ledger, filters={"period": "2026-10"}, limit=5, cursor=cursor
+        )
+        assert len(page["rows"]) <= 5
+        seen += [row["id"] for row in page["rows"]]
+        cursor = page["next_cursor"]
+        if not cursor:
+            break
+    assert len(seen) == len(set(seen)) == october["total_count"]
+
+
+def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger):
+    from fin_agent.ledger.accounts import loan_terms
+
+    terms = loan_terms(demo_ledger, "Home loan")
+    assert terms["emi_paise"] == 3_150_000
+    now = amortize_fn(**terms, prepay={"amount_paise": 5_000_000})
+    later = amortize_fn(**terms, prepay={"amount_paise": 5_000_000, "at_emi": 13})
+    assert 0 < later["prepay"]["interest_saved"]["paise"] < now["prepay"]["interest_saved"]["paise"]
+    with pytest.raises(ValueError, match="after_months"):
+        amortize_fn(**terms, prepay={"amount_paise": 5_000_000, "after_months": 12})
