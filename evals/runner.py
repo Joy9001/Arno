@@ -51,6 +51,7 @@ from fin_agent.agent.number_check import check_messages
 from fin_agent.agent.tracing import build_tracer_provider
 from fin_agent.config import REPO_ROOT, get_settings
 from fin_agent.db.conn import connect, current_database_url
+from fin_agent.demo.template import drop_database
 
 from evals.cases import build_cases, summarize
 from evals.graders import Judge, grade_case
@@ -765,6 +766,8 @@ def flag_transcript(
             lines.append(f"- input: `{case.inputs.messages}`")
             lines.append(f"- reply: {case.output.reply or '(empty)'}")
             lines.append(f"- number flags: {case.output.number_flags}")
+            if case.output.trial_db:
+                lines.append(f"- trial db: `{case.output.trial_db}`")
             if case.output.attempts:
                 lines.append("- attempts:")
                 for attempt in case.output.attempts:
@@ -803,6 +806,8 @@ def failure_transcript(
                 if case.output.error:
                     lines.append(f"- error: `{case.output.error}`")
                 lines.append(f"- number flags: {case.output.number_flags}")
+                if case.output.trial_db:
+                    lines.append(f"- trial db: `{case.output.trial_db}`")
                 if case.output.attempts:
                     lines.append("- attempts:")
                     for attempt in case.output.attempts:
@@ -851,12 +856,17 @@ def run_eval(
     """Run the suite for each model. The only path that spends money."""
     pydantic_models.ALLOW_MODEL_REQUESTS = True
     cards: list[Scorecard] = []
+    run_template = ""
+    admin_dsn = ""
     try:
         settings = get_settings(refresh=True)
         admin_dsn = settings.database_url
-        build_eval_template(admin_dsn, template=template, anchor=date.today())
+        # A template name unique to this run. A fixed name lets a concurrent eval run rebuild or
+        # write the template mid-run, which changes a trial's ground truth and grade.
+        run_template = f"{template}_{uuid.uuid4().hex[:8]}"
+        build_eval_template(admin_dsn, template=run_template, anchor=date.today())
         judge_name = judge_model or os.environ.get("EVAL_JUDGE_MODEL") or model_names[0]
-        # A fresh provider session per run and judge. A fixed session lets a provider cache or
+        # A fresh provider session for the judge. A fixed session lets a provider cache or
         # continue context from an earlier eval run, which can leak a previous trial's wording.
         os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-judge-{uuid.uuid4()}"
         judge = LLMJudge(model_for(judge_name), name=judge_name)
@@ -875,7 +885,7 @@ def run_eval(
                     model_name=model_name,
                     judge=judge,
                     admin_dsn=admin_dsn,
-                    template=template,
+                    template=run_template,
                     repeat=repeat,
                     max_concurrency=max_concurrency,
                     categories=categories,
@@ -899,21 +909,32 @@ def run_eval(
             print(format_scorecard(card))
             print()
             transcripts = failure_transcript(report)
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
             if card.failures:
                 path = results_dir / f"failures_{_slug(model_name)}.md"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(transcripts, encoding="utf-8")
-                print(f"failure transcripts: {path}")
+                stamped = results_dir / f"failures_{_slug(model_name)}_{stamp}.md"
+                stamped.write_text(transcripts, encoding="utf-8")
+                print(f"failure transcripts: {path} (also {stamped.name})")
             if card.number_flags:
                 path = results_dir / f"flags_{_slug(model_name)}.md"
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(flag_transcript(report), encoding="utf-8")
-                print(f"number-flag transcripts: {path}")
+                flags = flag_transcript(report)
+                path.write_text(flags, encoding="utf-8")
+                stamped = results_dir / f"flags_{_slug(model_name)}_{stamp}.md"
+                stamped.write_text(flags, encoding="utf-8")
+                print(f"number-flag transcripts: {path} (also {stamped.name})")
         if publish:
             publish_scorecards(cards, readme=readme)
         write_scorecard_files(cards, results_dir)
         return cards
     finally:
+        if admin_dsn and run_template:
+            try:
+                drop_database(admin_dsn, run_template)
+            except Exception:  # noqa: BLE001 - cleanup must not hide the run result
+                pass
         pydantic_models.ALLOW_MODEL_REQUESTS = False
 
 
