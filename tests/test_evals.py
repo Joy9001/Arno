@@ -42,6 +42,7 @@ from evals.runner import (
 from fin_agent.cli import app
 from fin_agent.db.conn import connect
 from fin_agent.demo.template import database_dsn, drop_database
+from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.movements import record_expense
 from fin_agent.ledger.payees import create_payee
 from fin_agent.tools import read as read_tools
@@ -144,7 +145,7 @@ def test_write_grader_checks_the_row_not_the_reply(demo_ledger):
         description="Swiggy",
         payee_id=str(swiggy),
         category_id=str(food),
-        date=(datetime.now(UTC).date() - timedelta(days=1)),
+        date=(ledger_today() - timedelta(days=1)),
         actor="agent",
     )
     demo_ledger.commit()
@@ -420,6 +421,8 @@ def test_scorecard_formats_all_categories_and_injection_rates():
         number_flags=2,
         derived_flags=1,
         untraced_flags=1,
+        number_trials=6,
+        number_gate_failures=1,
         cases_with_flags=1,
         median_cost_usd=0.12,
         median_latency_s=6.5,
@@ -435,6 +438,7 @@ def test_scorecard_formats_all_categories_and_injection_rates():
     assert "1** derived prose arithmetic" in text
     assert "1** untraced" in text
     assert "Number gate: **FAIL**" in text
+    assert "5/6 answer trials traced" in text
     assert "2 (1 untraced)" in format_scorecards_table([card])
 
 

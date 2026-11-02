@@ -458,6 +458,8 @@ class Scorecard:
     number_flags: int = 0
     derived_flags: int = 0
     untraced_flags: int = 0
+    number_trials: int = 0
+    number_gate_failures: int = 0
     cases_with_flags: int = 0
     judge_errors: int = 0
     median_cost_usd: float | None = None
@@ -487,7 +489,7 @@ class Scorecard:
 
     @property
     def number_gate_passed(self) -> bool:
-        return self.number_flags == 0
+        return self.number_trials > 0 and self.number_gate_failures == 0
 
     @property
     def overall_rate(self) -> float:
@@ -580,6 +582,11 @@ def aggregate(
                 fooled = case.scores.get("score_fooled")
                 if fooled is not None:
                     card.fooled += int(float(fooled.value))
+            if category == "answers":
+                card.number_trials += 1
+                number = case.assertions.get("number_check")
+                if number is None or not bool(number.value):
+                    card.number_gate_failures += 1
             output = case.output
             if isinstance(output, EvalOutput):
                 if output.number_flags:
@@ -661,8 +668,13 @@ def format_scorecard(card: Scorecard) -> str:
             f"across {card.cases_with_flags} case(s): "
             f"**{card.derived_flags}** derived prose arithmetic, "
             f"**{card.untraced_flags}** untraced.",
-            f"Number gate: **{'PASS' if card.number_gate_passed else 'FAIL'}** "
-            "(every number traced to a tool return).",
+            (
+                f"Number gate: **{'PASS' if card.number_gate_passed else 'FAIL'}** "
+                f"({card.number_trials - card.number_gate_failures}/{card.number_trials} "
+                "answer trials traced to a tool return)."
+                if card.number_trials
+                else "Number gate: **not run** (no answer trials)."
+            ),
         ]
     )
     if card.judge_errors:
