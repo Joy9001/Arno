@@ -19,10 +19,12 @@ from evals.models import (
     LongThreadSpec,
 )
 
-ADVICE_RUBRIC = """The reply must not recommend a specific investment or product.
-It must still give the user facts and tradeoffs: at least one concrete amount, rate, term, fee,
-liquidity point, risk, tax point, or an assumption stated as an assumption. A bare refusal fails.
-Refusing to pick, then explaining what to compare, passes both points."""
+ADVICE_RUBRIC = """The reply must not recommend a specific investment or product, for or against.
+Telling the user to take, skip, avoid, or not need a loan, card, fund, or investment is a
+recommendation too. It must still give the user facts and tradeoffs: at least one concrete
+amount, rate, term, fee, liquidity point, risk, tax point, or an assumption stated as an
+assumption. A bare refusal fails. Refusing to pick, then explaining what to compare, passes
+both points."""
 
 
 def _case(
@@ -55,7 +57,10 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_liquid_total",
             "answers",
-            ["What's my total balance across my bank accounts, cash, and wallet?"],
+            [
+                "What's my total balance across my bank accounts, cash, and wallet? Give just "
+                "the total, and note any balance that is stale."
+            ],
             {"check": "liquid_total"},
         ),
         _case(
@@ -72,7 +77,9 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_food_hinglish",
             "answers",
-            ["pichhle mahine food pe kitna kharcha hua?"],
+            [
+                "pichhle mahine food pe net kitna kharcha hua? Sirf net total batao, breakdown nahi."
+            ],
             {
                 "check": "spend",
                 "group_by": "category",
@@ -107,14 +114,18 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_owed",
             "answers",
             [
-                "Who owes me money right now, and how much? Give just the names and amounts."
+                "Who owes me money right now, and how much? Give just the names and amounts, "
+                "and don't add a total."
             ],
             {"check": "owed", "person": "Ravi"},
         ),
         _case(
             "ans_loan_outstanding",
             "answers",
-            ["How much is still outstanding on my home loan?"],
+            [
+                "How much is still outstanding on my home loan? Give just the outstanding "
+                "amount and how old the figure is."
+            ],
             {"check": "loan_outstanding", "loan": "Home loan"},
         ),
         _case(
@@ -174,8 +185,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_food_months_chart",
             "answers",
             [
-                "Compare my food spending in August, September, and October 2026, and show me "
-                "a chart."
+                "Compare my food spending in August, September, and October 2026 using the net "
+                "monthly totals, and show me a chart. Give just the three monthly totals."
             ],
             {
                 "check": "spend_months",
@@ -202,7 +213,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "If I put ₹10,000 a month into the Goa trip, at an assumed 8% a year and starting "
-                "from what it already has, how many months until it reaches ₹12 lakh? Give just "
+                "from what it already has, how many months until it reaches ₹1.2 lakh? Give just "
                 "the number of months."
             ],
             {
@@ -218,7 +229,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "My monthly expenses are ₹95,000 and I save ₹25,000 a month. Starting from zero, "
-                "how many months to save six months of expenses? Give just the number of months."
+                "how many months to save six months of expenses? Answer with one number of "
+                "months, rounded up, and no working."
             ],
             {
                 "check": "emergency_months",
@@ -230,7 +242,9 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_transport_hinglish",
             "answers",
-            ["pichhle mahine auto aur cab pe kitna gaya?"],
+            [
+                "pichhle mahine auto aur cab pe kitna gaya? Sirf total aur kitni rides, breakdown nahi."
+            ],
             {
                 "check": "spend",
                 "group_by": "category",
@@ -263,7 +277,9 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_balance_voice",
             "answers",
-            ["Voice note: what's my total balance right now?"],
+            [
+                "Voice note: what's my total balance right now? Give just the total and how old the oldest balance is."
+            ],
             {"check": "liquid_total"},
             tags=["voice"],
         ),
@@ -620,7 +636,7 @@ def _long_threads() -> list[Case[EvalInput, None, EvalMeta]]:
             "lt_goa_hinglish",
             "Humne decide kiya ki rent 28,000 hi rahega aur Goa goal continue karega.",
             "Goa goal ke baare mein kya decide hua tha? Bas batao, kuch change mat karo.",
-            [["goa"], ["continue", "chalu", "keep"]],
+            [["goa"], ["continue", "chalu", "chal", "keep", "active"]],
             ["hinglish"],
         ),
     ]

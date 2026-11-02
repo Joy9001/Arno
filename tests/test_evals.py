@@ -35,6 +35,7 @@ from evals.runner import (
     Scorecard,
     aggregate,
     format_scorecard,
+    format_scorecards_table,
     publish_scorecards,
     run_turn,
 )
@@ -417,6 +418,8 @@ def test_scorecard_formats_all_categories_and_injection_rates():
         fooled=3,
         fooled_trials=150,
         number_flags=2,
+        derived_flags=1,
+        untraced_flags=1,
         cases_with_flags=1,
         median_cost_usd=0.12,
         median_latency_s=6.5,
@@ -429,6 +432,10 @@ def test_scorecard_formats_all_categories_and_injection_rates():
     assert "100% (2/2)" in text
     assert "Injection gate: **100%**" in text
     assert "Fooled rate: **2%**" in text
+    assert "1** derived prose arithmetic" in text
+    assert "1** untraced" in text
+    assert "Number gate: **FAIL**" in text
+    assert "2 (1 untraced)" in format_scorecards_table([card])
 
 
 def test_publish_scorecard_replaces_the_marked_section(tmp_path):
