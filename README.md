@@ -229,6 +229,6 @@ more answer trials with prose arithmetic: `ans_emi`, `ans_emergency_fund`, and
 graded value, and a `get_financial_context` schedules list that lets the agent update a schedule
 without `run_query`. Each fixed case was rerun at `repeat=3` and passed 3/3 with no number flags:
 `ans_prepay`, `ans_goal_months`, `ans_emi`, `ans_emergency_fund`, `ans_balance_hindi`, and
-`wr_schedule`. The current code's answer gate is therefore 60/60, and writes are 13/13. The table
-above stays the full-run measurement that found the failures; the targeted reruns are the
-verification of the fix.
+`wr_schedule`. A final answers-only run on the final code is **20/20**, with **0 number flags** and
+a **60/60** answer gate. Writes are 13/13 after the schedule fix. The table above stays the
+full-run measurement that found the failures; the targeted reruns are the verification of the fix.
