@@ -7,6 +7,7 @@ import { GoalsPanel } from "./panels/Goals";
 import { ImportsPanel } from "./panels/Imports";
 import { LedgerPanel } from "./panels/Ledger";
 import { PeoplePanel } from "./panels/People";
+import { ProjectionPanel } from "./panels/Projection";
 import { SchedulesPanel } from "./panels/Schedules";
 import { SettingsPanel } from "./panels/Settings";
 
@@ -17,6 +18,7 @@ const TABS = [
   { id: "accounts", label: "Accounts and cards" },
   { id: "schedules", label: "Schedules" },
   { id: "goals", label: "Goals" },
+  { id: "projection", label: "Projection" },
   { id: "people", label: "People" },
   { id: "settings", label: "Settings" },
 ] as const;
@@ -37,6 +39,8 @@ function Panel({ tab }: { tab: TabId }) {
       return <SchedulesPanel />;
     case "goals":
       return <GoalsPanel />;
+    case "projection":
+      return <ProjectionPanel />;
     case "people":
       return <PeoplePanel />;
     case "settings":

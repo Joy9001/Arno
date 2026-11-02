@@ -16,6 +16,7 @@ import {
 } from "recharts";
 import { api, errorMessage } from "../api";
 import { formatRupees } from "./format";
+import { ProjectionCard } from "../projection";
 
 const COLORS = ["#4cc38a", "#5aa9e6", "#f6c85f", "#ff8a80", "#b48ead", "#8fd694"];
 
@@ -145,6 +146,7 @@ function UndoButton({ undoId }: { undoId?: string | null }) {
 export function Card({ data }: { data: Record<string, unknown> }) {
   const card = String(data.card ?? "card");
   if (card === "chart") return <ChartCard data={data} />;
+  if (card === "projection") return <ProjectionCard data={data} />;
 
   if (card === "movement" || card === "correction" || card === "undo") {
     const title = String(data.title ?? "Logged");

@@ -1097,3 +1097,111 @@ button.small {
     grid-template-columns: 1fr;
   }
 }
+
+/* Projection cards and panel ------------------------------------------------------------- */
+
+.badge.warn {
+  color: #f6c85f;
+  border-color: rgba(246, 200, 95, 0.4);
+}
+
+.projection-card figcaption {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.projection-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 10px 0 4px;
+}
+
+.projection-facts {
+  margin: 6px 0 12px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.projection-block {
+  margin-top: 14px;
+  border-top: 1px solid var(--panel-border);
+  padding-top: 10px;
+}
+
+.projection-block h4 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+}
+
+.projection-block summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.projection-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.projection-chart {
+  min-height: 220px;
+}
+
+.citation-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+button.citation {
+  width: auto;
+  margin: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: #0d131b;
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+button.citation:hover {
+  border-color: var(--accent);
+}
+
+.citation-detail {
+  margin-top: 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: #0d131b;
+}
+
+.citation-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.citation-json {
+  max-height: 260px;
+  overflow: auto;
+  margin: 8px 0 0;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.projection-panel {
+  margin-top: 18px;
+}
