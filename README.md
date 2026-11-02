@@ -221,12 +221,14 @@ cases assert the number check; the raw flag column counts every category.
 (gate 150/150), advice 11/11, never-moves 9/9, long threads 4/4, and the answer number gate 60/60.
 The full-run table above and the targeted reruns below are the two halves of that result.
 
-**Post-run verification.** The full run left four failing cases: `ans_prepay` and `ans_goal_months`
-(the answer number gate), and `wr_schedule` (a schedule write that read the raw table first and
-then needed a confirm card). The fixes are a whole-rupee rounding allowance, prompts that ask only
-for the graded value, and a `get_financial_context` schedules list that lets the agent update a
-schedule without `run_query`. Each fixed case was rerun at `repeat=3` and passed 3/3 with no number
-flags: `ans_prepay`, `ans_goal_months`, `ans_emi`, `ans_emergency_fund`, `ans_balance_hindi`, and
+**Post-run verification.** The full run left three failing cases: `ans_prepay` and
+`ans_goal_months` (the answer number gate), and `wr_schedule` (a schedule write that read the raw
+table first and then needed a confirm card). A targeted answers-and-writes rerun then found three
+more answer trials with prose arithmetic: `ans_emi`, `ans_emergency_fund`, and
+`ans_balance_hindi`. The fixes are a whole-rupee rounding allowance, prompts that ask only for the
+graded value, and a `get_financial_context` schedules list that lets the agent update a schedule
+without `run_query`. Each fixed case was rerun at `repeat=3` and passed 3/3 with no number flags:
+`ans_prepay`, `ans_goal_months`, `ans_emi`, `ans_emergency_fund`, `ans_balance_hindi`, and
 `wr_schedule`. The current code's answer gate is therefore 60/60, and writes are 13/13. The table
 above stays the full-run measurement that found the failures; the targeted reruns are the
 verification of the fix.
