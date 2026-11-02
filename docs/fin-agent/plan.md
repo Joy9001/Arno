@@ -444,9 +444,16 @@ Answer each when its layer arrives, not before.
   targets hold?
 - **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
   statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
-- **L5:** resample single days of spend, or whole weeks (weekend spend clusters)? What floor
-  probability makes a "yes"—90% or 95%? Card share of variable spend—learned from history or set
-  for each account?
+- **L5:** settled in code and recorded here.
+  - **Resample single days or whole weeks?** Single days, with separate weekday and weekend pools.
+    Weekend spend clusters survive without resampling whole weeks, and one bad week cannot repeat
+    as a block. The engine reports the method in `data_quality`.
+  - **What floor probability makes a "yes"—90% or 95%?** 90%. It matches the published P10-P90
+    band: a `yes` means the tenth-percentile path still clears the floor. 95% would make the
+    verdict and the band describe different things.
+  - **Card share of variable spend—learned or set?** Learned for each category from the last 90
+    days of spending on that card. With too little card history the share is zero (cash) and
+    `data_quality` says so; there is no per-account setting to keep in sync.
 - **L6:** briefing time, reminder lead days, and recurring-charge thresholds—tune on real data.
 - **L7:** which STT endpoint passes the Hinglish evals—cloud or local? Test Qwen3-ASR beside Whisper:
   [Hex's benchmark](https://github.com/anomalyco/hex/blob/HEAD/docs/plans/language-recommendations.md)

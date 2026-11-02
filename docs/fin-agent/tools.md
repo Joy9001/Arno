@@ -202,11 +202,16 @@ class Hypothetical:
 ```python
 {"floor_probability": 0.93, "median_low": {"amount": Money, "date"},
  "first_floor_crossing": str | None,
+ "optimistic": {"floor_probability": 0.97, "income": [...]} | None,
  "goals": [{"name", "completes_on", "slips_days"}],
  "verdict": "yes" | "yes-but" | "no" | None,
  "tradeoffs": [{"kind", "detail"}],
- "data_quality": {"balance_ages", "baseline_sources", "gaps", "setup_gaps"}}
+ "data_quality": {"balance_ages", "baseline_sources", "gaps", "setup_gaps"},
+ "source_ids": {"accounts", "cards", "schedules", "goals", "categories", "payees"}}
 ```
+
+The daily curve, the full source list, and the verdict card travel as UI metadata; the model sees
+the compact payload above. `optimistic` is the unconfirmed-income case and never feeds a verdict.
 
 UI: daily curve (median and P10-P90), source IDs, projection card.
 

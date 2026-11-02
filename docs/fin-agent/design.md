@@ -369,7 +369,8 @@ involvement—this is the tested arithmetic every affordability verdict comes fr
 - Variable spend, simulated: each run fills the horizon by resampling real past days of spend for
   each category, excluding categories already covered by obligations. A thousand runs give the
   spread. Until a category has enough real days, its setup estimate is used as a flat rate and the
-  `data_quality` field says so. Days versus whole weeks is an open question (`plan.md` §6, L5).
+  `data_quality` field says so. Single days are resampled with weekday and weekend pools kept
+  apart, the L5 decision in `plan.md` §6.
 - Goal contributions move money into a goal's account; those fenced savings are not spendable.
 - Money owed counts only when its label has an `expected_date`.
 
@@ -399,7 +400,7 @@ installments, card dues, goal contributions, and variable spend.
 | yes-but | Not as asked, but at least one of the tradeoffs listed later gets it there |
 | no | No tradeoff within the horizon does, or an obligation can't be met on its date |
 
-The threshold (90% or 95%) is an open question (`plan.md` §6, L5).
+The threshold is 90%, settled at L5 (`plan.md` §6), so it matches the published P10-P90 band.
 
 The engine computes each tradeoff by rerunning the projection:
 
