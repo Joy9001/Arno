@@ -19,6 +19,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
 from fin_agent.db.conn import connect
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
@@ -329,19 +330,22 @@ def _clear_confirmed_marks(names: list[str]) -> None:
 
 async def record_movement(
     ctx: RunContext[AgentDeps],
-    movement: dict[str, Any],
+    movement: Movement,
     not_duplicate: bool = False,
 ) -> ToolReturn:
     """Log money that moved: expense, income, transfer (card bill, SIP, saving to a goal), split,
     loan EMI, refund, or settling money owed. Say what happened; code works out the transfers.
     Ask first if the amount is missing or a split isn't clear. Pass category only if the user named
-    one; otherwise pass category_guess."""
+    one; otherwise pass category_guess. Amounts are rupees in `amount_rupees`, never paise.
+    Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
+    "category": "Food & Dining"}."""
+    payload_movement = movement.model_dump(exclude_none=True, mode="python")
     if ctx.tool_call_id:
-        movement["tool_call_id"] = ctx.tool_call_id
+        payload_movement["tool_call_id"] = ctx.tool_call_id
     payload = _call_write(
         lambda conn: write_tools.record_movement(
             conn,
-            movement=movement,
+            movement=payload_movement,
             message_id=ctx.deps.message_id,
             conversation_id=ctx.deps.conversation_id,
             flagged=_conversation_flagged(ctx),
@@ -355,17 +359,18 @@ async def record_movement(
 async def correct_movement(
     ctx: RunContext[AgentDeps],
     movement_id: str,
-    changes: dict[str, Any],
+    changes: MovementChanges,
     scope: Literal["this", "future", "all"] = "this",
 ) -> ToolReturn:
     """Fix a logged movement: category, payee, note, expected date, date, amount, account, or
-    delete it. For a category or payee, scope sets how far it goes: this row, this row and future
-    ones, or all rows past and future ('ramesh@okaxis is my landlord')."""
+    delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
+    category or payee, scope sets how far it goes: this row, this row and future ones, or all rows
+    past and future ('ramesh@okaxis is my landlord')."""
     payload = _call_write(
         lambda conn: write_tools.correct_movement(
             conn,
             movement_id=movement_id,
-            changes=changes,
+            changes=changes.model_dump(exclude_none=True, mode="python"),
             scope=scope,
             message_id=ctx.deps.message_id,
         )
@@ -387,23 +392,28 @@ async def update_setup(
         "baseline",
     ],
     action: Literal["add", "update", "archive"],
-    data: dict[str, Any],
+    data: SetupData,
 ) -> ToolReturn:
     """Change the user's setup: accounts, stated balances, schedules (income, EMIs, rent,
     subscriptions), goals, categories, payees, settings such as the floor, scheduled questions, and
-    estimated baselines. Not for logging money that moved."""
-    _gate(ctx, f"{action} {entity}: {data.get('name') or data.get('account') or data}")
+    estimated baselines. Not for logging money that moved. Amounts are rupees in `*_rupees`
+    fields, e.g. {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
+    payload_data = data.model_dump(exclude_none=True, mode="python")
+    summary = payload_data.get("name") or payload_data.get("account") or payload_data
+    _gate(ctx, f"{action} {entity}: {summary}")
     payload = _call_write(
         lambda conn: write_tools.update_setup_item(
             conn,
             entity=entity,
             action=action,
-            data=data,
+            data=payload_data,
             message_id=ctx.deps.message_id,
         )
     )
     if ctx.tool_call_approved:
-        _clear_confirmed_marks([str(value) for value in data.values() if isinstance(value, str)])
+        _clear_confirmed_marks(
+            [str(value) for value in payload_data.values() if isinstance(value, str)]
+        )
     return _write_return(payload)
 
 

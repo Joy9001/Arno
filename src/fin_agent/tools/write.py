@@ -233,7 +233,7 @@ def record_movement(
     when = _date(movement.get("date"))
     note = movement.get("note")
     description = movement.get("description")
-    payee_name = movement.get("payee")
+    payee_name = movement.get("payee") or movement.get("person")
     idempotency_key = f"{message_id}:{movement.get('tool_call_id')}" if message_id else None
 
     def named_outside(name: str | None) -> bool:

@@ -392,6 +392,7 @@ def record_split(
     date: date | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
@@ -456,6 +457,7 @@ def record_split(
             kind="split",
             transfers=transfers,
             idempotency_key=idempotency_key,
+            capture=capture,
         )
     return _finish_movement(conn, group, record)
 
