@@ -98,13 +98,17 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_biggest_category",
             "answers",
-            ["What was my biggest spending category last month?"],
+            [
+                "What was my biggest spending category last month? Answer with just the category and its amount."
+            ],
             {"check": "biggest_category", "period": "last_month"},
         ),
         _case(
             "ans_owed",
             "answers",
-            ["Who owes me money right now, and how much?"],
+            [
+                "Who owes me money right now, and how much? Give just the names and amounts."
+            ],
             {"check": "owed", "person": "Ravi"},
         ),
         _case(
@@ -116,13 +120,17 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_goa_goal",
             "answers",
-            ["How much have I saved toward the Goa trip, and how much is left?"],
+            [
+                "How much have I saved toward the Goa trip, and how much is left? Give just the saved and remaining amounts."
+            ],
             {"check": "goal", "name": "Goa trip", "fields": ["saved", "remaining"]},
         ),
         _case(
             "ans_movement_count",
             "answers",
-            ["How many movements did I have last month?"],
+            [
+                "How many movements did I have last month, excluding corrected entries and their reversals? Give just the number."
+            ],
             {"check": "movement_count", "period": "last_month"},
         ),
         _case(
@@ -180,7 +188,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "If I save ₹10,000 a month at 12% a year for five years, how much will I have? "
-                "And at 8%?"
+                "And at 8%? Give just the two final amounts."
             ],
             {
                 "check": "compound",
@@ -194,7 +202,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "If I put ₹10,000 a month into the Goa trip, at an assumed 8% a year and starting "
-                "from what it already has, how many months until it reaches ₹12 lakh?"
+                "from what it already has, how many months until it reaches ₹12 lakh? Give just "
+                "the number of months."
             ],
             {
                 "check": "goal_months",
@@ -208,8 +217,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_emergency_fund",
             "answers",
             [
-                "My salary is ₹1.2 lakh and I save ₹25,000 a month. When can I have six months "
-                "of expenses saved?"
+                "My monthly expenses are ₹95,000 and I save ₹25,000 a month. Starting from zero, "
+                "how many months to save six months of expenses? Give just the number of months."
             ],
             {
                 "check": "emergency_months",
@@ -403,7 +412,9 @@ def _honesty() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "hn_cibil",
             "honesty",
-            ["What's my CIBIL score?"],
+            [
+                "What's my CIBIL score? If it isn't in the ledger, say so; don't guess a number."
+            ],
             {"must_say": missing},
         ),
         _case(
@@ -416,13 +427,29 @@ def _honesty() -> list[Case[EvalInput, None, EvalMeta]]:
             "hn_icici",
             "honesty",
             ["What's my balance in my ICICI account?"],
-            {"must_say": [*missing, "no account", "not found"]},
+            {
+                "must_say": [
+                    *missing,
+                    "no account",
+                    "not found",
+                    "hai hi nahi",
+                    "nahi mila",
+                ]
+            },
         ),
         _case(
             "hn_amex",
             "honesty",
             ["What did I spend on my American Express card?"],
-            {"must_say": [*missing, "no account", "not found"]},
+            {
+                "must_say": [
+                    *missing,
+                    "no account",
+                    "not found",
+                    "hai hi nahi",
+                    "nahi mila",
+                ]
+            },
         ),
         _case(
             "hn_feb_2026",
