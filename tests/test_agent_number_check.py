@@ -154,5 +154,42 @@ def test_a_pinned_snapshot_counts_as_a_source():
 
 def test_month_dates_and_narrow_spaces_are_not_bare_numbers():
     assert check("October 2026 and 2026-10 are the period.", {}) == []
+    assert check("August **2025** has no entries.", {}) == []
     assert check("Coverage is 0\u202f%.", {}) == ["0 %"]
     assert check("Coverage is 0\u202f%.", {"coverage": {"complete": False}}) == []
+
+
+def test_a_number_from_a_tool_inside_run_code_is_traced():
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart
+
+    from fin_agent.agent.number_check import check_messages
+
+    nested = ToolReturnPart(
+        tool_name="summarize_spending",
+        content={"total": {"paise": 155000}, "groups": [{"key": "Swiggy", "count": 4}]},
+        tool_call_id="call-inner",
+    )
+    outer = ToolReturnPart(
+        tool_name="run_code",
+        content="The script ran.",
+        tool_call_id="call-outer",
+        metadata={"tool_returns": {"call-inner": nested}},
+    )
+    assert check_messages("Food was ₹1,550 over 4 orders.", [ModelRequest(parts=[outer])]) == []
+
+
+def test_a_summed_paise_column_is_traced_at_its_rupee_value():
+    result = {
+        "columns": ["month", "spend"],
+        "rows": [["2026-08", 5864900]],
+        "sql": "select to_char(date,'YYYY-MM') AS month, sum(amount_paise) AS spend ...",
+        "row_count": 1,
+    }
+    assert check("August 2026 was ₹58,649.", result) == []
+    assert check("August 2026 was ₹58,649.", result, kinds=("money",)) == []
+
+
+def test_money_only_ignores_hindi_style_days_and_months():
+    reply = "No data for August 2025. The next EMI is on 10 tareekh, about 30 din away."
+    assert check(reply, {}, kinds=("money",)) == []
+    assert check(reply, {"days": 30, "day": 10}, kinds=("money",)) == []

@@ -29,7 +29,7 @@ from fin_agent.agent.history import (
 from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.sessions import revoke_all_sessions
 from fin_agent.auth.setup import issue_setup_token, setup_required
-from fin_agent.config import ConfigurationError, get_settings
+from fin_agent.config import REPO_ROOT, ConfigurationError, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
@@ -265,6 +265,91 @@ def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
     if flags:
         typer.echo(f"couldn't trace: {', '.join(flags)}", err=True)
     return result.all_messages()
+
+
+@app.command("eval")
+def eval_command(
+    model: list[str] = typer.Option(  # noqa: B008
+        [], "--model", help="Model ID on the configured CHAT endpoint. Repeat for several."
+    ),
+    repeat: int = typer.Option(3, help="Trials per case; pass^k uses this."),
+    category: list[str] = typer.Option(  # noqa: B008
+        [],
+        "--category",
+        help="answers, writes, honesty, injection, advice, never_moves, long_threads",
+    ),
+    tag: list[str] = typer.Option([], "--tag", help="Only cases with any of these tags."),  # noqa: B008
+    limit: int | None = typer.Option(None, help="Run only the first N cases after filtering."),
+    per_category: int | None = typer.Option(
+        None, "--per-category", help="Keep at most N cases from each category."
+    ),
+    note: str = typer.Option("", "--note", help="A note shown in the scorecard."),
+    judge_model: str | None = typer.Option(
+        None,
+        "--judge-model",
+        envvar="EVAL_JUDGE_MODEL",
+        help="Pinned judge model for the advice rubric. Defaults to the model under test.",
+    ),
+    template: str = typer.Option("fin_agent_eval_template", help="Template database name."),
+    concurrency: int = typer.Option(2, help="Trials that may run at once."),
+    budget_usd: float = typer.Option(2.0, help="Spend ceiling for each trial, in USD."),
+    publish: bool = typer.Option(
+        True, "--publish/--no-publish", help="Replace the README scorecard table."
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Only list the selected cases."),
+) -> None:
+    """Run the agent eval suite against a configured cloud or local model.
+
+    This is the only command that turns model requests on. Every trial clones a fresh database
+    from the demo-persona template, so no trial can see another one's writes.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    from evals.models import CATEGORY_LABELS
+    from evals.runner import dry_run as list_cases
+    from evals.runner import run_eval
+
+    categories = set(category) or None
+    if categories:
+        unknown = categories - set(CATEGORY_LABELS)
+        if unknown:
+            raise typer.BadParameter(
+                f"unknown categories: {', '.join(sorted(unknown))}; "
+                f"choose from {', '.join(CATEGORY_LABELS)}"
+            )
+    tags = set(tag) or None
+    if dry_run:
+        counts = list_cases(
+            categories=categories, tags=tags, limit=limit, per_category=per_category
+        )
+        total = sum(counts.values())
+        typer.echo(f"{total} cases")
+        for name, count in sorted(counts.items()):
+            typer.echo(f"  {name}: {count}")
+        return
+    if not model:
+        raise typer.BadParameter("pass at least one --model")
+    if repeat < 1:
+        raise typer.BadParameter("--repeat must be at least 1")
+    if budget_usd <= 0:
+        raise typer.BadParameter("--budget-usd must be positive")
+
+    from decimal import Decimal
+
+    cards = run_eval(
+        model_names=list(model),
+        repeat=repeat,
+        template=template,
+        judge_model=judge_model,
+        categories=categories,
+        tags=tags,
+        limit=limit,
+        per_category=per_category,
+        max_concurrency=concurrency,
+        run_budget_usd=Decimal(str(budget_usd)),
+        publish=publish,
+        note=note,
+    )
+    typer.echo(f"scorecards: {', '.join(card.model for card in cards)}")
 
 
 @app.command("export")

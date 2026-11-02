@@ -14,7 +14,6 @@
 web/node_modules
 web/dist
 docs
-evals
 tests
 .env
 .env.*
@@ -22,3 +21,4 @@ tests
 compose.yaml
 Dockerfile
 .dockerignore
+evals/results

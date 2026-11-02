@@ -153,6 +153,17 @@ def primary_model() -> Model:
     return build_model(chat_config())
 
 
+def model_for(model_id: str) -> Model:
+    """Build a model on the configured CHAT endpoint with this exact ID.
+
+    Eval scorecards use one endpoint for cloud and local models; the ID is the only thing
+    that changes. The caller still owns pinning a dated version.
+    """
+    from dataclasses import replace
+
+    return build_model(replace(chat_config(), model=model_id))
+
+
 def vision_model() -> Model:
     return build_model(role_config("VISION"))
 
@@ -172,6 +183,7 @@ __all__ = [
     "backup_model",
     "build_model",
     "chat_config",
+    "model_for",
     "primary_model",
     "role_config",
     "vision_model",

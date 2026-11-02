@@ -25,12 +25,18 @@ def _endpoint() -> str | None:
     ).strip() or None
 
 
-def build_tracer_provider(*, span_exporter: Any = None) -> TracerProvider:
-    """A provider with the OpenInference processor, and OTLP only when configured."""
+def build_tracer_provider(
+    *, span_exporter: Any = None, project_name: str = "fin-agent", set_global: bool = True
+) -> TracerProvider:
+    """A provider with the OpenInference processor, and OTLP only when configured.
+
+    Eval trials pass their own project name so a failed trial is easy to find in Phoenix.
+    They also pass `set_global=False`, because the global provider can only be set once.
+    """
     provider = TracerProvider(
         resource=Resource.create(
             {
-                "openinference.project.name": "fin-agent",
+                "openinference.project.name": project_name,
                 "service.name": "fin-agent",
             }
         )
@@ -43,7 +49,8 @@ def build_tracer_provider(*, span_exporter: Any = None) -> TracerProvider:
         provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
     elif span_exporter is not None:
         provider.add_span_processor(SimpleSpanProcessor(span_exporter))
-    trace.set_tracer_provider(provider)
+    if set_global:
+        trace.set_tracer_provider(provider)
     return provider
 
 

@@ -124,8 +124,12 @@ def build_capabilities(
     backup: Model | None = None,
     spend_store: Any = None,
     tracer_provider: Any = None,
+    run_budget_usd: Decimal | None = None,
+    context_window: int | None = None,
 ) -> list[AbstractCapability[Any]]:
-    window = int(__import__("os").environ.get("LLM_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW))
+    window = int(
+        context_window or __import__("os").environ.get("LLM_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW)
+    )
     target = min(100_000, window // 2)
     keep = max(target // 5, 1)
 
@@ -170,15 +174,23 @@ def build_capabilities(
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
     if spend_store is not None:
-        capabilities.append(
-            SpendLimits(
-                budgets=[
-                    Budget(usd=Decimal("5"), window="run"),
-                    Budget(usd=Decimal("20"), window="day"),
-                ],
-                store=spend_store,
-            )
-        )
+        if run_budget_usd is not None:
+            # An eval trial is one conversation and may have several turns. A conversation
+            # budget is the only window that caps the whole trial, not each turn in it.
+            budgets = [
+                Budget(
+                    usd=run_budget_usd,
+                    tokens=1_000_000,
+                    window="conversation",
+                    name="trial",
+                )
+            ]
+        else:
+            budgets = [
+                Budget(usd=Decimal("5"), window="run"),
+                Budget(usd=Decimal("20"), window="day"),
+            ]
+        capabilities.append(SpendLimits(budgets=budgets, store=spend_store))
     if tracer_provider is not None:
         from pydantic_ai.models.instrumented import InstrumentationSettings
 

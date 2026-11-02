@@ -392,8 +392,9 @@ The cautionary tale worth remembering: Opus 4.5 scored 42% on CORE-Bench until r
 the _grader_ rejecting `96.12` when it expected `96.124991...`. After the fix, it scored 95%. A bad
 eval measures eval quality, confidently.
 
-**The `evals/` folder today** holds an older, human-judged runner for picking a local model. Its 39
-tasks seed the new set, and the runner retires at L4.
+**The `evals/` folder** holds the L4 suite: 110 cases across the seven categories, 50 distinct
+prompt-injection notes, a fresh cloned database for each trial, and the scorecard writer. Its old
+39-task human-judged runner is retired; those tasks seeded the new set.
 
 ### Traces
 

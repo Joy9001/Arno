@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from decimal import Decimal
 from typing import Any
 
 from pydantic_ai import Agent
@@ -45,8 +46,14 @@ def build_agent(
     backup: Any = None,
     spend_store: Any = None,
     tracer_provider: Any = None,
+    run_budget_usd: Decimal | None = None,
+    context_window: int | None = None,
 ) -> Agent[AgentDeps, str]:
-    """Build an agent. Tests pass a `TestModel` or `FunctionModel`; production reads env."""
+    """Build an agent. Tests pass a `TestModel` or `FunctionModel`; production reads env.
+
+    `run_budget_usd` and `context_window` exist for eval trials: one spend ceiling for the
+    whole trial, and a smaller window so a long thread really compacts.
+    """
     primary = model or primary_model()
     if backup is None and model is None:
         backup = backup_model()
@@ -61,6 +68,8 @@ def build_agent(
             backup=backup,
             spend_store=spend_store,
             tracer_provider=tracer_provider,
+            run_budget_usd=run_budget_usd,
+            context_window=context_window,
         ),
     )
 

@@ -45,6 +45,9 @@ DATE = re.compile(
     rf"|\b\d{{1,2}}/\d{{1,2}}(?:/\d{{2,4}})?\b",
     re.I,
 )
+# A bare year (with no amount attached) is a date, not an amount or a count. Bold markdown
+# can separate it from its month ("August **2025**"), so the DATE pattern above may miss it.
+YEAR = re.compile(r"(?<![\d.,])(?:19|20)\d{2}(?![\d.,])")
 LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.M)
 TIME = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b", re.I)
 
@@ -68,6 +71,7 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     # Models often use a narrow no-break space before a percent sign.
     text = text.replace("\u202f", " ").replace("\u00a0", " ").replace("\u2009", " ")
     blanked = DATE.sub(lambda m: " " * len(m.group()), text)
+    blanked = YEAR.sub(lambda m: " " * len(m.group()), blanked)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LIST_MARKER.sub(lambda m: " " * len(m.group()), blanked)
     found: list[tuple[str, float, float, str]] = []
@@ -111,9 +115,19 @@ def sources(returns: Any, user_texts: tuple[str, ...] = ()) -> set[float]:
                 values.add(value)
         elif isinstance(obj, dict):
             if isinstance(obj.get("columns"), list) and isinstance(obj.get("rows"), list):
+                # `run_query` returns raw paise columns. Its SQL names the unit, so a value
+                # summed under an alias like `spend` is still paise; add the rupee form too.
+                sql = str(obj.get("sql") or "").lower()
+                paise_context = "paise" in sql
                 for row in obj["rows"]:
                     for column, cell in zip(obj["columns"], row, strict=False):
                         walk(cell, str(column))
+                        if (
+                            paise_context
+                            and isinstance(cell, (int, float))
+                            and not isinstance(cell, bool)
+                        ):
+                            values.add(float(cell) / 100)
             for key_name, value in obj.items():
                 if key_name != "rows":
                     walk(value, str(key_name))
@@ -165,7 +179,11 @@ def _text_content(value: Any) -> str:
     return ""
 
 
-def check_messages(reply: str, messages: list[Any]) -> list[str]:
+def check_messages(
+    reply: str,
+    messages: list[Any],
+    kinds: tuple[str, ...] = ("money", "percent", "bare"),
+) -> list[str]:
     """Run the check over a turn's model messages: returns, arguments, and user text."""
     import json
 
@@ -183,6 +201,17 @@ def check_messages(reply: str, messages: list[Any]) -> list[str]:
             for part in message.parts:
                 if isinstance(part, ToolReturnPart):
                     returns.append(part.content)
+                    # A tool called inside `run_code` keeps its return in the top-level
+                    # ToolReturnPart's metadata. The model computes from those values, so
+                    # the check must see them or every script-derived number looks invented.
+                    metadata = getattr(part, "metadata", None)
+                    if isinstance(metadata, dict):
+                        nested = metadata.get("tool_returns")
+                        if isinstance(nested, dict):
+                            for item in nested.values():
+                                nested_content = getattr(item, "content", None)
+                                if nested_content is not None:
+                                    returns.append(nested_content)
                 elif isinstance(part, UserPromptPart):
                     text = _text_content(part.content)
                     if not text:
@@ -197,7 +226,7 @@ def check_messages(reply: str, messages: list[Any]) -> list[str]:
                     texts.append(text)
                 elif isinstance(part, ToolCallPart):
                     returns.append(part.args_as_dict())
-    return check(reply, returns, tuple(texts))
+    return check(reply, returns, tuple(texts), kinds=kinds)
 
 
 __all__ = ["check", "check_messages", "extract", "sources", "traced"]

@@ -37,6 +37,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 COPY src ./src
+COPY evals ./evals
 COPY README.md THIRD_PARTY_NOTICES.md ./
 RUN uv sync --frozen --no-dev --no-editable
 
