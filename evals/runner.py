@@ -847,8 +847,12 @@ def run_eval(
         admin_dsn = settings.database_url
         build_eval_template(admin_dsn, template=template, anchor=date.today())
         judge_name = judge_model or os.environ.get("EVAL_JUDGE_MODEL") or model_names[0]
+        # A fresh provider session per run and judge. A fixed session lets a provider cache or
+        # continue context from an earlier eval run, which can leak a previous trial's wording.
+        os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-judge-{uuid.uuid4()}"
         judge = LLMJudge(model_for(judge_name), name=judge_name)
         for model_name in model_names:
+            os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-{uuid.uuid4()}"
             started = datetime.now(UTC).isoformat()
             model = model_for(model_name)
             report = asyncio.run(
