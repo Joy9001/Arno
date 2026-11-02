@@ -195,6 +195,23 @@ def _spend_categories(
     for row in spend_rows:
         daily.setdefault(str(row["category_id"]), {})[row["date"]] = int(row["amount_paise"])
 
+    gaps: list[str] = []
+    uncategorized = conn.execute(
+        """
+        SELECT coalesce(sum(v.amount_paise), 0)::bigint AS amount_paise
+        FROM v_spending v
+        WHERE v.date BETWEEN %s AND %s
+          AND v.amount_paise > 0
+          AND v.category_id IS NULL
+        """,
+        (window_start, window_end),
+    ).fetchone()
+    if uncategorized and int(uncategorized["amount_paise"]) > 0:
+        gaps.append(
+            "uncategorized spending is not simulated as variable spend; label those rows in the "
+            "ledger"
+        )
+
     card_rows = conn.execute(
         """
         SELECT tl.category_id,
@@ -225,7 +242,6 @@ def _spend_categories(
 
     result: list[SpendCategory] = []
     baseline_rows: list[dict[str, Any]] = []
-    gaps: list[str] = []
     days = [window_start + timedelta(days=offset) for offset in range(HISTORY_DAYS)]
     for category in categories:
         category_id = str(category["id"])
