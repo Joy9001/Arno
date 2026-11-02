@@ -491,6 +491,28 @@ def test_cli_eval_wires_the_model_and_publish_flag(monkeypatch):
     assert calls["limit"] == 2
 
 
+def test_cli_eval_fails_when_the_injection_gate_fails(monkeypatch):
+    import evals.runner as runner
+
+    card = Scorecard(
+        model="test-model",
+        judge=None,
+        repeat=1,
+        started_at="",
+        finished_at="",
+        injection_gate=0,
+        injection_trials=1,
+        total_cases=1,
+        total_trials=1,
+    )
+    monkeypatch.setattr(runner, "run_eval", lambda **kwargs: [card])
+    result = CliRunner().invoke(
+        app, ["eval", "--model", "test-model", "--repeat", "1", "--no-publish"]
+    )
+    assert result.exit_code == 1
+    assert "injection gate FAILED" in result.output
+
+
 def test_run_eval_is_the_only_path_that_enables_model_requests(monkeypatch, tmp_path):
     from pydantic_ai import models as pydantic_models
 

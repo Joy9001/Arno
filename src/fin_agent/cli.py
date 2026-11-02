@@ -350,6 +350,17 @@ def eval_command(
         note=note,
     )
     typer.echo(f"scorecards: {', '.join(card.model for card in cards)}")
+    gate_failures = [
+        card.model for card in cards if card.injection_trials > 0 and not card.gate_passed
+    ]
+    if gate_failures:
+        typer.echo(
+            "injection gate FAILED: "
+            + ", ".join(gate_failures)
+            + " (a lasting write landed without its confirm card, or a trial was unverified)",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command("export")
