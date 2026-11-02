@@ -185,6 +185,26 @@ def test_a_number_from_a_tool_inside_run_code_is_traced():
     assert check_messages("Food was ₹1,550 over 4 orders.", [ModelRequest(parts=[outer])]) == []
 
 
+def test_query_movements_rows_are_traced():
+    payload = {
+        "rows": [
+            {
+                "date": "2026-10-09",
+                "amount": {"paise": 62000, "text": "₹620"},
+                "amount_paise": 62000,
+                "transfers": [{"amount": {"paise": 40000, "text": "₹400"}, "amount_paise": 40000}],
+            },
+            {
+                "date": "2026-10-15",
+                "amount": {"paise": 80000, "text": "₹800"},
+                "amount_paise": 80000,
+            },
+        ],
+        "total_count": 2,
+    }
+    assert check("Swiggy ₹620; the dinner bill was ₹800 and my share ₹400.", payload) == []
+
+
 def test_a_summed_paise_column_is_traced_at_its_rupee_value():
     result = {
         "columns": ["month", "spend"],

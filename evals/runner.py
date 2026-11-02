@@ -15,6 +15,7 @@ import os
 import statistics
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -166,7 +167,8 @@ async def run_turn(
     inp: EvalInput,
     *,
     meta: EvalMeta,
-    model: Model,
+    model: Model | None = None,
+    model_factory: Callable[[], Model] | None = None,
     model_name: str,
     judge: Judge | None = None,
     project_name: str | None = None,
@@ -176,8 +178,13 @@ async def run_turn(
 
     The database context variable is already set by the lifecycle. The agent is built per
     trial so the spend counter, context window, and Phoenix project belong to this trial alone.
+    A factory builds a fresh model, and therefore a fresh provider session, for each trial.
     """
     del judge  # the evaluator, not the task, calls the judge
+    if model_factory is not None:
+        model = model_factory()
+    if model is None:
+        raise ValueError("run_turn needs a model or a model_factory")
     started = datetime.now(UTC)
     started_at = started.isoformat()
     replies: list[str] = []
@@ -366,7 +373,8 @@ def build_dataset(
 
 async def evaluate_model(
     *,
-    model: Model,
+    model: Model | None = None,
+    model_factory: Callable[[], Model] | None = None,
     model_name: str,
     judge: Judge | None,
     admin_dsn: str,
@@ -394,6 +402,7 @@ async def evaluate_model(
             inp,
             meta=meta_by_id[inp.case_id],
             model=model,
+            model_factory=model_factory,
             model_name=model_name,
             project_name=_project_name(model_name, inp.case_id),
             run_budget_usd=run_budget_usd,
@@ -852,12 +861,17 @@ def run_eval(
         os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-judge-{uuid.uuid4()}"
         judge = LLMJudge(model_for(judge_name), name=judge_name)
         for model_name in model_names:
-            os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-{uuid.uuid4()}"
             started = datetime.now(UTC).isoformat()
-            model = model_for(model_name)
+            name = model_name
+
+            def fresh_model() -> Model:
+                # Each trial gets its own provider session so one trial's wording cannot leak
+                # into the next, and the pass^3 trials stay independent.
+                return model_for(name, session_id=f"fin-agent-eval-{name}-{uuid.uuid4()}")
+
             report = asyncio.run(
                 evaluate_model(
-                    model=model,
+                    model_factory=fresh_model,
                     model_name=model_name,
                     judge=judge,
                     admin_dsn=admin_dsn,

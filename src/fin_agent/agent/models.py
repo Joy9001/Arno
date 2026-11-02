@@ -73,7 +73,7 @@ def role_config(prefix: str) -> RoleConfig:
     return RoleConfig(base_url=base_url, api_key=api_key, model=model, context_window=window)
 
 
-def build_model(config: RoleConfig) -> Model:
+def build_model(config: RoleConfig, *, session_id: str | None = None) -> Model:
     """One code path for local and cloud: an OpenAI-compatible endpoint."""
     http_client = None
     if "opencode.ai" in config.base_url:
@@ -81,7 +81,7 @@ def build_model(config: RoleConfig) -> Model:
         # and prompt caching. Override OPENCODE_SESSION_ID to share one across restarts.
         import httpx2
 
-        session = os.environ.get("OPENCODE_SESSION_ID") or f"fin-agent-{uuid.uuid4()}"
+        session = session_id or os.environ.get("OPENCODE_SESSION_ID") or f"fin-agent-{uuid.uuid4()}"
         http_client = httpx2.AsyncClient(
             headers={
                 "User-Agent": "fin-agent/0.1",
@@ -153,7 +153,7 @@ def primary_model() -> Model:
     return build_model(chat_config())
 
 
-def model_for(model_id: str) -> Model:
+def model_for(model_id: str, *, session_id: str | None = None) -> Model:
     """Build a model on the configured CHAT endpoint with this exact ID.
 
     Eval scorecards use one endpoint for cloud and local models; the ID is the only thing
@@ -161,7 +161,7 @@ def model_for(model_id: str) -> Model:
     """
     from dataclasses import replace
 
-    return build_model(replace(chat_config(), model=model_id))
+    return build_model(replace(chat_config(), model=model_id), session_id=session_id)
 
 
 def vision_model() -> Model:

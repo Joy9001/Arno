@@ -121,7 +121,8 @@ def sources(returns: Any, user_texts: tuple[str, ...] = ()) -> set[float]:
             for _kind, value, _unit_value, _shown in extract(obj):
                 values.add(value)
         elif isinstance(obj, dict):
-            if isinstance(obj.get("columns"), list) and isinstance(obj.get("rows"), list):
+            is_table = isinstance(obj.get("columns"), list) and isinstance(obj.get("rows"), list)
+            if is_table:
                 # `run_query` returns raw paise columns. Its SQL names the unit, so a value
                 # summed under an alias like `spend` is still paise; add the rupee form too.
                 sql = str(obj.get("sql") or "").lower()
@@ -136,7 +137,7 @@ def sources(returns: Any, user_texts: tuple[str, ...] = ()) -> set[float]:
                         ):
                             values.add(float(cell) / 100)
             for key_name, value in obj.items():
-                if key_name != "rows":
+                if not (is_table and key_name == "rows"):
                     walk(value, str(key_name))
         elif isinstance(obj, (list, tuple)):
             for value in obj:

@@ -464,6 +464,16 @@ def grade_answers(
             )
         )
 
+    new_movements = _new_movements(conn, output)
+    results.append(
+        CheckResult(
+            name="no_writes",
+            passed=not new_movements,
+            reason=(
+                "read-only" if not new_movements else "an answers turn wrote to the ledger"
+            ),
+        )
+    )
     results.append(_number_check(output))
     return results
 
