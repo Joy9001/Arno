@@ -159,6 +159,13 @@ def test_month_dates_and_narrow_spaces_are_not_bare_numbers():
     assert check("Coverage is 0\u202f%.", {"coverage": {"complete": False}}) == []
 
 
+def test_a_day_range_tied_to_a_month_is_a_date():
+    assert check("October (1–31) is covered.", {}) == []
+    assert check("Coverage runs 1–31 October.", {}) == []
+    assert check("The period is 1-31 May.", {}) == []
+    assert check("I found 31 transactions.", {}) == ["31"]
+
+
 def test_a_number_from_a_tool_inside_run_code_is_traced():
     from pydantic_ai.messages import ModelRequest, ToolReturnPart
 

@@ -50,6 +50,12 @@ DATE = re.compile(
 YEAR = re.compile(r"(?<![\d.,])(?:19|20)\d{2}(?![\d.,])")
 LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.M)
 TIME = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b", re.I)
+# A day range tied to a month ("October (1–31)", "1–31 October") is a date, not a count.
+DAY_RANGE = re.compile(
+    rf"\b(?:{MONTHS})\s*\(?\s*\d{{1,2}}\s*[-–—]\s*\d{{1,2}}\s*\)?"
+    rf"|\b\d{{1,2}}\s*[-–—]\s*\d{{1,2}}\s*(?:{MONTHS})\b",
+    re.I,
+)
 
 
 def _value(text: str) -> float:
@@ -70,7 +76,8 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     """Return `(kind, value, unit, shown)` for each number, leaving out dates, times, and lists."""
     # Models often use a narrow no-break space before a percent sign.
     text = text.replace("\u202f", " ").replace("\u00a0", " ").replace("\u2009", " ")
-    blanked = DATE.sub(lambda m: " " * len(m.group()), text)
+    blanked = DAY_RANGE.sub(lambda m: " " * len(m.group()), text)
+    blanked = DATE.sub(lambda m: " " * len(m.group()), blanked)
     blanked = YEAR.sub(lambda m: " " * len(m.group()), blanked)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
     blanked = LIST_MARKER.sub(lambda m: " " * len(m.group()), blanked)

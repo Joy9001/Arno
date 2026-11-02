@@ -154,9 +154,29 @@ def _default_account(conn: psycopg.Connection, payee_id: str | None) -> str:
         return str(rows[0]["id"])
     if not rows:
         raise ToolInputError("which account? No liquid account exists yet.")
+    everyday = _everyday_account(conn)
+    if everyday:
+        return everyday
     raise ToolInputError(
         "which account? Liquid accounts: " + ", ".join(row["name"] for row in rows)
     )
+
+
+def _everyday_account(conn: psycopg.Connection) -> str | None:
+    """The liquid account the user moves money from most, for a payee with no history."""
+    row = conn.execute(
+        """
+        SELECT fa.id, count(*) AS n
+        FROM pgledger_transfers t
+        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
+        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        WHERE fa.active AND fa.liquid AND m.kind IN ('expense', 'refund')
+        GROUP BY fa.id
+        ORDER BY n DESC, fa.name
+        LIMIT 1
+        """
+    ).fetchone()
+    return str(row["id"]) if row else None
 
 
 def _possible_duplicate(

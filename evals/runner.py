@@ -743,6 +743,29 @@ def write_scorecard_files(
     return written
 
 
+def flag_transcript(
+    report: EvaluationReport[EvalInput, EvalOutput, EvalMeta],
+) -> str:
+    """Every passing or failing reply that stated a number with no tool trace."""
+    lines = ["# Number flags", ""]
+    for group in _report_groups(report):
+        for case in group.runs:
+            if not isinstance(case.output, EvalOutput) or not case.output.number_flags:
+                continue
+            lines.extend([f"## {case.name}", ""])
+            lines.append(f"- input: `{case.inputs.messages}`")
+            lines.append(f"- reply: {case.output.reply or '(empty)'}")
+            lines.append(f"- number flags: {case.output.number_flags}")
+            if case.output.attempts:
+                lines.append("- attempts:")
+                for attempt in case.output.attempts:
+                    lines.append(
+                        f"  - `{attempt.tool_name}` {json.dumps(attempt.args, ensure_ascii=False)}"
+                    )
+            lines.append("")
+    return "\n".join(lines)
+
+
 def failure_transcript(
     report: EvaluationReport[EvalInput, EvalOutput, EvalMeta],
 ) -> str:
@@ -863,6 +886,11 @@ def run_eval(
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(transcripts, encoding="utf-8")
                 print(f"failure transcripts: {path}")
+            if card.number_flags:
+                path = results_dir / f"flags_{_slug(model_name)}.md"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(flag_transcript(report), encoding="utf-8")
+                print(f"number-flag transcripts: {path}")
         if publish:
             publish_scorecards(cards, readme=readme)
         write_scorecard_files(cards, results_dir)

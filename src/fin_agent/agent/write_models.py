@@ -37,7 +37,8 @@ class Expense(_MovementBase):
     )
     payee: str = Field(description="Merchant or person name, e.g. Swiggy or Auto bhaiya.")
     account: str | None = Field(
-        default=None, description="Account name; omit to use the usual account for this payee."
+        default=None,
+        description="Account name; omit for this payee's usual account, or the busiest one.",
     )
     category: str | None = Field(
         default=None, description="Exact category only when the user named one."

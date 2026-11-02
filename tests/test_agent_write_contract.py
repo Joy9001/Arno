@@ -110,7 +110,6 @@ def test_hinglish_expense_uses_the_same_contract(demo_ledger):
                 "kind": "expense",
                 "amount_rupees": 150,
                 "payee": "Auto bhaiya",
-                "account": "SBI Salary",
                 "category": "Transport",
             }
         }
@@ -191,7 +190,6 @@ def test_split_takes_people_and_shares(demo_ledger):
                 "kind": "split",
                 "total_rupees": 1200,
                 "my_share_rupees": 400,
-                "account": "SBI Salary",
                 "people": [
                     {"name": "Ravi", "amount_rupees": 400},
                     {"name": "Amit", "amount_rupees": 400},
