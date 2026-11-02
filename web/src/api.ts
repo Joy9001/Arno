@@ -17,7 +17,7 @@ export class ApiError extends Error {
 /** Same-origin JSON fetch. Errors come back as RFC 9457 problem bodies. */
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body !== undefined && !headers.has("content-type")) {
+  if (init.body !== undefined && !(init.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
   const response = await fetch(path, {

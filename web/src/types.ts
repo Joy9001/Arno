@@ -211,3 +211,95 @@ export type Enrollment = {
   expires_at: string;
   kind: "add_device";
 };
+
+export type ImportCounts = {
+  new: number;
+  certain: number;
+  ambiguous: number;
+  ignored: number;
+  logged_not_on_statement: number;
+};
+
+export type ImportCandidate = {
+  movement_id: string;
+  date: string;
+  description: string;
+  amount_paise: number;
+  kind: string;
+};
+
+export type ImportLine = {
+  id: string;
+  date: string;
+  description: string;
+  amount_paise: number;
+  debit_paise: number | null;
+  credit_paise: number | null;
+  balance_paise: number | null;
+  upi_ref: string | null;
+  match_state: "new" | "certain" | "ambiguous" | "merged" | "ignored";
+  movement_id: string | null;
+  suggested_category: { category_id: string; category_name: string; source: string } | null;
+  candidates: ImportCandidate[];
+};
+
+export type ImportRecord = {
+  import_id: string;
+  status:
+    | "parsing"
+    | "needs_password"
+    | "needs_input"
+    | "review"
+    | "not_a_statement"
+    | "failed"
+    | "committed"
+    | "rejected";
+  attachment: {
+    filename: string | null;
+    content_type: string | null;
+    size_bytes: number | null;
+    sha256: string;
+    purged_at: string | null;
+  } | null;
+  account: { id: string; name: string; kind: string } | null;
+  period: { start: string | null; end: string | null } | null;
+  opening_paise: number | null;
+  closing_paise: number | null;
+  check: "VERIFIED" | "DISCREPANCY" | "FAILED" | null;
+  check_detail: Record<string, unknown> | null;
+  counts: ImportCounts | null;
+  review: {
+    counts?: ImportCounts;
+    ambiguous?: unknown[];
+    logged_not_on_statement?: {
+      movement_id: string;
+      date: string;
+      description: string;
+      amount_paise: number;
+    }[];
+    adjustment_paise?: number | null;
+  } | null;
+  reason: string | null;
+  parser_saved: boolean;
+  created_at: string | null;
+  committed_at: string | null;
+  rejected_at: string | null;
+  undone_at: string | null;
+  lines: ImportLine[];
+};
+
+export type ImportList = {
+  items: {
+    import_id: string;
+    status: ImportRecord["status"];
+    filename: string | null;
+    account: string | null;
+    period: ImportRecord["period"];
+    check: ImportRecord["check"];
+    counts: ImportCounts | null;
+    reason: string | null;
+    created_at: string | null;
+    committed_at: string | null;
+    undone_at: string | null;
+  }[];
+};

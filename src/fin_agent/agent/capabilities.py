@@ -48,7 +48,7 @@ from fin_agent.ledger.common import today as ledger_today
 logger = logging.getLogger("fin_agent.agent")
 
 WRITE_TOOLS = frozenset(
-    {"record_movement", "correct_movement", "update_setup", "preference", "undo"}
+    {"record_movement", "correct_movement", "update_setup", "preference", "import_document", "undo"}
 )
 
 SUMMARY_PROMPT = (

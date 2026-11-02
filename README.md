@@ -3,14 +3,16 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L2 (agent, dogfooding) is built.** L0 and L1 are unchanged: Postgres in Compose,
-> numbered migrations on a vendored pgledger, passkeys, the L1 ledger, group undo, full export,
-> the restic backup sidecar, and the demo persona. L2 adds the web and CLI chat, detached turns,
-> the read and write tools with Code Mode, approval-gated lasting writes, preferences, the
-> setup conversation, spend ceilings, model fallback, and optional Phoenix traces. The projection
-> engine and statement import land in later layers. The authoritative plan is
-> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
-> [`docs/archive/`](docs/archive/) are not authoritative.
+> **Status: L3 (import) is built.** L0-L2 are unchanged. L3 adds the background jobs loop,
+> statement readers (`pypdfium2`, `python-calamine`, `msoffcrypto-tool`, HTML/CSV, `python-docx`,
+> `striprtf`, OFX/MT940/JSON/CAMT), Monty parse runs with the `parse-statement` skill, saved
+> layouts that replay with no model call, reconciliation against logged rows, the review/commit/
+> undo flow, baseline recomputation, the `import_document` tool, and the web Imports screen.
+> Milestone 21's real SBI, Union Bank, and Slice decisions are still open: the harness and
+> synthetic fixtures pass, but no real statement was provided
+> ([spike results](docs/fin-agent/import-spike-results.md)). The projection engine lands in L5.
+> The authoritative plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026
+> docs in [`docs/archive/`](docs/archive/) are not authoritative.
 
 ## Built on
 
@@ -23,7 +25,10 @@ question about it — including whether you can afford something, and what it wo
   implied.
 - FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, psycopg 3, Vite and React,
   Tailscale, `python-dateutil` and `holidays` for schedules, and restic for encrypted off-site
-  backups. Full choices are in [plan §3](docs/fin-agent/plan.md#3-stack).
+  backups. Statement readers use `pypdfium2` (BSD-3-Clause or Apache-2.0), `python-calamine`
+  (MIT), `msoffcrypto-tool` (MIT), `python-docx` (MIT), `striprtf` (BSD-3-Clause), and
+  `olefile` (BSD-2-Clause). `python-multipart` (Apache-2.0) parses the upload form. Full choices
+  are in [plan §3](docs/fin-agent/plan.md#3-stack).
 
 ## Run it
 
@@ -76,6 +81,7 @@ fin-agent migrate              # apply pending SQL migrations
 fin-agent serve                # API + built web app (127.0.0.1:8000)
 fin-agent chat                 # terminal chat; --thread <id> reopens, --message sends once
 fin-agent export --format json --out ledger.json   # json, csv, or sql (pg_dump)
+fin-agent import-spike          # milestone 21: run real statements from private/statements
 fin-agent setup                # print a fresh first-run enrollment link and QR code
 fin-agent setup-token          # same, kept for scripts
 fin-agent passkeys list        # registered passkeys

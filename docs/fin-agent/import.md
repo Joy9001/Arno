@@ -135,7 +135,27 @@ If a real statement can't be parsed in Monty, the fallback is a separate sandbox
 Real statements never enter the repository. Parser tests use synthetic fixtures; a git-ignored
 local folder holds real files for manual runs.
 
-**Result:** _(unfilled—run the spike)_
+**Result:** the harness and the decision procedure are built; the real-statement decisions
+are **pending**. No real SBI, Union Bank, or Slice statement was provided, so nothing was
+touched in `private/statements/` and no bank got a verdict. What was verified now, with
+synthetic Indian fixtures and the research harness:
+
+| What | Result |
+|---|---|
+| SBI CSV layout, Union Bank TSV layout, Slice CSV layout | 3/3 `VERIFIED` through the readers, Monty, and `check_statement` |
+| Same SBI script through the research `check_real.py --parser` | `PASS(amounts balance)` |
+| A known layout replaying with `ALLOW_MODEL_REQUESTS = False` | Passes; no model call |
+| A fresh parse run writing and submitting a script (`FunctionModel`) | Submits, reruns in a fresh `AsyncMonty`, checks pass |
+| Locked PDF or Office file | The card asks, the password stays in memory, a wrong one is a readable `needs_password` |
+| `xfina` comparison, Tesseract, PaddleOCR, the `VISION` model | Not run: not installed or no real page; the vision call is wired and isolated |
+| Real SBI, Union Bank, Slice layouts, password patterns, quirks | Open until real files are handed over |
+| Milestone 24: a 12-month backfill and baselines from real rows | Open for the same reason; the recompute path is built and tested on synthetic rows |
+
+The generated counts are in [`import-spike-results.md`](import-spike-results.md). Run
+`fin-agent import-spike` with files in `private/statements/<bank>/` to fill the per-bank rows;
+the command prints and writes counts and status words only. The `parse-statement` skill is
+written for the SBI, Union Bank, and Slice layouts described in `import.md`, including the
+`await` + keyword-argument convention that replay requires.
 
 ---
 

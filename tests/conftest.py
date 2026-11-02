@@ -27,6 +27,9 @@ for _role in ("CHAT", "VISION", "STT"):
     os.environ.setdefault(f"{_role}_BASE_URL", "http://127.0.0.1:9/v1")
     os.environ.setdefault(f"{_role}_MODEL", "blocked-in-tests")
 
+# The job loop is tested directly; the API tests must not race it.
+os.environ.setdefault("FIN_AGENT_JOBS_ENABLED", "0")
+
 # No test can spend money. Only evals turn this on.
 from pydantic_ai import models  # noqa: E402
 

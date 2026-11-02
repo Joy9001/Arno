@@ -38,6 +38,10 @@ web/.vite/
 # Third-party research data, kept local (see each research README)
 docs/research/agent-toolkit-2026/data/
 
+# Real statements, local only. The spike harness reads this folder and never writes it.
+private/
+statements/
+
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 

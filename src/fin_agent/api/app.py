@@ -17,7 +17,7 @@ from fin_agent.agent.history import recover_crashed_runs
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.agent.tracing import build_tracer_provider
 from fin_agent.agent.turns import TurnManager
-from fin_agent.api import auth, chat, health, ledger, static
+from fin_agent.api import auth, chat, health, imports, ledger, static
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
 from fin_agent.auth.enrollment import enrollment_message
@@ -26,6 +26,7 @@ from fin_agent.config import Settings, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
+from fin_agent.jobs.runner import JobRunner, recover_interrupted_jobs
 from fin_agent.ledger.accounts import ensure_system_accounts
 from fin_agent.ledger.categories import ensure_default_categories
 from fin_agent.ledger.errors import LedgerError
@@ -72,6 +73,10 @@ async def lifespan(app: FastAPI):
         conn.commit()
         if recovered:
             logger.warning("recovered %d interrupted chat turn(s)", len(recovered))
+        interrupted = recover_interrupted_jobs(conn)
+        conn.commit()
+        if interrupted:
+            logger.warning("requeued %d interrupted job(s)", interrupted)
     finally:
         conn.close()
     spend_store, pool = await make_spend_store(app.state.settings.database_url)
@@ -81,9 +86,13 @@ async def lifespan(app: FastAPI):
     app.state.tracer_provider = tracer_provider
     app.state.agent = build_agent(spend_store=spend_store, tracer_provider=tracer_provider)
     app.state.turns = TurnManager(app.state.agent)
+    app.state.jobs = JobRunner()
+    if app.state.settings.jobs_enabled:
+        app.state.jobs.start()
     try:
         yield
     finally:
+        await app.state.jobs.stop()
         await app.state.turns.drain()
         if pool is not None:
             await pool.close()
@@ -113,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(ledger.router)
+    app.include_router(imports.router)
     app.include_router(chat.router)
     app.include_router(static.router)
 

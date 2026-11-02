@@ -167,6 +167,21 @@ export function Card({ data }: { data: Record<string, unknown> }) {
     );
   }
 
+  if (card === "import") {
+    return (
+      <div className="chat-card">
+        <div className="chat-card-head">
+          <strong>Import {String(data.status ?? "started")}</strong>
+        </div>
+        {data.reason ? <p>{String(data.reason)}</p> : null}
+        <p className="fine">
+          Open the Imports tab to review, edit, or commit. A password, if needed, goes there and
+          never in chat.
+        </p>
+      </div>
+    );
+  }
+
   if (card === "preference") {
     return (
       <div className="chat-card">

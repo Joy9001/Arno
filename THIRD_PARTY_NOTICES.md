@@ -87,3 +87,15 @@ SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
 CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Statement reader packages
+
+These are installed from PyPI and carry their own license files in the image:
+
+- `pypdfium2` — BSD-3-Clause or Apache-2.0
+- `python-calamine` — MIT
+- `msoffcrypto-tool` — MIT
+- `python-docx` — MIT
+- `striprtf` — BSD-3-Clause
+- `olefile` — BSD-2-Clause
+- `python-multipart` — Apache-2.0

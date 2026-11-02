@@ -4,6 +4,7 @@ import { logout, type Health, type User } from "./auth";
 import { ChatHome } from "./chat/Chat";
 import { AccountsPanel } from "./panels/Accounts";
 import { GoalsPanel } from "./panels/Goals";
+import { ImportsPanel } from "./panels/Imports";
 import { LedgerPanel } from "./panels/Ledger";
 import { PeoplePanel } from "./panels/People";
 import { SchedulesPanel } from "./panels/Schedules";
@@ -12,6 +13,7 @@ import { SettingsPanel } from "./panels/Settings";
 const TABS = [
   { id: "chat", label: "Chat" },
   { id: "ledger", label: "Ledger" },
+  { id: "imports", label: "Imports" },
   { id: "accounts", label: "Accounts and cards" },
   { id: "schedules", label: "Schedules" },
   { id: "goals", label: "Goals" },
@@ -27,6 +29,8 @@ function Panel({ tab }: { tab: TabId }) {
       return <ChatHome />;
     case "ledger":
       return <LedgerPanel />;
+    case "imports":
+      return <ImportsPanel />;
     case "accounts":
       return <AccountsPanel />;
     case "schedules":

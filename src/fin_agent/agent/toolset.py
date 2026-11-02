@@ -429,6 +429,20 @@ async def preference(
     return _write_return(payload)
 
 
+async def import_document(ctx: RunContext[AgentDeps], attachment_id: str) -> ToolReturn:
+    """Start importing an uploaded statement. Returns a status and a review link; the user
+    approves on the review screen, and you can't commit an import. If the file needs a password,
+    tell the user to enter it on the import card. Never ask for it in chat."""
+    payload = _call_write(
+        lambda conn: write_tools.import_document(
+            conn,
+            attachment_id=attachment_id,
+            message_id=ctx.deps.message_id,
+        )
+    )
+    return _write_return(payload)
+
+
 async def undo(ctx: RunContext[AgentDeps], undo_id: str | None = None) -> ToolReturn:
     """Undo a write. With no ID, it undoes the last write in this conversation. Use the undo_id
     from a write's result for an earlier one."""
@@ -445,7 +459,14 @@ async def undo(ctx: RunContext[AgentDeps], undo_id: str | None = None) -> ToolRe
 
 def build_write_toolset() -> FunctionToolset[AgentDeps]:
     return FunctionToolset(
-        tools=[record_movement, correct_movement, update_setup, preference, undo]
+        tools=[
+            record_movement,
+            correct_movement,
+            update_setup,
+            preference,
+            import_document,
+            undo,
+        ]
     )
 
 

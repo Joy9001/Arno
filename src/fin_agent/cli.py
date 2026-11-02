@@ -10,6 +10,7 @@ import sys
 import uuid
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import typer
 import uvicorn
@@ -296,6 +297,61 @@ def export_command(
     else:
         out.write_bytes(data) if isinstance(data, bytes) else out.write_text(data, encoding="utf-8")
         typer.echo(f"wrote {out}")
+
+
+@app.command("import-spike")
+def import_spike(
+    folder: Path = typer.Argument(  # noqa: B008
+        Path("private/statements"), help="Git-ignored folder with bank subfolders."
+    ),
+    bank: str | None = typer.Option(None, help="sbi, union, or slice. Omit for all three."),
+    password: str | None = typer.Option(
+        None, envvar="STATEMENT_PASSWORD", help="Statement password; never written anywhere."
+    ),
+    ledger_opening: int | None = typer.Option(
+        None, help="Opening balance in paise when the bank statement does not print one."
+    ),
+    write: bool = typer.Option(
+        True, "--write/--no-write", help="Write docs/fin-agent/import-spike-results.md."
+    ),
+) -> None:
+    """Milestone 21: a fresh parse run per bank, then rerun the parser on the rest.
+
+    It prints counts and status words only. The synthetic fixtures always run; real files run
+    only when they are in a git-ignored folder.
+    """
+    from fin_agent.importers.spike import SpikeReport, run_real, run_synthetic
+
+    synthetic = run_synthetic()
+    if bank and bank not in {"sbi", "union", "slice"}:
+        raise typer.BadParameter("bank is sbi, union, or slice")
+    real: list[Any] = []
+    notes: list[str] = []
+    if folder.is_dir():
+        if password is None and any(folder.iterdir()):
+            password = typer.prompt(
+                "Statement password (blank if none)", hide_input=True, default=""
+            )
+        real, notes = run_real(
+            folder,
+            password=password or None,
+            bank=bank,
+            ledger_opening_paise=ledger_opening,
+        )
+    else:
+        notes = [f"No real statement folder at {folder}; the real spike is not run."]
+    report = SpikeReport(
+        synthetic=synthetic,
+        real=real,
+        real_root=str(folder) if real else None,
+        notes=notes,
+    )
+    text = report.markdown()
+    typer.echo(text)
+    if write:
+        target = Path("docs/fin-agent/import-spike-results.md")
+        target.write_text(text, encoding="utf-8")
+        typer.echo(f"wrote {target}")
 
 
 @demo_app.command("seed")

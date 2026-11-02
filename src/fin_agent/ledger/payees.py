@@ -65,6 +65,7 @@ def create_payee(
     display_name: str,
     kind: str = "merchant",
     upi_id: str | None = None,
+    match_hash: str | None = None,
     default_category_id: str | None = None,
     create_person_account: bool = False,
     outside_text: bool = False,
@@ -91,10 +92,10 @@ def create_payee(
         row = conn.execute(
             """
             INSERT INTO payees
-                (display_name, kind, upi_id, default_category_id, outside_text)
-            VALUES (%s, %s, %s, %s, %s) RETURNING *
+                (display_name, kind, upi_id, match_hash, default_category_id, outside_text)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
             """,
-            (name, kind, upi_id, default_category_id, outside_text),
+            (name, kind, upi_id, match_hash, default_category_id, outside_text),
         ).fetchone()
         group.record_created("payees", row)
         if create_person_account or kind == "person":

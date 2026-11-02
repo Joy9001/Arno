@@ -64,6 +64,15 @@ def chat_config(*, fallback: bool = False) -> RoleConfig:
     return RoleConfig(base_url=base_url, api_key=api_key, model=model, context_window=window)
 
 
+def role_config(prefix: str) -> RoleConfig:
+    """VISION and STT have their own endpoint and key, and no fallback."""
+    base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip() or "http://127.0.0.1:9/v1"
+    api_key = os.environ.get(f"{prefix}_API_KEY", "").strip() or "not-needed"
+    model = os.environ.get(f"{prefix}_MODEL", "").strip() or f"{prefix.lower()}-unconfigured"
+    window = _int_env(f"{prefix}_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW)
+    return RoleConfig(base_url=base_url, api_key=api_key, model=model, context_window=window)
+
+
 def build_model(config: RoleConfig) -> Model:
     """One code path for local and cloud: an OpenAI-compatible endpoint."""
     http_client = None
@@ -144,6 +153,10 @@ def primary_model() -> Model:
     return build_model(chat_config())
 
 
+def vision_model() -> Model:
+    return build_model(role_config("VISION"))
+
+
 def backup_model() -> Model | None:
     config = chat_config(fallback=True)
     if not os.environ.get("CHAT_FALLBACK_BASE_URL") and not os.environ.get("CHAT_FALLBACK_MODEL"):
@@ -160,4 +173,6 @@ __all__ = [
     "build_model",
     "chat_config",
     "primary_model",
+    "role_config",
+    "vision_model",
 ]

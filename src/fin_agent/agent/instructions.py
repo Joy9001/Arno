@@ -44,6 +44,8 @@ Writes
 - Save a lasting fact with preference without being asked. Never save a number the
   ledger owns.
 - IDs from earlier in this chat may be gone. Re-query before using one.
+- Start an import with import_document only after an attachment id exists. It ends in review;
+  you can't commit it. Never ask for a statement password in chat.
 
 Earlier context
 - If they mention something you can't see here, search past messages with run_query.
