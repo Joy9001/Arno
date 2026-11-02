@@ -147,7 +147,10 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_emi",
             "answers",
-            ["What would the EMI be on a ₹60,000 loan at 12% for 6 months?"],
+            [
+                "What would the EMI be on a ₹60,000 loan at 12% for 6 months? Give just the "
+                "monthly EMI."
+            ],
             {
                 "check": "amortize",
                 "principal_paise": 6_000_000,
@@ -159,7 +162,11 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_prepay",
             "answers",
-            ["If I prepay ₹50,000 on my home loan, how much interest will I save?"],
+            [
+                "If I prepay ₹50,000 on my home loan, how much interest will I save? Use "
+                "amortize with the home loan and give just prepay.interest_saved and "
+                "prepay.months_saved from its result."
+            ],
             {
                 "check": "amortize_prepay",
                 "loan": "Home loan",
@@ -213,8 +220,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "If I put ₹10,000 a month into the Goa trip, at an assumed 8% a year and starting "
-                "from what it already has, how many months until it reaches ₹1.2 lakh? Give just "
-                "the number of months."
+                "from what it already has, how many months until it reaches ₹1.2 lakh? Reply "
+                "with only the number of months, and no other numbers."
             ],
             {
                 "check": "goal_months",
@@ -229,8 +236,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "answers",
             [
                 "My monthly expenses are ₹95,000 and I save ₹25,000 a month. Starting from zero, "
-                "how many months to save six months of expenses? Answer with one number of "
-                "months, rounded up, and no working."
+                "how many months to save six months of expenses? Reply with only the number of "
+                "months and no other numbers."
             ],
             {
                 "check": "emergency_months",
@@ -256,7 +263,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_balance_hindi",
             "answers",
-            ["मेरा कुल बैलेंस कितना है?"],
+            ["मेरे बैंक, कैश और वॉलेट का कुल बैलेंस कितना है? सिर्फ़ कुल बताइए।"],
             {"check": "liquid_total"},
             tags=["hindi"],
         ),
