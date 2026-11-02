@@ -11,6 +11,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from fin_agent.india.workdays import last_working_day
 from fin_agent.ledger.accounts import create_account, list_accounts, set_statement_balance
@@ -75,10 +76,81 @@ def _day(today: date, months_ago: int, day: int) -> date:
     return date(first.year, first.month, min(day, last))
 
 
-def seed_demo(
-    conn: psycopg.Connection, *, today: date | None = None, reset: bool = True
+def _recent_complete_months(today: date, count: int = 3) -> list[tuple[date, date, str]]:
+    """The last `count` complete calendar months before `today`, oldest first."""
+    months: list[tuple[date, date, str]] = []
+    for months_ago in range(count, 0, -1):
+        start = _month_start(today, months_ago)
+        end = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
+        months.append((start, end, f"{start.year:04d}-{start.month:02d}"))
+    return months
+
+
+def _seed_statement_coverage(
+    conn: psycopg.Connection,
+    accounts: list[dict[str, Any]],
+    today: date,
+    *,
+    leave_gap: bool,
 ) -> dict[str, Any]:
-    """Seed the persona. `reset=True` clears the L1 tables first, never auth or conversations."""
+    """Insert synthetic committed imports so coverage reflects the last three complete months.
+
+    These are coverage rows only: no statement files, no statement lines, and no real data. They
+    make the demo template exercise "answered from covered data" as well as the older-month
+    "no data" path. `leave_gap` drops the oldest of the three months for the honesty cases.
+    """
+    months = _recent_complete_months(today)
+    gap_month = months.pop(0)[2] if leave_gap and months else None
+    inserted = 0
+    for account in accounts:
+        for start, end, key in months:
+            conn.execute(
+                """
+                INSERT INTO imports (
+                    file_hash, parser, account_id, period_start, period_end,
+                    check_result, status, committed_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, 'committed', now())
+                """,
+                (
+                    f"demo-statement:{account['id']}:{key}",
+                    "synthetic-demo",
+                    account["id"],
+                    start,
+                    end,
+                    Jsonb(
+                        {
+                            "status": "VERIFIED",
+                            "synthetic": True,
+                            "source": "demo persona coverage",
+                        }
+                    ),
+                ),
+            )
+            inserted += 1
+    conn.commit()
+    return {
+        "months": [key for _, _, key in months],
+        "gap": gap_month,
+        "imports": inserted,
+    }
+
+
+def seed_demo(
+    conn: psycopg.Connection,
+    *,
+    today: date | None = None,
+    reset: bool = True,
+    statement_coverage: bool = True,
+    coverage_gap: bool = False,
+) -> dict[str, Any]:
+    """Seed the persona.
+
+    `reset=True` clears the L1 tables first, never auth or conversations. The persona gives every
+    active non-system account synthetic committed imports for the last three complete months, so
+    coverage reports a covered range rather than a gap everywhere. `coverage_gap=True` leaves the
+    oldest of those months uncovered for the honesty eval cases; `statement_coverage=False` turns
+    the coverage rows off entirely.
+    """
     today = today or date.today()
     if not reset:
         existing = conn.execute(
@@ -602,6 +674,15 @@ def seed_demo(
         actor="system",
     )
 
+    coverage = {"months": [], "gap": None, "imports": 0}
+    if statement_coverage:
+        coverage = _seed_statement_coverage(
+            conn,
+            list_accounts(conn),
+            today,
+            leave_gap=coverage_gap,
+        )
+
     return {
         "today": today.isoformat(),
         "accounts": len(list_accounts(conn, include_system=True)),
@@ -609,6 +690,8 @@ def seed_demo(
         "schedules": conn.execute("SELECT count(*) AS n FROM schedules").fetchone()["n"],
         "goals": conn.execute("SELECT count(*) AS n FROM goals").fetchone()["n"],
         "movements": conn.execute("SELECT count(*) AS n FROM movements").fetchone()["n"],
+        "imports": coverage["imports"],
+        "statement_coverage": coverage,
         "people": conn.execute(
             "SELECT count(*) AS n FROM payees WHERE kind IN ('person', 'organization')"
         ).fetchone()["n"],

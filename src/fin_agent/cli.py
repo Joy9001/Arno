@@ -446,6 +446,16 @@ def demo_seed(
         False, "--reset/--no-reset", help="Clear the L1 tables before seeding."
     ),
     force: bool = typer.Option(False, "--force", help="Skip the reset confirmation."),
+    statement_coverage: bool = typer.Option(
+        True,
+        "--statement-coverage/--no-statement-coverage",
+        help="Seed synthetic committed statement imports for the last three complete months.",
+    ),
+    coverage_gap: bool = typer.Option(
+        False,
+        "--coverage-gap",
+        help="Leave the oldest of those months uncovered for honesty cases.",
+    ),
 ) -> None:
     """Seed the synthetic Indian persona: the demo instance and the test fixture."""
     anchor = date.fromisoformat(today) if today else None
@@ -461,15 +471,21 @@ def demo_seed(
         run_migrations(conn)
         set_agent_ro_password(conn, settings.agent_ro_password)
         set_backup_password(conn, settings.backup_password)
-        summary = seed_demo(conn, today=anchor, reset=reset)
+        summary = seed_demo(
+            conn,
+            today=anchor,
+            reset=reset,
+            statement_coverage=statement_coverage,
+            coverage_gap=coverage_gap,
+        )
     finally:
         conn.close()
     typer.echo(
         "Seeded demo persona: "
         f"{summary['accounts']} accounts, {summary['categories']} categories, "
         f"{summary['schedules']} schedules, {summary['goals']} goals, "
-        f"{summary['movements']} movements, {summary['people']} people "
-        f"(today={summary['today']})."
+        f"{summary['movements']} movements, {summary['imports']} imports, "
+        f"{summary['people']} people (today={summary['today']})."
     )
 
 
@@ -478,6 +494,11 @@ def demo_template(
     target: str = typer.Option("fin_agent_demo_template", help="Template database name to create."),
     today: str | None = typer.Option(None, help="Anchor date (YYYY-MM-DD). Defaults to today."),
     force: bool = typer.Option(False, "--force", help="Skip the reset confirmation."),
+    coverage_gap: bool = typer.Option(
+        False,
+        "--coverage-gap",
+        help="Leave the oldest covered month as a gap for honesty cases.",
+    ),
 ) -> None:
     """Seed the current database, then clone it as a Postgres template for eval trials."""
     anchor = date.fromisoformat(today) if today else None
@@ -487,14 +508,15 @@ def demo_template(
     conn = connect(settings.database_url)
     try:
         run_migrations(conn)
-        summary = seed_demo(conn, today=anchor, reset=True)
+        summary = seed_demo(conn, today=anchor, reset=True, coverage_gap=coverage_gap)
         source = conn.info.dbname
     finally:
         conn.close()
     clone_database(settings.database_url, source=source, target=target)
     typer.echo(
-        f"Seeded {source} ({summary['movements']} movements) and created template {target}. "
-        f"Clone a trial with CREATE DATABASE <trial> TEMPLATE {target}."
+        f"Seeded {source} ({summary['movements']} movements, {summary['imports']} imports) "
+        f"and created template {target}. Clone a trial with "
+        f"CREATE DATABASE <trial> TEMPLATE {target}."
     )
 
 

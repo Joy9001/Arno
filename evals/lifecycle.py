@@ -39,11 +39,14 @@ def build_eval_template(
     *,
     template: str = DEFAULT_TEMPLATE,
     anchor: date | None = None,
+    statement_coverage: bool = True,
+    coverage_gap: bool = False,
 ) -> str:
     """Build the seeded template from scratch, never from the user's ledger.
 
     A self-hoster's real database is not touched: the template is its own database, created
-    empty, migrated, and seeded with the synthetic persona.
+    empty, migrated, and seeded with the synthetic persona. `coverage_gap=True` leaves the oldest
+    of the persona's three covered months as a gap for honesty cases.
     """
     anchor = anchor or date.today()
     create_database(admin_dsn, template)
@@ -53,7 +56,13 @@ def build_eval_template(
         run_migrations(conn)
         set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
         set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
-        seed_demo(conn, today=anchor, reset=True)
+        seed_demo(
+            conn,
+            today=anchor,
+            reset=True,
+            statement_coverage=statement_coverage,
+            coverage_gap=coverage_gap,
+        )
         conn.commit()
     finally:
         conn.close()

@@ -13,6 +13,7 @@ from fin_agent.ledger.audit import undo_group
 from fin_agent.ledger.goals import list_goals
 from fin_agent.ledger.movements import list_movements
 from fin_agent.ledger.schedules import list_schedules, upcoming
+from fin_agent.tools import read as read_tools
 
 DEMO_DAY = date(2026, 11, 1)
 
@@ -80,6 +81,94 @@ def test_demo_persona_seeds_a_complete_indian_ledger(db):
     assert refreshed["HDFC Savings"]["balance_paise"] != before
 
 
+def test_demo_persona_has_recent_statement_coverage(demo_ledger):
+    context = read_tools.get_financial_context(demo_ledger)
+    hdfc = next(account for account in context["accounts"] if account["name"] == "HDFC Savings")
+
+    october = read_tools.coverage(
+        demo_ledger,
+        account_id=hdfc["id"],
+        start=date(2026, 10, 1),
+        end=date(2026, 10, 31),
+    )
+    assert october == {
+        "complete": True,
+        "gaps": [],
+        "from": "2026-10-01",
+        "to": "2026-10-31",
+    }
+
+    july = read_tools.coverage(
+        demo_ledger,
+        account_id=hdfc["id"],
+        start=date(2026, 7, 1),
+        end=date(2026, 7, 31),
+    )
+    assert july["complete"] is False
+    assert july["gaps"] == ["2026-07"]
+    assert july["from"] is None
+    assert july["to"] is None
+
+    # The 13-month snapshot still reports older gaps, but the covered range is the recent
+    # three months, not the whole window.
+    assert hdfc["covered"]["from"] == "2026-08-01"
+    assert hdfc["covered"]["to"] == "2026-10-31"
+    assert "2026-10" not in hdfc["covered"]["gaps"]
+
+
+def test_summarize_and_query_report_covered_and_gap_periods(demo_ledger):
+    october = read_tools.summarize_spending(demo_ledger, group_by="none", period="2026-10")
+    assert october["coverage"]["complete"] is True
+    assert october["coverage"]["gaps"] == []
+    assert october["coverage"]["from"] == "2026-10-01"
+    assert october["coverage"]["to"] == "2026-10-31"
+    assert october["total"] is not None
+
+    july = read_tools.summarize_spending(demo_ledger, group_by="none", period="2026-07")
+    assert july["coverage"]["complete"] is False
+    assert july["coverage"]["gaps"] == ["2026-07"]
+    assert july["total"] is None
+
+    october_rows = read_tools.query_movements(demo_ledger, filters={"period": "2026-10"})
+    assert october_rows["coverage"]["complete"] is True
+    assert october_rows["coverage"]["from"] == "2026-10-01"
+    assert october_rows["coverage"]["to"] == "2026-10-31"
+    assert october_rows["rows"]
+
+    july_rows = read_tools.query_movements(demo_ledger, filters={"period": "2026-07"})
+    assert july_rows["coverage"]["complete"] is False
+    assert july_rows["coverage"]["gaps"] == ["2026-07"]
+    assert july_rows["rows"] == []
+
+
+def test_demo_coverage_switch_leaves_the_oldest_month_open(db):
+    summary = seed_demo(db, today=DEMO_DAY, reset=True, coverage_gap=True)
+    assert summary["statement_coverage"]["gap"] == "2026-08"
+    assert summary["statement_coverage"]["months"] == ["2026-09", "2026-10"]
+
+    hdfc = db.execute("SELECT id FROM accounts WHERE name = 'HDFC Savings'").fetchone()["id"]
+    august = read_tools.coverage(db, account_id=hdfc, start=date(2026, 8, 1), end=date(2026, 8, 31))
+    september = read_tools.coverage(
+        db, account_id=hdfc, start=date(2026, 9, 1), end=date(2026, 9, 30)
+    )
+    assert august["complete"] is False
+    assert august["gaps"] == ["2026-08"]
+    assert september["complete"] is True
+
+
+def test_demo_statement_coverage_can_be_disabled(db):
+    summary = seed_demo(db, today=DEMO_DAY, reset=True, statement_coverage=False)
+    assert summary["imports"] == 0
+    assert summary["statement_coverage"]["months"] == []
+
+    hdfc = db.execute("SELECT id FROM accounts WHERE name = 'HDFC Savings'").fetchone()["id"]
+    october = read_tools.coverage(
+        db, account_id=hdfc, start=date(2026, 10, 1), end=date(2026, 10, 31)
+    )
+    assert october["complete"] is False
+    assert october["gaps"] == ["2026-10"]
+
+
 def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
     first = seed_demo(db, today=DEMO_DAY, reset=True)
     second = seed_demo(db, today=DEMO_DAY, reset=True)
@@ -87,6 +176,8 @@ def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
     assert first["movements"] == second["movements"]
     assert first["accounts"] == second["accounts"]
     assert first["schedules"] == second["schedules"]
+    assert first["imports"] == second["imports"]
+    assert first["statement_coverage"] == second["statement_coverage"]
     assert db.execute("SELECT count(*) AS n FROM audit_log").fetchone()["n"] > 0
 
 
@@ -97,12 +188,13 @@ def test_demo_template_can_be_cloned():
         seed_demo(conn, today=DEMO_DAY, reset=True)
         source = conn.info.dbname
     try:
-        clone_database(settings.database_url, source=source, target=target, terminate=False)
+        clone_database(settings.database_url, source=source, target=target, terminate=True)
         info = psycopg.conninfo.conninfo_to_dict(settings.database_url)
         info["dbname"] = target
         with psycopg.connect(psycopg.conninfo.make_conninfo(**info), row_factory=dict_row) as clone:
             assert clone.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] > 0
             assert clone.execute("SELECT count(*) AS n FROM goals").fetchone()["n"] == 1
+            assert clone.execute("SELECT count(*) AS n FROM imports").fetchone()["n"] > 0
     finally:
         info = psycopg.conninfo.conninfo_to_dict(settings.database_url)
         info["dbname"] = "postgres"

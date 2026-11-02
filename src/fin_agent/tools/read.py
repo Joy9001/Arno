@@ -73,11 +73,13 @@ def coverage(
         )
         if not covered:
             gaps.append(key)
+    covered_from = min(max(row["period_start"], start) for row in rows) if rows else None
+    covered_to = max(min(row["period_end"], end) for row in rows) if rows else None
     return {
         "complete": not gaps,
         "gaps": gaps,
-        "from": start.isoformat(),
-        "to": end.isoformat(),
+        "from": covered_from.isoformat() if covered_from else None,
+        "to": covered_to.isoformat() if covered_to else None,
     }
 
 
