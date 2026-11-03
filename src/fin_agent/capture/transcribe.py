@@ -6,6 +6,10 @@ because those are the words a Hinglish note is most likely to mis-hear. A cloud 
 that prompt too, which is why the caller can turn it off.
 """
 
+# TODO(L7): no live STT endpoint or Hinglish audio corpus was available. Tests prove the
+# request shape with a loopback stub; real cloud-versus-local Hinglish WER and the payee-name
+# prompt's effect remain unmeasured. See plan.md section 6.
+
 from __future__ import annotations
 
 import os

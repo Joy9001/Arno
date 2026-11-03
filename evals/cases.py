@@ -438,6 +438,8 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             },
             tags=["voice"],
         ),
+        # TODO(L7): run this voice+Hinglish case against the configured CHAT endpoint. CI blocks
+        # model requests, so only the suite shape is verified here.
         _case(
             "wr_chai_voice_hinglish",
             "writes",

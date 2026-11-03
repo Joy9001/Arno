@@ -5,6 +5,9 @@ tools: the image's text can only become a capped merchant, amount, date, method,
 The caller marks the text fields before they reach the chat model.
 """
 
+# TODO(L7): no live VISION endpoint was configured. Tests swap in a typed extraction, so the
+# endpoint plumbing, ledgers, and marking are covered; real receipt/UPI screenshots are not.
+
 from __future__ import annotations
 
 from datetime import date as Date

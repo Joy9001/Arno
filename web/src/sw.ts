@@ -3,6 +3,8 @@
 
 // TODO(L6): verify this on an installed Android PWA over Tailscale HTTPS. The build, manifest,
 // and push handler are tested; the live vendor delivery path is not.
+// TODO(L7): the share target is built and the worker handler is tested only by the build. Verify
+// a real GPay, PhonePe, or Paytm share into the installed PWA on Android.
 
 import { cleanupOutdatedCaches, precacheAndRoute } from "workbox-precaching";
 
