@@ -474,13 +474,16 @@ Answer each when its layer arrives, not before.
   - **Scheduled questions.** Read-only, with the pinned financial snapshot and CodeMode read tools
     only. Each run has 20 model requests and a $1 default ceiling (`spend_limit_usd`), against the
     shared $20 daily ceiling. The answer goes to the Inbox.
-- **L7:** which STT endpoint passes the Hinglish evals—cloud or local? Test Qwen3-ASR beside Whisper:
-  [Hex's benchmark](https://github.com/anomalyco/hex/blob/HEAD/docs/plans/language-recommendations.md)
-  gives Hindi word error rates of 18.85% for Whisper turbo, 12.68% for Qwen3-ASR 0.6B, and 7.84% for
-  Qwen3-ASR 1.7B. Those are Hex's numbers on clean, read-aloud Hindi, so they say nothing about
-  Hinglish or phone audio, and neither its licence nor an OpenAI-compatible server for it is checked.
-  Does passing payee names as a context prompt help recognition? With a cloud endpoint, those names
-  reach that provider too.
+- **L7:** the cloud-versus-local Hinglish comparison is **not measured on this host**. No `STT_*`
+  endpoint and no Hinglish audio corpus are configured, so the Hinglish and voice-transcript eval
+  cases test the agent downstream of a transcript, not the speech model. The code path is one for
+  both. Locally, `speaches` 0.8.3-cpu (Whisper through faster-whisper) is the `local-stt` Compose
+  profile. **Qwen3-ASR 0.6B and 1.7B are Apache-2.0** (checked on Hugging Face, November 3, 2026),
+  and vLLM serves them through the same OpenAI-compatible `/v1/audio/transcriptions` API,
+  including its prompt field, so Qwen3-ASR is a viable local alternative to Whisper. The
+  payee-name context prompt is implemented and on by default (`STT_PAYEE_CONTEXT=1`); whether it
+  improves recognition is untested, so it is an option rather than a claim. A cloud STT endpoint
+  receives those payee names too; setting `STT_PAYEE_CONTEXT=0` keeps them local.
 - **L8:** MIT or Apache-2.0?
 
 ---

@@ -3,13 +3,15 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L6 (watch) is complete.** L0-L5 are unchanged. `job_schedules` turns India-time
-> RRULEs into one period-keyed job, so a sleeping laptop catches up once and a restart cannot send
-> the same item twice. The weekly briefing, reminders, episode-deduped risk warnings, nightly
-> baseline recompute, 48-hour backup alert, and recurring-charge proposals work without an LLM;
-> the briefing's prose is the one optional CHAT call, with a template fallback. The Inbox and
-> contentless web push deliver them, and scheduled questions run read-only with a per-run ceiling.
-> The authoritative plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs
+> **Status: L7 (capture) is complete.** L0-L6 are unchanged. Push-to-talk records in the chat
+> composer, saves the audio, calls the OpenAI-compatible `STT_*` endpoint, and sends the transcript
+> down the normal chat path; a failed call leaves a retry card. A receipt or UPI screenshot is saved
+> first, read by an isolated tool-less `VISION_*` call into five capped fields, logged at once with
+> its `upi_ref`, and shown as an image-beside-fields undo card. The server, not the client, appends
+> the marked text to `model_history` and sets `outside_text_at`. The PWA is an Android share target,
+> and `--profile local-stt` starts `speaches`. The Hinglish STT comparison and the payee-prompt
+> measurement remain open in [plan §6](docs/fin-agent/plan.md#6-open-questions). The authoritative
+> plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs
 > in [`docs/archive/`](docs/archive/) are not authoritative.
 
 ## Built on
@@ -40,6 +42,7 @@ cp .env.example .env
 #   - set FIN_AGENT_RP_ID and FIN_AGENT_RP_ORIGIN to your machine's tailnet name.
 docker compose up -d --build
 # Local models: docker compose --profile local-llm up -d
+# Local STT:    docker compose --profile local-stt up -d
 # Traces:       docker compose --profile traces up -d  (set PHOENIX_COLLECTOR_ENDPOINT)
 ```
 

@@ -230,6 +230,9 @@ retry card rather than a lost photo.
 → text → the normal chat path, sent at once with the transcript shown. A transcript is your own
 words, so it doesn't flag the thread. The audio is saved first, so a failed transcription leaves a
 retry card.
+The `STT_*` call can carry the active payee names as a context prompt, because those are the words a
+Hinglish note is most likely to mishear. It is on by default; `STT_PAYEE_CONTEXT=0` turns it off.
+With a cloud endpoint, those names reach that provider as well.
 Hinglish accuracy is an eval category ([L7](plan.md#6-open-questions)).
 
 A dictation app such as [Hex](https://github.com/anomalyco/hex) needs no code from us: it pastes into
