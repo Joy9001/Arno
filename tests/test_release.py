@@ -50,7 +50,8 @@ def test_license_is_mit_and_matches_the_package_metadata():
 
 
 def test_compose_pins_a_versioned_image_and_rotates_logs():
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    version = project["version"]
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
     assert f"ghcr.io/joy9001/fin-agent:${{FIN_AGENT_VERSION:-{version}}}" in compose
