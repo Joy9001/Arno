@@ -417,6 +417,9 @@ def score(
 ) -> dict[str, Any]:
     dataset = dataset or find_dataset()
     if dataset is None:
+        # TODO(L5): run the 25 labeled samples on a machine that has the local dataset, publish
+        # the score in the README, and flip this to available. The dataset has no license and is
+        # never committed.
         return {
             "available": False,
             "reason": (

@@ -410,6 +410,8 @@ def backtest(
             result = backtest_db(conn, runs=runs, seed=seed)
             if result["months"]:
                 return result
+    # TODO(L5): rerun against the real 12-month backfill when one is present. Until then the
+    # README numbers come from the synthetic history and say so.
     return backtest_synthetic(runs=runs, seed=seed)
 
 
