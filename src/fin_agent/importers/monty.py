@@ -190,6 +190,7 @@ def normalize_accounts(output: Any) -> tuple[list[dict[str, Any]], str | None]:
                     "credit": row.get("credit") if isinstance(row.get("credit"), int) else 0,
                     "balance": row.get("balance") if isinstance(row.get("balance"), int) else None,
                     "upi_ref": _upi_ref(row.get("upi_ref")),
+                    "counterparty": str(row.get("counterparty") or "").strip()[:120] or None,
                 }
             )
         accounts.append(

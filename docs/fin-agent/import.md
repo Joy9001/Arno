@@ -48,11 +48,15 @@ Each stage works as follows:
 4. **Checks** (described later). A failure writes nothing and says why.
 5. **Dedupe.** Match against earlier imports by `content_hash`.
 6. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
-7. **Review screen.** The web app shows new rows, merged rows, ambiguous matches, and categories.
-   The user commits, edits, or rejects.
+7. **Categorize, then review.** One batched model call labels the distinct counterparties, not
+   one call per line. The same call may name one of your own accounts as the other side. The web
+   app shows new rows, merged rows, ambiguous matches, categories, and suggestions to move money
+   between your accounts. The user commits, edits, or rejects.
 8. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
-   record the closing balance on the account. If it disagrees with the ledger, the difference is a
-   visible adjustment. Then recompute baselines, and save the parser.
+   record the closing balance on the account. A suggested own-account line is written as a
+   transfer only after the user confirms it on the review screen. If the closing disagrees with
+   the ledger, the difference is a visible adjustment. Then recompute baselines, and save the
+   parser.
 
 A parser is saved only after you commit. One that failed the checks, or came from an import you
 rejected, isn't saved. A committed import is undone from the Imports screen, not by the agent.
@@ -143,7 +147,7 @@ scoring was not run. `xfina` was not added.
 | Bank | Format to download | Password | Parser result | Decision | Quirks |
 |---|---|---|---|---|---|
 | SBI | 12 months in one download (Nov 3, 2025 – Nov 3, 2026), PDF or `.xlsx` | Yes, both | PDF: 939 rows, `VERIFIED`, 1 repair, 321 s. `.xlsx`: 939 rows, `VERIFIED`, 0 repairs, 85 s | Saved parser (Monty). Either format works; the `.xlsx` is faster to parse | Both formats print the same rows, and the statement's own debit plus credit count equals the 939 rows. The `.xlsx` is an encrypted OLE2 file |
-| Slice | One unlocked PDF for each monthly cycle; 5 cycles (May 25 – Oct 24, 2026) | No | 5/5 `VERIFIED`, 80 rows, 0 repairs, 297 s | Saved parser (Monty) | The cycle runs from the 25th to the 24th. The header prints it as a yearless `DD MON - DD MON` and the rows as `DD Mon 'YY`, so no 4-digit year appears; the period finder takes the year from the `'YY` date (commit 626e421) |
+| Slice | One unlocked PDF for each monthly cycle; 5 cycles (May 25 – Oct 24, 2026) | No | 5/5 `VERIFIED`, 80 rows, 0 repairs, 297 s | Saved parser (Monty) | The cycle runs from the 25th to the 24th. The header prints it as a yearless `DD MON - DD MON` and the rows as `DD Mon 'YY`, so no 4-digit year appears; the period finder takes the year from the `'YY` date (commit 626e421). The exports are incomplete: the PDFs omit several repayments that the app shows (for example ₹200 on 27 Jun and ₹1,823 on 7 Jul), and one ₹4,969.91 repayment is dated 10 Sep in the PDF and 9 Sep in the app. The card's review screen asks the user to confirm an own-account transfer before commit |
 | Union Bank | Unknown | Unknown | Not run | Open | Not provided |
 
 The synthetic fixtures still pass through the readers, Monty, and `check_statement` (3/3
@@ -206,6 +210,21 @@ after a statement covering their date appear on the review screen as "logged but
 statement"—wrong account, cash, or a mistake.
 
 ---
+
+## Own-account moves need a human yes
+
+A card bill, a SIP, or a transfer to another account you own is not spending. The categorizer
+gets the user's own accounts (id, name, kind, institution, last four) in the same batched call,
+and can return one of them instead of a category. The review screen then shows the line as a
+suggested transfer, with the other account's name, and asks the user to confirm or reject it.
+Commit refuses to run while a suggestion is unconfirmed, so the model cannot move money between
+accounts on its own.
+
+The confirmation matters because the other statement is not always complete. Slice's monthly PDFs
+for 2026 omit several repayments that its app shows, and one repayment is a day off. A confirmed
+SBI line is therefore still booked when the card's PDF never printed the matching credit. The
+resulting difference surfaces as the usual visible closing adjustment rather than as a silent
+change to spending. The alternative, treating the line as spend, would overstate consumption.
 
 ## Photos and voice
 

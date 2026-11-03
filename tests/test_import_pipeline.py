@@ -6,17 +6,33 @@ import hashlib
 from datetime import date
 
 import pytest
+from psycopg.types.json import Jsonb
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from fin_agent.agent.parse_run import ParseResult
+from fin_agent.importers.categorizer import categorize_import
 from fin_agent.importers.commit import commit_import, undo_import
 from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.pipeline import _run_import, create_import, import_payload
+from fin_agent.importers.pipeline import (
+    _account_fingerprint,
+    _run_import,
+    create_import,
+    import_payload,
+)
 from fin_agent.importers.readers import Doc
+from fin_agent.importers.reconcile import insert_lines, reconcile
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance
-from fin_agent.ledger.errors import InvalidLedgerError
+from fin_agent.ledger.common import ledger_balance, system_account
+from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from tests.import_fixtures import SBI_PARSER, sbi_csv
+
+
+def test_a_card_without_headers_gets_a_stable_layout_key():
+    account = {"kind": "card", "institution": "Slice", "name": "Slice card", "last4": "3753"}
+    assert _account_fingerprint(account) == "card|Slice|3753"
+    assert _account_fingerprint({**account, "last4": None}) is None
 
 
 def _attachment(conn, payload: bytes) -> str:
@@ -324,3 +340,352 @@ async def test_a_failed_check_writes_no_rows(ledger):
     assert detail["lines"] == []
     with pytest.raises(InvalidLedgerError):
         commit_import(ledger, row["id"], categorize=False)
+
+
+def _batch_model(calls: dict, answers: list[dict]) -> FunctionModel:
+    def respond(messages, info: AgentInfo) -> ModelResponse:
+        del messages
+        calls["n"] += 1
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"response": answers})])
+
+    return FunctionModel(respond)
+
+
+def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, dict]:
+    raw_account = conn.execute("SELECT * FROM accounts WHERE id = %s", (account["id"],)).fetchone()
+    import_id = new_id(conn, "imp")
+    conn.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
+                             commit_groups)
+        VALUES (%s, 'hash-categorize', 'review', %s, '2026-04-01', '2026-04-30', '[]'::jsonb)
+        """,
+        (import_id, account["id"]),
+    )
+    insert_lines(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        parsed_account={"rows": rows},
+    )
+    reconcile(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    conn.commit()
+    return import_id, raw_account
+
+
+async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
+    account = _account(ledger)
+    import_id, raw_account = _review_import(
+        ledger,
+        account,
+        [
+            {
+                "date": "2026-04-01",
+                "description": "UPI/DR/123456789012/SWIGGY BANGALORE/ramesh@okaxis",
+                "debit": 45000,
+                "credit": 0,
+                "balance": 24522890,
+                "counterparty": "Swiggy",
+            },
+            {
+                "date": "2026-04-02",
+                "description": "UPI/DR/123456789013/SWIGGY BANGALORE/ramesh@okaxis",
+                "debit": 30000,
+                "credit": 0,
+                "balance": 24492890,
+                "counterparty": "Swiggy",
+            },
+            {
+                "date": "2026-04-03",
+                "description": "UPI/DR/223456789012/AMAZON PAY INDIA/amazon@okhdfcbank",
+                "debit": 120000,
+                "credit": 0,
+                "balance": 24372890,
+                "counterparty": "Amazon",
+            },
+        ],
+    )
+    calls = {"n": 0}
+    counts = await categorize_import(
+        ledger,
+        import_id,
+        raw_account,
+        model=_batch_model(
+            calls,
+            [
+                {"key": "swiggy", "category": "Food & Dining"},
+                {"key": "amazon", "category": "Shopping"},
+            ],
+        ),
+    )
+    ledger.commit()
+
+    assert calls["n"] == 1
+    assert counts == {
+        "lines": 3,
+        "rule_hits": 0,
+        "llm_keys": 2,
+        "llm_calls": 1,
+        "transfers": 0,
+    }
+    lines = ledger.execute(
+        "SELECT match_detail FROM statement_lines WHERE import_id = %s ORDER BY date",
+        (import_id,),
+    ).fetchall()
+    assert [line["match_detail"]["suggested_category"]["category_name"] for line in lines] == [
+        "Food & Dining",
+        "Food & Dining",
+        "Shopping",
+    ]
+    rules = ledger.execute(
+        "SELECT merchant_pattern FROM category_rules WHERE source = 'llm' ORDER BY merchant_pattern"
+    ).fetchall()
+    assert [row["merchant_pattern"] for row in rules] == ["amazon", "swiggy"]
+
+
+async def test_an_own_account_answer_is_a_transfer_and_saves_no_rule(ledger):
+    account = _account(ledger)
+    other = create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        institution="Slice",
+        last4="4242",
+        opening_balance_paise=0,
+        opening_balance_as_of=date(2026, 3, 31),
+        credit_limit_paise=500000,
+        statement_day=25,
+        due_day=5,
+    )
+    ledger.commit()
+    import_id, raw_account = _review_import(
+        ledger,
+        account,
+        [
+            {
+                "date": "2026-04-02",
+                "description": "UPI/DR/123456789012/SLICE CARD/self",
+                "debit": 45000,
+                "credit": 0,
+                "balance": 24522890,
+                "counterparty": "Slice Card",
+            }
+        ],
+    )
+    calls = {"n": 0}
+    counts = await categorize_import(
+        ledger,
+        import_id,
+        raw_account,
+        model=_batch_model(
+            calls,
+            [
+                {
+                    "key": "slice card",
+                    "category": "Bills & Utilities",
+                    "own_account_id": other["id"],
+                }
+            ],
+        ),
+    )
+    ledger.commit()
+
+    assert counts["transfers"] == 1
+    detail = ledger.execute(
+        "SELECT match_detail FROM statement_lines WHERE import_id = %s", (import_id,)
+    ).fetchone()["match_detail"]
+    assert detail["suggested_transfer_account_id"] == other["id"]
+    assert "suggested_category" not in detail
+    assert ledger.execute("SELECT count(*) AS n FROM category_rules").fetchone()["n"] == 0
+
+
+async def test_an_exact_rule_hit_skips_the_model(ledger):
+    account = _account(ledger)
+    category = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+    ledger.execute(
+        """
+        INSERT INTO category_rules (merchant_pattern, category_id, source)
+        VALUES ('swiggy', %s, 'user')
+        """,
+        (category["id"],),
+    )
+    import_id, raw_account = _review_import(
+        ledger,
+        account,
+        [
+            {
+                "date": "2026-04-01",
+                "description": "UPI/DR/123456789012/SWIGGY/ramesh@okaxis",
+                "debit": 45000,
+                "credit": 0,
+                "balance": 24522890,
+                "counterparty": "Swiggy",
+            }
+        ],
+    )
+
+    def explode(messages, info: AgentInfo) -> ModelResponse:
+        del messages, info
+        raise AssertionError("the model must not be called for a rule hit")
+
+    counts = await categorize_import(ledger, import_id, raw_account, model=FunctionModel(explode))
+    ledger.commit()
+
+    assert counts["rule_hits"] == 1
+    assert counts["llm_keys"] == 0
+    assert counts["llm_calls"] == 0
+    line = ledger.execute(
+        "SELECT match_detail FROM statement_lines WHERE import_id = %s", (import_id,)
+    ).fetchone()
+    assert line["match_detail"]["suggested_category"]["source"] == "rule"
+
+
+async def test_a_blocked_categorizer_still_reaches_review(ledger):
+    account = _account(ledger)
+    attachment_id = _attachment(ledger, sbi_csv())
+    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+
+    async def fake_parse(doc, context, *, account_name=None):
+        del doc, context, account_name
+        return ParseResult(status="parser_submitted", script=SBI_PARSER)
+
+    await _run_import(row["id"], parser_runner=fake_parse)
+    detail = import_payload(ledger, row["id"])
+
+    assert detail["status"] == "review"
+    assert detail["lines"] != []
+    assert all(line["suggested_category"] is None for line in detail["lines"])
+
+
+async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatch):
+    account = _account(ledger)
+    other = create_account(
+        ledger,
+        kind="bank",
+        name="Axis savings",
+        institution="Axis",
+        last4="1111",
+        opening_balance_paise=100000,
+        opening_balance_as_of=date(2026, 3, 31),
+    )
+    ledger.commit()
+    spending = system_account(ledger, "spending")
+    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
+    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+
+    import_id, raw_account = _review_import(
+        ledger,
+        account,
+        [
+            {
+                "date": "2026-04-02",
+                "description": "UPI/DR/123456789012/SBI CARD/self",
+                "debit": 45000,
+                "credit": 0,
+                "balance": 24522890,
+                "counterparty": "SBI Card",
+            },
+            {
+                "date": "2026-04-03",
+                "description": "AMAZON PAY INDIA",
+                "debit": 120000,
+                "credit": 0,
+                "balance": 24402890,
+                "counterparty": "Amazon",
+            },
+        ],
+    )
+    lines = ledger.execute(
+        "SELECT id FROM statement_lines WHERE import_id = %s ORDER BY date", (import_id,)
+    ).fetchall()
+    ledger.execute(
+        """
+        UPDATE statement_lines
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
+        WHERE id = %s
+        """,
+        (Jsonb({"suggested_transfer_account_id": other["id"]}), lines[0]["id"]),
+    )
+    ledger.execute(
+        """
+        UPDATE statement_lines
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
+        WHERE id = %s
+        """,
+        (
+            Jsonb(
+                {
+                    "suggested_category": {
+                        "category_id": str(food["id"]),
+                        "category_name": "Food & Dining",
+                        "source": "llm",
+                    }
+                }
+            ),
+            lines[1]["id"],
+        ),
+    )
+    ledger.execute(
+        "UPDATE imports SET check_result = %s WHERE id = %s",
+        (Jsonb({"status": "VERIFIED"}), import_id),
+    )
+    ledger.commit()
+
+    def no_model(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("commit must not call the model")
+
+    monkeypatch.setattr("fin_agent.importers.categorizer.Agent", no_model)
+    with pytest.raises(ConflictLedgerError, match="Confirm every payment"):
+        commit_import(ledger, import_id, categorize=True)
+
+    ledger.execute(
+        """
+        UPDATE statement_lines
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
+        WHERE id = %s
+        """,
+        (Jsonb({"transfer_confirmed": True}), lines[0]["id"]),
+    )
+    ledger.commit()
+    commit_import(ledger, import_id, categorize=True)
+
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    other_after = ledger.execute("SELECT * FROM accounts WHERE id = %s", (other["id"],)).fetchone()
+    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890 - 45000 - 120000
+    assert ledger_balance(ledger, other_after["ledger_account_id"]) == 100000 + 45000
+    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 120000
+
+    first = ledger.execute(
+        """
+        SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (lines[0]["id"],),
+    ).fetchone()
+    second = ledger.execute(
+        """
+        SELECT m.kind, m.id FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (lines[1]["id"],),
+    ).fetchone()
+    assert first["kind"] == "transfer"
+    assert second["kind"] == "expense"
+    label = ledger.execute(
+        "SELECT category_id FROM transfer_labels WHERE movement_id = %s", (second["id"],)
+    ).fetchone()
+    assert label["category_id"] == food["id"]
+
+    undo_import(ledger, import_id)
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890

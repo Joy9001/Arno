@@ -207,6 +207,39 @@ async def test_synthetic_indian_parsers_verify(payload, parser, opening, closing
     assert closing == check["computed_closing"]
 
 
+def test_normalize_accounts_keeps_a_clean_counterparty():
+    accounts, reason = normalize_accounts(
+        {
+            "accounts": [
+                {
+                    "name": "SBI savings",
+                    "rows": [
+                        {
+                            "date": "2026-04-01",
+                            "description": "UPI/DR/123456789012/SWIGGY/ramesh@okaxis",
+                            "debit": 45000,
+                            "credit": 0,
+                            "balance": 24522890,
+                            "counterparty": "  SWIGGY BANGALORE  ",
+                        },
+                        {
+                            "date": "2026-04-02",
+                            "description": "INTEREST CREDIT",
+                            "debit": 0,
+                            "credit": 100,
+                            "balance": 24522990,
+                            "counterparty": "",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+    assert reason is None
+    assert accounts[0]["rows"][0]["counterparty"] == "SWIGGY BANGALORE"
+    assert accounts[0]["rows"][1]["counterparty"] is None
+
+
 def test_derive_period_yearless_range_takes_year_from_short_token():
     from fin_agent.importers.periods import derive_period
 

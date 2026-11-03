@@ -19,7 +19,8 @@ A Python script whose last expression is one of:
                "headers": ["Date", "Narration", "Chq/Ref No", "Debit", "Credit", "Balance"],
                "rows": [{"date": "2026-04-01", "description": "UPI/...",
                          "debit": 45000, "credit": 0, "balance": 24522890,
-                         "upi_ref": "123456789012"}]}]}
+                         "upi_ref": "123456789012",
+                         "counterparty": "SWIGGY BANGALORE"}]}]}
 ```
 
 ```python
@@ -35,6 +36,10 @@ A Python script whose last expression is one of:
 - `debit` and `credit` are both non-negative. A row has one of them, never both.
 - A row may carry `balance` when the statement prints a running balance.
 - `headers` is the column-header row exactly as printed. It is the layout fingerprint.
+- `counterparty` is the payee, merchant, or person the narration names, cleaned of reference
+  numbers, UPI handles, and bank codes. Extract it in the script from the narration's own
+  structure (for example a UPI narration's name field), never type a name by hand. Use `null`
+  when the line names nobody, such as interest or a bank charge.
 - A statement with a genuinely empty month returns `empty_statement: true`, no rows, and
   opening equal to closing.
 - One script may return several accounts, each checked on its own.

@@ -50,7 +50,7 @@ class OpeningIn(ApiModel):
 
 
 class ResolveLine(ApiModel):
-    resolution: Literal["new", "ignore", "merge"]
+    resolution: Literal["new", "ignore", "merge", "confirm_transfer", "reject_transfer"]
     movement_id: str | None = None
 
 

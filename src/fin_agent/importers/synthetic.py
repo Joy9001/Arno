@@ -57,6 +57,7 @@ else:
             'debit': money(row[2]) or 0,
             'credit': money(row[3]) or 0,
             'balance': money(row[4]),
+            'counterparty': str(row[1])[:120],
         })
     result = {'accounts': [{
         'name': 'Synthetic statement',

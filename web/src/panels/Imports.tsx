@@ -14,7 +14,13 @@ function StatusBadge({ status }: { status: ImportRecord["status"] }) {
   return <span className={`badge ${tone}`}>{status.replaceAll("_", " ")}</span>;
 }
 
-function LineTable({ detail }: { detail: ImportRecord }) {
+function LineTable({
+  detail,
+  accountNames,
+}: {
+  detail: ImportRecord;
+  accountNames: Map<string, string>;
+}) {
   return (
     <div className="table-wrap">
       <table>
@@ -37,7 +43,15 @@ function LineTable({ detail }: { detail: ImportRecord }) {
                 {formatPaise(line.amount_paise)}
               </td>
               <td>{line.balance_paise === null ? "—" : formatPaise(line.balance_paise)}</td>
-              <td>{line.suggested_category?.category_name ?? "—"}</td>
+              <td>
+                {line.suggested_transfer_account_id
+                  ? `Transfer${
+                      accountNames.get(line.suggested_transfer_account_id)
+                        ? ` · ${accountNames.get(line.suggested_transfer_account_id)}`
+                        : ""
+                    }`
+                  : (line.suggested_category?.category_name ?? "—")}
+              </td>
               <td>
                 <span className={`badge ${line.match_state === "ambiguous" ? "danger" : "muted"}`}>
                   {line.match_state}
@@ -134,10 +148,85 @@ function AmbiguousRows({
   );
 }
 
+function TransferRows({
+  detail,
+  accountNames,
+  onResolved,
+}: {
+  detail: ImportRecord;
+  accountNames: Map<string, string>;
+  onResolved: (next: ImportRecord) => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pending = detail.lines.filter(
+    (line) => line.suggested_transfer_account_id && !line.transfer_confirmed,
+  );
+  if (pending.length === 0) return null;
+
+  async function resolve(lineId: string, resolution: "confirm_transfer" | "reject_transfer") {
+    setBusy(lineId);
+    setError(null);
+    try {
+      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/lines/${lineId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolution }),
+      });
+      onResolved(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="subcard">
+      <h3>Payments to your own accounts</h3>
+      <p className="muted">
+        The agent thinks these lines move money between your accounts. Confirm each one, or keep
+        it as spending.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {pending.map((line) => (
+        <div key={line.id} className="ambiguous">
+          <div>
+            <strong>{formatPaise(line.amount_paise)}</strong> on {formatDate(line.date)}
+            <p className="fine">
+              {line.description} →{" "}
+              {accountNames.get(line.suggested_transfer_account_id!) ?? "another account"}
+            </p>
+          </div>
+          <div className="row-actions">
+            <button
+              type="button"
+              disabled={busy === line.id}
+              onClick={() => void resolve(line.id, "confirm_transfer")}
+            >
+              Confirm transfer
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={busy === line.id}
+              onClick={() => void resolve(line.id, "reject_transfer")}
+            >
+              Not a transfer
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 export function ImportsPanel() {
   const list = useApi<ImportList>("/api/imports");
   const reloadList = list.reload;
   const accounts = useApi<AccountSummary>("/api/accounts");
+  const accountNames = new Map(
+    (accounts.data?.accounts ?? []).map((account) => [account.id, account.name]),
+  );
   const [selected, setSelected] = useState<ImportRecord | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [accountId, setAccountId] = useState("");
@@ -147,6 +236,9 @@ export function ImportsPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedId = useRef<string | null>(null);
+  const pendingTransfers = (selected?.lines ?? []).filter(
+    (line) => line.suggested_transfer_account_id && !line.transfer_confirmed,
+  ).length;
 
   useEffect(() => {
     selectedId.current = selected?.import_id ?? null;
@@ -443,10 +535,19 @@ export function ImportsPanel() {
                 </div>
               )}
 
-              {selected.lines.length > 0 && <LineTable detail={selected} />}
+              {selected.lines.length > 0 && (
+                <LineTable detail={selected} accountNames={accountNames} />
+              )}
 
               {selected.status === "review" && (
-                <AmbiguousRows detail={selected} onResolved={setSelected} />
+                <>
+                  <TransferRows
+                    detail={selected}
+                    accountNames={accountNames}
+                    onResolved={setSelected}
+                  />
+                  <AmbiguousRows detail={selected} onResolved={setSelected} />
+                </>
               )}
 
               {selected.review?.logged_not_on_statement &&
@@ -470,7 +571,11 @@ export function ImportsPanel() {
                   {selected.status === "review" && (
                     <button
                       type="button"
-                      disabled={busy || (selected.counts?.ambiguous ?? 0) > 0}
+                      disabled={
+                        busy ||
+                        (selected.counts?.ambiguous ?? 0) > 0 ||
+                        pendingTransfers > 0
+                      }
                       onClick={() => void act("commit")}
                     >
                       Commit import

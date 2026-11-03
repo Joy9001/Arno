@@ -480,6 +480,11 @@ Answer each when its layer arrives, not before.
     Slice support, and every real file had a text layer or was a spreadsheet.
   - **Union Bank.** Still open: no statement was provided, so its format and parser decision wait on
     one. Counts and quirks per bank are in [`import.md`](import.md#the-spike-milestone-21-in-the-plan).
+  - **Do Slice's exports carry every repayment?** No. The PDFs omit several repayments that the
+    app shows, and one is a day off. The importer treats an own-account move as a transfer only
+    after the user confirms it on the review screen, and a statement whose printed closing
+    disagrees with those confirmed moves keeps the difference as a visible adjustment rather than
+    silently counting the payment as spending.
 - **L5:** settled in code and recorded here.
   - **Resample single days or whole weeks?** Single days, with separate weekday and weekend pools.
     Weekend spend clusters survive without resampling whole weeks, and one bad week cannot repeat

@@ -240,7 +240,10 @@ export type ImportLine = {
   upi_ref: string | null;
   match_state: "new" | "certain" | "ambiguous" | "merged" | "ignored";
   movement_id: string | null;
+  counterparty: string | null;
   suggested_category: { category_id: string; category_name: string; source: string } | null;
+  suggested_transfer_account_id: string | null;
+  transfer_confirmed: boolean;
   candidates: ImportCandidate[];
 };
 

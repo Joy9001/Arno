@@ -87,25 +87,37 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
         recognized neither SBI file, and OCR wasn't needed.
   - [ ] Union Bank: open until its statements arrive.
 - [ ] **Milestone 24:** commit the 12-month backfill through the review screen, then recompute
-      baselines from the real rows.
-  - [x] SBI, November 3, 2026: 939 rows committed with `commit_import` after inspecting the review
-        payload. It showed `VERIFIED`, 939 new, and 0 ambiguous. The adjustment came out 0, the
-        ledger balance equals the printed closing, the parser was saved, and 7 baselines were
-        computed. Ran with local code while the API was stopped, not through the review screen.
-        The baselines stay provisional until the own-account fix below: "Family Transfer" holds
-        320 rows and is about 40% of the computed baseline spend.
-  - [ ] Fix own-account moves booked as spend. Commit records every debit as an expense and every
-        credit as income, and reconcile matches within one account only. Card bills and transfers
-        between your own accounts count as spending, against plan.md's "Spending means
-        consumption". Importing Slice now would count its 11 SBI bill payments twice. UPI transfers to
-        people, some possibly to your own Union Bank account, land in "Family Transfer" and count
-        as spend.
-  - [ ] Fix SBI UPI merchant extraction. Each narration became its own payee: 709 payees from 939
-        rows, so category rules almost never reuse. Categorizing took about 40 minutes, one call
-        per line, and 112 rows were left uncategorized. Also clean up the existing 709 payees and
-        their category rules, because fixing extraction won't remove them.
-  - [ ] Import Slice after the own-account fix, in period order (May 25 cycle first).
-  - [ ] Release `v0.1.2`, so the live image reads Slice's yearless period (`626e421`).
+      baselines from the real rows. The 7 baselines are computed from SBI only, so they move once
+      Slice's cycles are in. The backfill was committed with local code, not the screen.
+  - [x] SBI, November 4, 2026: re-imported from the pre-backfill snapshot with the new parser.
+        939 rows, `VERIFIED`, 0 ambiguous, 0 adjustment, balance equals the printed closing.
+        928 of the 939 lines carry a category suggestion, 349 payees and 348 rules were written
+        (down from 709/703), and 7 baselines were recomputed. The parser and layout were saved.
+        Ran with local code while the API was stopped, not through the review screen.
+  - [x] Fix own-account moves booked as spend. The parser names the counterparty; one batched
+        categorizer call per import returns a category or one of your own accounts. Commit books
+        a suggested own-account line as a transfer, not an expense. The review screen now asks you
+        to confirm every such line before commit, and commit refuses an unconfirmed one. The 11
+        SBI `slice sm / ccrepaymen` debits (May 30 to Oct 29) were confirmed against Slice's app
+        and booked as transfers. UPI transfers to people, some possibly to your own Union Bank
+        account, still land in "Family Transfer" and count as spend, because no Union Bank account
+        exists in the ledger yet.
+  - [x] Fix SBI UPI merchant extraction. The agent-written parser now emits `counterparty` from
+        the narration's own name field, and the regex guesser is gone; one batched call replaces
+        one call per line. The re-import made 349 payees from 939 rows, and 928 lines were
+        categorized in about 9 minutes, including a 120-second timeout retry. Restoring
+        `private/pre-m24.dump` removed the old 709 payees and their 703 rules. The names stay short
+        ("Swiggy L", "ZEPTONO W") because SBI truncates them in the narration; that is the file,
+        not the extractor.
+  - [ ] Import Slice after the own-account fix, in period order (May 25 cycle first). The June
+        cycle (25 May – 24 Jun) is committed: 8 rows, `VERIFIED`, closes at ₹2,023.00. July is
+        held: the PDF closes at ₹8,821.92 but Slice's app says ₹6,798.92, and the app shows two
+        repayments the PDF omits (₹200 on 27 Jun, ₹1,823 on 7 Jul). The August PDF also omits
+        ₹3,004.67 and ₹3,794.25, and Slice's transaction list dates the ₹4,969.91 repayment 9 Sep
+        where the PDF says 10 Sep. These are export gaps, so the remaining cycles wait on
+        corrected exports or manual rows, not a parser fix.
+  - [ ] Release `v0.1.2`, so the live image reads Slice's yearless period (`626e421`) and asks for
+        own-account transfer confirmation.
 
 ### Engine measures (L5), after the backfill
 

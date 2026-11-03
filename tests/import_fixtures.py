@@ -217,9 +217,18 @@ else:
     for row in rows[header_index + 1:]:
         if not row or not to_iso(row[0]):
             continue
+        counterparty = None
+        for part in str(row[1]).split('/'):
+            part = part.strip()
+            if not part or '@' in part or part.isdigit():
+                continue
+            if part.upper() in ('UPI', 'DR', 'CR', 'NEFT', 'IMPS', 'NEFT CR'):
+                continue
+            counterparty = part[:120]
+            break
         out.append({'date': to_iso(row[0]), 'description': str(row[1]),
                     'debit': money(row[3]) or 0, 'credit': money(row[4]) or 0,
-                    'balance': money(row[5])})
+                    'balance': money(row[5]), 'counterparty': counterparty})
     result = {'accounts': [{'name': 'SBI savings', 'institution': 'SBI',
                    'account_number': '50100123456789', 'opening': opening,
                    'closing': closing, 'headers': header, 'rows': out}]}
@@ -259,8 +268,18 @@ else:
             debit = money(amount[:-2]) or 0
         elif amount.lower().endswith('cr'):
             credit = money(amount[:-2]) or 0
+        counterparty = None
+        for part in str(row[1]).split('/'):
+            part = part.strip()
+            if not part or '@' in part or part.isdigit():
+                continue
+            if part.upper() in ('UPI', 'DR', 'CR', 'NEFT', 'IMPS', 'NEFT CR'):
+                continue
+            counterparty = part[:120]
+            break
         out.append({'date': to_iso(row[0]), 'description': str(row[1]),
-                    'debit': debit, 'credit': credit, 'balance': money(row[4])})
+                    'debit': debit, 'credit': credit, 'balance': money(row[4]),
+                    'counterparty': counterparty})
     result = {'accounts': [{'name': 'Union Bank', 'institution': 'Union Bank of India',
                    'opening': opening, 'closing': closing,
                    'headers': header, 'rows': out}]}
@@ -290,9 +309,12 @@ else:
         if not row or not to_iso(row[0]):
             continue
         amount = money(row[2]) or 0
-        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
+        description = str(row[1])
+        counterparty = None if 'payment received' in description.lower() else description[:120]
+        out.append({'date': to_iso(row[0]), 'description': description,
                     'debit': -amount if amount < 0 else 0,
-                    'credit': amount if amount > 0 else 0, 'balance': None})
+                    'credit': amount if amount > 0 else 0, 'balance': None,
+                    'counterparty': counterparty})
     result = {'accounts': [{'name': 'Slice card', 'institution': 'Slice',
                    'opening': None, 'closing': closing,
                    'headers': header, 'rows': out}]}

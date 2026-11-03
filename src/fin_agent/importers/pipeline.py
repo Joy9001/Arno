@@ -15,6 +15,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from fin_agent.db.conn import connect
+from fin_agent.importers.categorizer import categorize_import
 from fin_agent.importers.checks import account_check
 from fin_agent.importers.helpers import HELPER_VERSION
 from fin_agent.importers.identifiers import scrub_account_number
@@ -417,7 +418,7 @@ async def _run_import(
         manual_opening = (row.get("review") or {}).get("manual_opening_paise")
         if opening is None and manual_opening is not None:
             opening = {"paise": int(manual_opening), "as_of": None}
-        fingerprint = detect_fingerprint(doc) or None
+        fingerprint = detect_fingerprint(doc) or _account_fingerprint(account)
         layout = layout_for(conn, fingerprint)
         if layout is not None and layout["fingerprint"] != fingerprint:
             layout = None
@@ -463,6 +464,7 @@ async def _run_import(
                         fingerprint=fingerprint,
                         period=period,
                     )
+                    await categorize_import(conn, import_id, resolved)
                     touch_layout(conn, layout["id"])
                     conn.commit()
                 return
@@ -563,6 +565,15 @@ async def _run_import(
             fingerprint=fingerprint or _fingerprint_from_headers(parsed),
             period=period,
         )
+        await categorize_import(conn, import_id, resolved)
+        conn.commit()
+
+
+def _account_fingerprint(account: dict[str, Any] | None) -> str | None:
+    """A card statement has no column headers; key its layout by the card instead."""
+    if not account or not account.get("last4"):
+        return None
+    return f"{account['kind']}|{account.get('institution') or account['name']}|{account['last4']}"
 
 
 def _fingerprint_from_headers(parsed: dict[str, Any]) -> str | None:
@@ -641,7 +652,12 @@ def import_payload(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
                 "upi_ref": line["upi_ref"],
                 "match_state": line["match_state"],
                 "movement_id": line["movement_id"],
+                "counterparty": (line["match_detail"] or {}).get("counterparty"),
                 "suggested_category": (line["match_detail"] or {}).get("suggested_category"),
+                "suggested_transfer_account_id": (line["match_detail"] or {}).get(
+                    "suggested_transfer_account_id"
+                ),
+                "transfer_confirmed": bool((line["match_detail"] or {}).get("transfer_confirmed")),
                 "candidates": (line["match_detail"] or {}).get("candidates", [])
                 if line["match_state"] == "ambiguous"
                 else [],

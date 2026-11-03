@@ -48,6 +48,10 @@ def insert_lines(
         if occurrence:
             digest = content_hash(str(row["date"]), amount, f"{safe_raw or ''}#{occurrence}")
         row_id = new_id(conn, "stl")
+        detail = {"identifier_hashes": sorted(hashes)}
+        counterparty = str(row.get("counterparty") or "").strip()[:120]
+        if counterparty:
+            detail["counterparty"] = counterparty
         created = conn.execute(
             """
             INSERT INTO statement_lines
@@ -69,7 +73,7 @@ def insert_lines(
                 row.get("balance"),
                 upi_ref,
                 digest,
-                Jsonb({"identifier_hashes": sorted(hashes)}),
+                Jsonb(detail),
             ),
         ).fetchone()
         if created is not None:
@@ -127,9 +131,11 @@ def _candidates(
           AND (t.from_account_id = %s OR t.to_account_id = %s)
           AND NOT EXISTS (
               SELECT 1 FROM statement_lines sl
+              JOIN imports i ON i.id = sl.import_id
               WHERE sl.movement_id = m.id
                 AND sl.id <> %s
                 AND sl.match_state IN ('certain', 'merged')
+                AND i.account_id = %s
           )
         GROUP BY m.id, m.date, m.description, m.kind
         ORDER BY m.date, m.id
@@ -142,6 +148,7 @@ def _candidates(
             ledger_id,
             ledger_id,
             line["id"],
+            account["id"],
         ),
     ).fetchall()
     candidates: list[dict[str, Any]] = []
@@ -223,10 +230,9 @@ def reconcile(
         ]
         chosen = None
         state = "new"
-        detail: dict[str, Any] = {
-            "candidates": candidates,
-            "identifier_hashes": sorted(line_hashes),
-        }
+        detail: dict[str, Any] = dict(line.get("match_detail") or {})
+        detail["candidates"] = candidates
+        detail["identifier_hashes"] = sorted(line_hashes)
         if len(upi) == 1:
             chosen = upi[0]
             state = "certain"
@@ -273,11 +279,6 @@ def reconcile(
                 }
             )
         else:
-            from fin_agent.importers.categorizer import extract_merchant, rule_category
-
-            suggestion = rule_category(conn, extract_merchant(line["description_raw"]))
-            if suggestion:
-                detail["suggested_category"] = suggestion
             _set_match(conn, line["id"], "new", None, detail)
             counts["new"] += 1
 
@@ -323,7 +324,9 @@ def _set_match(
     conn.execute(
         """
         UPDATE statement_lines
-        SET match_state = %s, movement_id = %s, match_detail = %s, updated_at = now()
+        SET match_state = %s, movement_id = %s,
+            match_detail = coalesce(match_detail, '{}'::jsonb) || %s,
+            updated_at = now()
         WHERE id = %s
         """,
         (state, movement_id, Jsonb(detail), line_id),
@@ -411,8 +414,25 @@ def resolve_line(
         if candidate is None:
             raise ValueError("No such movement")
         _set_match(conn, line_id, "certain", movement_id, {"resolved_by": "user"})
+    elif resolution == "confirm_transfer":
+        if not (line["match_detail"] or {}).get("suggested_transfer_account_id"):
+            raise ValueError("That line is not a suggested transfer")
+        _set_match(conn, line_id, "new", None, {"transfer_confirmed": True})
+    elif resolution == "reject_transfer":
+        conn.execute(
+            """
+            UPDATE statement_lines
+            SET match_state = 'new',
+                match_detail = (coalesce(match_detail, '{}'::jsonb)
+                                - 'suggested_transfer_account_id'),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (line_id,),
+        )
+        _set_match(conn, line_id, "new", None, {"transfer_rejected": True})
     else:
-        raise ValueError("resolution is ignore, new, or merge")
+        raise ValueError("resolution is ignore, new, merge, confirm_transfer, or reject_transfer")
     conn.commit()
     return dict(conn.execute("SELECT * FROM statement_lines WHERE id = %s", (line_id,)).fetchone())
 

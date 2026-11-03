@@ -26,7 +26,9 @@ logger = logging.getLogger("fin_agent.jobs")
 Handler = Callable[[dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
 MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUTS = {
-    "import_statement": 600,
+    # A 12-month statement can spend five minutes in the parse run, then a few more
+    # in batched categorization before review.
+    "import_statement": 1200,
     "recompute_baselines": 120,
     "weekly_briefing": 180,
     "reminders": 60,

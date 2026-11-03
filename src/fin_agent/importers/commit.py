@@ -13,7 +13,6 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from fin_agent.importers.categorizer import category_for_merchant, extract_merchant
 from fin_agent.importers.layouts import save_layout
 from fin_agent.importers.pipeline import _finish_open_transaction
 from fin_agent.jobs.runner import enqueue_job
@@ -108,7 +107,7 @@ def _new_movement(
     if amount == 0:
         raise InvalidLedgerError("A statement line with no amount cannot be committed")
     description = line["description_raw"]
-    merchant = extract_merchant(description)
+    detail = line.get("match_detail") or {}
     upi_id = None
     capture = {
         "kind": "statement_line",
@@ -116,20 +115,45 @@ def _new_movement(
         "upi_ref": line.get("upi_ref"),
     }
     payee = None
-    if merchant:
-        hashes = (line.get("match_detail") or {}).get("identifier_hashes") or []
+    counterparty = detail.get("counterparty")
+    if counterparty:
+        hashes = detail.get("identifier_hashes") or []
         payee = resolve_payee(
             conn,
-            merchant,
+            counterparty,
             kind="merchant",
             upi_id=upi_id,
             match_hash=hashes[0] if hashes else None,
             outside_text=True,
         )
-    category = category_for_merchant(conn, merchant) if categorize else None
-    category_id = category["category_id"] if category else None
+    suggested = detail.get("suggested_category") or {}
+    category_id = suggested.get("category_id") if categorize else None
+
+    other_id = detail.get("suggested_transfer_account_id")
+    other = None
+    if other_id and str(other_id) != str(account["id"]):
+        other = conn.execute(
+            "SELECT id FROM accounts WHERE id = %s AND active", (other_id,)
+        ).fetchone()
+    if other is not None:
+        if amount < 0:
+            from_id, to_id = account["id"], other["id"]
+        else:
+            from_id, to_id = other["id"], account["id"]
+        transfer = movements_mod.record_transfer(
+            conn,
+            from_account_id=from_id,
+            to_account_id=to_id,
+            amount_paise=abs(amount),
+            description=description,
+            date=line["date"],
+            idempotency_key=f"stmt:{line['id']}",
+            actor="user",
+        )
+        capture_group = _capture_statement_line(conn, movement_id=str(transfer["id"]), line=line)
+        return {"id": transfer["id"], "undo_id": [transfer["undo_id"], capture_group]}
     if amount < 0:
-        return movements_mod.record_expense(
+        record = movements_mod.record_expense(
             conn,
             account_id=account["id"],
             amount_paise=-amount,
@@ -141,7 +165,8 @@ def _new_movement(
             capture=capture,
             actor="user",
         )
-    return movements_mod.record_income(
+        return {"id": record["id"], "undo_id": [record["undo_id"]]}
+    record = movements_mod.record_income(
         conn,
         account_id=account["id"],
         amount_paise=amount,
@@ -152,6 +177,7 @@ def _new_movement(
         capture=capture,
         actor="user",
     )
+    return {"id": record["id"], "undo_id": [record["undo_id"]]}
 
 
 def _account_balance_at(conn: psycopg.Connection, ledger_account_id: str, day: date) -> int:
@@ -237,6 +263,18 @@ def commit_import(
             "Resolve every ambiguous line on the review screen first.",
             details={"ambiguous": [line["id"] for line in unresolved]},
         )
+    unconfirmed = [
+        line
+        for line in lines
+        if line["match_state"] != "ignored"
+        and (line["match_detail"] or {}).get("suggested_transfer_account_id")
+        and not (line["match_detail"] or {}).get("transfer_confirmed")
+    ]
+    if unconfirmed:
+        raise ConflictLedgerError(
+            "Confirm every payment to your own account on the review screen first.",
+            details={"unconfirmed_transfers": [line["id"] for line in unconfirmed]},
+        )
     group_ids = [str(group) for group in (row["commit_groups"] or [])]
     committed_lines = 0
     for line in lines:
@@ -282,7 +320,8 @@ def commit_import(
             continue
         result = _new_movement(conn, line=line, account=account, categorize=categorize)
         movement_id = str(result["id"])
-        group_ids.append(str(result["undo_id"]))
+        group_ids.extend(str(part) for part in result["undo_id"])
+
         conn.execute(
             """
             UPDATE statement_lines

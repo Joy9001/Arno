@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import date
 
+from psycopg.types.json import Jsonb
+
 from fin_agent.importers.baselines import recompute_baselines
 from fin_agent.importers.identifiers import find_upi_ref, match_hash, scrub, scrub_account_number
-from fin_agent.importers.reconcile import insert_lines, reconcile
+from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
@@ -227,6 +229,181 @@ def test_a_keyed_identifier_hash_matches_a_logged_payee(ledger):
     assert line["match_state"] == "certain"
     assert (line["match_detail"] or {}).get("rule") == "identifier-hash"
     assert "912345678901" not in line["description_raw"]
+
+
+def test_counterparty_survives_insert_and_reconcile(ledger):
+    account = _account(ledger)
+    import_id = _import(ledger, account)
+    insert_lines(
+        ledger,
+        import_id=import_id,
+        account=account,
+        parsed_account=_parsed(
+            {
+                "date": "2026-04-01",
+                "description": "UPI/DR/123456789012/SWIGGY/ramesh@okaxis",
+                "debit": 45000,
+                "credit": 0,
+                "balance": 24522890,
+                "counterparty": "Swiggy",
+            }
+        ),
+    )
+    reconcile(
+        ledger,
+        import_id=import_id,
+        account=account,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    line = ledger.execute(
+        "SELECT * FROM statement_lines WHERE import_id = %s", (import_id,)
+    ).fetchone()
+    assert line["match_state"] == "new"
+    assert line["match_detail"]["counterparty"] == "Swiggy"
+    assert "identifier_hashes" in line["match_detail"]
+    assert "candidates" in line["match_detail"]
+
+
+def test_both_sides_of_one_transfer_match_their_own_statement(ledger):
+    bank = _account(ledger)
+    card = create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        last4="4242",
+        opening_balance_paise=0,
+        opening_balance_as_of=date(2026, 3, 31),
+        credit_limit_paise=500000,
+        statement_day=25,
+        due_day=5,
+    )
+    card_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
+    transfer = movements_mod.record_transfer(
+        ledger,
+        from_account_id=bank["id"],
+        to_account_id=card["id"],
+        amount_paise=42800,
+        description="Card payment",
+        date=date(2026, 4, 1),
+    )
+    bank_import = _import(ledger, bank)
+    insert_lines(
+        ledger,
+        import_id=bank_import,
+        account=bank,
+        parsed_account=_parsed(
+            {
+                "date": "2026-04-01",
+                "description": "UPI/DR/123456789012/SLICE CARD/self",
+                "debit": 42800,
+                "credit": 0,
+                "balance": 24525090,
+            }
+        ),
+    )
+    reconcile(
+        ledger,
+        import_id=bank_import,
+        account=bank,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    bank_line = ledger.execute(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s",
+        (bank_import,),
+    ).fetchone()
+    assert bank_line["match_state"] == "certain"
+    assert bank_line["movement_id"] == transfer["id"]
+
+    card_import = _import(ledger, card_row)
+    insert_lines(
+        ledger,
+        import_id=card_import,
+        account=card_row,
+        parsed_account=_parsed(
+            {
+                "date": "2026-04-02",
+                "description": "Repayment",
+                "debit": 0,
+                "credit": 42800,
+                "balance": None,
+            }
+        ),
+    )
+    reconcile(
+        ledger,
+        import_id=card_import,
+        account=card_row,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    card_line = ledger.execute(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s",
+        (card_import,),
+    ).fetchone()
+    assert card_line["match_state"] == "certain"
+    assert card_line["movement_id"] == transfer["id"]
+
+
+def test_a_suggested_transfer_is_confirmed_or_rejected_by_the_user(ledger):
+    account = _account(ledger)
+    card = create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        last4="4242",
+        opening_balance_paise=0,
+        opening_balance_as_of=date(2026, 3, 31),
+        credit_limit_paise=1500000,
+        statement_day=25,
+        due_day=9,
+    )
+    import_id = _import(ledger, account)
+    insert_lines(
+        ledger,
+        import_id=import_id,
+        account=account,
+        parsed_account={
+            "rows": [
+                {
+                    "date": "2026-04-01",
+                    "description": "SLICE CARD",
+                    "debit": 45000,
+                    "credit": 0,
+                    "balance": 24522890,
+                },
+                {
+                    "date": "2026-04-02",
+                    "description": "SLICE CARD",
+                    "debit": 20000,
+                    "credit": 0,
+                    "balance": 24502890,
+                },
+            ]
+        },
+    )
+    lines = ledger.execute(
+        "SELECT id FROM statement_lines WHERE import_id = %s ORDER BY date", (import_id,)
+    ).fetchall()
+    for line in lines:
+        ledger.execute(
+            "UPDATE statement_lines SET match_detail = %s WHERE id = %s",
+            (Jsonb({"suggested_transfer_account_id": card["id"]}), line["id"]),
+        )
+    ledger.commit()
+
+    confirmed = resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=lines[0]["id"],
+        resolution="confirm_transfer",
+    )
+    assert confirmed["match_detail"]["transfer_confirmed"] is True
+    rejected = resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=lines[1]["id"],
+        resolution="reject_transfer",
+    )
+    assert "suggested_transfer_account_id" not in rejected["match_detail"]
 
 
 def test_two_identical_rows_in_one_statement_are_kept(ledger):
