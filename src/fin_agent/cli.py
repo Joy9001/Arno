@@ -6,6 +6,7 @@ Admin commands never go over HTTP. Anyone with a shell on the host already has t
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import uuid
 from datetime import date
@@ -33,6 +34,7 @@ from fin_agent.config import REPO_ROOT, ConfigurationError, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
+from fin_agent.db.pre_migration import dump_before_migrating
 from fin_agent.demo.persona import seed_demo
 from fin_agent.demo.template import clone_database
 from fin_agent.ledger import export as ledger_export
@@ -74,6 +76,7 @@ def migrate() -> None:
     settings = _settings()
     conn = connect(settings.database_url)
     try:
+        dump_before_migrating(conn, settings)
         applied = run_migrations(conn)
         set_agent_ro_password(conn, settings.agent_ro_password)
         set_backup_password(conn, settings.backup_password)
@@ -97,6 +100,9 @@ def serve(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    from fin_agent.logging_utils import install as install_log_sanitizer
+
+    install_log_sanitizer()
     uvicorn.run(
         "fin_agent.api.app:create_app",
         factory=True,
@@ -451,6 +457,80 @@ def export_command(
     else:
         out.write_bytes(data) if isinstance(data, bytes) else out.write_text(data, encoding="utf-8")
         typer.echo(f"wrote {out}")
+
+
+@app.command("restore")
+def restore_command(
+    target: str | None = typer.Option(
+        None,
+        "--target",
+        envvar="RESTORE_DATABASE_URL",
+        help="Fresh database URL to restore into. Defaults to DATABASE_URL.",
+    ),
+    from_dir: Path | None = typer.Option(  # noqa: B008
+        None,
+        "--from-dir",
+        help="A directory already extracted from a restic snapshot.",
+    ),
+    repository: str | None = typer.Option(
+        None, "--repository", envvar="RESTIC_REPOSITORY", help="The restic repository."
+    ),
+    snapshot: str = typer.Option("latest", help="Snapshot ID or `latest`."),
+    force: bool = typer.Option(
+        False, "--force", help="Replace the target database if it already has tables."
+    ),
+    allow_no_manifest: bool = typer.Option(
+        False,
+        "--allow-no-manifest",
+        help="Accept a dump without backup_manifest.json (manual pg_dump restores only).",
+    ),
+) -> None:
+    """Restore a backup and verify every table, then the ledger's balances.
+
+    With `--repository`, restic is used directly. With `--from-dir`, point at files extracted by
+    `restic restore`. The restic password always comes from RESTIC_PASSWORD.
+    """
+    from fin_agent.backup_restore import RestoreError, restore_from_directory, restore_from_restic
+
+    settings = _settings()
+    target_dsn = target or settings.database_url
+    try:
+        if from_dir is not None:
+            report = restore_from_directory(
+                from_dir,
+                target_dsn,
+                force=force,
+                require_manifest=not allow_no_manifest,
+            )
+        else:
+            if not repository:
+                typer.echo(
+                    "error: pass --repository, set RESTIC_REPOSITORY, or use --from-dir",
+                    err=True,
+                )
+                raise typer.Exit(code=2)
+            report = restore_from_restic(
+                repository=repository,
+                password=os.environ.get("RESTIC_PASSWORD", ""),
+                target_dsn=target_dsn,
+                snapshot=snapshot,
+                force=force,
+                require_manifest=not allow_no_manifest,
+            )
+    except RestoreError as exc:
+        typer.echo(f"restore failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = report.as_dict()
+    typer.echo(
+        f"restored {payload['dump']} from {payload['snapshot']} into {payload['restored_database']}"
+    )
+    for name, passed in report.checks.items():
+        typer.echo(f"  {'ok' if passed else 'FAIL'}  {name}")
+    for mismatch in report.mismatches:
+        typer.echo(f"  mismatch: {mismatch}", err=True)
+    typer.echo("restore verified" if report.ok else "restore verification FAILED")
+    if not report.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("import-spike")

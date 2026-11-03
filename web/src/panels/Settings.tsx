@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, errorMessage } from "../api";
+import { ensureFreshPasskey } from "../auth";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
 import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
@@ -383,6 +384,7 @@ export function SettingsPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   const displayName = displayNameDraft ?? settings.data?.profile.display_name ?? "";
   const floor =
@@ -455,6 +457,29 @@ export function SettingsPanel() {
       tree.reload();
     } catch (caught) {
       setError(errorMessage(caught));
+    }
+  }
+
+  async function downloadExport(path: string, filename: string) {
+    setDownloading(true);
+    setError(null);
+    try {
+      await ensureFreshPasskey();
+      const response = await fetch(path, { credentials: "same-origin" });
+      if (!response.ok) {
+        const problem = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(problem?.detail ?? `Download failed (${response.status})`);
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setDownloading(false);
     }
   }
 
@@ -684,18 +709,33 @@ export function SettingsPanel() {
           <h3>Export</h3>
           <p className="muted">
             A full JSON export, one CSV per table in a ZIP, and a plain `pg_dump`. The dump is the
-            complete database, not a report.
+            complete database, not a report. Each download asks for your passkey first.
           </p>
           <div className="button-row">
-            <a className="button" href="/api/export/json" download>
+            <button
+              type="button"
+              className="button"
+              disabled={downloading}
+              onClick={() => void downloadExport("/api/export/json", "fin-agent-export.json")}
+            >
               Download JSON
-            </a>
-            <a className="button" href="/api/export/csv" download>
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={downloading}
+              onClick={() => void downloadExport("/api/export/csv", "fin-agent-export.zip")}
+            >
               Download CSV ZIP
-            </a>
-            <a className="button" href="/api/export/pg_dump" download>
+            </button>
+            <button
+              type="button"
+              className="button"
+              disabled={downloading}
+              onClick={() => void downloadExport("/api/export/pg_dump", "fin-agent-export.sql")}
+            >
               Download pg_dump
-            </a>
+            </button>
           </div>
           <p className="fine">
             The backup sidecar is separate: it dumps, encrypts with restic, and ships off-site. This

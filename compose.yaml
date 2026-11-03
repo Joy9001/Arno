@@ -1,9 +1,16 @@
 name: fin-agent
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:18.6
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -14,7 +21,7 @@ services:
       - db-data:/var/lib/postgresql
     # Published on loopback for development (tests, psql). Not reachable from the tailnet.
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:${FIN_AGENT_DB_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d fin_agent"]
       interval: 5s
@@ -24,20 +31,28 @@ services:
 
   api:
     build: .
-    image: fin-agent-api:local
+    image: ghcr.io/joy9001/fin-agent:${FIN_AGENT_VERSION:-0.1.0}
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       # Optional: Compose still requires POSTGRES_PASSWORD, so a missing .env fails loudly.
-      - path: .env
+      - path: ${FIN_AGENT_ENV_FILE:-.env}
         required: false
     environment:
       # Inside Compose the database is `db`, not the loopback address in .env.
       DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD}@db:5432/fin_agent
       FIN_AGENT_WEB_DIR: /app/web/dist
       FIN_AGENT_AUTO_MIGRATE: "1"
+      FIN_AGENT_PRE_MIGRATION_DIR: /app/pre-migration
+    volumes:
+      # A dump from before each migration. The image creates this path owned by the API user.
+      - pre-migration-data:/app/pre-migration
+      # Read-only access to the default restic repository so `fin-agent restore` works with the
+      # local volume. Off-site repositories are read through restic directly.
+      - backup-data:/backups:ro
     ports:
       # Loopback only. `tailscale serve --bg` proxies HTTPS on the tailnet to this port.
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${FIN_AGENT_API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -59,10 +74,11 @@ services:
     build:
       context: .
       dockerfile: backup/Dockerfile
-    image: fin-agent-backup:local
+    image: ghcr.io/joy9001/fin-agent-backup:${FIN_AGENT_VERSION:-0.1.0}
     restart: unless-stopped
+    logging: *default-logging
     env_file:
-      - path: .env
+      - path: ${FIN_AGENT_ENV_FILE:-.env}
         required: false
     environment:
       # Its own role: SELECT for pg_dump, INSERT into backup_runs only.
@@ -86,6 +102,7 @@ services:
     image: ollama/ollama:0.12.6
     profiles: ["local-llm"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       # Must match LLM_CONTEXT_WINDOW; otherwise Ollama truncates long histories silently.
       OLLAMA_CONTEXT_LENGTH: ${LLM_CONTEXT_WINDOW:-128000}
@@ -100,6 +117,7 @@ services:
     image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
     profiles: ["local-stt"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       ENABLE_UI: "false"
       WHISPER__INFERENCE_DEVICE: cpu
@@ -115,8 +133,9 @@ services:
     image: postgres:18.6
     profiles: ["traces"]
     restart: "no"
+    logging: *default-logging
     env_file:
-      - path: .env
+      - path: ${FIN_AGENT_ENV_FILE:-.env}
         required: false
     environment:
       PGHOST: db
@@ -146,6 +165,7 @@ services:
     image: arizephoenix/phoenix:21.0
     profiles: ["traces"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-phoenix-local-only}@db:5432/phoenix
       PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
@@ -165,6 +185,7 @@ services:
 volumes:
   db-data:
   backup-data:
+  pre-migration-data:
   ollama-data:
   speaches-data:
   phoenix-data:

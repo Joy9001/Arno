@@ -1,0 +1,403 @@
+"""The milestone 37 restore drill: restic repository + password -> a verified database.
+
+The backup sidecar writes two files into every snapshot: the `pg_dump` and
+`backup_manifest.json`, a row count and content hash for every table. Restoring into a fresh
+database and recomputing the same manifest proves the ledger, balances, schedules, goals,
+preferences, conversations, attachments, and audit history all came back.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import psycopg
+from psycopg import sql
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.rows import dict_row
+
+from fin_agent.db.conn import connect
+
+MANIFEST_NAME = "backup_manifest.json"
+DUMP_NAMES = ("fin_agent.dump", "fin_agent.sql")
+
+REQUIRED_TABLES = {
+    "accounts",
+    "movements",
+    "pgledger_accounts",
+    "pgledger_entries",
+    "pgledger_transfers",
+    "schedules",
+    "goals",
+    "preferences",
+    "conversations",
+    "messages",
+    "attachments",
+    "audit_log",
+    "schema_version",
+}
+
+
+class RestoreError(RuntimeError):
+    """The restore could not run, or the restored database failed verification."""
+
+
+@dataclass
+class RestoreReport:
+    snapshot: str
+    dump: Path
+    manifest: dict[str, Any] | None
+    checks: dict[str, bool] = field(default_factory=dict)
+    mismatches: list[str] = field(default_factory=list)
+    restored_database: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.checks) and all(self.checks.values()) and not self.mismatches
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "snapshot": self.snapshot,
+            "dump": str(self.dump),
+            "restored_database": self.restored_database,
+            "manifest_present": self.manifest is not None,
+            "checks": self.checks,
+            "mismatches": self.mismatches,
+        }
+
+
+def build_manifest(conn: psycopg.Connection) -> dict[str, Any]:
+    row = conn.execute("SELECT fin_agent_backup_manifest() AS manifest").fetchone()
+    return dict(row["manifest"])
+
+
+def _binary(env_name: str, name: str) -> str:
+    executable = os.environ.get(env_name) or shutil.which(name)
+    if executable is None:
+        raise RestoreError(
+            f"{name} is not installed. Run the drill where restic and the PostgreSQL 18 client "
+            "are available, or restore the snapshot to a directory and pass --from-dir."
+        )
+    return executable
+
+
+def _restic(repository: str, password: str) -> tuple[str, dict[str, str]]:
+    return _binary("RESTIC", "restic"), os.environ | {
+        "RESTIC_REPOSITORY": repository,
+        "RESTIC_PASSWORD": password,
+    }
+
+
+def extract_snapshot(
+    repository: str,
+    password: str,
+    target: Path,
+    *,
+    snapshot: str = "latest",
+) -> Path:
+    """Dump the dump and manifest out of one snapshot into `target`.
+
+    `restic dump` is used rather than a full tree restore: on Windows a full restore tries to set
+    timestamps on directories it creates outside the target, which fails. The two files are all the
+    drill needs.
+    """
+    restic, env = _restic(repository, password)
+    target.mkdir(parents=True, exist_ok=True)
+    listing = subprocess.run(
+        [restic, "ls", "--no-lock", "--json", snapshot],
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    if listing.returncode != 0:
+        raise RestoreError(
+            "restic ls failed: " + listing.stderr.decode("utf-8", "replace").strip()[-1000:]
+        )
+    wanted = {*DUMP_NAMES, MANIFEST_NAME}
+    found = False
+    for line in listing.stdout.decode("utf-8", "replace").splitlines():
+        try:
+            node = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if node.get("struct_type") != "node" or node.get("type") != "file":
+            continue
+        if node.get("name") not in wanted:
+            continue
+        extracted = subprocess.run(
+            [restic, "dump", "--no-lock", snapshot, node["path"]],
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        if extracted.returncode != 0:
+            raise RestoreError(
+                "restic dump failed: " + extracted.stderr.decode("utf-8", "replace").strip()[-1000:]
+            )
+        (target / node["name"]).write_bytes(extracted.stdout)
+        found = True
+    if not found:
+        raise RestoreError(f"Snapshot {snapshot} has no Fin-Agent dump or manifest.")
+    return target
+
+
+def find_backup_files(root: Path) -> tuple[Path, Path | None]:
+    dumps = [path for path in root.rglob("*") if path.is_file() and path.name in DUMP_NAMES]
+    if not dumps:
+        dumps = [path for path in root.rglob("*.dump") if path.is_file()]
+    if not dumps:
+        raise RestoreError(f"No pg_dump file found under {root}")
+    manifests = [path for path in root.rglob(MANIFEST_NAME) if path.is_file()]
+    return dumps[0], manifests[0] if manifests else None
+
+
+def _admin_dsn(target_dsn: str) -> tuple[str, dict[str, Any]]:
+    info = conninfo_to_dict(target_dsn)
+    name = str(info.get("dbname", ""))
+    if not name:
+        raise RestoreError("The target database URL needs a database name.")
+    admin = make_conninfo(**{**info, "dbname": "postgres"})
+    return admin, info
+
+
+def _database_has_tables(target_dsn: str) -> bool:
+    try:
+        with psycopg.connect(target_dsn, row_factory=dict_row) as conn:
+            row = conn.execute(
+                """
+                SELECT count(*) AS n FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                """
+            ).fetchone()
+            return bool(row["n"])
+    except psycopg.OperationalError:
+        return False
+
+
+def prepare_database(target_dsn: str, *, force: bool = False) -> str:
+    """Create the target, or replace it only when it is empty or `force` is set."""
+    admin, info = _admin_dsn(target_dsn)
+    name = str(info["dbname"])
+    with psycopg.connect(admin, autocommit=True) as conn:
+        exists = (
+            conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
+            is not None
+        )
+        if exists:
+            if _database_has_tables(target_dsn) and not force:
+                raise RestoreError(
+                    f"Database {name!r} already has tables. Pass --force to replace it, or choose "
+                    "a fresh database."
+                )
+            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    return name
+
+
+def _restore_dump(dump: Path, target_dsn: str) -> None:
+    env = os.environ.copy()
+    info = conninfo_to_dict(target_dsn)
+    for source, target in (
+        ("host", "PGHOST"),
+        ("port", "PGPORT"),
+        ("user", "PGUSER"),
+        ("password", "PGPASSWORD"),
+        ("dbname", "PGDATABASE"),
+        ("sslmode", "PGSSLMODE"),
+    ):
+        if source in info:
+            env[target] = str(info[source])
+
+    dbname = str(info.get("dbname", ""))
+    if dump.suffix == ".sql":
+        executable = _binary("PSQL", "psql")
+        command = [executable, "-v", "ON_ERROR_STOP=1", "-d", dbname, "-f", str(dump)]
+    else:
+        executable = _binary("PG_RESTORE", "pg_restore")
+        command = [
+            executable,
+            "--no-owner",
+            "--no-privileges",
+            "-d",
+            dbname,
+            str(dump),
+        ]
+    result = subprocess.run(command, capture_output=True, env=env, check=False)
+    if result.returncode != 0:
+        raise RestoreError(
+            f"{Path(executable).name} failed: "
+            + result.stderr.decode("utf-8", "replace").strip()[-2000:]
+        )
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_database(
+    conn: psycopg.Connection,
+    *,
+    manifest: dict[str, Any] | None,
+    dump_sha256: str | None,
+    require_manifest: bool = True,
+) -> tuple[dict[str, bool], list[str]]:
+    checks: dict[str, bool] = {}
+    mismatches: list[str] = []
+
+    tables = conn.execute(
+        """
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        """
+    ).fetchall()
+    present = {str(row["table_name"]) for row in tables}
+    checks["required_tables"] = REQUIRED_TABLES <= present
+
+    version = conn.execute("SELECT coalesce(max(version), 0) AS v FROM schema_version").fetchone()
+    checks["schema_version"] = int(version["v"]) > 0
+
+    unbalanced = conn.execute(
+        """
+        SELECT count(*) AS n FROM (
+            SELECT e.transfer_id
+            FROM pgledger_entries e
+            GROUP BY e.transfer_id
+            HAVING sum(e.amount) <> 0
+        ) AS bad
+        """
+    ).fetchone()["n"]
+    checks["ledger_transfers_balance"] = unbalanced == 0
+
+    drifted = conn.execute(
+        """
+        SELECT count(*) AS n FROM (
+            SELECT a.id
+            FROM pgledger_accounts a
+            LEFT JOIN (
+                SELECT account_id, sum(amount) AS total FROM pgledger_entries GROUP BY account_id
+            ) e ON e.account_id = a.id
+            WHERE coalesce(e.total, 0) <> a.balance
+        ) AS bad
+        """
+    ).fetchone()["n"]
+    checks["account_balances_match_entries"] = drifted == 0
+
+    if manifest is None:
+        checks["manifest_present"] = not require_manifest
+        checks["manifest_matches"] = not require_manifest
+        if require_manifest:
+            mismatches.append(
+                "No backup_manifest.json in the snapshot; content could not be compared."
+            )
+        return checks, mismatches
+
+    checks["manifest_matches"] = True
+    if dump_sha256 and manifest.get("dump_sha256") and manifest["dump_sha256"] != dump_sha256:
+        checks["manifest_matches"] = False
+        mismatches.append("The dump's SHA-256 does not match the manifest.")
+
+    actual = build_manifest(conn)
+    expected_tables = manifest.get("tables") or {}
+    actual_tables = actual.get("tables") or {}
+    for table in sorted(set(expected_tables) | set(actual_tables)):
+        expected = expected_tables.get(table)
+        found = actual_tables.get(table)
+        if expected is None:
+            checks["manifest_matches"] = False
+            mismatches.append(f"{table}: present after restore but missing from the manifest")
+        elif found is None:
+            checks["manifest_matches"] = False
+            mismatches.append(f"{table}: in the manifest but missing after restore")
+        elif expected != found:
+            checks["manifest_matches"] = False
+            mismatches.append(
+                f"{table}: manifest {expected.get('rows')} rows/{expected.get('md5')}, "
+                f"restored {found.get('rows')} rows/{found.get('md5')}"
+            )
+    return checks, mismatches
+
+
+def restore_from_directory(
+    directory: Path,
+    target_dsn: str,
+    *,
+    force: bool = False,
+    require_manifest: bool = True,
+    snapshot_name: str = "local",
+) -> RestoreReport:
+    dump, manifest_path = find_backup_files(directory)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path else None
+    if manifest is not None and manifest.get("format") != "fin-agent-backup-manifest":
+        raise RestoreError(f"{manifest_path} is not a Fin-Agent backup manifest.")
+    dump_hash = _sha256(dump)
+
+    name = prepare_database(target_dsn, force=force)
+    _restore_dump(dump, target_dsn)
+    with connect(target_dsn) as conn:
+        checks, mismatches = verify_database(
+            conn,
+            manifest=manifest,
+            dump_sha256=dump_hash,
+            require_manifest=require_manifest,
+        )
+    report = RestoreReport(
+        snapshot=snapshot_name,
+        dump=dump,
+        manifest=manifest,
+        checks=checks,
+        mismatches=mismatches,
+        restored_database=name,
+    )
+    if not report.ok:
+        raise RestoreError(
+            "Restore verification failed: " + "; ".join(mismatches or ["a check did not pass"])
+        )
+    return report
+
+
+def restore_from_restic(
+    *,
+    repository: str,
+    password: str,
+    target_dsn: str,
+    snapshot: str = "latest",
+    force: bool = False,
+    require_manifest: bool = True,
+    keep_directory: Path | None = None,
+) -> RestoreReport:
+    if not password:
+        raise RestoreError(
+            "RESTIC_PASSWORD is not set; the off-site copies are unreadable without it."
+        )
+    if keep_directory is not None:
+        directory = extract_snapshot(repository, password, keep_directory, snapshot=snapshot)
+        return restore_from_directory(
+            directory,
+            target_dsn,
+            force=force,
+            require_manifest=require_manifest,
+            snapshot_name=snapshot,
+        )
+    with tempfile.TemporaryDirectory(
+        prefix="fin-agent-restore-", ignore_cleanup_errors=True
+    ) as tmp:
+        directory = extract_snapshot(repository, password, Path(tmp), snapshot=snapshot)
+        return restore_from_directory(
+            directory,
+            target_dsn,
+            force=force,
+            require_manifest=require_manifest,
+            snapshot_name=snapshot,
+        )

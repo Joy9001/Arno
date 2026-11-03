@@ -25,7 +25,15 @@ def _token_from_link(link: str) -> str:
     return link.split("#t=", 1)[1]
 
 
+def _mark_fresh(client: TestClient) -> None:
+    """Simulate the fresh passkey check these tests are not exercising."""
+    with psycopg.connect(client.app.state.settings.database_url) as conn:
+        conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
+        conn.commit()
+
+
 def _create_enrollment(client: TestClient) -> dict:
+    _mark_fresh(client)
     response = client.post("/api/auth/enrollments")
     assert response.status_code == 200, response.text
     return response.json()
@@ -210,6 +218,7 @@ def test_add_device_token_cannot_do_first_run_setup(client, app, setup_token, se
 def test_deleting_the_last_passkey_is_refused(client, app, setup_token, settings):
     first = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, first).status_code == 200
+    _mark_fresh(client)
 
     passkeys = _passkeys(client)
     assert len(passkeys) == 1
@@ -235,6 +244,7 @@ def test_deleting_the_last_passkey_is_refused(client, app, setup_token, settings
 def test_passkeys_can_be_listed_and_renamed(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    _mark_fresh(client)
 
     passkey = _passkeys(client)[0]
     renamed = client.patch(

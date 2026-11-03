@@ -843,9 +843,11 @@ noted.
 | `PromptInjectionDefender`, pattern tier | Results in [Options not taken](#options-not-taken) |
 
 **Not tested:** how often a real model gets fooled (the fooled rate, [step 9](#step-9-evals-and-observability)),
-the content security policy, `mark()`'s cap and character stripping (not built yet), the defender's ML
-tier, and `dispatch_request` over real HTTP, because the tests drove `run_stream`.
-[Step 8](#a-turn-outlives-its-connection) then replaced `dispatch_request`. No real LLM was involved.
+`mark()`'s cap and character stripping as a runtime property, the defender's ML tier, and
+`dispatch_request` over real HTTP, because the tests drove `run_stream`. The content security
+policy and headers are now tested in [step 10](#the-interface-tests-november-1-2026) and the L8
+suite. [Step 8](#a-turn-outlives-its-connection) then replaced `dispatch_request`. No real LLM was
+involved.
 
 ---
 
@@ -1328,7 +1330,8 @@ The test found four things the build must handle:
 - **Cross-site requests:** `SameSite=Strict` cookies, one origin, and Starlette's `TrustedHost` for the
   tailnet name.
 - **No rate limits:** there's one user behind passkeys, one running turn per thread, and spend ceilings.
-  The only cap is 25 MB on uploads.
+  The only cap is 25 MB on uploads. Export and passkey changes need a fresh passkey check within
+  five minutes.
 - **CLI:** a named, revocable token created on the host. Admin commands never go over HTTP. Export and
   passkey changes need a fresh passkey check.
 
@@ -1406,7 +1409,9 @@ and a scripted model. The code is [saved](../research/design-probes/README.md).
 
 **Not tested:** shadcn's patterns on Vite; the service worker, share target, and push under this policy;
 passkeys, Tailscale, Docker, and Linux; a real phone and a real LLM; `dump_messages` output after
-compaction; and the 25 MB cap, `TrustedHost`, and pre-migration dump, which aren't built yet.
+compaction. The 25 MB cap, `TrustedHost`, the pre-migration dump, and the fresh-passkey wall are
+built and tested; the live Tailscale and Docker checks remain environment checks, and the clean-room
+install is recorded separately.
 
 ---
 

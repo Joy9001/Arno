@@ -214,7 +214,11 @@ def demo_ledger(db):
 
 @pytest.fixture
 def authed_client(client, setup_token, settings):
-    """A TestClient with a registered passkey and an active session cookie."""
+    """A TestClient with a registered passkey, a session, and a fresh passkey check.
+
+    The L8 step-up wall is tested separately in `test_l8_ship.py`; most tests are about ledger
+    behavior, so this fixture marks the session as freshly reverified.
+    """
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     begin = client.post("/api/auth/setup/begin", json={"token": setup_token})
     assert begin.status_code == 200, begin.text
@@ -224,4 +228,6 @@ def authed_client(client, setup_token, settings):
         json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
     )
     assert verified.status_code == 200, verified.text
+    with psycopg.connect(_dsn(), autocommit=True) as conn:
+        conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
     return client

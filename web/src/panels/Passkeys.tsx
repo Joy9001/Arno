@@ -1,7 +1,7 @@
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { errorMessage } from "../api";
-import { createEnrollment, deletePasskey, listPasskeys, renamePasskey } from "../auth";
+import { createEnrollment, deletePasskey, ensureFreshPasskey, listPasskeys, renamePasskey } from "../auth";
 import { formatMoment } from "../format";
 import type { Enrollment, Passkey } from "../types";
 
@@ -57,6 +57,7 @@ export function PasskeysCard() {
     setBusy(true);
     setError(null);
     try {
+      await ensureFreshPasskey();
       setEnrollment(await createEnrollment());
       setNow(Date.now());
     } catch (caught) {
@@ -81,6 +82,7 @@ export function PasskeysCard() {
     const name = (drafts[passkey.id] ?? passkey.name).trim();
     if (!name || name === passkey.name) return;
     try {
+      await ensureFreshPasskey();
       await renamePasskey(passkey.id, name);
       setDrafts((current) => {
         const next = { ...current };
@@ -98,6 +100,7 @@ export function PasskeysCard() {
       return;
     }
     try {
+      await ensureFreshPasskey();
       await deletePasskey(passkey.id);
       await refresh();
     } catch (caught) {

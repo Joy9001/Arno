@@ -49,7 +49,7 @@ def session_from_token(conn: psycopg.Connection, token: str) -> dict[str, Any] |
         return None
     row = conn.execute(
         """
-        SELECT s.id AS session_id, s.expires_at, u.id AS user_id, u.display_name
+        SELECT s.id AS session_id, s.expires_at, s.reverified_at, u.id AS user_id, u.display_name
         FROM sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token_hash = %s
@@ -77,6 +77,23 @@ def revoke_session(conn: psycopg.Connection, token: str) -> None:
             "UPDATE sessions SET revoked_at = now() WHERE token_hash = %s AND revoked_at IS NULL",
             (hash_token(token),),
         )
+
+
+def mark_reverified(conn: psycopg.Connection, session_id: str) -> None:
+    """Record a fresh passkey check for this session. Export and passkey changes read it."""
+    with conn.transaction():
+        conn.execute("UPDATE sessions SET reverified_at = now() WHERE id = %s", (session_id,))
+
+
+REVERIFY_TTL_MINUTES = 5
+
+
+def is_fresh(session: dict[str, Any]) -> bool:
+    value = session.get("reverified_at")
+    if value is None:
+        return False
+    age = datetime.now(UTC) - value
+    return timedelta(0) <= age <= timedelta(minutes=REVERIFY_TTL_MINUTES)
 
 
 def revoke_all_sessions(conn: psycopg.Connection, user_id: str | None = None) -> int:

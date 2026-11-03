@@ -128,3 +128,11 @@ def run_migrations(conn: psycopg.Connection, directory: Path = MIGRATIONS_DIR) -
             )
         newly_applied.append(migration.version)
     return newly_applied
+
+
+def pending(conn: psycopg.Connection, directory: Path = MIGRATIONS_DIR) -> list[Migration]:
+    """Return the migrations this database has not applied yet, without applying anything."""
+    conn.execute(SCHEMA_VERSION_DDL)
+    conn.commit()
+    recorded = {int(row["version"]) for row in applied(conn)}
+    return [migration for migration in discover(directory) if migration.version not in recorded]

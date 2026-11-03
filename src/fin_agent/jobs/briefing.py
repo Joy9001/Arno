@@ -260,7 +260,9 @@ async def send_weekly_briefing(
         body = await write_prose(numbers, model=model)
     except Exception as exc:  # noqa: BLE001 - the numbers still go out
         prose_error = type(exc).__name__
-        logger.info("weekly briefing prose failed (%s); using the template", prose_error)
+        logger.info(
+            "weekly briefing prose failed (%s); using the template", type(prose_error).__name__
+        )
         conn.execute(
             """
             UPDATE settings

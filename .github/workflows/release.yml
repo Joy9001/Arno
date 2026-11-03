@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches pyproject
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          test "v$VERSION" = "${GITHUB_REF_NAME}" || {
+            echo "Tag ${GITHUB_REF_NAME} does not match pyproject version ${VERSION}" >&2
+            exit 1
+          }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/joy9001/fin-agent:${{ env.VERSION }}
+            ghcr.io/joy9001/fin-agent:${{ github.ref_name }}
+
+      - name: Build and push the backup image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backup/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/joy9001/fin-agent-backup:${{ env.VERSION }}
+            ghcr.io/joy9001/fin-agent-backup:${{ github.ref_name }}

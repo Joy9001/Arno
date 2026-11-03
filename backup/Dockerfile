@@ -5,7 +5,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backup/backup.sh /usr/local/bin/fin-agent-backup
-COPY THIRD_PARTY_NOTICES.md /usr/share/doc/fin-agent/THIRD_PARTY_NOTICES.md
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/fin-agent/
 RUN chmod +x /usr/local/bin/fin-agent-backup
 
 ENTRYPOINT ["/usr/local/bin/fin-agent-backup"]

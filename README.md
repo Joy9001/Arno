@@ -3,16 +3,18 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L7 (capture) is complete.** L0-L6 are unchanged. Push-to-talk records in the chat
-> composer, saves the audio, calls the OpenAI-compatible `STT_*` endpoint, and sends the transcript
-> down the normal chat path; a failed call leaves a retry card. A receipt or UPI screenshot is saved
-> first, read by an isolated tool-less `VISION_*` call into five capped fields, logged at once with
-> its `upi_ref`, and shown as an image-beside-fields undo card. The server, not the client, appends
-> the marked text to `model_history` and sets `outside_text_at`. The PWA is an Android share target,
-> and `--profile local-stt` starts `speaches`. The Hinglish STT comparison and the payee-prompt
-> measurement remain open in [plan §6](docs/fin-agent/plan.md#6-open-questions). The authoritative
-> plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs
-> in [`docs/archive/`](docs/archive/) are not authoritative.
+> **Status: L8 (ship) is built; milestones 40 and 41 are the human gates still open.** L0-L7 are
+> unchanged. L8 adds the restic restore drill (`fin-agent restore`), the security and
+> permissive-license pass with dependency auditing in CI, the MIT `LICENSE`, versioned images, a
+> pre-migration `pg_dump`, 10 MB log rotation, and the self-hoster
+> [install and operations guide](docs/fin-agent/self-hosting.md). The code build is complete, but
+> "shipped" in [`plan.md`](docs/fin-agent/plan.md#what-shipped-means) still needs someone else to
+> install it from the docs alone (milestone 40) and four weeks of daily use without a spreadsheet
+> (milestone 41). The authoritative plan is
+> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
+> [`docs/archive/`](docs/archive/) are not authoritative.
+>
+> License: **MIT** ([`LICENSE`](LICENSE)).
 
 ## Built on
 
@@ -30,17 +32,25 @@ question about it — including whether you can afford something, and what it wo
   `olefile` (BSD-2-Clause). `python-multipart` (Apache-2.0) parses the upload form. Full choices
   are in [plan §3](docs/fin-agent/plan.md#3-stack).
 
+Fin-Agent itself is MIT licensed. Every shipped dependency's license is audited in CI; no GPL,
+AGPL, SSPL, or Elastic code is in the image. Weak-copyleft libraries are used unmodified and named
+in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
 ## Run it
 
 Requirements: Docker with Compose, and a host that is already on your Tailscale network for
-remote access.
+remote access. Host disk encryption (BitLocker, LUKS, or FileVault) is required: it is what protects
+the database at rest. The full walkthrough, including model configuration, privacy tables, restore,
+and Postgres major upgrades, is in
+[`docs/fin-agent/self-hosting.md`](docs/fin-agent/self-hosting.md).
 
 ```bash
 cp .env.example .env
-# Set POSTGRES_PASSWORD and AGENT_RO_PASSWORD, then either:
+# Set POSTGRES_PASSWORD, AGENT_RO_PASSWORD, BACKUP_PASSWORD, and RESTIC_PASSWORD, then either:
 #   - keep FIN_AGENT_RP_ID=localhost for local use, or
 #   - set FIN_AGENT_RP_ID and FIN_AGENT_RP_ORIGIN to your machine's tailnet name.
 docker compose up -d --build
+# Or pull the pinned release image: docker compose pull && docker compose up -d
 # Local models: docker compose --profile local-llm up -d
 # Local STT:    docker compose --profile local-stt up -d
 # Traces:       docker compose --profile traces up -d  (set PHOENIX_COLLECTOR_ENDPOINT)
@@ -95,6 +105,8 @@ fin-agent eval --model X --dry-run   # list the selected cases without spending
 fin-agent eval --model X --category injection --repeat 3
 fin-agent backtest             # project() as of each month, 30 days ahead; publishes in this README
 fin-agent hackerrank           # score the local HackerRank sample set; never commits the data
+fin-agent restore              # restore the newest restic snapshot and verify every table
+fin-agent restore --from-dir /restore --allow-no-manifest   # a manual pg_dump restore
 ```
 
 Admin commands run on the host, never over HTTP. A passkey reset needs a shell on the host, which
@@ -103,12 +115,27 @@ already has the data.
 ## Backups
 
 Compose starts a `backup` sidecar with its own `backup` database role. It checks hourly and runs
-`pg_dump` whenever the last success is over 24 hours old, then `restic` encrypts and ships the
-dump to `RESTIC_REPOSITORY`. Each attempt is recorded in `backup_runs`, which the Settings panel
-shows. The default repository is the local `backup-data` volume; set an S3/B2/R2 or rclone
-repository to go off-site. `RESTIC_PASSWORD` is the one secret that must live somewhere other
-than this machine. The restore steps and the tested round-trip are in
-[`backup/README.md`](backup/README.md).
+`pg_dump` whenever the last success is over 24 hours old, writes a `backup_manifest.json` with a
+row count and content hash for every table, then `restic` encrypts and ships both to
+`RESTIC_REPOSITORY`. Each attempt is recorded in `backup_runs`, which the Settings panel shows.
+The default repository is the local `backup-data` volume; set an S3/B2/R2 or rclone repository to
+go off-site.
+
+`RESTIC_PASSWORD` is the one secret that must live somewhere other than this machine. Losing it
+makes the off-site copies unreadable; there is no recovery path. On a fresh machine, with only the
+repository and that password:
+
+```bash
+docker compose up -d db
+docker compose run --rm --no-deps --user root api fin-agent restore
+```
+
+`fin-agent restore` restores the newest snapshot, recreates every table, recomputes the manifest,
+checks that every transfer balances and every account balance equals its entries, and exits
+non-zero on any difference. It refuses a target that already has tables unless you pass `--force`.
+The complete procedure is in
+[`docs/fin-agent/self-hosting.md`](docs/fin-agent/self-hosting.md#62-restore-drill-on-a-fresh-machine)
+and [`backup/README.md`](backup/README.md).
 
 ## Develop
 
@@ -139,9 +166,11 @@ Checks:
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
+uv run pip-audit --strict
+uv run python scripts/license_audit.py
 DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
 AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
-pnpm --dir web lint && pnpm --dir web build
+pnpm --dir web lint && pnpm --dir web audit --audit-level high && pnpm --dir web build
 ```
 
 Tests refuse to touch a database whose name doesn't end in `_test`. They also block every
@@ -166,9 +195,11 @@ src/fin_agent/
   cli.py
 web/           Vite and React app (a static build): read-only panels and Settings
 backup/        pg_dump + restic sidecar
+scripts/       the license audit
 evals/         pydantic_evals suite, demo-persona dataset, and scorecard writer
 tests/         pytest, including a software WebAuthn authenticator
 compose.yaml
+LICENSE
 ```
 
 The `evals/` folder holds the L4 `pydantic_evals` suite, the demo-persona dataset, and the
@@ -179,18 +210,28 @@ projection/verdict cards read `GET /api/projection`; there is no write path from
 
 - Private network only. Compose publishes both ports on `127.0.0.1`; Tailscale provides HTTPS.
 - One user, passkey login through `py_webauthn`. Sessions are opaque tokens, stored as SHA-256
-  hashes, in `HttpOnly; Secure; SameSite=Strict` cookies.
+  hashes, in `HttpOnly; Secure; SameSite=Strict` cookies. Export and passkey changes require a
+  fresh passkey check within five minutes.
 - The content security policy is `default-src 'self'; script-src 'self'; style-src 'self'
   'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action
   'self'; frame-ancestors 'none'`, plus `nosniff` and `no-referrer`. No inline scripts, and images
   only from the app's own origin.
 - `TrustedHost` accepts loopback and `*.ts.net` by default; widen it with
   `FIN_AGENT_TRUSTED_HOSTS`.
+- Uploads are capped at 25 MB on statements, photos, and audio.
 - The database has three roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
   people, categorization, settings, and conversation tables and views, no auth tables, no `TEMP`,
   read-only by default, and a two-second statement timeout; `backup` can `SELECT` for `pg_dump`
-  and `INSERT` into `backup_runs` only.
+  and `INSERT` into `backup_runs` only. Phoenix, when enabled, owns only its own database and
+  `agent_ro` cannot connect to it.
 - Secrets live in `.env`, never in the database. Host disk encryption is an install requirement.
+- Logs carry IDs and timings, never amounts, merchants, or message content. A filter also redacts
+  Postgres `DETAIL` lines and exception text.
+- `scripts/license_audit.py` checks every Python and web dependency for a permissive or explicitly
+  noticed weak-copyleft license; `pip-audit` and `pnpm audit` run in CI. No GPL, AGPL, SSPL, or
+  Elastic code ships in the image. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the
+  direct dependencies, and the built web bundle carries every production package's license text at
+  `/THIRD_PARTY_NOTICES.txt`.
 
 ## The one rule
 

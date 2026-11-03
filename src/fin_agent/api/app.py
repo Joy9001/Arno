@@ -26,11 +26,13 @@ from fin_agent.config import Settings, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
+from fin_agent.db.pre_migration import dump_before_migrating
 from fin_agent.jobs.runner import JobRunner, recover_interrupted_jobs
 from fin_agent.jobs.schedules import ensure_builtin_schedules, sync_scheduled_questions
 from fin_agent.ledger.accounts import ensure_system_accounts
 from fin_agent.ledger.categories import ensure_default_categories
 from fin_agent.ledger.errors import LedgerError
+from fin_agent.logging_utils import install as install_log_sanitizer
 from fin_agent.notifications import ensure_vapid_keys
 
 logger = logging.getLogger("fin_agent")
@@ -40,6 +42,7 @@ def _bootstrap(settings: Settings) -> None:
     conn = connect(settings.database_url)
     try:
         if settings.auto_migrate:
+            dump_before_migrating(conn, settings)
             applied = run_migrations(conn)
             if applied:
                 logger.info("applied migrations %s", applied)
@@ -110,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+    install_log_sanitizer()
 
     app = FastAPI(
         title="Fin-Agent",
@@ -137,7 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.exception_handler(StarletteHTTPException)
     async def http_exception(request: Request, exc: StarletteHTTPException):
         detail = exc.detail if isinstance(exc.detail, str) else None
-        return problem(exc.status_code, detail=detail)
+        return problem(exc.status_code, detail=detail, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception(request: Request, exc: RequestValidationError):

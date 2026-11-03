@@ -14,6 +14,7 @@ umask 077
 INTERVAL="${BACKUP_INTERVAL_SECONDS:-3600}"
 MAX_AGE="${BACKUP_MAX_AGE_SECONDS:-86400}"
 DUMP="${BACKUP_DUMP_PATH:-/tmp/fin_agent.dump}"
+MANIFEST="${BACKUP_MANIFEST_PATH:-/tmp/backup_manifest.json}"
 
 log() {
     printf '%s backup: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
@@ -63,6 +64,22 @@ run_backup() {
     fi
 
     bytes=$(stat -c%s "$DUMP")
+    dump_sha=$(sha256sum "$DUMP" | cut -d' ' -f1)
+
+    # The restore drill compares this manifest with the restored database. It is generated
+    # immediately after the dump; a write that lands in between shows up as a mismatch.
+    if ! psql "$DATABASE_URL" -Atq -v ON_ERROR_STOP=1 \
+        -c "SELECT jsonb_pretty(fin_agent_backup_manifest())" > "$MANIFEST"; then
+        finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        duration=$(( $(date +%s) - start_epoch ))
+        log "backup manifest failed"
+        record failed "$started" "$finished" "$bytes" "$((duration * 1000))" "" "manifest failed" || true
+        rm -f "$DUMP" "$MANIFEST"
+        return 1
+    fi
+    jq --arg sha "$dump_sha" '. + {dump_sha256: $sha}' "$MANIFEST" > "$MANIFEST.tmp" \
+        && mv "$MANIFEST.tmp" "$MANIFEST"
+
     if ! restic snapshots --json >/dev/null 2>&1; then
         log "restic repository is not initialised; running restic init"
         if ! restic init; then
@@ -70,19 +87,19 @@ run_backup() {
             duration=$(( $(date +%s) - start_epoch ))
             log "restic init failed"
             record failed "$started" "$finished" "$bytes" "$((duration * 1000))" "" "restic init failed" || true
-            rm -f "$DUMP"
+            rm -f "$DUMP" "$MANIFEST"
             return 1
         fi
     fi
 
-    if summary=$(restic backup --json --tag fin-agent --host fin-agent "$DUMP"); then
+    if summary=$(restic backup --json --tag fin-agent --host fin-agent "$DUMP" "$MANIFEST"); then
         snapshot=$(printf '%s' "$summary" | jq -r 'select(.message_type == "summary") | .snapshot_id' | tail -n 1)
         restic forget --keep-daily 7 --keep-weekly 4 --prune >/dev/null 2>&1 || true
         finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         duration=$(( $(date +%s) - start_epoch ))
         log "success: ${bytes} bytes, snapshot ${snapshot:-unknown}"
         record success "$started" "$finished" "$bytes" "$((duration * 1000))" "$snapshot" "" || true
-        rm -f "$DUMP"
+        rm -f "$DUMP" "$MANIFEST"
         return 0
     fi
 
@@ -90,7 +107,7 @@ run_backup() {
     duration=$(( $(date +%s) - start_epoch ))
     log "restic backup failed"
     record failed "$started" "$finished" "$bytes" "$((duration * 1000))" "" "restic backup failed" || true
-    rm -f "$DUMP"
+    rm -f "$DUMP" "$MANIFEST"
     return 1
 }
 

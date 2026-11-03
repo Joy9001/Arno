@@ -28,6 +28,7 @@ def problem(
     detail: str | None = None,
     type_: str = "about:blank",
     extra: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body: dict[str, Any] = {
         "type": type_,
@@ -38,4 +39,4 @@ def problem(
         body["detail"] = detail
     if extra:
         body.update(extra)
-    return JSONResponse(body, status_code=status, media_type=PROBLEM_MEDIA_TYPE)
+    return JSONResponse(body, status_code=status, media_type=PROBLEM_MEDIA_TYPE, headers=headers)

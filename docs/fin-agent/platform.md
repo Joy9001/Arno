@@ -208,8 +208,9 @@ rules.
 ## Deployment
 
 Compose was re-checked on its merits against other ways to deploy an agent on October 31, 2026
-([system design, step 10](system-design.md#step-10-interfaces-and-operations)). The `compose.yaml`
-file defines the following services:
+([system design, step 10](system-design.md#step-10-interfaces-and-operations)). The self-hoster
+walkthrough is [`self-hosting.md`](self-hosting.md). The `compose.yaml` file defines the following
+services:
 
 ```yaml
 # compose.yaml — shape, not final
@@ -230,9 +231,13 @@ A deployment works as follows:
 - Access is through Tailscale on the host: `tailscale serve --bg` proxies HTTPS on the tailnet to the
   API, which Compose publishes on loopback only. A sidecar stays an option for a VPS
   ([step 10](system-design.md#running-it)).
-- Updating is `docker compose pull`, then `up -d`. The API runs `pg_dump` before any migration, and
-  migrations run in a transaction. A Postgres major upgrade is a documented dump and restore.
-- API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB.
+- Updating is `docker compose pull`, then `up -d`. `compose.yaml` pins
+  `ghcr.io/joy9001/fin-agent:$FIN_AGENT_VERSION` (and the matching backup image), and the release
+  workflow pushes the version tag. The API runs `pg_dump` before any migration and writes it to the
+  `pre-migration-data` volume, and migrations run in a transaction. A Postgres major upgrade is a
+  documented dump and restore.
+- API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB (`max-size: 10m`,
+  `max-file: 3`) on every Compose service.
 - Host disk encryption (BitLocker, LUKS, FileVault) is an install requirement, stated in the
   docs—it's what protects the database at rest.
 - Images are amd64; arm64 is parked.
@@ -255,15 +260,20 @@ A deployment works as follows:
 ## Backups
 
 - The `backup` sidecar checks hourly and runs `pg_dump` whenever its last success is over 24 hours
-  old, because a nightly cron misses a sleeping laptop. It hands the dump to restic, which encrypts,
-  dedupes, and ships it to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent
+  old, because a nightly cron misses a sleeping laptop. It writes `backup_manifest.json` (a row
+  count and content hash for every table) and hands both files to restic, which encrypts, dedupes,
+  and ships them to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent
   of the API process. It dumps the app's database only, so traces stay out of backups.
 - The sidecar records each success in Postgres, through its own role, which can read for `pg_dump` and
   write only that record. A daily job checks it, and no success for 48
   hours sends an inbox item and a push.
 - Backups exist from L1—before real money goes in at L2.
-- A restore drill is a milestone (L8). On a fresh machine, given the backup and the restic
-  password, the ledger comes back.
+- The restore drill is `fin-agent restore`. On a fresh machine, given the backup and the restic
+  password, it pulls the dump and manifest out of the newest snapshot, restores into a
+  database that has no tables, recomputes every table's hash, and checks that every transfer
+  balances and every account balance equals its entries. It refuses to overwrite a populated
+  database without `--force`. `tests/test_l8_ship.py` runs the round trip through a real restic
+  repository. [Install and restore steps](self-hosting.md#62-restore-drill-on-a-fresh-machine).
 
 The restic password is the one secret that has to live somewhere other than this machine. Losing
 it makes the off-site copies unreadable—the install docs say so in bold.
@@ -272,15 +282,17 @@ it makes the off-site copies unreadable—the install docs say so in bold.
 
 ## Security
 
-The following table is the threat model, refreshed at L8:
+The following table is the threat model, refreshed at L8 on November 3, 2026:
 
 | Threat | Defense |
 |---|---|
 | Internet attacker | Not reachable: the instance is only on the tailnet. Passkeys, security headers, single origin, `SameSite=Strict` cookies, and `TrustedHost` |
-| Stolen laptop or disk | Host disk encryption, an install requirement |
+| Stolen laptop or disk | Host disk encryption, an install requirement (BitLocker, LUKS, FileVault) |
 | Leaked backup | restic encryption; the password isn't stored with the backups |
+| Lost restic password | _Not defended; it is data loss._ The install docs say in bold to keep it off the machine. There is no recovery path |
 | VPS provider reads the disk | _Not defended._ Stated in the docs; in-database encryption is parked with this as its trigger |
 | Live host compromise | _Not defended._ Stated in the docs |
+| Borrowed unlocked browser | Sessions expire; export and every passkey change need a fresh passkey check within five minutes (`sessions.reverified_at`) |
 | Prompt injection through statements or photos | Rule 2 in `plan.md` §4: statements are parsed in a run with no write or ledger tools, and photos by a tool-less call into a typed schema; payee names and notes reach the agent marked as data; lasting or wide writes ask first in a conversation that has read them ([`design.md`](design.md#untrusted-text-and-write-tiers)). Eval cases test it |
 | A forged or replayed confirm answer | Server-held history: an answer counts once, only for a pending call, with the stored arguments ([tested](system-design.md#the-safety-tests-october-31-2026)) |
 | Secrets typed into chat | `InputGuardrail` removes API keys, card numbers, PAN, and spaced Aadhaar before the model or storage sees them. Passwords, OTPs, and bank account numbers can't be detected, so a statement password has its own field on the import card |
@@ -288,7 +300,10 @@ The following table is the threat model, refreshed at L8:
 | Agent-written SQL | The `agent_ro` grants are the boundary: `SELECT` only, no auth tables. The read-only default, the timeout, one statement through the extended protocol, and a transaction that's always rolled back are extra layers ([`tools.md`](tools.md#run_query)). `TEMP` is revoked, and no network extension such as `dblink` is installed |
 | Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
 | LLM provider sees data | The self-hoster's choice for each role. See [What each role sends](#what-each-role-sends) |
-| Malicious dependency | Lockfiles, permissive-license allowlist, dependency audit in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
+| Malicious or compromised dependency | Lockfiles, the permissive-license allowlist in `scripts/license_audit.py`, and `pip-audit` + `pnpm audit` in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
+| GPL, AGPL, or unknown license in the image | The same audit fails the build. Weak copyleft (`psycopg` LGPL-3.0, `pywebpush` MPL-2.0) is allowed only as unmodified libraries and is named in `THIRD_PARTY_NOTICES.md` |
+| Upload flood or a huge file | 25 MB cap on statements, photos, and audio; one user behind a passkey; spend ceilings |
+| Logs leak finances | Logs carry IDs and timings only, and a filter redacts amounts, Postgres `DETAIL` lines, and exception text before a handler writes them |
 | Traces hold your finances | Phoenix stays on the host's loopback with outside requests off. It uses its own role, which owns only its database, and `agent_ro` can't connect to that database. Traces last 90 days. Reaching it over the tailnet needs its login on. Redaction runs before spans are written |
 
 Logs never contain amounts, merchants, or message content—only IDs and timings. Traces do include

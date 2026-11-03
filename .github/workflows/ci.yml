@@ -73,6 +73,12 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      - name: Dependency vulnerability audit
+        run: uv run pip-audit --strict
+
+      - name: License audit
+        run: uv run python scripts/license_audit.py --python-only
+
       - name: Pytest
         run: uv run pytest -q
 
@@ -102,6 +108,12 @@ jobs:
 
       - name: Lint
         run: pnpm lint
+
+      - name: Dependency vulnerability audit
+        run: pnpm audit --audit-level high
+
+      - name: License audit
+        run: python3 ../scripts/license_audit.py --web-only
 
       - name: Build
         run: pnpm build

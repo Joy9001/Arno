@@ -30,6 +30,7 @@ htmlcov/
 web/node_modules/
 web/dist/
 web/.vite/
+web/public/THIRD_PARTY_NOTICES.txt
 
 # IDE
 .idea/

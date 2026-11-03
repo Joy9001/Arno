@@ -233,7 +233,7 @@ The following table records the choice for each layer:
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
 | Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama, speaches, and Phoenix | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
-| License | Permissive; final pick (MIT versus Apache-2.0) at release | All chosen dependencies are permissive. Phoenix is Elastic 2.0, but it's optional and runs as its own image |
+| License | MIT, settled at L8 | All shipped dependencies are permissive or explicitly noticed weak copyleft; no GPL/AGPL. Phoenix is Elastic 2.0, but it's optional and runs as its own image |
 
 ### Provider switch
 
@@ -425,6 +425,29 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 40. Someone else installs it from the docs alone.
 41. Four weeks of daily use without falling back to mental math or a spreadsheet.
 
+**L8 status, November 3, 2026.** Milestones 37-39 are built and tested. 37 is
+`fin-agent restore`: the sidecar writes a per-table manifest with every dump, and the command
+restores the newest restic snapshot into a fresh database, recomputes the manifest, and checks the
+ledger's balances. `tests/test_l8_ship.py` runs the round trip through a real restic repository.
+38 is the refreshed threat model in [`platform.md`](platform.md#security), the exact CSP and
+headers, the fresh-passkey wall on export and passkey changes, log sanitization, the `agent_ro` and
+Phoenix isolation, and the Python + web license audit with `pip-audit`/`pnpm audit` in CI. 39 is
+**MIT** ([`LICENSE`](../../LICENSE)), the versioned `ghcr.io/joy9001/fin-agent` and
+`fin-agent-backup` images, the release workflow, a pre-migration `pg_dump`, 10 MB log rotation, and
+[`self-hosting.md`](self-hosting.md).
+
+Milestones 40 and 41 are **not** done, and no code change can make them done. 40 needs a second
+person to install from the docs alone; 41 needs four weeks of the owner's daily use without a
+spreadsheet or mental-math fallback. A clean-room Compose check ran on this build host on
+November 3, 2026, from the documented steps and a separate project name, ports, volumes, and env
+file: the images built, `/api/health` returned 200 with schema 11, the first-run enrollment link
+printed, the backup sidecar produced a restic snapshot with its manifest, and
+`fin-agent restore` brought it back with `required_tables`, `schema_version`,
+`ledger_transfers_balance`, `account_balances_match_entries`, and `manifest_matches` all `ok`. That
+is not milestone 40: it was the same owner, the same Windows/Docker Desktop host, and no
+Tailscale, phone, or passkey. The Linux Compose grace period, `tailscale serve`, and a real
+second installer remain unexercised.
+
 **Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
 unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
 something has crept in—check it against [`parked.md`](parked.md).
@@ -484,7 +507,10 @@ Answer each when its layer arrives, not before.
   payee-name context prompt is implemented and on by default (`STT_PAYEE_CONTEXT=1`); whether it
   improves recognition is untested, so it is an option rather than a claim. A cloud STT endpoint
   receives those payee names too; setting `STT_PAYEE_CONTEXT=0` keeps them local.
-- **L8:** MIT or Apache-2.0?
+- **L8:** **MIT.** It matches the vendored pgledger license, adds no patent or notice machinery a
+  one-person project has to maintain, and the permissive-license audit in CI is the actual
+  guarantee. Apache-2.0's patent grant was the only real argument for it, and nothing in the stack
+  or the product turns on patents. Recorded November 3, 2026.
 
 ---
 
@@ -498,3 +524,9 @@ All of the following must be true:
 - No fix pushed in the last week
 
 Then it's shipped. Parked items get promoted from a working, used system—not from a document.
+
+Milestones 40 and 41 are the human gates in that list. They are recorded as open until a second
+person has installed the instance from [`self-hosting.md`](self-hosting.md) alone and the owner
+has used it daily for four weeks. Passing tests, a clean-room install on the build host, or a
+complete code audit is not a substitute for either.
+

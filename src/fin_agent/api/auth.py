@@ -9,13 +9,14 @@ import psycopg
 from fastapi import APIRouter, Request, Response, status
 from pydantic import BaseModel, Field
 
-from fin_agent.api.deps import Database, Session
+from fin_agent.api.deps import Database, FreshSession, Session
 from fin_agent.api.problems import problem
 from fin_agent.auth import passkeys
 from fin_agent.auth.enrollment import enrollment_link
 from fin_agent.auth.sessions import (
     COOKIE_NAME,
     create_session,
+    mark_reverified,
     revoke_all_sessions,
     revoke_session,
     session_from_token,
@@ -242,6 +243,51 @@ def session(session: Session) -> dict[str, Any]:
     return {"authenticated": True, "user": _user_payload(session)}
 
 
+@router.post("/reverify/begin")
+def reverify_begin(request: Request, session: Session, conn: Database) -> Any:
+    """Start a fresh passkey check for export and passkey changes."""
+    settings = _settings(request)
+    credential_ids = [
+        row["credential_id"]
+        for row in conn.execute(
+            "SELECT credential_id FROM webauthn_credentials WHERE user_id = %s",
+            (session["user_id"],),
+        ).fetchall()
+    ]
+    try:
+        challenge_id, options = passkeys.begin_authentication(
+            conn,
+            rp_id=settings.rp_id,
+            user_id=session["user_id"],
+            credential_ids=credential_ids,
+            kind="reverify",
+        )
+    except psycopg.Error:
+        logger.exception("could not start passkey re-verification")
+        return problem(503, detail="The database is unreachable.")
+    return {"challenge_id": challenge_id, "options": options}
+
+
+@router.post("/reverify/verify")
+def reverify_verify(body: VerifyBody, request: Request, session: Session, conn: Database) -> Any:
+    settings = _settings(request)
+    try:
+        user = passkeys.finish_authentication(
+            conn,
+            rp_id=settings.rp_id,
+            rp_origin=settings.rp_origin,
+            challenge_id=body.challenge_id,
+            credential=body.credential,
+            kind="reverify",
+        )
+    except passkeys.PasskeyError as exc:
+        return problem(401, detail=str(exc))
+    if user["id"] != session["user_id"]:
+        return problem(401, detail="That passkey belongs to a different user.")
+    mark_reverified(conn, session["session_id"])
+    return {"status": "reverified"}
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(request: Request, response: Response, conn: Database) -> Response:
     revoke_session(conn, request.cookies.get(COOKIE_NAME, ""))
@@ -277,7 +323,7 @@ def list_passkeys(session: Session, conn: Database) -> dict[str, Any]:
 def rename_passkey(
     passkey_id: str,
     body: RenamePasskeyBody,
-    session: Session,
+    session: FreshSession,
     conn: Database,
 ) -> Any:
     name = body.name.strip()
@@ -298,7 +344,7 @@ def rename_passkey(
 
 
 @router.delete("/passkeys/{passkey_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_passkey(passkey_id: str, session: Session, conn: Database) -> Response:
+def delete_passkey(passkey_id: str, session: FreshSession, conn: Database) -> Response:
     row = conn.execute(
         "SELECT id FROM webauthn_credentials WHERE id = %s AND user_id = %s",
         (passkey_id, session["user_id"]),
@@ -326,7 +372,7 @@ def delete_passkey(passkey_id: str, session: Session, conn: Database) -> Respons
 
 
 @router.post("/enrollments")
-def create_enrollment(request: Request, session: Session, conn: Database) -> dict[str, Any]:
+def create_enrollment(request: Request, session: FreshSession, conn: Database) -> dict[str, Any]:
     """Create a 10-minute, single-use link that adds a passkey for the signed-in user."""
     settings = _settings(request)
     issued = issue_add_device_token(conn, session["user_id"], ttl_minutes=10)

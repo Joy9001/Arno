@@ -21,7 +21,14 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 
+# restic is in the runtime image so `fin-agent restore` can run the milestone 37 drill with one
+# command, without a second tool on the host.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends restic \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
+COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libpq.so.5 /usr/local/lib/libpq.so.5
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2 /usr/local/lib/
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libldap.so.2 /usr/local/lib/
@@ -32,18 +39,22 @@ COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libkrb5support.so.0 /usr/local/li
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/liblber.so.2 /usr/local/lib/
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libkeyutils.so.1 /usr/local/lib/
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libcom_err.so.2 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libzstd.so.1 /usr/local/lib/
+COPY --from=pgclient /usr/lib/x86_64-linux-gnu/liblzma.so.5 /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY evals ./evals
-COPY README.md THIRD_PARTY_NOTICES.md ./
+COPY LICENSE README.md THIRD_PARTY_NOTICES.md ./
 RUN uv sync --frozen --no-dev --no-editable
 
 COPY --from=web /web/dist ./web/dist
 
-RUN useradd --create-home --uid 10001 fin && chown -R fin:fin /app
+RUN useradd --create-home --uid 10001 fin \
+    && mkdir -p /app/pre-migration \
+    && chown -R fin:fin /app
 USER fin
 
 EXPOSE 8000

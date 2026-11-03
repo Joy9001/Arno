@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from fin_agent.api.deps import Database, current_session
+from fin_agent.api.deps import Database, FreshSession, current_session
 from fin_agent.ledger import (
     accounts,
     categories,
@@ -558,7 +558,8 @@ def get_backup_status(conn: Database) -> dict[str, Any]:
 
 
 @router.get("/export/json")
-def get_export_json(conn: Database) -> JSONResponse:
+def get_export_json(conn: Database, fresh: FreshSession) -> JSONResponse:
+    del fresh
     stamp = datetime.now().strftime("%Y%m%d")
     return JSONResponse(
         export.export_json(conn),
@@ -567,7 +568,8 @@ def get_export_json(conn: Database) -> JSONResponse:
 
 
 @router.get("/export/csv")
-def get_export_csv(conn: Database) -> Response:
+def get_export_csv(conn: Database, fresh: FreshSession) -> Response:
+    del fresh
     stamp = datetime.now().strftime("%Y%m%d")
     return Response(
         export.export_csv_zip(conn),
@@ -577,8 +579,8 @@ def get_export_csv(conn: Database) -> Response:
 
 
 @router.get("/export/pg_dump")
-def get_export_pg_dump(conn: Database) -> Response:
-    del conn
+def get_export_pg_dump(conn: Database, fresh: FreshSession) -> Response:
+    del conn, fresh
     from fin_agent.config import get_settings
 
     stamp = datetime.now().strftime("%Y%m%d")

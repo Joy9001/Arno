@@ -16,7 +16,6 @@ export type EnrollmentKind = "first_run" | "add_device";
 type RegistrationOptions = Parameters<typeof startRegistration>[0]["optionsJSON"];
 type AuthenticationOptions = Parameters<typeof startAuthentication>[0]["optionsJSON"];
 type RegistrationCredential = Awaited<ReturnType<typeof startRegistration>>;
-
 export type EnrollmentBegin = {
   challenge_id: string;
   options: RegistrationOptions;
@@ -60,6 +59,26 @@ export async function loginWithPasskey(): Promise<User> {
 
 export async function logout(): Promise<void> {
   await api<void>("/api/auth/logout", { method: "POST" });
+}
+
+let reverifiedUntil = 0;
+
+/**
+ * Re-authenticate with a passkey before export or a passkey change. The server checks this, not
+ * the client; the timestamp only avoids a second prompt inside the same five-minute window.
+ */
+export async function ensureFreshPasskey(): Promise<void> {
+  if (Date.now() < reverifiedUntil) return;
+  const begin = await api<{ challenge_id: string; options: AuthenticationOptions }>(
+    "/api/auth/reverify/begin",
+    { method: "POST" },
+  );
+  const credential = await startAuthentication({ optionsJSON: begin.options });
+  await api<{ status: string }>("/api/auth/reverify/verify", {
+    method: "POST",
+    body: JSON.stringify({ challenge_id: begin.challenge_id, credential }),
+  });
+  reverifiedUntil = Date.now() + 4 * 60 * 1000;
 }
 
 export async function logoutAll(): Promise<void> {

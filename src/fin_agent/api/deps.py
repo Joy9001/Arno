@@ -9,7 +9,7 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import Depends, HTTPException, Request, status
 
-from fin_agent.auth.sessions import COOKIE_NAME, session_from_token
+from fin_agent.auth.sessions import COOKIE_NAME, is_fresh, session_from_token
 from fin_agent.db.conn import connect
 
 
@@ -34,3 +34,17 @@ def current_session(request: Request, conn: Database) -> dict[str, Any]:
 
 
 Session = Annotated[dict[str, Any], Depends(current_session)]
+
+
+def fresh_session(session: Session) -> dict[str, Any]:
+    """A session that has re-authenticated with a passkey in the last five minutes."""
+    if not is_fresh(session):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Confirm with your passkey to continue.",
+            headers={"X-Fin-Agent-Step-Up": "passkey"},
+        )
+    return session
+
+
+FreshSession = Annotated[dict[str, Any], Depends(fresh_session)]

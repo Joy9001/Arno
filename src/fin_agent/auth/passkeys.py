@@ -238,6 +238,7 @@ def begin_authentication(
     rp_id: str,
     user_id: str,
     credential_ids: list[bytes],
+    kind: str = "login",
 ) -> tuple[str, dict[str, Any]]:
     options = generate_authentication_options(
         rp_id=rp_id,
@@ -248,7 +249,7 @@ def begin_authentication(
     )
     challenge_id = _insert_challenge(
         conn,
-        kind="login",
+        kind=kind,
         challenge=options.challenge,
         user_handle=None,
         user_id=user_id,
@@ -263,8 +264,9 @@ def finish_authentication(
     rp_origin: str,
     challenge_id: str,
     credential: dict[str, Any],
+    kind: str = "login",
 ) -> dict[str, Any]:
-    challenge = _pop_challenge(conn, challenge_id, "login")
+    challenge = _pop_challenge(conn, challenge_id, kind)
     if challenge.user_id is None:
         raise PasskeyError("This sign-in attempt expired. Start again.")
 

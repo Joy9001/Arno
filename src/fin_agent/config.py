@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,7 @@ class Settings:
     jobs_enabled: bool
     agent_ro_password: str | None
     backup_password: str | None
+    pre_migration_dir: Path
     vapid_subject: str = "mailto:fin-agent@localhost"
 
     @property
@@ -87,6 +89,12 @@ class Settings:
             jobs_enabled=_flag("FIN_AGENT_JOBS_ENABLED", True),
             agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,
             backup_password=os.environ.get("BACKUP_PASSWORD") or None,
+            pre_migration_dir=Path(
+                os.environ.get(
+                    "FIN_AGENT_PRE_MIGRATION_DIR",
+                    Path(tempfile.gettempdir()) / "fin-agent-pre-migration",
+                )
+            ),
             vapid_subject=os.environ.get(
                 "FIN_AGENT_VAPID_SUBJECT", "mailto:fin-agent@localhost"
             ).strip(),

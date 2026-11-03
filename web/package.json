@@ -6,7 +6,8 @@
   "packageManager": "pnpm@11.1.2",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && node scripts/collect-licenses.mjs && vite build",
+    "licenses": "node scripts/collect-licenses.mjs",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
