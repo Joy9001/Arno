@@ -2,7 +2,7 @@
 
 __all__ = ["__version__"]
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # TODO(L8-40/41): these are human gates, not code. Milestone 40 is a second person installing
 # from docs/fin-agent/self-hosting.md alone; milestone 41 is four weeks of daily use without

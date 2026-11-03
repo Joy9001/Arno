@@ -1,6 +1,6 @@
 [project]
 name = "fin-agent"
-version = "0.1.1"
+version = "0.1.2"
 description = "Private, self-hosted personal finance agent"
 license = "MIT"
 license-files = ["LICENSE"]
