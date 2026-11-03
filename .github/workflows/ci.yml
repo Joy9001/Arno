@@ -75,7 +75,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Dependency vulnerability audit
-        run: uv run pip-audit --strict
+        # Audit the lockfile, not the installed project: fin-agent itself is not on PyPI.
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt -q > "$RUNNER_TEMP/requirements.txt"
+          uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"
 
       - name: License audit
         run: uv run python scripts/license_audit.py --python-only

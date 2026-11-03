@@ -166,7 +166,8 @@ Checks:
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pip-audit --strict
+uv export --frozen --no-emit-project --format requirements-txt -q > /tmp/requirements.txt
+uv run pip-audit --strict --disable-pip -r /tmp/requirements.txt
 uv run python scripts/license_audit.py
 DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
 AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
