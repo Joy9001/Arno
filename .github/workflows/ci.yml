@@ -22,6 +22,7 @@ jobs:
       # The runner may also have an older client; pin the one matching the server.
       PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
       PSQL: /usr/lib/postgresql/18/bin/psql
+      PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore
       FIN_AGENT_RP_ID: localhost
       FIN_AGENT_RP_ORIGIN: http://localhost:8000
       FIN_AGENT_COOKIE_SECURE: "0"

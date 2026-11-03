@@ -158,8 +158,17 @@ def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, settings, 
     assert path.read_bytes() == b"-- pre-migration dump\n"
 
 
+def _binary(env_name: str, name: str) -> str | None:
+    # Same lookup as fin_agent.backup_restore: CI pins the PostgreSQL 18 client by env var.
+    return os.environ.get(env_name) or shutil.which(name)
+
+
 @pytest.mark.skipif(
-    not all(shutil.which(name) for name in ("restic", "pg_dump", "pg_restore")),
+    not (
+        _binary("RESTIC", "restic")
+        and _binary("PG_DUMP", "pg_dump")
+        and _binary("PG_RESTORE", "pg_restore")
+    ),
     reason="restic or the PostgreSQL 18 client is missing",
 )
 def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
@@ -202,7 +211,15 @@ def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
     if "password" in info:
         env["PGPASSWORD"] = str(info["password"])
     dumped = subprocess.run(
-        ["pg_dump", "--no-owner", "--no-privileges", "--format=custom", "-f", str(dump), source],
+        [
+            _binary("PG_DUMP", "pg_dump"),
+            "--no-owner",
+            "--no-privileges",
+            "--format=custom",
+            "-f",
+            str(dump),
+            source,
+        ],
         capture_output=True,
         env=env,
         check=False,
