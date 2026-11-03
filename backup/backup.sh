@@ -66,8 +66,10 @@ run_backup() {
     bytes=$(stat -c%s "$DUMP")
     dump_sha=$(sha256sum "$DUMP" | cut -d' ' -f1)
 
-    # The restore drill compares this manifest with the restored database. It is generated
-    # immediately after the dump; a write that lands in between shows up as a mismatch.
+    # The restore drill compares this manifest with the restored database.
+    # TODO(backup): the manifest is generated immediately after pg_dump, so a write that lands
+    # between the two can make a restore report a mismatch. Use pg_export_snapshot() for an exact
+    # point-in-time manifest if this becomes noisy in practice.
     if ! psql "$DATABASE_URL" -Atq -v ON_ERROR_STOP=1 \
         -c "SELECT jsonb_pretty(fin_agent_backup_manifest())" > "$MANIFEST"; then
         finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -507,10 +507,11 @@ Answer each when its layer arrives, not before.
   payee-name context prompt is implemented and on by default (`STT_PAYEE_CONTEXT=1`); whether it
   improves recognition is untested, so it is an option rather than a claim. A cloud STT endpoint
   receives those payee names too; setting `STT_PAYEE_CONTEXT=0` keeps them local.
-- **L8:** **MIT.** It matches the vendored pgledger license, adds no patent or notice machinery a
-  one-person project has to maintain, and the permissive-license audit in CI is the actual
-  guarantee. Apache-2.0's patent grant was the only real argument for it, and nothing in the stack
-  or the product turns on patents. Recorded November 3, 2026.
+- **L8:** **MIT.** It lets anyone use, modify, and redistribute Fin-Agent freely, matches the
+  vendored pgledger license, and adds no patent or notice machinery a one-person project has to
+  maintain. The permissive-license audit in CI keeps the dependency side honest. Apache-2.0's
+  patent grant was the only real argument for it, and nothing in the stack or the product turns on
+  patents. Recorded November 3, 2026.
 
 ---
 
