@@ -53,7 +53,8 @@ TRUNCATE
     schedules, goals, scheduled_questions,
     category_rules, baselines,
     conversations, messages, preferences, audit_log,
-    notifications, push_subscriptions, jobs, job_schedules, backup_runs
+    notifications, push_subscriptions, jobs, job_schedules, backup_runs,
+    vapid_keys, risk_state
 RESTART IDENTITY CASCADE
 """
 
@@ -140,6 +141,23 @@ def migrated() -> list[int]:
 def clean_database(migrated: list[int]) -> None:
     with psycopg.connect(_dsn(), autocommit=True) as conn:
         conn.execute(RESET_TABLES)
+        conn.execute(
+            """
+            UPDATE settings
+            SET base_currency = 'INR',
+                time_zone = 'Asia/Kolkata',
+                floor_paise = NULL,
+                default_horizon_days = 90,
+                notification_time = '08:00',
+                weekly_briefing_dow = 0,
+                reminder_lead_days = 3,
+                last_model_error_type = NULL,
+                last_model_error_at = NULL,
+                updated_at = now()
+            WHERE id = 1
+            """
+        )
+        conn.execute("INSERT INTO risk_state (id) VALUES (1) ON CONFLICT DO NOTHING")
 
 
 @pytest.fixture

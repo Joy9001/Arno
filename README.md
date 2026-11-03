@@ -3,13 +3,14 @@
 A self-hosted, open-source finance agent that holds your whole financial picture and answers any
 question about it — including whether you can afford something, and what it would cost you.
 
-> **Status: L5 (engine) is complete.** L0-L4 are unchanged. `project()` is a seeded, pure
-> day-by-day curve over liquid balances; affordability returns a tested yes / yes-but / no verdict
-> and four tradeoffs; `project` is a Code Mode read tool; the web app has inline projection and
-> verdict cards with citations and a read-only Projection panel; and the backtest and HackerRank
-> measures are published below. The projection engine was L5. The authoritative plan is
-> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
-> [`docs/archive/`](docs/archive/) are not authoritative.
+> **Status: L6 (watch) is complete.** L0-L5 are unchanged. `job_schedules` turns India-time
+> RRULEs into one period-keyed job, so a sleeping laptop catches up once and a restart cannot send
+> the same item twice. The weekly briefing, reminders, episode-deduped risk warnings, nightly
+> baseline recompute, 48-hour backup alert, and recurring-charge proposals work without an LLM;
+> the briefing's prose is the one optional CHAT call, with a template fallback. The Inbox and
+> contentless web push deliver them, and scheduled questions run read-only with a per-run ceiling.
+> The authoritative plan is [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs
+> in [`docs/archive/`](docs/archive/) are not authoritative.
 
 ## Built on
 

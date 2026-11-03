@@ -158,8 +158,8 @@ has a `goal` account, so its fenced savings are a real ledger balance, excluded 
 because the account isn't `liquid`.
 
 **`scheduled_questions`:** the questions you schedule yourself: `prompt`, `rule` (an iCalendar
-RRULE), `spend_limit`, `last_run_at`, and `active`. The agent runs them read-only and answers into
-the inbox.
+RRULE), `spend_limit` (US cents; $1.00 by default), `last_run_at`, and `active`. The agent runs
+them read-only and answers into the inbox.
 
 ### People
 

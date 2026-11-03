@@ -285,6 +285,7 @@ class SettingsUpdate(ApiModel):
     default_horizon_days: int | None = Field(default=None, ge=1, le=3650)
     notification_time: str | None = None
     weekly_briefing_dow: int | None = Field(default=None, ge=0, le=6)
+    reminder_lead_days: int | None = Field(default=None, ge=0, le=30)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
 
 

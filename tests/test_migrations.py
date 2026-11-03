@@ -44,6 +44,8 @@ EXPECTED_TABLES = {
     "jobs",
     "job_schedules",
     "backup_runs",
+    "vapid_keys",
+    "risk_state",
 }
 
 EXPECTED_VIEWS = {"v_spending", "v_cashflow", "v_balances", "v_owed"}

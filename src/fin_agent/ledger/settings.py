@@ -29,6 +29,7 @@ def read_settings(conn: psycopg.Connection) -> dict[str, Any]:
         if hasattr(row["notification_time"], "isoformat")
         else str(row["notification_time"]),
         "weekly_briefing_dow": row["weekly_briefing_dow"],
+        "reminder_lead_days": row["reminder_lead_days"],
         "profile": {
             "user_id": user["id"] if user else None,
             "display_name": user["display_name"] if user else None,
@@ -50,6 +51,7 @@ def update_settings(
     default_horizon_days: int | None = None,
     notification_time: str | None = None,
     weekly_briefing_dow: int | None = None,
+    reminder_lead_days: int | None = None,
     display_name: str | None = None,
     actor: str = "user",
     message_id: str | None = None,
@@ -60,6 +62,8 @@ def update_settings(
         raise InvalidLedgerError("The default horizon is 1 to 3650 days")
     if weekly_briefing_dow is not None and not 0 <= weekly_briefing_dow <= 6:
         raise InvalidLedgerError("The briefing day is 0 (Sunday) to 6 (Saturday)")
+    if reminder_lead_days is not None and not 0 <= reminder_lead_days <= 30:
+        raise InvalidLedgerError("Reminder lead days are 0 to 30")
     if base_currency is not None and (len(base_currency) != 3 or not base_currency.isalpha()):
         raise InvalidLedgerError("The currency is a three-letter code")
     if display_name is not None and not display_name.strip():
@@ -85,6 +89,7 @@ def update_settings(
         "default_horizon_days": default_horizon_days,
         "notification_time": notification_time,
         "weekly_briefing_dow": weekly_briefing_dow,
+        "reminder_lead_days": reminder_lead_days,
     }.items():
         if value is not None:
             updates[key] = value

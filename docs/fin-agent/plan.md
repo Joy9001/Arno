@@ -454,7 +454,26 @@ Answer each when its layer arrives, not before.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
     `data_quality` says so; there is no per-account setting to keep in sync.
-- **L6:** briefing time, reminder lead days, and recurring-charge thresholds—tune on real data.
+- **L6:** settled in code and recorded here.
+  - **Notification and briefing times.** The notification time is 08:00 Asia/Kolkata and the
+    weekly briefing is Sunday at that time. Both are settings; nightly risk, pattern, baseline,
+    and backup checks run at 02:00-03:00 India time so they don't compete with a reminder. A
+    schedule that was missed while the machine slept fires once, keyed by its period.
+  - **Reminder lead days.** 3 days before a bill, EMI, or card due date. A reminder is keyed by
+    the source and due date, so it appears once inside the lead window.
+  - **Recurring-charge thresholds.** At least 3 occurrences, gaps within 3 days of 7, 30, or 365
+    days, and amounts within 10% of the median. An expected occurrence 3 or more days late with no
+    matching payment is a missed charge. Detection runs nightly and after every import, and only
+    proposes; it never writes a schedule.
+  - **Risk episodes.** The engine's own 90% floor threshold decides a warning. One warning goes
+    out per episode when the floor probability falls below it or the first crossing moves earlier;
+    the episode re-arms after the probability recovers and the crossing no longer moves earlier.
+    The check runs nightly and after every ledger or setup write.
+  - **Backup alert.** 48 hours after the last recorded successful sidecar backup, once per outage;
+    a new success starts the next episode.
+  - **Scheduled questions.** Read-only, with the pinned financial snapshot and CodeMode read tools
+    only. Each run has 20 model requests and a $1 default ceiling (`spend_limit_usd`), against the
+    shared $20 daily ceiling. The answer goes to the Inbox.
 - **L7:** which STT endpoint passes the Hinglish evals—cloud or local? Test Qwen3-ASR beside Whisper:
   [Hex's benchmark](https://github.com/anomalyco/hex/blob/HEAD/docs/plans/language-recommendations.md)
   gives Hindi word error rates of 18.85% for Whisper turbo, 12.68% for Qwen3-ASR 0.6B, and 7.84% for

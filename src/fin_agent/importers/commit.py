@@ -361,6 +361,12 @@ def commit_import(
             kind="recompute_baselines",
             payload={"day": date.today().isoformat()},
         )
+        enqueue_job(
+            conn,
+            key=f"pattern_detection:{date.today().isoformat()}:import:{import_id}",
+            kind="pattern_detection",
+            payload={"day": date.today().isoformat(), "import_id": import_id},
+        )
     result = {
         "status": "committed",
         "import_id": import_id,

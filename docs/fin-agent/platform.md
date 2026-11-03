@@ -50,7 +50,7 @@ The API exposes the following surfaces:
 | Projection | `GET /api/projection`—the read-only Projection panel and the inline projection/verdict card. `horizon_days` and an optional hypothetical (`amount_paise`, `date`, `method`, `emi_months`, `account`) select the run. The same payload carries the curve, data quality, and source IDs |
 | Uploads | `POST /api/attachments` (statement, photo, audio), up to 25 MB. Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo; a voice note sends at once and shows its transcript |
 | Conversations | List, read, rename, and full-text search of threads, and flag a reply. A chat request with no thread ID creates one. Reading a thread also returns a running turn's message and merges saved cards back in ([step 10](system-design.md#the-chat-contract)) |
-| Inbox and push | List and read notifications; register a push subscription |
+| Inbox and push | List and mark read, open a notification in a new chat, subscribe or unsubscribe; the scheduler's job status and the user's scheduled questions |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
 | Auth | See [Auth](#auth) |
 
@@ -198,7 +198,9 @@ down, the briefing goes out as a plain template—the numbers still arrive.
 
 **Delivery:** every item lands in the in-app inbox. Web push (`pywebpush`, VAPID keys generated
 at first run) sends a contentless ping—"Your weekly briefing is ready"—so no financial content
-passes through the browser vendor's push service.
+passes through the browser vendor's push service. Tapping an inbox item opens a new chat seeded
+with that item, so a follow-up or accepting a proposal goes through the agent and the normal write
+rules.
 
 ---
 

@@ -20,7 +20,6 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from fin_agent.db.conn import connect
-from fin_agent.ledger.common import today as ledger_today
 
 logger = logging.getLogger("fin_agent.jobs")
 
@@ -29,8 +28,12 @@ MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUTS = {
     "import_statement": 600,
     "recompute_baselines": 120,
-    "generate_weekly_briefing": 180,
+    "weekly_briefing": 180,
+    "reminders": 60,
     "risk_check": 120,
+    "pattern_detection": 120,
+    "backup_check": 30,
+    "scheduled_question": 300,
 }
 
 
@@ -38,10 +41,22 @@ def default_handlers() -> dict[str, Handler]:
     """Imported lazily, so the job module does not import the whole agent at boot."""
     from fin_agent.importers.baselines import handle_recompute_baselines
     from fin_agent.importers.pipeline import handle_import_job
+    from fin_agent.jobs.backup import handle_backup_check
+    from fin_agent.jobs.briefing import handle_weekly_briefing
+    from fin_agent.jobs.patterns import handle_pattern_detection
+    from fin_agent.jobs.questions import handle_scheduled_question
+    from fin_agent.jobs.reminders import handle_reminders
+    from fin_agent.jobs.risk import handle_risk_check
 
     return {
         "import_statement": handle_import_job,
         "recompute_baselines": handle_recompute_baselines,
+        "weekly_briefing": handle_weekly_briefing,
+        "reminders": handle_reminders,
+        "risk_check": handle_risk_check,
+        "pattern_detection": handle_pattern_detection,
+        "backup_check": handle_backup_check,
+        "scheduled_question": handle_scheduled_question,
     }
 
 
@@ -92,6 +107,32 @@ def recover_interrupted_jobs(conn: psycopg.Connection) -> int:
         """
     ).fetchall()
     return len(rows)
+
+
+def enqueue_risk_check(conn: psycopg.Connection, group_id: str) -> str | None:
+    """Queue a projection check after a write, collapsed to one per short burst.
+
+    A statement import creates many write groups. Every one asks for a check, but a job that
+    started in the last ten seconds already sees the writes that committed before it, so a small
+    debounce keeps one import from filling the queue without delaying a normal write.
+    """
+    recent = conn.execute(
+        """
+        SELECT 1 FROM jobs
+        WHERE kind = 'risk_check'
+          AND payload ->> 'reason' = 'write'
+          AND created_at > now() - interval '10 seconds'
+        LIMIT 1
+        """
+    ).fetchone()
+    if recent is not None:
+        return None
+    return enqueue_job(
+        conn,
+        key=f"risk_check:write:{group_id}",
+        kind="risk_check",
+        payload={"reason": "write"},
+    )
 
 
 def _claim_one(conn: psycopg.Connection) -> dict[str, Any] | None:
@@ -145,6 +186,7 @@ def _finish(
 
 def _fail(conn: psycopg.Connection, job: dict[str, Any], error: str, *, timed_out: bool) -> None:
     attempts = int(job["attempts"]) + 1
+    failed_notification = None
     if attempts >= MAX_ATTEMPTS:
         conn.execute(
             """
@@ -155,16 +197,15 @@ def _fail(conn: psycopg.Connection, job: dict[str, Any], error: str, *, timed_ou
             """,
             (attempts, error[:2000], timed_out, job["id"]),
         )
-        conn.execute(
-            """
-            INSERT INTO notifications (kind, title, body, data)
-            VALUES ('job_failed', %s, %s, %s)
-            """,
-            (
-                f"{job['kind']} failed",
-                "It was tried three times. Check the import card for the reason.",
-                Jsonb({"job_id": job["id"], "kind": job["kind"]}),
-            ),
+        from fin_agent.notifications import create_notification
+
+        failed_notification = create_notification(
+            conn,
+            kind="job_failed",
+            title=f"{job['kind']} failed",
+            body="It was tried three times. Settings shows the job status and the last error.",
+            data={"job_id": job["id"], "kind": job["kind"]},
+            dedupe_key=f"job_failed:{job['id']}",
         )
         import_id = (job.get("payload") or {}).get("import_id")
         if job["kind"] == "import_statement" and import_id:
@@ -190,6 +231,11 @@ def _fail(conn: psycopg.Connection, job: dict[str, Any], error: str, *, timed_ou
             (attempts, delay, error[:2000], timed_out, job["id"]),
         )
     conn.commit()
+    if failed_notification is not None:
+        from fin_agent.notifications import send_push_for_kind
+
+        send_push_for_kind(conn, "job_failed")
+        conn.commit()
 
 
 class JobRunner:
@@ -210,7 +256,6 @@ class JobRunner:
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
         self._running: set[asyncio.Task[None]] = set()
-        self._last_baseline_day = None
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -245,9 +290,24 @@ class JobRunner:
             except TimeoutError:
                 pass
 
+    def _prepare_schedules(self) -> int:
+        """Seed and sync the recurring schedules, then turn due ones into jobs."""
+        with closing(connect()) as conn:
+            from fin_agent.jobs.schedules import (
+                enqueue_due_schedules,
+                ensure_builtin_schedules,
+                sync_scheduled_questions,
+            )
+
+            ensure_builtin_schedules(conn)
+            sync_scheduled_questions(conn)
+            enqueued = enqueue_due_schedules(conn)
+            conn.commit()
+        return enqueued
+
     async def tick(self) -> int:
         """Claim and run as many jobs as the concurrency limit allows."""
-        self._enqueue_daily_baseline()
+        self._prepare_schedules()
         free = self.concurrency - len(self._running)
         if free <= 0:
             return 0
@@ -266,6 +326,7 @@ class JobRunner:
 
     async def run_once(self) -> int:
         """Claim every currently due job and await it. Tests use this instead of the loop."""
+        self._prepare_schedules()
         claimed = 0
         while True:
             with closing(connect()) as conn:
@@ -274,21 +335,6 @@ class JobRunner:
                 return claimed
             await self._run_job(job)
             claimed += 1
-
-    def _enqueue_daily_baseline(self) -> None:
-        day = ledger_today()
-        if self._last_baseline_day == day:
-            return
-        with closing(connect()) as conn:
-            enqueue_job(
-                conn,
-                key=f"baselines:{day.isoformat()}",
-                kind="recompute_baselines",
-                payload={"day": day.isoformat()},
-                run_at=None,
-            )
-            conn.commit()
-        self._last_baseline_day = day
 
     async def _run_job(self, job: dict[str, Any]) -> None:
         kind = str(job["kind"])

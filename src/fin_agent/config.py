@@ -37,6 +37,7 @@ class Settings:
     jobs_enabled: bool
     agent_ro_password: str | None
     backup_password: str | None
+    vapid_subject: str = "mailto:fin-agent@localhost"
 
     @property
     def cookie_name(self) -> str:
@@ -86,6 +87,9 @@ class Settings:
             jobs_enabled=_flag("FIN_AGENT_JOBS_ENABLED", True),
             agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,
             backup_password=os.environ.get("BACKUP_PASSWORD") or None,
+            vapid_subject=os.environ.get(
+                "FIN_AGENT_VAPID_SUBJECT", "mailto:fin-agent@localhost"
+            ).strip(),
         )
 
 

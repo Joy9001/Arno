@@ -125,6 +125,7 @@ def build_capabilities(
     spend_store: Any = None,
     tracer_provider: Any = None,
     run_budget_usd: Decimal | None = None,
+    question_budget_usd: Decimal | None = None,
     context_window: int | None = None,
 ) -> list[AbstractCapability[Any]]:
     window = int(
@@ -184,6 +185,13 @@ def build_capabilities(
                     window="conversation",
                     name="trial",
                 )
+            ]
+        elif question_budget_usd is not None:
+            # A scheduled question has its own small ceiling, while the daily ceiling is shared
+            # with chat and every other agent run.
+            budgets = [
+                Budget(usd=question_budget_usd, window="run", name="scheduled question"),
+                Budget(usd=Decimal("20"), window="day", name="shared daily"),
             ]
         else:
             budgets = [

@@ -14,6 +14,7 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from fin_agent import scheduled_questions as questions_mod
 from fin_agent.engine.money import money
 from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import accounts as accounts_mod
@@ -26,6 +27,7 @@ from fin_agent.ledger import settings as settings_mod
 from fin_agent.ledger.audit import undo_group, undo_latest, write_group
 from fin_agent.ledger.common import ledger_balance
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.ledger.errors import InvalidLedgerError
 
 
 class ToolInputError(ValueError):
@@ -925,6 +927,7 @@ def update_setup_item(
             default_horizon_days=data.get("default_horizon_days"),
             notification_time=data.get("notification_time"),
             weekly_briefing_dow=data.get("weekly_briefing_dow"),
+            reminder_lead_days=data.get("reminder_lead_days"),
             display_name=data.get("display_name"),
             actor="agent",
             message_id=message_id,
@@ -949,35 +952,45 @@ def update_setup_item(
             ).fetchone()
             if row is None:
                 raise ToolInputError("No such scheduled question")
-            with write_group(conn, actor="agent", message_id=message_id) as group:
-                after = conn.execute(
-                    "UPDATE scheduled_questions SET active = false, updated_at = now() "
-                    "WHERE id = %s RETURNING *",
-                    (row["id"],),
-                ).fetchone()
-                group.record_updated("scheduled_questions", row["id"], row, after)
+            result = questions_mod.archive_question(
+                conn, row["id"], actor="agent", message_id=message_id
+            )
             summary = "Archived the scheduled question"
-            undo_id = group.group_id
+        elif action == "update":
+            row = conn.execute(
+                "SELECT * FROM scheduled_questions "
+                "WHERE id = %s OR lower(prompt) = lower(%s) LIMIT 1",
+                (data.get("id"), data.get("prompt")),
+            ).fetchone()
+            if row is None:
+                raise ToolInputError("No such scheduled question")
+            result = questions_mod.update_question(
+                conn,
+                row["id"],
+                prompt=data.get("prompt"),
+                rule=data.get("rule"),
+                spend_limit_usd=data.get("spend_limit_usd"),
+                active=data.get("active"),
+                actor="agent",
+                message_id=message_id,
+            )
+            summary = "Updated the scheduled question"
         else:
-            spend = data.get("spend_limit_usd")
-            with write_group(conn, actor="agent", message_id=message_id) as group:
-                row = conn.execute(
-                    """
-                    INSERT INTO scheduled_questions (prompt, rule, spend_limit_paise)
-                    VALUES (%s, %s, %s) RETURNING *
-                    """,
-                    (
-                        data["prompt"],
-                        data["rule"],
-                        int(Decimal(str(spend)) * 100) if spend is not None else None,
-                    ),
-                ).fetchone()
-                group.record_created("scheduled_questions", row)
+            try:
+                result = questions_mod.create_question(
+                    conn,
+                    prompt=data["prompt"],
+                    rule=data["rule"],
+                    spend_limit_usd=data.get("spend_limit_usd"),
+                    actor="agent",
+                    message_id=message_id,
+                )
+            except InvalidLedgerError as exc:
+                raise ToolInputError(exc.message) from exc
             summary = "Added the scheduled question"
-            undo_id = group.group_id
         return {
             "status": "saved",
-            "undo_id": undo_id,
+            "undo_id": result["undo_id"],
             "summary": summary,
             "card": _card("setup", title="Setup saved", summary=summary),
         }

@@ -29,6 +29,23 @@ Actor = str
 # Columns a generic restore may touch. Identity and provenance stay put.
 _IMMUTABLE_COLUMNS = {"id", "created_at"}
 
+# A write to any of these can move the projection, so it queues a risk check. Preferences,
+# notifications, and scheduled questions do not: they never change cash.
+RISK_TABLES = frozenset(
+    {
+        "accounts",
+        "baselines",
+        "categories",
+        "goals",
+        "imports",
+        "movements",
+        "payees",
+        "schedules",
+        "settings",
+        "transfer_labels",
+    }
+)
+
 
 def jsonable(value: Any) -> Any:
     """Turn database values into JSON-safe values for audit rows and exports."""
@@ -148,6 +165,11 @@ def write_group(
                     Jsonb(entry["after"]) if entry["after"] is not None else None,
                 ),
             )
+        if any(entry["table_name"] in RISK_TABLES for entry in group.entries):
+            # Same transaction as the write, so a crash cannot lose the check or run it twice.
+            from fin_agent.jobs.runner import enqueue_risk_check
+
+            enqueue_risk_check(conn, group.group_id)
 
 
 def group_for_row(conn: psycopg.Connection, table: str, row_id: str) -> str | None:
