@@ -7,8 +7,8 @@ means" against the code, CI, the live instance, and the TODOs in the source.
 in CI and the versioned images are published. Two kinds of gap remain:
 
 - Measurements that need real data, real endpoints, or a phone were never run.
-- The human gates haven't started. The live ledger has 3 accounts, 0 transfers, and
-  0 conversations, so the four-week clock for milestone 41 isn't running.
+- The human gates haven't started. The live ledger now has 5 accounts, 11 transfers, and
+  0 conversations, so the four-week clock for milestone 41 still isn't running.
 
 Work the groups in order, because each depends on the one before it.
 

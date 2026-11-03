@@ -137,9 +137,11 @@ one LLM call each, and still run when the LLM is down ([note](diagrams/sd-agent-
   call. A new layout starts a parse run: the same agent, with no write tools, and it waits if the
   LLM is down. This replaced "at most one LLM call" on October 31, 2026
   ([step 5](#imports-the-agent-writes-the-parser)).
-- **The merchant categorizer** writes its answer through as a category rule (source `llm`), so
-  each new merchant costs one LLM call, once. User rules win, and a correction replaces an `llm`
-  rule ([`design.md`](design.md#categorization)).
+- **The categorizer batches, and asks before moving money.** One call per import labels the
+  distinct counterparties, and the same call can name one of your own accounts. A transfer
+  suggestion is written only after you confirm it on the review screen. Category answers are
+  saved as rules (source `llm`) keyed on the counterparty; user rules win, and a correction
+  replaces an `llm` rule ([`design.md`](design.md#categorization)).
 
 ### Who decides what inside a chat turn
 

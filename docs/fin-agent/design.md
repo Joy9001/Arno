@@ -183,7 +183,7 @@ Three tables handle categorization:
 | Table | Holds |
 |---|---|
 | `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active`. Categories are labels on spending, not ledger accounts |
-| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees merchants no rule matches. The one-shot categorizer's answer for a new merchant is saved as a rule too, so each merchant costs one LLM call, once; on chat, the agent's `category_guess` plays this part. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
+| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees counterparties no rule matches. On import, one batched call labels every distinct counterparty and may also name one of the user's own accounts; an own-account suggestion becomes a transfer only after the review screen confirms it, and no rule is saved for it. On chat, the agent's `category_guess` plays this part. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
 | `baselines` | Typical spend for each category: `amount_per_day`, `source` (`estimated` at setup, `computed` from real rows), `window`, `updated_at` |
 
 Baselines are recomputed nightly after a category has enough real rows. The `source` flag exists
