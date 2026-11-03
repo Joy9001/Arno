@@ -438,8 +438,8 @@ headers, the fresh-passkey wall on export and passkey changes, log sanitization,
 Phoenix isolation, and the Python + web license audit with `pip-audit`/`pnpm audit` in CI. 39 is
 **MIT** ([`LICENSE`](../../LICENSE)), the versioned `ghcr.io/joy9001/fin-agent` and
 `fin-agent-backup` images, the release workflow, a pre-migration `pg_dump`, 10 MB log rotation, and
-[`self-hosting.md`](self-hosting.md). No image is published yet: they arrive when the `v0.1.0` tag's
-release workflow succeeds.
+[`self-hosting.md`](self-hosting.md). The `v0.1.0` tag is published: its release workflow pushed
+`0.1.0` and `v0.1.0` for both `ghcr.io/joy9001/fin-agent` and `fin-agent-backup` (run 41628402245).
 
 Milestones 40 and 41 are **not** done, and no code change can make them done. 40 needs a second
 person to install from the docs alone; 41 needs four weeks of the owner's daily use without a

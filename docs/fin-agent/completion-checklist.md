@@ -3,8 +3,8 @@
 Audit on November 3, 2026, at `109c7ea`. It checks [`plan.md`](plan.md) §5 and "What 'shipped'
 means" against the code, CI, the live instance, and the TODOs in the source.
 
-**Verdict: not complete.** Every layer's code exists, and the code and docs gaps in group A are
-nearly closed: `main` is green in CI again. Two kinds of gap remain:
+**Verdict: not complete.** Every layer's code exists, and group A is closed: `main` is green in CI
+and the versioned images are published. Two kinds of gap remain:
 
 - Measurements that need real data, real endpoints, or a phone were never run.
 - The human gates haven't started. The live ledger has 3 accounts, 0 transfers, and
@@ -26,8 +26,9 @@ Work the groups in order, because each depends on the one before it.
 - [x] **Correct plan.md's L8 status.** Milestones 37-39 are "built", not "built and tested":
   - 37: the drill ran on the build host, not a fresh machine.
   - 39: no `v*` tag exists, so no image has been published.
-- [ ] **Tag `v0.1.0`.** Then confirm that `release.yml` pushes both `ghcr.io/joy9001/fin-agent`
-      images and that `self-hosting.md` pulls them.
+- [x] **Tag `v0.1.0`.** Then confirm that `release.yml` pushes both `ghcr.io/joy9001/fin-agent`
+      images and that `self-hosting.md` pulls them. Run 41628402245 pushed `0.1.0` and `v0.1.0` for
+      `fin-agent` and `fin-agent-backup`; `compose.yaml` pins `0.1.0` by default.
 - [ ] *(Optional)* Remove the backup manifest race. The manifest is built after `pg_dump`, so
       take both from one `pg_export_snapshot()` (`backup/backup.sh:70`).
 
