@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -49,3 +49,11 @@ jobs:
           tags: |
             ghcr.io/joy9001/fin-agent-backup:${{ env.VERSION }}
             ghcr.io/joy9001/fin-agent-backup:${{ github.ref_name }}
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --verify-tag \
+              --title "${GITHUB_REF_NAME}" --generate-notes
