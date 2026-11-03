@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import select
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import psycopg
@@ -377,3 +379,55 @@ def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(demo_ledger
     finally:
         with _admin_conn() as admin:
             admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_snapshot_test" WITH (FORCE)')
+
+
+@pytest.mark.skipif(
+    BACKUP_SCRIPT_SKIP is not None or sys.platform == "win32",
+    reason=BACKUP_SCRIPT_SKIP or "POSIX signals are needed to stop the idle sleep",
+)
+def test_backup_script_stops_promptly_while_idle(tmp_path: Path):
+    """`docker compose stop` must not wait out the interval: TERM interrupts the idle sleep."""
+    info = conninfo_to_dict(os.environ["DATABASE_URL"])
+    env = os.environ | {
+        "BACKUP_INTERVAL_SECONDS": "3600",
+        "BACKUP_MAX_AGE_SECONDS": "99999999999",
+        "BACKUP_DUMP_PATH": str(tmp_path / "fin_agent.dump"),
+        "BACKUP_MANIFEST_PATH": str(tmp_path / "backup_manifest.json"),
+        "RESTIC_REPOSITORY": str(tmp_path / "restic-repo"),
+        "RESTIC_PASSWORD": "idle-drill-password",
+        "PATH": _client_path(),
+    }
+    if "password" in info:
+        env["PGPASSWORD"] = str(info["password"])
+    sh = shutil.which("sh")
+    assert sh is not None
+    proc = subprocess.Popen(
+        [sh, str(BACKUP_SCRIPT)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        text=True,
+    )
+    output: list[str] = []
+    try:
+        assert proc.stdout is not None
+        deadline = time.monotonic() + 60
+        while not any("next check in" in line for line in output):
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"script never went idle: {output}"
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            assert ready, f"script never went idle: {output}"
+            line = proc.stdout.readline()
+            assert line, f"script exited before going idle: {output}"
+            output.append(line)
+
+        started = time.monotonic()
+        proc.terminate()
+        proc.wait(timeout=5)
+        elapsed = time.monotonic() - started
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+    assert elapsed < 5, f"stop took {elapsed:.1f}s; output: {''.join(output)}"
+    assert proc.returncode == 0, f"output: {''.join(output)}"

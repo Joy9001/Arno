@@ -52,8 +52,16 @@ SQL
 
 snapshot_pid=""
 snapshot_dir=""
+sleep_pid=""
+in_backup=0
 
 stop_snapshot() {
+    # Kill the idle sleep child too, so a stopped container leaves nothing behind.
+    if [ -n "$sleep_pid" ]; then
+        kill "$sleep_pid" 2>/dev/null || true
+        wait "$sleep_pid" 2>/dev/null || true
+        sleep_pid=""
+    fi
     if [ -n "$snapshot_pid" ]; then
         kill "$snapshot_pid" 2>/dev/null || true
         wait "$snapshot_pid" 2>/dev/null || true
@@ -68,7 +76,7 @@ stop_snapshot() {
 }
 
 trap 'stop_snapshot' EXIT
-trap 'stop_snapshot; exit 1' INT TERM HUP
+trap 'stop_snapshot; if [ "$in_backup" = "1" ]; then exit 1; else exit 0; fi' INT TERM HUP
 
 run_backup() {
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -180,6 +188,7 @@ run_backup() {
 }
 
 if [ "${BACKUP_ONCE:-0}" = "1" ]; then
+    in_backup=1
     run_backup
     exit $?
 fi
@@ -190,7 +199,14 @@ while true; do
         log "last success ${age}s ago; next check in ${INTERVAL}s"
     else
         log "last success ${age}s ago; backup is due"
+        in_backup=1
         run_backup || true
+        in_backup=0
     fi
-    sleep "$INTERVAL"
+    # A backgrounded sleep keeps the shell able to run the TERM trap immediately; a foreground
+    # sleep defers it until the full interval has passed.
+    sleep "$INTERVAL" &
+    sleep_pid=$!
+    wait "$sleep_pid" || true
+    sleep_pid=""
 done
