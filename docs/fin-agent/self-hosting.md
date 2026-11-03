@@ -258,6 +258,12 @@ RESTIC_REPOSITORY=/backups/restic      # local volume; see below for off-site
 **Keep `RESTIC_PASSWORD` somewhere other than this machine, such as a password manager or a printed
 copy in a safe. Losing it makes every off-site copy unreadable. There is no recovery path.**
 
+On Google Drive, the recovery kit also includes the OAuth client ID and secret. Under `drive.file`,
+only the client that created the backups can see them. You can re-download the client from the
+Google Cloud console while you can still sign in to Google. If the client is gone, download the
+`fin-agent-backups` folder from the Drive website and point restic at the local copy. That still
+needs `RESTIC_PASSWORD`.
+
 The default repository is the local `backup-data` volume, which is not off-site. For a real
 off-site copy, use Google Drive through rclone, or S3-compatible storage such as Cloudflare R2,
 AWS S3, or Backblaze B2's S3 endpoint. Both need only environment variables. `docker compose logs
