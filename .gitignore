@@ -46,8 +46,6 @@ statements/
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 
-# Opencode
-.opencode/
 
 # OS
 .DS_Store
