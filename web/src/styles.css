@@ -1205,3 +1205,91 @@ button.citation:hover {
 .projection-panel {
   margin-top: 18px;
 }
+
+/* L6: the inbox badge and notification list. */
+.tab-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #06110d;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.inbox-item {
+  padding: 12px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: #0d131b;
+}
+
+.inbox-item.unread {
+  border-color: rgba(76, 195, 138, 0.45);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.inbox-head,
+.inbox-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inbox-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inbox-body {
+  margin: 8px 0 10px;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.badge.kind-reminder,
+.badge.kind-backup_stale,
+.badge.kind-job_failed {
+  color: #f6c85f;
+  border-color: rgba(246, 200, 95, 0.4);
+}
+
+.badge.kind-risk_warning,
+.badge.kind-missed_recurring {
+  color: var(--danger);
+  border-color: rgba(255, 138, 128, 0.4);
+}
+
+.badge.kind-new_subscription {
+  color: var(--accent);
+  border-color: rgba(76, 195, 138, 0.4);
+}
+
+.scheduled-form {
+  display: flex;
+  flex-direction: column;
+  margin-top: 14px;
+}
+
+.scheduled-form textarea {
+  width: 100%;
+}
+
+.muted-row td {
+  opacity: 0.55;
+}
+
+.inbox-item {
+  cursor: pointer;
+}

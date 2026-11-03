@@ -1,9 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, errorMessage } from "../api";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
-import type { BackupStatus, CategoryTree, Settings as SettingsPayload } from "../types";
+import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
+import type {
+  BackupStatus,
+  CategoryTree,
+  JobStatus,
+  ScheduledQuestion,
+  ScheduledQuestionList,
+  Settings as SettingsPayload,
+} from "../types";
 import { useApi } from "../useApi";
 import { PasskeysCard } from "./Passkeys";
 
@@ -38,6 +46,326 @@ function BackupCard({ status }: { status: BackupStatus }) {
         </div>
       </dl>
       {status.last_attempt?.error && <p className="error">{status.last_attempt.error}</p>}
+    </div>
+  );
+}
+
+function NotificationsCard({
+  settings,
+  onSaved,
+}: {
+  settings: SettingsPayload;
+  onSaved: () => void;
+}) {
+  const [time, setTime] = useState(settings.notification_time.slice(0, 5));
+  const [briefingDay, setBriefingDay] = useState(String(settings.weekly_briefing_dow));
+  const [leadDays, setLeadDays] = useState(String(settings.reminder_lead_days));
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api<SettingsPayload>("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify({
+          notification_time: time,
+          weekly_briefing_dow: Number(briefingDay),
+          reminder_lead_days: Number(leadDays),
+        }),
+      });
+      setMessage("Notification times and reminder lead days saved.");
+      onSaved();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="settings-block">
+      <h3>Notifications and reminders</h3>
+      <p className="muted">
+        Times are India time. The weekly briefing runs on the chosen day; reminders appear this
+        many days before a bill, EMI, or card due date. Nightly risk, pattern, and backup checks
+        run on their own schedule.
+      </p>
+      <form onSubmit={(event) => void save(event)}>
+        <label>
+          Notification time
+          <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
+        </label>
+        <label>
+          Weekly briefing day
+          <select value={briefingDay} onChange={(event) => setBriefingDay(event.target.value)}>
+            {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map(
+              (name, index) => (
+                <option key={name} value={index}>
+                  {name}
+                </option>
+              )
+            )}
+          </select>
+        </label>
+        <label>
+          Reminder lead days
+          <input
+            type="number"
+            min={0}
+            max={30}
+            value={leadDays}
+            onChange={(event) => setLeadDays(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Save notification settings"}
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      {message && <p className="notice">{message}</p>}
+    </div>
+  );
+}
+
+function PushCard() {
+  const [supported] = useState(() => pushSupported());
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
+    "default"
+  );
+  const [subscribed, setSubscribed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!supported) return;
+    void pushPermission().then(setPermission);
+    navigator.serviceWorker
+      .getRegistration()
+      .then((registration) => registration?.pushManager.getSubscription())
+      .then((subscription) => setSubscribed(Boolean(subscription)))
+      .catch(() => setSubscribed(false));
+  }, [supported]);
+
+  async function toggle() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (subscribed) {
+        await disablePush();
+        setSubscribed(false);
+      } else {
+        const result = await enablePush();
+        setPermission(result);
+        setSubscribed(result === "granted");
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="settings-block">
+      <h3>Web push</h3>
+      <p className="muted">
+        Push only says that something is ready, such as “Your weekly briefing is ready”. No amount,
+        merchant, or balance is sent through the browser vendor's push service; the full item stays
+        in the Inbox.
+      </p>
+      {!supported && <p className="muted">This browser does not support web push.</p>}
+      {supported && (
+        <>
+          <p className="fine">
+            Permission: {permission} · {subscribed ? "subscribed" : "not subscribed"}
+          </p>
+          <button type="button" onClick={() => void toggle()} disabled={busy}>
+            {busy ? "Working…" : subscribed ? "Disable push" : "Enable push"}
+          </button>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function ScheduledQuestionsCard() {
+  const questions = useApi<ScheduledQuestionList>("/api/scheduled-questions");
+  const [prompt, setPrompt] = useState("");
+  const [rule, setRule] = useState("FREQ=WEEKLY;BYDAY=SU");
+  const [spend, setSpend] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function add(event: FormEvent) {
+    event.preventDefault();
+    if (!prompt.trim() || !rule.trim()) return;
+    setSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await api("/api/scheduled-questions", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt,
+          rule,
+          spend_limit_usd: spend.trim() === "" ? null : Number(spend),
+        }),
+      });
+      setPrompt("");
+      setMessage("Scheduled question saved. It runs read-only and answers into the Inbox.");
+      questions.reload();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function archive(question: ScheduledQuestion) {
+    try {
+      await api(`/api/scheduled-questions/${question.id}`, { method: "DELETE" });
+      questions.reload();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  return (
+    <div className="settings-block wide">
+      <h3>Scheduled questions</h3>
+      <p className="muted">
+        The agent runs these read-only, with no write tools, the pinned financial snapshot, and a
+        ceiling of 20 model requests. The default run ceiling is $1 against the shared $20 daily
+        ceiling. Answers land in the Inbox.
+      </p>
+      {questions.data?.questions.length === 0 && (
+        <p className="muted">No scheduled questions yet.</p>
+      )}
+      <div className="preference-list">
+        {questions.data?.questions.map((question) => (
+          <div key={question.id} className="preference">
+            <div>
+              <p>{question.prompt}</p>
+              <p className="fine">
+                {question.rule} · next {formatMoment(question.next_run_at)} · last run{" "}
+                {formatMoment(question.last_run_at)} · limit $
+                {question.spend_limit_usd ?? question.default_spend_limit_usd}
+              </p>
+            </div>
+            <button type="button" className="ghost small" onClick={() => void archive(question)}>
+              Archive
+            </button>
+          </div>
+        ))}
+      </div>
+      <form className="scheduled-form" onSubmit={(event) => void add(event)}>
+        <label>
+          Question
+          <textarea
+            rows={2}
+            value={prompt}
+            placeholder="Every Sunday, what did I spend on food?"
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+        </label>
+        <label>
+          RRULE
+          <input value={rule} onChange={(event) => setRule(event.target.value)} />
+        </label>
+        <label>
+          Spend limit (USD)
+          <input
+            inputMode="decimal"
+            value={spend}
+            placeholder="1.00"
+            onChange={(event) => setSpend(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={saving}>
+          {saving ? "Saving…" : "Add scheduled question"}
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      {message && <p className="notice">{message}</p>}
+    </div>
+  );
+}
+
+function JobsCard() {
+  const jobs = useApi<JobStatus>("/api/jobs");
+  return (
+    <div className="settings-block wide">
+      <h3>Job status</h3>
+      <p className="muted">
+        The one loop in the API process runs the recurring schedules. A missed run fires once when
+        the machine wakes, and a period key prevents a duplicate.
+      </p>
+      {jobs.data && (
+        <p className="fine">
+          {Object.entries(jobs.data.counts)
+            .map(([status, count]) => `${count} ${status}`)
+            .join(" · ") || "no jobs yet"}
+        </p>
+      )}
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Schedule</th>
+              <th>Rule</th>
+              <th>Next</th>
+              <th>Last</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.data?.schedules.map((schedule) => (
+              <tr key={schedule.id} className={schedule.active ? "" : "muted-row"}>
+                <td>{schedule.label}</td>
+                <td className="fine">{schedule.rule}</td>
+                <td>{formatMoment(schedule.next_run_at)}</td>
+                <td>{formatMoment(schedule.last_run_at)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <h3 className="section-title">Recent jobs</h3>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Status</th>
+              <th>Attempts</th>
+              <th>Finished</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {jobs.data?.recent.map((job) => (
+              <tr key={job.id}>
+                <td>{job.kind.replaceAll("_", " ")}</td>
+                <td>
+                  <span className={`badge ${job.status === "failed" ? "danger" : "muted"}`}>
+                    {job.status}
+                  </span>
+                </td>
+                <td className="num">{job.attempts}</td>
+                <td>{formatMoment(job.finished_at)}</td>
+                <td className="fine">{job.last_error ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {jobs.error && <p className="error">{jobs.error}</p>}
     </div>
   );
 }
@@ -135,10 +463,10 @@ export function SettingsPanel() {
       <header className="panel-head">
         <div>
           <p className="eyebrow">Settings</p>
-          <h2>Profile, categories, backups, export</h2>
+          <h2>Profile, categories, notifications, jobs, backups, export</h2>
           <p className="muted">
-            These are the L1 settings sections. Chat and settings write through the same ledger
-            functions and the same audit log.
+            These are the L1 and L6 settings sections. Chat and settings write through the same
+            ledger functions and the same audit log.
           </p>
         </div>
       </header>
@@ -190,6 +518,12 @@ export function SettingsPanel() {
         </div>
 
         {backup.data ? <BackupCard status={backup.data} /> : <div className="settings-block" />}
+
+        {settings.data && (
+          <NotificationsCard settings={settings.data} onSaved={settings.reload} />
+        )}
+
+        <PushCard />
 
         <PasskeysCard />
 
@@ -341,6 +675,10 @@ export function SettingsPanel() {
             <button type="submit">Add user rule</button>
           </form>
         </div>
+
+        <ScheduledQuestionsCard />
+
+        <JobsCard />
 
         <div className="settings-block wide">
           <h3>Export</h3>

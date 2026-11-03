@@ -145,6 +145,7 @@ export type Settings = {
   default_horizon_days: number;
   notification_time: string;
   weekly_briefing_dow: number;
+  reminder_lead_days: number;
   profile: { user_id: string | null; display_name: string | null };
   last_model_error_type: string | null;
   last_model_error_at: string | null;
@@ -302,4 +303,79 @@ export type ImportList = {
     committed_at: string | null;
     undone_at: string | null;
   }[];
+};
+
+export type NotificationItem = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  data: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+};
+
+export type NotificationList = {
+  notifications: NotificationItem[];
+  unread_count: number;
+  as_of: string;
+};
+
+export type NotificationChat = {
+  thread_id: string;
+  title: string | null;
+  message: string;
+  outside_text: boolean;
+};
+
+export type ScheduledQuestion = {
+  id: string;
+  prompt: string;
+  rule: string;
+  spend_limit_usd: string | null;
+  default_spend_limit_usd: string;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  active: boolean;
+  created_at: string | null;
+};
+
+export type ScheduledQuestionList = {
+  questions: ScheduledQuestion[];
+  default_spend_limit_usd: string;
+  as_of: string;
+};
+
+export type JobScheduleStatus = {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  label: string;
+  rule: string;
+  next_run_at: string;
+  last_run_at: string | null;
+  active: boolean;
+};
+
+export type JobRunStatus = {
+  id: string;
+  key: string;
+  kind: string;
+  status: "pending" | "running" | "done" | "failed";
+  attempts: number;
+  run_at: string;
+  finished_at: string | null;
+  last_error: string | null;
+};
+
+export type JobStatus = {
+  schedules: JobScheduleStatus[];
+  recent: JobRunStatus[];
+  counts: Record<string, number>;
+  as_of: string;
+};
+
+export type PushKey = {
+  public_key: string;
+  subject: string;
 };

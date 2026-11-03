@@ -344,7 +344,13 @@ function Conversation({
   );
 }
 
-export function ChatHome() {
+export function ChatHome({
+  focusThreadId,
+  onFocusHandled,
+}: {
+  focusThreadId?: string | null;
+  onFocusHandled?: () => void;
+}) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string>(() => newThreadId());
   const [initial, setInitial] = useState<ChatMessage[]>([]);
@@ -367,11 +373,15 @@ export function ChatHome() {
       try {
         const list = await loadThreads("");
         if (!alive) return;
-        if (list.length > 0) {
-          setActiveId(list[0].id);
+        const wanted = focusThreadId && list.some((thread) => thread.id === focusThreadId)
+          ? focusThreadId
+          : list[0]?.id;
+        if (wanted) {
+          setActiveId(wanted);
         } else {
           setLoadedFor(activeId);
         }
+        if (focusThreadId) onFocusHandled?.();
       } catch (caught) {
         if (alive) setError(errorMessage(caught));
       } finally {
