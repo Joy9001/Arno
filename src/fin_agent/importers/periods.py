@@ -51,6 +51,15 @@ _MONTH_YEAR = re.compile(
     r"\b(" + "|".join(sorted(_MONTHS, key=len, reverse=True)) + r")\s+(\d{4})\b",
     re.IGNORECASE,
 )
+_YEARLESS_RANGE = re.compile(
+    r"\b(\d{1,2})\s+("
+    + "|".join(sorted(_MONTHS, key=len, reverse=True))
+    + r")\s*(?:to|through|until|till|[-–—])\s*(\d{1,2})\s+("
+    + "|".join(sorted(_MONTHS, key=len, reverse=True))
+    + r")\b",
+    re.IGNORECASE,
+)
+_SHORT_YEAR = re.compile(r"['’](\d{2})\b")
 
 
 def _one_date(day: str, month: str, year: str) -> dt.date | None:
@@ -100,6 +109,17 @@ def derive_period(
         if start and end:
             if end < start:
                 start, end = end, start
+            return {"start": start.isoformat(), "end": end.isoformat(), "source": "header"}
+    yearless = _YEARLESS_RANGE.search(text)
+    years = [2000 + int(year) for year in _SHORT_YEAR.findall(text)]
+    if yearless and years:
+        end_year = max(years)
+        start_month = _MONTHS[yearless.group(2).lower()[:9]]
+        end_month = _MONTHS[yearless.group(4).lower()[:9]]
+        start_year = end_year - 1 if end_month < start_month else end_year
+        start = _one_date(yearless.group(1), yearless.group(2), str(start_year))
+        end = _one_date(yearless.group(3), yearless.group(4), str(end_year))
+        if start and end:
             return {"start": start.isoformat(), "end": end.isoformat(), "source": "header"}
     month_year = _MONTH_YEAR.search(text)
     if month_year:

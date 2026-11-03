@@ -207,6 +207,24 @@ async def test_synthetic_indian_parsers_verify(payload, parser, opening, closing
     assert closing == check["computed_closing"]
 
 
+def test_derive_period_yearless_range_takes_year_from_short_token():
+    from fin_agent.importers.periods import derive_period
+
+    doc = Doc(b"12 JUL - 11 AUG\n14 Aug '26 \xe2\x80\xa2 UPI 100.00\n")
+    assert derive_period(doc) == {
+        "start": "2026-07-12",
+        "end": "2026-08-11",
+        "source": "header",
+    }
+    wrap = Doc(b"15 DEC - 14 JAN\n20 Dec '26 UPI 1.00\n02 Jan \xe2\x80\x9927 UPI 2.00\n")
+    assert derive_period(wrap) == {
+        "start": "2026-12-15",
+        "end": "2027-01-14",
+        "source": "header",
+    }
+    assert derive_period(Doc(b"12 JUL - 11 AUG\nno year token\n")) is None
+
+
 async def test_monty_has_no_file_access():
     doc = Doc(sbi_csv())
     result = await run_script(doc, "open('/etc/passwd').read()\n")
