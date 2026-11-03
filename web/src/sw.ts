@@ -36,9 +36,55 @@ declare global {
 
 const worker = self as unknown as WorkerScope;
 
+const SHARE_CACHE = "fin-agent-share";
+const SHARE_KEY = "/share-target/image";
+
+type FetchLike = Event & {
+  request: Request;
+  respondWith(response: Response | Promise<Response>): void;
+};
+
 worker.skipWaiting();
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
+
+worker.addEventListener("fetch", (event: Event) => {
+  const request = event as FetchLike;
+  const url = new URL(request.request.url);
+  if (
+    request.request.method !== "POST" ||
+    url.origin !== self.location.origin ||
+    url.pathname !== "/share-target"
+  ) {
+    return;
+  }
+  request.respondWith(
+    (async () => {
+      try {
+        const form = await request.request.formData();
+        const files = form
+          .getAll("image")
+          .filter((value): value is File => value instanceof File);
+        const image =
+          files.find((file) => file.type.startsWith("image/")) ?? files[0];
+        if (!image) return Response.redirect("/?share=empty", 303);
+        const cache = await caches.open(SHARE_CACHE);
+        await cache.put(
+          SHARE_KEY,
+          new Response(image, {
+            headers: {
+              "content-type": image.type || "image/png",
+              "x-filename": encodeURIComponent(image.name || "shared-image"),
+            },
+          }),
+        );
+        return Response.redirect("/?share=1", 303);
+      } catch {
+        return Response.redirect("/?share=error", 303);
+      }
+    })(),
+  );
+});
 
 worker.addEventListener("push", (event: Event) => {
   const push = event as PushLike;

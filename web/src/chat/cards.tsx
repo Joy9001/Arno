@@ -143,10 +143,77 @@ function UndoButton({ undoId }: { undoId?: string | null }) {
   );
 }
 
-export function Card({ data }: { data: Record<string, unknown> }) {
+export function Card({
+  data,
+  onRetryCapture,
+}: {
+  data: Record<string, unknown>;
+  onRetryCapture?: (kind: string, attachmentId: string) => void;
+}) {
   const card = String(data.card ?? "card");
   if (card === "chart") return <ChartCard data={data} />;
   if (card === "projection") return <ProjectionCard data={data} />;
+
+  if (card === "capture") {
+    const attachmentId = String(data.attachment_id ?? "");
+    const amount = Number(data.amount_paise ?? 0);
+    const method = data.method ? String(data.method).toUpperCase() : "unknown";
+    return (
+      <div className="chat-card capture-card">
+        <div className="capture-image">
+          <img
+            src={String(data.url ?? `/api/attachments/${attachmentId}`)}
+            alt="The shared receipt or payment screenshot"
+          />
+        </div>
+        <div className="capture-fields">
+          <div className="chat-card-head">
+            <strong>{String(data.title ?? "Photo logged")}</strong>
+            <span className="money">{formatRupees(amount)}</span>
+          </div>
+          <dl>
+            <dt>Merchant</dt>
+            <dd>{String(data.merchant ?? "unknown")}</dd>
+            <dt>Date</dt>
+            <dd>{String(data.date ?? "unknown")}</dd>
+            <dt>Method</dt>
+            <dd>{method.toLowerCase()}</dd>
+            <dt>UPI ref</dt>
+            <dd>{data.upi_ref ? String(data.upi_ref) : "not shown"}</dd>
+          </dl>
+          <UndoButton undoId={data.undo_id as string | undefined} />
+        </div>
+      </div>
+    );
+  }
+
+  if (card === "capture-retry") {
+    const kind = String(data.kind ?? "");
+    const attachmentId = String(data.attachment_id ?? "");
+    const url = data.url ? String(data.url) : `/api/attachments/${attachmentId}`;
+    return (
+      <div className="chat-card capture-card retry">
+        {kind === "photo" && (
+          <div className="capture-image">
+            <img src={url} alt="The photo that could not be read" />
+          </div>
+        )}
+        <div className="capture-fields">
+          <div className="chat-card-head">
+            <strong>{String(data.title ?? "Capture failed")}</strong>
+          </div>
+          <p>{String(data.note ?? "The file is saved. Retry it.")}</p>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => onRetryCapture?.(kind, attachmentId)}
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (card === "movement" || card === "correction" || card === "undo") {
     const title = String(data.title ?? "Logged");

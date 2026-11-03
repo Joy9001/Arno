@@ -968,6 +968,63 @@ button.small {
   resize: vertical;
 }
 
+.composer-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.composer .record.live {
+  color: #ff8a80;
+  border-color: #6b2b2b;
+}
+
+.capture-card {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.capture-image img {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #0b0f14;
+}
+
+.capture-fields dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 8px 0;
+}
+
+.capture-fields dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.capture-fields dd {
+  margin: 0;
+}
+
+@media (max-width: 640px) {
+  .capture-card {
+    grid-template-columns: 1fr;
+  }
+}
+
 .empty-chat {
   margin: auto;
   text-align: center;

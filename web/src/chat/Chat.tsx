@@ -1,11 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { DefaultChatTransport, isToolUIPart, getToolName, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { Streamdown } from "streamdown";
 import { api, errorMessage } from "../api";
+import { takeSharedImage } from "../share";
 import { Card, NumberFlags } from "./cards";
 import type { ChatMessage, ThreadBody, ThreadList, ThreadSummary } from "./types";
+
+type CaptureCard = Record<string, unknown>;
+
+type CaptureResult =
+  | { status: "logged"; attachment_id: string; card: CaptureCard }
+  | { status: "failed"; attachment_id: string; note: string; card: CaptureCard };
+
+type TranscribeResult =
+  | { status: "transcribed"; attachment_id: string; transcript: string }
+  | { status: "failed"; attachment_id: string; note: string; card: CaptureCard };
 
 const LINKED = {
   a: ({ children }: { children?: ReactNode }) => (
@@ -82,7 +93,13 @@ function ThreadSidebar({
   );
 }
 
-function Part({ part }: { part: ChatMessage["parts"][number] }) {
+function Part({
+  part,
+  onRetryCapture,
+}: {
+  part: ChatMessage["parts"][number];
+  onRetryCapture?: (kind: string, attachmentId: string) => void;
+}) {
   if (part.type === "text") {
     return (
       <Streamdown components={LINKED} mode="static" className="markdown">
@@ -93,7 +110,9 @@ function Part({ part }: { part: ChatMessage["parts"][number] }) {
   if (part.type.startsWith("data-")) {
     const data = (part as { data?: unknown }).data;
     if (part.type === "data-card" && data && typeof data === "object") {
-      return <Card data={data as Record<string, unknown>} />;
+      return (
+        <Card data={data as Record<string, unknown>} onRetryCapture={onRetryCapture} />
+      );
     }
     if (part.type === "data-number-flags") {
       const amounts = (data as { amounts?: string[] } | undefined)?.amounts ?? [];
@@ -117,11 +136,13 @@ function Message({
   busy,
   onApprove,
   onFlag,
+  onRetryCapture,
 }: {
   message: ChatMessage;
   busy: boolean;
   onApprove: (approvalId: string, approved: boolean) => void;
   onFlag: (message: ChatMessage) => void;
+  onRetryCapture: (kind: string, attachmentId: string, messageId: string) => void;
 }) {
   const [flagged, setFlagged] = useState(Boolean(message.metadata?.flagged_at));
   const role = message.role;
@@ -190,7 +211,15 @@ function Message({
             </details>
           );
         }
-        return <Part key={index} part={part} />;
+        return (
+          <Part
+            key={index}
+            part={part}
+            onRetryCapture={(kind, attachmentId) =>
+              onRetryCapture(kind, attachmentId, message.id)
+            }
+          />
+        );
       })}
     </article>
   );
@@ -205,19 +234,25 @@ function Conversation({
   initialMessages: ChatMessage[];
   onThreadChanged: () => void;
 }) {
+  const voiceRef = useRef<string | null>(null);
   const transport = useMemo(
     () =>
       new DefaultChatTransport<ChatMessage>({
         api: "/api/chat",
-        prepareSendMessagesRequest: ({ id, messages, trigger, messageId }) => ({
-          body: {
-            id,
-            trigger,
-            messageId,
-            // The server holds the thread's history; it only needs this turn's message.
-            messages: messages.slice(-1),
-          },
-        }),
+        prepareSendMessagesRequest: ({ id, messages, trigger, messageId }) => {
+          const voiceAttachment = voiceRef.current;
+          voiceRef.current = null;
+          return {
+            body: {
+              id,
+              trigger,
+              messageId,
+              voice_attachment_id: voiceAttachment ?? undefined,
+              // The server holds the thread's history; it only needs this turn's message.
+              messages: messages.slice(-1),
+            },
+          };
+        },
         prepareReconnectToStreamRequest: ({ id }) => ({
           api: `/api/chat/${id}/stream`,
         }),
@@ -229,6 +264,7 @@ function Conversation({
   const {
     messages,
     sendMessage,
+    setMessages,
     status,
     stop,
     error,
@@ -244,12 +280,223 @@ function Conversation({
 
   const [input, setInput] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const holdingRef = useRef(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const pendingPhoto = useRef<File | null>(null);
+  const [recording, setRecording] = useState(false);
+  const canRecord =
+    typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
+  const [uploading, setUploading] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
   const busy = status === "submitted" || status === "streaming";
   const visibleMessages = useMemo(() => groupMessages(messages), [messages]);
 
   useEffect(() => {
+    return () => {
+      const recorder = recorderRef.current;
+      if (recorder && recorder.state !== "inactive") recorder.stop();
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
+  useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, status]);
+
+  function appendCard(card: Record<string, unknown>, id: string) {
+    setMessages((current) => [
+      ...current,
+      {
+        id,
+        role: "assistant",
+        parts: [{ type: "data-card", id, data: card }],
+      } as unknown as ChatMessage,
+    ]);
+  }
+
+  function removeMessage(id: string) {
+    setMessages((current) => current.filter((message) => message.id !== id));
+  }
+
+  async function uploadPhoto(file: File) {
+    if (busy) {
+      pendingPhoto.current = file;
+      return;
+    }
+    setCaptureError(null);
+    setUploading(true);
+    const form = new FormData();
+    form.append("file", file, file.name || "photo.png");
+    try {
+      const result = await api<CaptureResult>(`/api/chat/${threadId}/photo`, {
+        method: "POST",
+        body: form,
+      });
+      if (result.status === "logged") {
+        appendCard(result.card, `photo_${result.attachment_id}`);
+        onThreadChanged();
+      } else {
+        appendCard(result.card, `capture_retry_${result.attachment_id}`);
+      }
+    } catch (caught) {
+      setCaptureError(errorMessage(caught));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!busy && pendingPhoto.current) {
+      const file = pendingPhoto.current;
+      pendingPhoto.current = null;
+      void uploadPhoto(file);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
+
+  async function transcribe(blob: Blob, mimeType: string) {
+    setCaptureError(null);
+    setTranscribing(true);
+    const form = new FormData();
+    const extension = mimeType.includes("ogg")
+      ? "ogg"
+      : mimeType.includes("mp4")
+        ? "m4a"
+        : "webm";
+    form.append("file", blob, `voice.${extension}`);
+    form.append("thread_id", threadId);
+    try {
+      const result = await api<TranscribeResult>("/api/transcribe", {
+        method: "POST",
+        body: form,
+      });
+      if (result.status === "transcribed") {
+        voiceRef.current = result.attachment_id;
+        try {
+          await sendMessage({ text: result.transcript });
+        } catch (caught) {
+          voiceRef.current = null;
+          setInput(result.transcript);
+          setCaptureError(errorMessage(caught));
+        }
+      } else {
+        appendCard(result.card, `capture_retry_${result.attachment_id}`);
+      }
+    } catch (caught) {
+      setCaptureError(errorMessage(caught));
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  async function retryCapture(kind: string, attachmentId: string, messageId: string) {
+    setCaptureError(null);
+    try {
+      if (kind === "photo") {
+        const result = await api<CaptureResult>(
+          `/api/chat/${encodeURIComponent(threadId)}/photo/${encodeURIComponent(attachmentId)}`,
+          { method: "POST" },
+        );
+        if (result.status === "logged") {
+          removeMessage(messageId);
+          appendCard(result.card, `photo_${attachmentId}`);
+          onThreadChanged();
+        } else {
+          setCaptureError(result.note);
+        }
+        return;
+      }
+      const result = await api<TranscribeResult>(
+        `/api/transcribe/${encodeURIComponent(attachmentId)}?thread_id=${encodeURIComponent(threadId)}`,
+        { method: "POST" },
+      );
+      if (result.status === "transcribed") {
+        removeMessage(messageId);
+        voiceRef.current = attachmentId;
+        await sendMessage({ text: result.transcript });
+      } else {
+        setCaptureError(result.note);
+      }
+    } catch (caught) {
+      setCaptureError(errorMessage(caught));
+    }
+  }
+
+  async function startRecording() {
+    if (busy || transcribing || recording) return;
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setCaptureError("This browser cannot record audio.");
+      return;
+    }
+    setCaptureError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const preferred = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ].find((type) => MediaRecorder.isTypeSupported(type));
+      const recorder = new MediaRecorder(
+        stream,
+        preferred ? { mimeType: preferred } : undefined,
+      );
+      chunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        recorderRef.current = null;
+        setRecording(false);
+        const type = recorder.mimeType || preferred || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type });
+        chunksRef.current = [];
+        if (blob.size) void transcribe(blob, type);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      if (!holdingRef.current) stopRecording();
+    } catch {
+      setCaptureError("Microphone access was refused.");
+    }
+  }
+
+  function stopRecording() {
+    holdingRef.current = false;
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+
+  useEffect(() => {
+    let alive = true;
+    void takeSharedImage().then((file) => {
+      if (alive && file) void uploadPhoto(file);
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+
+  function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    holdingRef.current = true;
+    void startRecording();
+  }
+
+  function onPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    stopRecording();
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -309,6 +556,9 @@ function Conversation({
               addToolApprovalResponse({ id: approvalId, approved })
             }
             onFlag={(item) => void flag(item)}
+            onRetryCapture={(kind, attachmentId, messageId) =>
+              void retryCapture(kind, attachmentId, messageId)
+            }
           />
         ))}
         {status === "submitted" && <p className="muted fine">Thinking…</p>}
@@ -324,18 +574,66 @@ function Conversation({
       </div>
 
       <form className="composer" onSubmit={(event) => void submit(event)}>
-        <textarea
-          value={input}
-          rows={2}
-          placeholder="Message Fin-Agent…"
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void submit(event);
-            }
-          }}
-        />
+        <div className="composer-main">
+          <textarea
+            value={input}
+            rows={2}
+            placeholder="Message Fin-Agent…"
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void submit(event);
+              }
+            }}
+          />
+          <div className="composer-actions">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => fileInput.current?.click()}
+              disabled={busy || uploading}
+            >
+              {uploading ? "Reading…" : "Photo"}
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void uploadPhoto(file);
+              }}
+            />
+            {canRecord && (
+              <button
+                type="button"
+                className={recording ? "ghost record live" : "ghost record"}
+                disabled={busy || transcribing}
+                onPointerDown={onPointerDown}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                onLostPointerCapture={() => {
+                  if (holdingRef.current) stopRecording();
+                }}
+              >
+                {recording ? "Listening… release" : transcribing ? "Transcribing…" : "Hold to talk"}
+              </button>
+            )}
+          </div>
+          {(recording || transcribing || uploading || captureError) && (
+            <p className={captureError ? "error fine" : "fine"}>
+              {captureError ??
+                (recording
+                  ? "Recording… release to send."
+                  : transcribing
+                    ? "Transcribing…"
+                    : "Reading the photo…")}
+            </p>
+          )}
+        </div>
         <button type="submit" disabled={busy || !input.trim()}>
           Send
         </button>

@@ -24,6 +24,17 @@ export default defineConfig({
         display: "standalone",
         start_url: "/",
         scope: "/",
+        share_target: {
+          action: "/share-target",
+          method: "POST",
+          enctype: "multipart/form-data",
+          params: {
+            title: "title",
+            text: "text",
+            url: "url",
+            files: [{ name: "image", accept: ["image/*"] }],
+          },
+        },
         icons: [
           {
             src: "/icons/icon-192.png",
