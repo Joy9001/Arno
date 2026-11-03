@@ -46,6 +46,12 @@ statements/
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 
+# Opencode
+.opencode/
+
+# Repowise local index (local cache, not a source of truth)
+.repowise/
+
 # OS
 .DS_Store
 

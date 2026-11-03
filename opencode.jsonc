@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "repowise": {
+      "type": "local",
+      "command": [
+        "repowise",
+        "mcp",
+        "J:/Development/Fin-Agent",
+        "--transport",
+        "stdio"
+      ],
+      "enabled": true
+    }
+  }
+}
