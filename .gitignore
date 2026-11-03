@@ -49,9 +49,6 @@ statements/
 # Opencode
 .opencode/
 
-# Repowise local index (local cache, not a source of truth)
-.repowise/
-
 # OS
 .DS_Store
 
