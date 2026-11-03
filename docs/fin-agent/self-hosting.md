@@ -252,16 +252,81 @@ lets a restore prove the database came back, not just that a dump unpacked.
 ```dotenv
 BACKUP_PASSWORD=<long random>
 RESTIC_PASSWORD=<long random>          # THE ONE SECRET TO KEEP OFF THIS MACHINE
-RESTIC_REPOSITORY=/backups/restic      # or s3:..., sftp:..., rest:..., rclone:...
+RESTIC_REPOSITORY=/backups/restic      # local volume; see below for off-site
 ```
 
 **Keep `RESTIC_PASSWORD` somewhere other than this machine, such as a password manager or a printed
 copy in a safe. Losing it makes every off-site copy unreadable. There is no recovery path.**
 
 The default repository is the local `backup-data` volume, which is not off-site. For a real
-off-site copy, set an S3/B2/R2 repository and the credentials restic expects, or an `rclone:`
-remote. `docker compose logs backup` and Settings → Backup status show attempts; no success for 48
-hours sends an inbox item and a push.
+off-site copy, use Google Drive through rclone, or S3-compatible storage such as Cloudflare R2,
+AWS S3, or Backblaze B2's S3 endpoint. Both need only environment variables. `docker compose logs
+backup` and Settings → Backup status show attempts; no success for 48 hours sends an inbox item and
+a push.
+
+Google Drive is the current recommended setup:
+
+```dotenv
+RESTIC_REPOSITORY=rclone:gdrive:fin-agent-backups
+RCLONE_CONFIG_GDRIVE_TYPE=drive
+RCLONE_CONFIG_GDRIVE_SCOPE=drive.file
+RCLONE_CONFIG_GDRIVE_TOKEN='{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}'
+```
+
+To get the token, install rclone on a machine with a browser (`scoop install rclone`, `winget
+install Rclone.Rclone`, or [rclone.org/install](https://rclone.org/install/)) and run:
+
+```bash
+rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ"
+```
+
+Sign in, then copy the JSON between the arrows into `RCLONE_CONFIG_GDRIVE_TOKEN`, inside single
+quotes. The `drive.file` scope lets rclone see only the files it created, not the rest of your
+Drive. The refresh token is a credential: treat it like `RESTIC_PASSWORD` and keep it out of git.
+
+Use your own Google OAuth client. rclone's shared client ID is rate-limited (the first backup took
+five minutes on `rateLimitExceeded`) and is being retired. In the Google Cloud console, enable the
+Drive API, publish the OAuth consent screen to **In production** (a "Testing" app's refresh tokens
+expire after 7 days; `drive.file` needs no verification), and create a **Desktop app** client.
+Then authorize with a base64 blob that carries all three settings, and add the client to `.env`:
+
+```bash
+rclone authorize "drive" "$(printf '{"client_id":"%s","client_secret":"%s","scope":"drive.file"}' \
+  "$CLIENT_ID" "$CLIENT_SECRET" | base64 -w0)"
+```
+
+```dotenv
+RCLONE_CONFIG_GDRIVE_CLIENT_ID=<client id>
+RCLONE_CONFIG_GDRIVE_CLIENT_SECRET=<client secret>
+```
+
+Under `drive.file`, a client sees only the files it created. Changing clients starts an empty
+repository, so seed it again, as described below.
+
+Cloudflare R2 needs an API token scoped to **Object Read & Write** on that bucket only:
+
+```dotenv
+RESTIC_REPOSITORY=s3:https://<account-id>.r2.cloudflarestorage.com/<bucket>
+AWS_ACCESS_KEY_ID=<R2 API token access key id>
+AWS_SECRET_ACCESS_KEY=<R2 API token secret>
+AWS_DEFAULT_REGION=auto
+```
+
+Any other rclone remote works the same way, through `RCLONE_CONFIG_<NAME>_*` variables. SFTP does
+not work: the images have no ssh client.
+
+The sidecar runs `restic init` itself on first use. To switch or move storage later, change
+`RESTIC_REPOSITORY` and its credentials, then seed the new repository right away. The age check
+reads `backup_runs`, not the repository, so otherwise the new repository stays empty for up to 24
+hours:
+
+```bash
+# `up -d` recreates the container; `docker restart` keeps the old environment.
+docker compose up -d backup && docker compose run --rm -e BACKUP_ONCE=1 backup
+docker compose run --rm --no-deps backup restic snapshots
+```
+
+To carry old snapshots across, `restic copy --from-repo <old repository>` exists.
 
 Test the repository from the host:
 
@@ -279,7 +344,7 @@ docker compose up -d db
 
 # 2. Restore and verify in one command. The API image owns the PostgreSQL client and restic.
 #    The default local backup volume is root-owned, so read it with --user root. An off-site
-#    repository (S3/B2/R2/rclone) does not need that flag.
+#    repository does not need that flag.
 docker compose run --rm --no-deps --user root api fin-agent restore
 
 # 3. Start the app.

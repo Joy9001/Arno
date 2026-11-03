@@ -51,3 +51,6 @@ statements/
 
 # Eval runs write transcripts and scorecards here; they are local artifacts.
 evals/results/
+
+# Secrets
+.secrets/

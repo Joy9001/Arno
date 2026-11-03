@@ -21,11 +21,13 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 
-# restic is in the runtime image so `fin-agent restore` can run the milestone 37 drill with one
-# command, without a second tool on the host.
+# restic and rclone are in the runtime image so `fin-agent restore` can read local, S3/R2, or
+# rclone (Google Drive) repositories with one command, without a second tool on the host.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends restic \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=rclone/rclone:1.71.2 /usr/local/bin/rclone /usr/local/bin/rclone
 
 COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
