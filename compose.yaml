@@ -94,6 +94,22 @@ services:
     ports:
       - "127.0.0.1:11434:11434"
 
+  # `docker compose --profile local-stt up`: local speech-to-text for the STT role.
+  # The first voice note downloads Whisper into the volume; later notes reuse it.
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    profiles: ["local-stt"]
+    restart: unless-stopped
+    environment:
+      ENABLE_UI: "false"
+      WHISPER__INFERENCE_DEVICE: cpu
+      WHISPER__COMPUTE_TYPE: int8
+    volumes:
+      - speaches-data:/home/ubuntu/.cache/huggingface
+    ports:
+      # Host development only. The API inside Compose reaches it at http://speaches:8000/v1.
+      - "127.0.0.1:8001:8000"
+
   # `docker compose --profile traces up`: Phoenix on its own database and role.
   phoenix-init:
     image: postgres:18.6
@@ -150,4 +166,5 @@ volumes:
   db-data:
   backup-data:
   ollama-data:
+  speaches-data:
   phoenix-data:
