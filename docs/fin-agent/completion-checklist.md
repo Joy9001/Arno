@@ -88,6 +88,19 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
   - [ ] Union Bank: open until its statements arrive.
 - [ ] **Milestone 24:** commit the 12-month backfill through the review screen, then recompute
       baselines from the real rows.
+  - [x] SBI, November 3, 2026: 939 rows committed with `commit_import` after inspecting the review
+        payload. It showed `VERIFIED`, 939 new, and 0 ambiguous. The adjustment came out 0, the
+        ledger balance equals the printed closing, the parser was saved, and 7 baselines were
+        computed. Ran with local code while the API was stopped, not through the review screen.
+  - [ ] Fix own-account moves booked as spend. Commit records every debit as an expense and every
+        credit as income, and reconcile matches within one account only. Card bills and transfers
+        between your own accounts count as spending, against plan.md's "Spending means
+        consumption". Importing Slice now would count its 11 SBI bill payments twice.
+  - [ ] Fix SBI UPI merchant extraction. Each narration became its own payee: 709 payees from 939
+        rows, so category rules almost never reuse. Categorizing took about 40 minutes, one call
+        per line, and 112 rows were left uncategorized.
+  - [ ] Import Slice after the own-account fix, in period order (May 25 cycle first).
+  - [ ] Release `v0.1.2`, so the live image reads Slice's yearless period (`626e421`).
 
 ### Engine measures (L5), after the backfill
 
