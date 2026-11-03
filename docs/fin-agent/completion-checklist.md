@@ -56,10 +56,8 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
   - [x] Released `v0.1.1` (run 41648263436), so the published images carry rclone. `pip-audit`
         now audits the lockfile export: `--strict` failed once the version left `0.1.0`, a name
         that an unrelated PyPI package also uses.
-  - [ ] The repository is private, so its GHCR packages are too, and an anonymous
-        `docker compose pull` returns `unauthorized` (`0.1.0` as well). Make the packages
-        public, or `docker login ghcr.io` with a `read:packages` token. Until then, the host runs
-        `0.1.1` built locally from the tag, and milestone 40 can't pull.
+  - [x] The repository and both GHCR packages are public. Anonymous pulls of `0.1.1` work, and
+        the API runs the published image. The sidecar picks it up on `docker compose up -d backup`.
 - [x] Get the backup sidecar running. The `Exited (137)` was a SIGKILL. Dash defers the TERM trap
       until the foreground `sleep 3600` exits, so every stop hit the 30-second grace period. The
       sleep now runs in the background under `wait`, and a stop takes 0.66 s with exit 0.
