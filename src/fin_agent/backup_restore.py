@@ -170,7 +170,7 @@ def _admin_dsn(target_dsn: str) -> tuple[str, dict[str, Any]]:
 
 def _database_has_tables(target_dsn: str) -> bool:
     try:
-        with psycopg.connect(target_dsn, row_factory=dict_row) as conn:
+        with psycopg.connect(target_dsn, connect_timeout=10, row_factory=dict_row) as conn:
             row = conn.execute(
                 """
                 SELECT count(*) AS n FROM information_schema.tables
