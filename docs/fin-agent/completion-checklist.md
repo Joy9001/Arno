@@ -38,11 +38,37 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 ### Durability, first and before any real money
 
-- [ ] Point `RESTIC_REPOSITORY` **off-site**: S3, B2, SFTP, or rclone. Today it's the local
-      `/backups/restic`, which fails milestone 12 and the durability requirement.
-- [ ] Get the backup sidecar running. It's `Exited (137)`, and its last success was November 1.
-- [ ] Confirm that a new `backup_runs` success lands within 24 hours.
-- [ ] Stop the sidecar on purpose and confirm the 48-hour backup alert fires once.
+- [ ] Point `RESTIC_REPOSITORY` **off-site**. Google Drive for now, through restic's `rclone:`
+      backend. R2 or S3 later is a `.env`-only switch (`self-hosting.md` §6.1).
+  - [x] Both images ship rclone 1.71.2. Before this, neither had `ssh` or `rclone`, so the documented
+        SFTP and rclone targets couldn't work. SFTP is still unsupported, and the docs say so.
+  - [x] `RESTIC_REPOSITORY=rclone:gdrive:fin-agent-backups`, configured from env vars with the
+        `drive.file` scope and the owner's own Google OAuth client. rclone's shared client ID is
+        being retired, and it hit `rateLimitExceeded`: a first seed took 317 s for 136 KB. Seeded
+        on November 3, 2026: snapshot `3883b6902129`, 136,174 bytes, `backup_runs` success at
+        12:56:02 UTC, 60 s with no rate limits.
+  - [x] Restored from Drive into a scratch database with `fin-agent restore`. All five checks
+        passed (tables, schema version, transfers balance, account balances, manifest).
+  - [ ] Confirm that the OAuth consent screen is **In production**. A "Testing" app's refresh
+        token dies after 7 days, around November 10.
+  - [ ] Delete the older `fin-agent-backups` folder in Drive, the one from the shared client. The
+        new client can't see it under `drive.file`.
+  - [ ] Release `v0.1.1` so the published images carry rclone. The host runs a local build tagged
+        `FIN_AGENT_VERSION=0.1.1-local`, and the published `0.1.0` can't reach Drive.
+  - [ ] Keep `RESTIC_PASSWORD` off this machine (owner's job; can't be verified from here).
+- [x] Get the backup sidecar running. The `Exited (137)` was a SIGKILL. Dash defers the TERM trap
+      until the foreground `sleep 3600` exits, so every stop hit the 30-second grace period. The
+      sleep now runs in the background under `wait`, and a stop takes 0.66 s with exit 0.
+- [ ] Confirm that a new `backup_runs` success lands within 24 hours. The loop's last local
+      success was 12:18:20 UTC on November 3. This item closes when the restart after the alert
+      test produces a scheduled off-site success.
+- [ ] Stop the sidecar on purpose and confirm the 48-hour backup alert fires once. **Running:**
+      the sidecar was stopped at 12:51 UTC on November 3. The alert line is 12:56 UTC on
+      November 5, and `backup_check` runs daily at 03:00 IST (21:30 UTC):
+  - [ ] November 6, 03:00 IST: one `backup_stale` row in `notifications`.
+  - [ ] November 7, 03:00 IST: still one row (dedupe). Then run `docker compose start backup`
+        and confirm the catch-up success. Any `docker compose up -d` before then restarts the
+        sidecar and resets the test.
 
 ### Import (L3), in this order
 
