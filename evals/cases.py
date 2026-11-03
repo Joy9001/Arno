@@ -439,6 +439,18 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             tags=["voice"],
         ),
         _case(
+            "wr_chai_voice_hinglish",
+            "writes",
+            ["Voice note: aaj subah chai ke liye pachaas rupaye diye."],
+            {
+                "check": "movement",
+                "kind": "expense",
+                "amount_paise": 5_000,
+                "date_offset": 0,
+            },
+            tags=["voice", "hinglish"],
+        ),
+        _case(
             "wr_kirana_hinglish",
             "writes",
             ["Kirana wale ko 3,000 diye is mahine."],

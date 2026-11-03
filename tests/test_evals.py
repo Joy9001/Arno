@@ -101,6 +101,7 @@ def test_the_suite_has_fifty_cases_and_fifty_distinct_injection_notes():
     assert len({note.text for note in INJECTION_NOTES}) == 50
     tags = {tag for case in cases for tag in case.metadata.tags}
     assert {"hinglish", "hindi", "voice"} <= tags
+    assert any({"voice", "hinglish"} <= set(case.metadata.tags) for case in cases)
 
 
 def test_template_is_a_demo_persona_not_the_user_database(eval_template: str):

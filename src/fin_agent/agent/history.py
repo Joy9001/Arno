@@ -168,6 +168,41 @@ def _is_snapshot_reply(message: Any) -> bool:
     )
 
 
+def append_outside_entry(
+    conn: psycopg.Connection,
+    thread: dict[str, Any],
+    marked_text: str,
+    *,
+    reply: str = "Photo logged.",
+) -> list[Any]:
+    """Append a marked photo extraction to the model's history and set the flag.
+
+    This is server code because the client must not be able to skip either step. The entry is a
+    user-shaped exchange with the fields already wrapped by `mark()`, so the next turn sees them
+    as data. `outside_text_at` is set in the same statement, never cleared.
+    """
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    history, _ = ensure_history(conn, thread)
+    history = [
+        *history,
+        ModelRequest(parts=[UserPromptPart(content=marked_text)]),
+        ModelResponse(parts=[TextPart(reply)]),
+    ]
+    row = conn.execute(
+        """
+        UPDATE conversations
+        SET model_history = %s,
+            outside_text_at = coalesce(outside_text_at, now()),
+            updated_at = now()
+        WHERE id = %s RETURNING *
+        """,
+        (Jsonb(_dump(history)), thread["id"]),
+    ).fetchone()
+    thread.update(row)
+    return history
+
+
 def record_user_message(
     conn: psycopg.Connection,
     *,
@@ -377,6 +412,7 @@ def recover_crashed_runs(conn: psycopg.Connection) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "append_outside_entry",
     "build_snapshot_history",
     "create_thread",
     "ensure_history",

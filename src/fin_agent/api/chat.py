@@ -177,6 +177,18 @@ async def post_chat(request: Request) -> Response:
         title = thread.get("title")
         run_id = f"run_{uuid.uuid4().hex}"
         history_mod.mark_run_started(conn, thread_id, run_id)
+        capture_ref = None
+        voice_attachment_id = body.get("voice_attachment_id")
+        if isinstance(voice_attachment_id, str) and voice_attachment_id:
+            voice_row = conn.execute(
+                """
+                SELECT id FROM attachments
+                WHERE id = %s AND kind = 'audio' AND data IS NOT NULL
+                """,
+                (voice_attachment_id,),
+            ).fetchone()
+            if voice_row is not None:
+                capture_ref = str(voice_row["id"])
         conn.commit()
         flagged = thread.get("outside_text_at") is not None or outside or outside_swap
 
@@ -187,6 +199,8 @@ async def post_chat(request: Request) -> Response:
         message_id=user_server_id,
         flagged=flagged,
         user_texts=(text,),
+        capture_kind="voice" if capture_ref else "chat",
+        capture_ref=capture_ref,
     )
     adapter = await VercelAIAdapter.from_request(
         request,

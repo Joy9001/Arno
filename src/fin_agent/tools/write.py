@@ -181,6 +181,11 @@ def _everyday_account(conn: psycopg.Connection) -> str | None:
     return str(row["id"]) if row else None
 
 
+def default_account_for_payee(conn: psycopg.Connection, payee_id: str | None) -> str:
+    """The account a capture should use: usual for this payee, else the everyday liquid one."""
+    return _default_account(conn, payee_id)
+
+
 def _possible_duplicate(
     conn: psycopg.Connection,
     *,
@@ -250,6 +255,8 @@ def record_movement(
     flagged: bool = False,
     user_texts: tuple[str, ...] = (),
     not_duplicate: bool = False,
+    capture_kind: str = "chat",
+    capture_ref: str | None = None,
 ) -> dict[str, Any]:
     kind = str(movement.get("kind") or "expense")
     when = _date(movement.get("date"))
@@ -257,6 +264,11 @@ def record_movement(
     description = movement.get("description")
     payee_name = movement.get("payee") or movement.get("person")
     idempotency_key = f"{message_id}:{movement.get('tool_call_id')}" if message_id else None
+    evidence = (
+        {"kind": capture_kind, "ref": capture_ref or message_id}
+        if (capture_ref or message_id)
+        else None
+    )
 
     def named_outside(name: str | None) -> bool:
         if not name:
@@ -302,7 +314,7 @@ def record_movement(
             date=when,
             note=note,
             idempotency_key=idempotency_key,
-            capture={"kind": "chat", "ref": message_id} if message_id else None,
+            capture=evidence,
             actor="agent",
             message_id=message_id,
         )
@@ -340,7 +352,7 @@ def record_movement(
             date=when,
             note=note,
             idempotency_key=idempotency_key,
-            capture={"kind": "chat", "ref": message_id} if message_id else None,
+            capture=evidence,
             actor="agent",
             message_id=message_id,
         )
@@ -427,7 +439,7 @@ def record_movement(
             date=when,
             note=note,
             idempotency_key=idempotency_key,
-            capture={"kind": "chat", "ref": message_id} if message_id else None,
+            capture=evidence,
             actor="agent",
             message_id=message_id,
         )
@@ -1217,6 +1229,7 @@ def delete_preference_for_good(conn: psycopg.Connection, preference_id: str) -> 
 __all__ = [
     "ToolInputError",
     "correct_movement",
+    "default_account_for_payee",
     "delete_preference_for_good",
     "preference",
     "record_movement",

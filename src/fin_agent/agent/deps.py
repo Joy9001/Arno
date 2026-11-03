@@ -14,6 +14,10 @@ class AgentDeps:
     flagged: bool = False
     # The current user message, so a new name it contains isn't marked as outside text.
     user_texts: tuple[str, ...] = ()
+    # Evidence for a movement: photo and voice captures set their own kind and ref. The client
+    # may name a voice attachment, but the server fixes the kind.
+    capture_kind: str = "chat"
+    capture_ref: str | None = None
     # Charts and cards a tool produced inside this turn, for the post-run extractor.
     cards: list[dict[str, object]] = field(default_factory=list)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.

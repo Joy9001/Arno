@@ -430,6 +430,8 @@ async def record_movement(
             flagged=_conversation_flagged(ctx),
             user_texts=ctx.deps.user_texts,
             not_duplicate=not_duplicate,
+            capture_kind=ctx.deps.capture_kind,
+            capture_ref=ctx.deps.capture_ref,
         )
     )
     return _write_return(payload)
