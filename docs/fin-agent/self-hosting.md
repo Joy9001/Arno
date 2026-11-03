@@ -270,38 +270,28 @@ Google Drive is the current recommended setup:
 RESTIC_REPOSITORY=rclone:gdrive:fin-agent-backups
 RCLONE_CONFIG_GDRIVE_TYPE=drive
 RCLONE_CONFIG_GDRIVE_SCOPE=drive.file
+RCLONE_CONFIG_GDRIVE_CLIENT_ID=<client id>
+RCLONE_CONFIG_GDRIVE_CLIENT_SECRET=<client secret>
 RCLONE_CONFIG_GDRIVE_TOKEN='{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}'
 ```
 
-To get the token, install rclone on a machine with a browser (`scoop install rclone`, `winget
-install Rclone.Rclone`, or [rclone.org/install](https://rclone.org/install/)) and run:
+Use your own Google OAuth client. rclone's shared client ID is rate-limited (a first backup took
+five minutes on `rateLimitExceeded`) and is being retired. In the Google Cloud console, create a
+project, enable the **Google Drive API**, publish the OAuth consent screen to **In production** (a
+"Testing" app's refresh tokens expire after 7 days; `drive.file` needs no verification), and create
+a **Desktop app** client. Then install rclone on a machine with a browser (`scoop install rclone`,
+`winget install Rclone.Rclone`, or [rclone.org/install](https://rclone.org/install/)) and run:
 
 ```bash
-rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ"
+BLOB=$(printf '{"client_id":"%s","client_secret":"%s","scope":"drive.file"}' "$CLIENT_ID" "$CLIENT_SECRET" | base64 -w0)
+rclone authorize "drive" "$BLOB"
 ```
 
-Sign in, then copy the JSON between the arrows into `RCLONE_CONFIG_GDRIVE_TOKEN`, inside single
-quotes. The `drive.file` scope lets rclone see only the files it created, not the rest of your
-Drive. The refresh token is a credential: treat it like `RESTIC_PASSWORD` and keep it out of git.
-
-Use your own Google OAuth client. rclone's shared client ID is rate-limited (the first backup took
-five minutes on `rateLimitExceeded`) and is being retired. In the Google Cloud console, enable the
-Drive API, publish the OAuth consent screen to **In production** (a "Testing" app's refresh tokens
-expire after 7 days; `drive.file` needs no verification), and create a **Desktop app** client.
-Then authorize with a base64 blob that carries all three settings, and add the client to `.env`:
-
-```bash
-rclone authorize "drive" "$(printf '{"client_id":"%s","client_secret":"%s","scope":"drive.file"}' \
-  "$CLIENT_ID" "$CLIENT_SECRET" | base64 -w0)"
-```
-
-```dotenv
-RCLONE_CONFIG_GDRIVE_CLIENT_ID=<client id>
-RCLONE_CONFIG_GDRIVE_CLIENT_SECRET=<client secret>
-```
-
-Under `drive.file`, a client sees only the files it created. Changing clients starts an empty
-repository, so seed it again, as described below.
+Sign in, then copy the token JSON into `RCLONE_CONFIG_GDRIVE_TOKEN`, inside single quotes. rclone
+1.75 prints a base64 blob between the arrows. Decode it, and the `token` field is the value. The
+`drive.file` scope lets rclone see only the files this client created, not the rest of your Drive,
+so changing clients starts an empty repository; seed it again as described below. The client
+secret and refresh token are credentials: keep them out of git.
 
 Cloudflare R2 needs an API token scoped to **Object Read & Write** on that bucket only:
 

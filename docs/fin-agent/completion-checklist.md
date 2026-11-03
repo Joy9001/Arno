@@ -55,7 +55,10 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
         new client can't see it under `drive.file`.
   - [ ] Release `v0.1.1` so the published images carry rclone. The host runs a local build tagged
         `FIN_AGENT_VERSION=0.1.1-local`, and the published `0.1.0` can't reach Drive.
-  - [ ] Keep `RESTIC_PASSWORD` off this machine (owner's job; can't be verified from here).
+  - [ ] Keep the recovery kit off this machine (owner's job; can't be verified from here):
+        `RESTIC_PASSWORD` **and** the OAuth client JSON from `.secrets/`. Under `drive.file`,
+        only that client can see the repository. If the client is lost, download the folder in
+        the Drive web UI and point restic at the local path.
 - [x] Get the backup sidecar running. The `Exited (137)` was a SIGKILL. Dash defers the TERM trap
       until the foreground `sleep 3600` exits, so every stop hit the 30-second grace period. The
       sleep now runs in the background under `wait`, and a stop takes 0.66 s with exit 0.
@@ -125,7 +128,8 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 - [ ] Check Compose restarts and the 30-second grace period on a Linux host (plan.md §6, L0).
 - [ ] **Milestone 37 as written:** restore the off-site backup on a different machine, using only
-      the restic password.
+      the restic password. On Drive this also needs the OAuth client (or a manual folder download
+      in the Drive web UI), so the drill tests the recovery kit, not the password alone.
 
 ## C. Human gates
 

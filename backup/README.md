@@ -26,21 +26,22 @@ or Backblaze B2's S3 endpoint. Both need only environment variables. `RESTIC_PAS
 secret that must live somewhere other than this machine; losing it makes the off-site copies
 unreadable. **Store it off this machine, in a password manager or a safe.**
 
-Google Drive is the current recommended setup:
+Google Drive is the current recommended setup, with your own Google OAuth client (rclone's shared
+client ID is rate-limited and being retired):
 
 ```dotenv
 RESTIC_REPOSITORY=rclone:gdrive:fin-agent-backups
 RCLONE_CONFIG_GDRIVE_TYPE=drive
 RCLONE_CONFIG_GDRIVE_SCOPE=drive.file
+RCLONE_CONFIG_GDRIVE_CLIENT_ID=<client id>
+RCLONE_CONFIG_GDRIVE_CLIENT_SECRET=<client secret>
 RCLONE_CONFIG_GDRIVE_TOKEN='{"access_token":"...","token_type":"Bearer","refresh_token":"...","expiry":"..."}'
 ```
 
-To get the token, install rclone on a machine with a browser, run
-`rclone authorize "drive" "eyJzY29wZSI6ImRyaXZlLmZpbGUifQ"`, and sign in. Copy the JSON between the
-arrows into `RCLONE_CONFIG_GDRIVE_TOKEN`, inside single quotes. The `drive.file` scope covers only
-the files rclone creates, not the rest of your Drive. The refresh token is a credential: keep it out
-of git. Use your own Google OAuth client (`RCLONE_CONFIG_GDRIVE_CLIENT_ID` and `_CLIENT_SECRET`):
-rclone's shared one is rate-limited and being retired. See `docs/fin-agent/self-hosting.md` §6.1.
+Get the token with `rclone authorize "drive"` and a base64 blob that carries the client and the
+`drive.file` scope; `docs/fin-agent/self-hosting.md` §6.1 has the console steps and the command.
+`drive.file` covers only the files this client creates, not the rest of your Drive. The client
+secret and refresh token are credentials: keep them out of git.
 
 Cloudflare R2 needs an API token scoped to **Object Read & Write** on that bucket only:
 
