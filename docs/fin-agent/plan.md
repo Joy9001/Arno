@@ -470,8 +470,16 @@ Answer each when its layer arrives, not before.
   counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
   Traces answer all three. Are the model timeouts right for a real provider, and do the latency
   targets hold?
-- **L3:** what does Slice export, and in what format? Can a fresh model write parsers for real
-  statements in Monty, or is a separate sandbox needed? Is `xfina` or OCR worth adding?
+- **L3:** settled in the Milestone 21 spike and recorded here.
+  - **What does Slice export, and in what format?** Unlocked monthly PDFs, one for each cycle that
+    runs from the 25th to the 24th.
+  - **Can a fresh model write parsers for real statements in Monty, or is a separate sandbox
+    needed?** It can, so no separate sandbox is needed. A fresh model wrote parsers that verify on
+    the real SBI and Slice statements.
+  - **Is `xfina` or OCR worth adding?** No. `xfina` 0.10.0 recognized neither SBI file and has no
+    Slice support, and every real file had a text layer or was a spreadsheet.
+  - **Union Bank.** Still open: no statement was provided, so its format and parser decision wait on
+    one. Counts and quirks per bank are in [`import.md`](import.md#the-spike-milestone-21-in-the-plan).
 - **L5:** settled in code and recorded here.
   - **Resample single days or whole weeks?** Single days, with separate weekday and weekend pools.
     Weekend spend clusters survive without resampling whole weeks, and one bad week cannot repeat

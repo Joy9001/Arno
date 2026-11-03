@@ -98,13 +98,13 @@ the spike keeps one only if it beats a written parser on real statements.
 
 | Package | Version | License | What it covers |
 |---|---|---|---|
-| `xfina` | 0.8.1 (Oct 2, 2026) | Apache-2.0 | Written in Rust (PyO3). Indian: SBI (PDF, password), HDFC, ICICI, Axis, Bank of Baroda (XLS); HDFC, ICICI, Axis cards; CAMS. ReBIT-shaped output. Three GitHub stars; classifiers stop at 3.13—check for a 3.14 wheel |
+| `xfina` | 0.10.0 | Apache-2.0 | Written in Rust (PyO3). Indian: SBI (PDF, password), HDFC, ICICI, Axis, Bank of Baroda (XLS); HDFC, ICICI, Axis cards; CAMS. ReBIT-shaped output. Three GitHub stars. Installs on Python 3.14, but recognized neither SBI file and has no Slice support |
 | `bankstatementparser` | 0.0.20 (Sep 25, 2026) | Apache-2.0 OR MIT | CSV, OFX and QFX, MT940, CAMT, PDF with an LLM and vision fallback, Golden Rule check built in. No Indian banks named. Pulls LiteLLM |
 | `casparser` | 1.4.1 | MIT | CAMS, KFintech, NSDL, and CDSL _Consolidated Account Statement_ (_CAS_) PDFs. Built on `pypdfium2`, no GPL dependencies. Parked with statement-driven net worth ([`parked.md`](parked.md)) |
 | `monopoly-core` | Not recorded | AGPL-3.0 | Excluded by the license decision in `plan.md` §1 |
 
-My banks: SBI, Union Bank of India (PDFs are password protected—typically the first four letters of
-the name plus DDMM of birth), and the Slice credit card (export format unknown).
+My banks: SBI (PDF or `.xlsx`, password protected), Union Bank of India (PDF, password protected),
+and the Slice credit card (unlocked monthly PDFs).
 
 ---
 
@@ -135,27 +135,22 @@ If a real statement can't be parsed in Monty, the fallback is a separate sandbox
 Real statements never enter the repository. Parser tests use synthetic fixtures; a git-ignored
 local folder holds real files for manual runs.
 
-**Result:** the harness and the decision procedure are built; the real-statement decisions
-are **pending**. No real SBI, Union Bank, or Slice statement was provided, so nothing was
-touched in `private/statements/` and no bank got a verdict. What was verified now, with
-synthetic Indian fixtures and the research harness:
+**Result.** A fresh model in a parse run wrote a parser for the real SBI statement and another for
+the real Slice statement; both are saved. Union Bank was not provided, so its decision is open.
+Every real file had a text layer or was a spreadsheet, so OCR was not needed and the phone-photo
+scoring was not run. `xfina` was not added.
 
-| What | Result |
-|---|---|
-| SBI CSV layout, Union Bank TSV layout, Slice CSV layout | 3/3 `VERIFIED` through the readers, Monty, and `check_statement` |
-| Same SBI script through the research `check_real.py --parser` | `PASS(amounts balance)` |
-| A known layout replaying with `ALLOW_MODEL_REQUESTS = False` | Passes; no model call |
-| A fresh parse run writing and submitting a script (`FunctionModel`) | Submits, reruns in a fresh `AsyncMonty`, checks pass |
-| Locked PDF or Office file | The card asks, the password stays in memory, a wrong one is a readable `needs_password` |
-| `xfina` comparison, Tesseract, PaddleOCR, the `VISION` model | Not run: not installed or no real page; the vision call is wired and isolated |
-| Real SBI, Union Bank, Slice layouts, password patterns, quirks | Open until real files are handed over |
-| Milestone 24: a 12-month backfill and baselines from real rows | Open for the same reason; the recompute path is built and tested on synthetic rows |
+| Bank | Format to download | Password | Parser result | Decision | Quirks |
+|---|---|---|---|---|---|
+| SBI | 12 months in one download (Nov 3, 2025 – Nov 3, 2026), PDF or `.xlsx` | Yes, both | PDF: 939 rows, `VERIFIED`, 1 repair, 321 s. `.xlsx`: 939 rows, `VERIFIED`, 0 repairs, 85 s | Saved parser (Monty). Either format works; the `.xlsx` is faster to parse | Both formats print the same rows, and the statement's own debit plus credit count equals the 939 rows. The `.xlsx` is an encrypted OLE2 file |
+| Slice | One unlocked PDF for each monthly cycle; 5 cycles (May 25 – Oct 24, 2026) | No | 5/5 `VERIFIED`, 80 rows, 0 repairs, 297 s | Saved parser (Monty) | The cycle runs from the 25th to the 24th. The header prints it as a yearless `DD MON - DD MON` and the rows as `DD Mon 'YY`, so no 4-digit year appears; the period finder takes the year from the `'YY` date (commit 626e421) |
+| Union Bank | Unknown | Unknown | Not run | Open | Not provided |
 
-The generated counts are in [`import-spike-results.md`](import-spike-results.md). Run
-`fin-agent import-spike` with files in `private/statements/<bank>/` to fill the per-bank rows;
-the command prints and writes counts and status words only. The `parse-statement` skill is
-written for the SBI, Union Bank, and Slice layouts described in `import.md`, including the
-`await` + keyword-argument convention that replay requires.
+The synthetic fixtures still pass through the readers, Monty, and `check_statement` (3/3
+`VERIFIED`), and a known layout replays with no model call.
+
+The generated counts and status words are in [`import-spike-results.md`](import-spike-results.md).
+Milestone 24 (the backfill) is tracked in the completion checklist.
 
 ---
 

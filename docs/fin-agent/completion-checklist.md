@@ -76,8 +76,16 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 - [ ] Put 12 months of real SBI, Union Bank, and Slice statements in `private/statements/<bank>/`,
       then run `fin-agent import-spike`.
+  - [x] SBI: one download covers 12 months. The PDF gave 939 rows, `VERIFIED` after 1 repair in
+        321 s. The `.xlsx` gave the same 939 rows with 0 repairs in 85 s.
+  - [x] Slice: 5 cycles (May 25 to Oct 24, 2026). One parser, replayed with no LLM: 5/5
+        `VERIFIED`, 80 rows. The yearless cycle header needed a period fix (`626e421`).
+  - [ ] Union Bank: no statements provided.
 - [ ] Record each bank's decision (saved parser, or `xfina`/OCR) in `import.md` and plan.md §6 L3.
       Note what Slice exports.
+  - [x] SBI and Slice: saved Monty parser. Slice exports unlocked monthly PDFs. `xfina` 0.10.0
+        recognized neither SBI file, and OCR wasn't needed.
+  - [ ] Union Bank: open until its statements arrive.
 - [ ] **Milestone 24:** commit the 12-month backfill through the review screen, then recompute
       baselines from the real rows.
 
