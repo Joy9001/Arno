@@ -92,13 +92,18 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
         payload. It showed `VERIFIED`, 939 new, and 0 ambiguous. The adjustment came out 0, the
         ledger balance equals the printed closing, the parser was saved, and 7 baselines were
         computed. Ran with local code while the API was stopped, not through the review screen.
+        The baselines stay provisional until the own-account fix below: "Family Transfer" holds
+        320 rows and is about 40% of the computed baseline spend.
   - [ ] Fix own-account moves booked as spend. Commit records every debit as an expense and every
         credit as income, and reconcile matches within one account only. Card bills and transfers
         between your own accounts count as spending, against plan.md's "Spending means
-        consumption". Importing Slice now would count its 11 SBI bill payments twice.
+        consumption". Importing Slice now would count its 11 SBI bill payments twice. UPI transfers to
+        people, some possibly to your own Union Bank account, land in "Family Transfer" and count
+        as spend.
   - [ ] Fix SBI UPI merchant extraction. Each narration became its own payee: 709 payees from 939
         rows, so category rules almost never reuse. Categorizing took about 40 minutes, one call
-        per line, and 112 rows were left uncategorized.
+        per line, and 112 rows were left uncategorized. Also clean up the existing 709 payees and
+        their category rules, because fixing extraction won't remove them.
   - [ ] Import Slice after the own-account fix, in period order (May 25 cycle first).
   - [ ] Release `v0.1.2`, so the live image reads Slice's yearless period (`626e421`).
 
