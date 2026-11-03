@@ -66,7 +66,7 @@ jobs:
           CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install -y postgresql-client-18 restic
+          sudo apt-get install -y postgresql-client-18 restic jq
 
       - name: Ruff check
         run: uv run ruff check .

@@ -50,35 +50,101 @@ VALUES
 SQL
 }
 
+snapshot_pid=""
+snapshot_dir=""
+
+stop_snapshot() {
+    if [ -n "$snapshot_pid" ]; then
+        kill "$snapshot_pid" 2>/dev/null || true
+        wait "$snapshot_pid" 2>/dev/null || true
+        snapshot_pid=""
+    fi
+    exec 3>&-
+    exec 4<&-
+    if [ -n "$snapshot_dir" ]; then
+        rm -rf "$snapshot_dir"
+        snapshot_dir=""
+    fi
+}
+
+trap 'stop_snapshot' EXIT
+trap 'stop_snapshot; exit 1' INT TERM HUP
+
 run_backup() {
     started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     start_epoch=$(date +%s)
     log "starting pg_dump"
 
-    if ! pg_dump --no-owner --no-privileges --format=custom --file="$DUMP" "$DATABASE_URL"; then
+    snapshot_dir=$(mktemp -d "${TMPDIR:-/tmp}/fin-agent-backup.XXXXXX")
+    snapshot_in="$snapshot_dir/in"
+    snapshot_out="$snapshot_dir/out"
+    mkfifo "$snapshot_in" "$snapshot_out"
+    : > "$MANIFEST"
+
+    # One exported snapshot feeds the manifest and pg_dump, so a write that commits mid-backup
+    # cannot make the restore drill report a mismatch.
+    psql "$DATABASE_URL" -Atq -v ON_ERROR_STOP=1 \
+        <"$snapshot_in" >"$snapshot_out" 2>"$snapshot_dir/stderr" &
+    snapshot_pid=$!
+    exec 3>"$snapshot_in"
+    exec 4<"$snapshot_out"
+
+    {
+        printf '%s\n' 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;'
+        printf '%s\n' "SELECT 'SNAPSHOT:' || pg_export_snapshot();"
+        printf '\\o %s\n' "$MANIFEST"
+        printf '%s\n' 'SELECT jsonb_pretty(fin_agent_backup_manifest());'
+        printf '%s\n' '\o'
+        printf '%s\n' '\echo MANIFEST_READY'
+    } >&3
+
+    snapshot=""
+    while IFS= read -r snapshot_line <&4; do
+        case "$snapshot_line" in
+            SNAPSHOT:*) snapshot=${snapshot_line#SNAPSHOT:} ;;
+            MANIFEST_READY) break ;;
+        esac
+    done
+
+    if [ -z "$snapshot" ] || [ ! -s "$MANIFEST" ]; then
+        finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        duration=$(( $(date +%s) - start_epoch ))
+        log "backup manifest failed"
+        record failed "$started" "$finished" "" "$((duration * 1000))" "" "manifest failed" || true
+        stop_snapshot
+        rm -f "$DUMP" "$MANIFEST"
+        return 1
+    fi
+
+    if ! pg_dump --snapshot="$snapshot" --no-owner --no-privileges --format=custom \
+        --file="$DUMP" "$DATABASE_URL"; then
         finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         duration=$(( $(date +%s) - start_epoch ))
         log "pg_dump failed"
         record failed "$started" "$finished" "" "$((duration * 1000))" "" "pg_dump failed" || true
+        stop_snapshot
+        rm -f "$DUMP" "$MANIFEST"
         return 1
     fi
+
+    printf '%s\n' 'COMMIT;' >&3
+    exec 3>&-
+    if ! wait "$snapshot_pid"; then
+        snapshot_pid=""
+        finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        duration=$(( $(date +%s) - start_epoch ))
+        log "backup manifest failed"
+        record failed "$started" "$finished" "" "$((duration * 1000))" "" "manifest failed" || true
+        stop_snapshot
+        rm -f "$DUMP" "$MANIFEST"
+        return 1
+    fi
+    snapshot_pid=""
+    stop_snapshot
 
     bytes=$(stat -c%s "$DUMP")
     dump_sha=$(sha256sum "$DUMP" | cut -d' ' -f1)
 
-    # The restore drill compares this manifest with the restored database.
-    # TODO(backup): the manifest is generated immediately after pg_dump, so a write that lands
-    # between the two can make a restore report a mismatch. Use pg_export_snapshot() for an exact
-    # point-in-time manifest if this becomes noisy in practice.
-    if ! psql "$DATABASE_URL" -Atq -v ON_ERROR_STOP=1 \
-        -c "SELECT jsonb_pretty(fin_agent_backup_manifest())" > "$MANIFEST"; then
-        finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-        duration=$(( $(date +%s) - start_epoch ))
-        log "backup manifest failed"
-        record failed "$started" "$finished" "$bytes" "$((duration * 1000))" "" "manifest failed" || true
-        rm -f "$DUMP" "$MANIFEST"
-        return 1
-    fi
     jq --arg sha "$dump_sha" '. + {dump_sha256: $sha}' "$MANIFEST" > "$MANIFEST.tmp" \
         && mv "$MANIFEST.tmp" "$MANIFEST"
 
@@ -112,6 +178,11 @@ run_backup() {
     rm -f "$DUMP" "$MANIFEST"
     return 1
 }
+
+if [ "${BACKUP_ONCE:-0}" = "1" ]; then
+    run_backup
+    exit $?
+fi
 
 while true; do
     age=$(last_success_age 2>/dev/null || printf '999999999')

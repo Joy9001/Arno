@@ -274,3 +274,106 @@ def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
     finally:
         with _admin_conn() as admin:
             admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_restore_test" WITH (FORCE)')
+
+
+BACKUP_SCRIPT = Path(__file__).resolve().parents[1] / "backup" / "backup.sh"
+
+
+def _backup_script_skip_reason() -> str | None:
+    missing = [name for name in ("sh", "jq", "restic") if shutil.which(name) is None]
+    for env_name, name in (("PSQL", "psql"), ("PG_DUMP", "pg_dump")):
+        if _binary(env_name, name) is None:
+            missing.append(name)
+    if missing:
+        return f"backup script needs {', '.join(missing)}"
+    dump = _binary("PG_DUMP", "pg_dump")
+    assert dump is not None
+    version = subprocess.run([dump, "--version"], capture_output=True, text=True, check=False)
+    if " (PostgreSQL) 18." not in version.stdout:
+        return f"backup script needs pg_dump 18: {version.stdout.strip() or version.stderr.strip()}"
+    return None
+
+
+def _client_path() -> str:
+    """Prepend the client directories the env vars name, so the script finds v18 first."""
+    dirs = [
+        str(Path(executable).parent)
+        for env_name, name in (
+            ("PSQL", "psql"),
+            ("PG_DUMP", "pg_dump"),
+            ("PG_RESTORE", "pg_restore"),
+            ("RESTIC", "restic"),
+        )
+        if (executable := _binary(env_name, name))
+    ]
+    return os.pathsep.join([*dict.fromkeys(dirs), os.environ.get("PATH", "")])
+
+
+BACKUP_SCRIPT_SKIP = _backup_script_skip_reason()
+
+
+@pytest.mark.skipif(BACKUP_SCRIPT_SKIP is not None, reason=BACKUP_SCRIPT_SKIP or "")
+def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(demo_ledger, tmp_path: Path):
+    """A write that commits mid-backup must not land in the manifest but miss the dump."""
+    db = demo_ledger
+    db.commit()
+    source = os.environ["DATABASE_URL"]
+    info = conninfo_to_dict(source)
+    dump = tmp_path / "fin_agent.dump"
+    manifest = tmp_path / "backup_manifest.json"
+    repo = tmp_path / "restic-repo"
+
+    real_dump = _binary("PG_DUMP", "pg_dump")
+    assert real_dump is not None
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "pg_dump"
+    shim.write_text(
+        "#!/bin/sh\n"
+        '"$REAL_PG_DUMP" "$@"\n'
+        "status=$?\n"
+        'psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 -c '
+        "\"INSERT INTO preferences (body, created_by) VALUES ('raced write', 'user')\"\n"
+        'exit "$status"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+
+    env = os.environ | {
+        "BACKUP_ONCE": "1",
+        "BACKUP_DUMP_PATH": str(dump),
+        "BACKUP_MANIFEST_PATH": str(manifest),
+        "RESTIC_REPOSITORY": str(repo),
+        "RESTIC_PASSWORD": "race-drill-password",
+        "REAL_PG_DUMP": real_dump,
+        "PATH": os.pathsep.join([str(shim_dir), _client_path()]),
+    }
+    if "password" in info:
+        env["PGPASSWORD"] = str(info["password"])
+    sh = shutil.which("sh")
+    assert sh is not None
+    ran = subprocess.run(
+        [sh, str(BACKUP_SCRIPT)], capture_output=True, env=env, timeout=300, check=False
+    )
+    assert ran.returncode == 0, ran.stderr.decode("utf-8", "replace")[-3000:]
+
+    target_info = dict(info)
+    target_info["dbname"] = "fin_agent_l8_snapshot_test"
+    target = make_conninfo(**target_info)
+    try:
+        report = restore_from_restic(
+            repository=str(repo),
+            password="race-drill-password",
+            target_dsn=target,
+            force=True,
+        )
+        assert report.checks.get("manifest_matches") is True, report.as_dict()
+        assert report.ok, report.as_dict()
+        with psycopg.connect(target, row_factory=dict_row) as restored:
+            raced = restored.execute(
+                "SELECT count(*) AS n FROM preferences WHERE body = 'raced write'"
+            ).fetchone()["n"]
+        assert raced == 0
+    finally:
+        with _admin_conn() as admin:
+            admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_snapshot_test" WITH (FORCE)')

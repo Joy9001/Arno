@@ -3,7 +3,9 @@
 `docker compose` starts one `backup` service. It checks hourly and runs when the last successful
 backup is over 24 hours old, so a sleeping laptop catches up on wake. It dumps the app database,
 writes `backup_manifest.json` (a row count and content hash for every table), hands both to
-`restic`, prunes daily and weekly snapshots, and records the attempt in `backup_runs`.
+`restic`, prunes daily and weekly snapshots, and records the attempt in `backup_runs`. The dump
+and the manifest come from one exported snapshot, so a write that commits mid-backup is in both
+or neither.
 
 The sidecar is not the API process, so backups keep working when the app is broken. It connects
 as the `backup` role: `SELECT` on the database for `pg_dump`, and `INSERT` on `backup_runs` only.

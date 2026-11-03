@@ -245,8 +245,9 @@ human review.
 
 The `backup` sidecar checks hourly and runs when its last success is over 24 hours old, so a
 sleeping laptop catches up. It runs `pg_dump`, writes `backup_manifest.json` (a row count and
-content hash for every table), and hands both to restic. The manifest is what lets a restore prove
-the database came back, not just that a dump unpacked.
+content hash for every table), and hands both to restic. The dump and the manifest come from one
+exported snapshot, so a write that commits mid-backup is in both or neither. The manifest is what
+lets a restore prove the database came back, not just that a dump unpacked.
 
 ```dotenv
 BACKUP_PASSWORD=<long random>
@@ -305,9 +306,8 @@ The same command is covered by `tests/test_l8_ship.py`, which dumps a seeded dat
 preferences, conversations, a message, an attachment, schedules, goals, and audit rows, pushes it
 through a real restic repository, restores into a fresh database, and compares the manifest.
 
-If a restore reports a mismatch on a table that changes constantly, take a new backup and rerun;
-the manifest is generated immediately after the dump, and a write that lands between the two can
-show up there.
+A mismatch on a table means the files and the database disagree, not that a write raced the
+backup: the dump and manifest are taken from the same exported snapshot.
 
 ### 6.3 Pre-migration dump
 

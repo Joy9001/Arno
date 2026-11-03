@@ -261,8 +261,10 @@ A deployment works as follows:
 
 - The `backup` sidecar checks hourly and runs `pg_dump` whenever its last success is over 24 hours
   old, because a nightly cron misses a sleeping laptop. It writes `backup_manifest.json` (a row
-  count and content hash for every table) and hands both files to restic, which encrypts, dedupes,
-  and ships them to any S3-compatible target (R2, B2, S3) or an rclone remote. It's independent
+  count and content hash for every table); the dump and the manifest come from one exported
+  snapshot, so a mid-backup write is in both or neither. It hands both files to restic, which
+  encrypts, dedupes, and ships them to any S3-compatible target (R2, B2, S3) or an rclone remote.
+  It's independent
   of the API process. It dumps the app's database only, so traces stay out of backups.
 - The sidecar records each success in Postgres, through its own role, which can read for `pg_dump` and
   write only that record. A daily job checks it, and no success for 48
