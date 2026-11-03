@@ -116,8 +116,8 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
         ₹3,004.67 and ₹3,794.25, and Slice's transaction list dates the ₹4,969.91 repayment 9 Sep
         where the PDF says 10 Sep. These are export gaps, so the remaining cycles wait on
         corrected exports or manual rows, not a parser fix.
-  - [ ] Release `v0.1.2`, so the live image reads Slice's yearless period (`626e421`) and asks for
-        own-account transfer confirmation.
+  - [x] Release `v0.1.2` (run 41715939134), so the live image reads Slice's yearless period
+        (`626e421`) and asks for own-account transfer confirmation.
 
 ### Engine measures (L5), after the backfill
 
