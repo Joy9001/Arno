@@ -12,6 +12,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`import.md`](import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
 that needs a table, a schema, or three paragraphs of justification goes in a satellite doc
@@ -425,16 +426,20 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 40. Someone else installs it from the docs alone.
 41. Four weeks of daily use without falling back to mental math or a spreadsheet.
 
-**L8 status, November 3, 2026.** Milestones 37-39 are built and tested. 37 is
-`fin-agent restore`: the sidecar writes a per-table manifest with every dump, and the command
-restores the newest restic snapshot into a fresh database, recomputes the manifest, and checks the
-ledger's balances. `tests/test_l8_ship.py` runs the round trip through a real restic repository.
+**L8 status, November 3, 2026.** Milestones 37-39 are built; 37 is not yet tested the way it is
+written. 37 is `fin-agent restore`: the sidecar writes a per-table manifest with every dump, and the
+command restores the newest restic snapshot into a fresh database, recomputes the manifest, and
+checks the ledger's balances. `tests/test_l8_ship.py` runs the round trip through a real restic
+repository, and CI runs it green (run 41627342626). That drill ran on this build host, not on a fresh
+machine; the fresh-machine restore, using only the restic password, stays open in
+[`completion-checklist.md`](completion-checklist.md) group B.
 38 is the refreshed threat model in [`platform.md`](platform.md#security), the exact CSP and
 headers, the fresh-passkey wall on export and passkey changes, log sanitization, the `agent_ro` and
 Phoenix isolation, and the Python + web license audit with `pip-audit`/`pnpm audit` in CI. 39 is
 **MIT** ([`LICENSE`](../../LICENSE)), the versioned `ghcr.io/joy9001/fin-agent` and
 `fin-agent-backup` images, the release workflow, a pre-migration `pg_dump`, 10 MB log rotation, and
-[`self-hosting.md`](self-hosting.md).
+[`self-hosting.md`](self-hosting.md). No image is published yet: they arrive when the `v0.1.0` tag's
+release workflow succeeds.
 
 Milestones 40 and 41 are **not** done, and no code change can make them done. 40 needs a second
 person to install from the docs alone; 41 needs four weeks of the owner's daily use without a

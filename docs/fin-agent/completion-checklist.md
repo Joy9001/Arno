@@ -1,0 +1,114 @@
+# Completion checklist
+
+Audit on November 3, 2026, at `109c7ea`. It checks [`plan.md`](plan.md) §5 and "What 'shipped'
+means" against the code, CI, the live instance, and the TODOs in the source.
+
+**Verdict: not complete.** Every layer's code exists, and the code and docs gaps in group A are
+nearly closed: `main` is green in CI again. Two kinds of gap remain:
+
+- Measurements that need real data, real endpoints, or a phone were never run.
+- The human gates haven't started. The live ledger has 3 accounts, 0 transfers, and
+  0 conversations, so the four-week clock for milestone 41 isn't running.
+
+Work the groups in order, because each depends on the one before it.
+
+## A. Code and docs: closable now
+
+- [x] **Fix the red CI.** `test_restore_drill_brings_back_every_area` calls bare `pg_dump`. It finds
+      the runner's v16 client and aborts against the 18.6 server: 339 passed, 1 failed on run
+      41622521117. Fixed in three places:
+  - [x] The test uses `os.environ.get("PG_DUMP") or "pg_dump"`.
+  - [x] `ci.yml` sets `PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore`. The restore goes
+        through `_binary("PG_RESTORE", ...)`, and v16 can't read an 18 dump.
+  - [x] The `skipif` checks the binaries the env vars name, not `shutil.which`.
+- [x] **The restore drill passes in CI at least once.** Green on run 41627342626. It also passes
+      locally (341 passed, 0 skipped on November 3, 2026).
+- [x] **Correct plan.md's L8 status.** Milestones 37-39 are "built", not "built and tested":
+  - 37: the drill ran on the build host, not a fresh machine.
+  - 39: no `v*` tag exists, so no image has been published.
+- [ ] **Tag `v0.1.0`.** Then confirm that `release.yml` pushes both `ghcr.io/joy9001/fin-agent`
+      images and that `self-hosting.md` pulls them.
+- [ ] *(Optional)* Remove the backup manifest race. The manifest is built after `pg_dump`, so
+      take both from one `pg_export_snapshot()` (`backup/backup.sh:70`).
+
+## B. Owner setup and measurements
+
+Each item needs real data, a real endpoint, or a device. Most can't run in CI.
+
+### Durability, first and before any real money
+
+- [ ] Point `RESTIC_REPOSITORY` **off-site**: S3, B2, SFTP, or rclone. Today it's the local
+      `/backups/restic`, which fails milestone 12 and the durability requirement.
+- [ ] Get the backup sidecar running. It's `Exited (137)`, and its last success was November 1.
+- [ ] Confirm that a new `backup_runs` success lands within 24 hours.
+- [ ] Stop the sidecar on purpose and confirm the 48-hour backup alert fires once.
+
+### Import (L3), in this order
+
+- [ ] Put 12 months of real SBI, Union Bank, and Slice statements in `private/statements/<bank>/`,
+      then run `fin-agent import-spike`.
+- [ ] Record each bank's decision (saved parser, or `xfina`/OCR) in `import.md` and plan.md §6 L3.
+      Note what Slice exports.
+- [ ] **Milestone 24:** commit the 12-month backfill through the review screen, then recompute
+      baselines from the real rows.
+
+### Engine measures (L5), after the backfill
+
+- [ ] **Milestone 29:** run `fin-agent backtest` on the real backfill, and publish the median
+      30-day error and band calibration in place of the synthetic block. Remove the TODO at
+      `engine/backtest.py:413`.
+- [ ] Set the forecast-accuracy target in `system-design.md`. The success measures said to set it
+      after the first real backtest.
+- [ ] **Milestone 30:** run `fin-agent hackerrank --dataset <folder>` on the 25 samples and
+      publish the score. Set its target, and remove the TODO at `engine/hackerrank.py:420`.
+
+### Evals and models (L2, L4)
+
+- [ ] **Milestones 15 and 26:** run the scorecard on at least one local model through Ollama (for
+      example, `qwen3:4b`). Today the table has one cloud model.
+- [ ] Rerun the cloud model on the full 120-case suite. The 4 L5 projection and affordability
+      cases have never run on a real model.
+- [ ] Fill the **median cost** column. It's `—` today, so the scorecard is missing price data.
+- [ ] Run `wr_chai_voice_hinglish` against the configured chat endpoint (`evals/cases.py:441`).
+- [ ] **Latency:** the measured median is 16.5 s against the targets of about 5 s for one lookup
+      and about 15 s for a multistep what-if. Either meet the targets or restate them in plan.md
+      with the measured numbers.
+- [ ] Answer the open L2 questions from real-use traces, and record the answers in plan.md §6:
+  - Is the number check noisy? This decides between keeping the note and tappable numbers.
+  - What are the real token counts, and is a 1-hour cache worth it?
+  - What's the confirm-card tap rate?
+  - Are the model timeouts right for a real provider?
+
+### Watch and capture (L6, L7), on real endpoints and a phone
+
+- [ ] Get HTTPS working through `tailscale serve` on the host, and reach it from a phone. This
+      covers milestone 4, which was never exercised.
+- [ ] Install the PWA on Android and receive a real web push (`web/src/sw.ts:4`,
+      `notifications.py:204`).
+- [ ] Walk through the Inbox and Settings screens in a real browser (`web/src/panels/Inbox.tsx:1`).
+- [ ] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
+      timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`).
+- [ ] Configure `STT_*` (`speaches` or Qwen3-ASR), then record real Hinglish voice notes.
+      Compare cloud against local, and keep or drop `STT_PAYEE_CONTEXT` based on the results
+      (`capture/transcribe.py:9`).
+- [ ] Configure `VISION_*`, then log real receipts and UPI screenshots (`capture/photo.py:8`).
+- [ ] Share a screenshot from GPay, PhonePe, or Paytm into the installed PWA (`web/src/sw.ts:6`).
+
+### Platform
+
+- [ ] Check Compose restarts and the 30-second grace period on a Linux host (plan.md §6, L0).
+- [ ] **Milestone 37 as written:** restore the off-site backup on a different machine, using only
+      the restic password.
+
+## C. Human gates
+
+These start only after group B's durability and import work is done.
+
+- [ ] **Milestone 41:** four weeks of daily use with real money, without falling back to a
+      spreadsheet or mental math. Start the clock on the first real day.
+- [ ] Measure the categorizer during those four weeks. The target is 90% or more of LLM
+      categories left uncorrected, read from `audit_log`.
+- [ ] **Milestone 40:** someone else installs Fin-Agent from `self-hosting.md` alone. Fix every
+      gap they report in the docs.
+- [ ] **Freeze:** no fix pushed for one week after the last item, per "What 'shipped' means".
+- [ ] Remove the TODO in `src/fin_agent/__init__.py`, and mark plan.md as shipped.
