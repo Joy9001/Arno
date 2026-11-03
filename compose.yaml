@@ -31,7 +31,7 @@ services:
 
   api:
     build: .
-    image: ghcr.io/joy9001/fin-agent:${FIN_AGENT_VERSION:-0.1.0}
+    image: ghcr.io/joy9001/fin-agent:${FIN_AGENT_VERSION:-0.1.1}
     restart: unless-stopped
     logging: *default-logging
     env_file:
@@ -74,7 +74,7 @@ services:
     build:
       context: .
       dockerfile: backup/Dockerfile
-    image: ghcr.io/joy9001/fin-agent-backup:${FIN_AGENT_VERSION:-0.1.0}
+    image: ghcr.io/joy9001/fin-agent-backup:${FIN_AGENT_VERSION:-0.1.1}
     restart: unless-stopped
     logging: *default-logging
     env_file:

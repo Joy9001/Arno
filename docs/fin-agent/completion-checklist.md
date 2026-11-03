@@ -49,9 +49,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
         12:56:02 UTC, 60 s with no rate limits.
   - [x] Restored from Drive into a scratch database with `fin-agent restore`. All five checks
         passed (tables, schema version, transfers balance, account balances, manifest).
-  - [ ] Confirm that the OAuth consent screen is **In production**. A "Testing" app's refresh
+  - [x] Confirm that the OAuth consent screen is **In production**. A "Testing" app's refresh
         token dies after 7 days, around November 10.
-  - [ ] Delete the older `fin-agent-backups` folder in Drive, the one from the shared client. The
+  - [x] Delete the older `fin-agent-backups` folder in Drive, the one from the shared client. The
         new client can't see it under `drive.file`.
   - [ ] Release `v0.1.1` so the published images carry rclone. The host runs a local build tagged
         `FIN_AGENT_VERSION=0.1.1-local`, and the published `0.1.0` can't reach Drive.
@@ -69,7 +69,7 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
       the sidecar was stopped at 12:51 UTC on November 3. The alert line is 12:56 UTC on
       November 5, and `backup_check` runs daily at 03:00 IST (21:30 UTC):
   - [ ] November 6, 03:00 IST: one `backup_stale` row in `notifications`.
-  - [ ] November 7, 03:00 IST: still one row (dedupe). Then run `docker compose start backup`
+  - [ ] November 7, 03:00 IST: still one row (dedupe). Then run `docker compose up -d backup`
         and confirm the catch-up success. Any `docker compose up -d` before then restarts the
         sidecar and resets the test.
 
