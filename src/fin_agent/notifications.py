@@ -201,6 +201,7 @@ def _push(
     url: str = "/",
 ) -> int:
     """Send one generic ping to every subscription, dropping endpoints that are gone."""
+    # TODO(L6): live browser-vendor push delivery is untested on this host; tests mock webpush.
     keys = ensure_vapid_keys(conn)
     subscriptions = list(conn.execute("SELECT * FROM push_subscriptions").fetchall())
     if not subscriptions:

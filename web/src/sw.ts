@@ -1,6 +1,9 @@
 /* The service worker adds the push handler. Push payloads are contentless pings: a generic
    sentence and a URL, never a merchant or an amount. */
 
+// TODO(L6): verify this on an installed Android PWA over Tailscale HTTPS. The build, manifest,
+// and push handler are tested; the live vendor delivery path is not.
+
 import { cleanupOutdatedCaches, precacheAndRoute } from "workbox-precaching";
 
 type NotificationData = { title?: string; body?: string; url?: string };

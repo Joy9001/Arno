@@ -219,6 +219,8 @@ def render_template(numbers: dict[str, Any]) -> str:
 
 async def write_prose(numbers: dict[str, Any], *, model: Any = None) -> str:
     """One CHAT call, and only one. The caller falls back to the template on any failure."""
+    # TODO(L6): exercised with scripted models and the fallback; rerun against the configured
+    # CHAT endpoint so a real provider's prose and timeout behavior are measured.
     from pydantic_ai import Agent, UsageLimits
 
     from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS

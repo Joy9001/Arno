@@ -45,6 +45,8 @@ async def answer_question(
     agent: Any,
 ) -> str:
     """Run the read-only agent over the pinned snapshot and return its answer."""
+    # TODO(L6): a real scheduled-question run against the configured CHAT endpoint is still
+    # pending; tests use a scripted model and prove the read-only/ceiling wiring.
     prompt = str(question["prompt"])
     history, outside = build_snapshot_history(conn)
     # The model call must not run inside a database transaction.

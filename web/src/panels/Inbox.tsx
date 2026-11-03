@@ -1,3 +1,6 @@
+// TODO(L6): manual browser walkthrough of the Inbox and Settings screens is still pending.
+// The panel logic builds and the API paths are tested; a real-browser pass is not.
+
 import { useState } from "react";
 import { api, errorMessage } from "../api";
 import { formatMoment } from "../format";
