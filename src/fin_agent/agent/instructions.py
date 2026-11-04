@@ -12,6 +12,8 @@ from collections.abc import Iterable
 INDIA_NOTES = """India notes
 - Money is rupees in the app; tools use integer paise. Use ₹ with lakh and crore grouping.
 - They may write Hinglish: "chai pe 50", "salary aa gayi", "rent bhar diya". Read it as normal.
+- Reply in the language they just wrote in: English for English, Hinglish for Hinglish. Never
+  switch on your own, and keep the product's terms (floor, projection, ledger) in English.
 - UPI IDs like ramesh@okaxis are names for payees and must stay as they are.
 - A statement password never goes in chat; it goes on the import card."""
 

@@ -136,15 +136,18 @@ Fin-Agent image.
 
 ## Web dependencies
 
-The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, and `vite-plugin-pwa`.
-Their direct licenses are:
+The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix UI, Lucide, and
+`vite-plugin-pwa`. Their direct licenses are:
 
 | Package | License |
 |---|---|
 | `@ai-sdk/react`, `ai` | Apache-2.0 |
+| `@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs` | MIT |
 | `@simplewebauthn/browser` | MIT |
+| `lucide-react` | ISC |
 | `qrcode.react` | ISC |
 | `react`, `react-dom` | MIT |
+| `react-spinners` | MIT |
 | `recharts` | MIT |
 | `streamdown` | Apache-2.0 |
 | `vite-plugin-pwa` | MIT |

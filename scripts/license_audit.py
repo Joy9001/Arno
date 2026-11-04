@@ -92,6 +92,8 @@ def _classify(text: str) -> str:
         return "Unlicense"
     if "zlib" in lowered:
         return "Zlib"
+    if "0bsd" in lowered:
+        return "0BSD"
     if "bsd-3" in lowered or "3-clause bsd" in lowered:
         return "BSD-3-Clause"
     if "bsd-2" in lowered or "2-clause bsd" in lowered:

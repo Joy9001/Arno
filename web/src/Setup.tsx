@@ -1,6 +1,8 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import { useState, type FormEvent } from "react";
+import { MessageSquare } from "lucide-react";
 import { errorMessage } from "./api";
+import { Busy } from "./Loading";
 import {
   beginEnrollment,
   verifyEnrollment,
@@ -59,7 +61,12 @@ export function Setup({ authState }: { authState: AuthState }) {
     return (
       <main className="centered">
         <section className="card">
-          <p className="eyebrow">Wrong address</p>
+          <div className="auth-brand">
+            <span className="brand-mark" aria-hidden="true">
+              <MessageSquare size={14} strokeWidth={2.3} />
+            </span>
+            Fin-Agent
+          </div>
           <h1>Open this page at the passkey origin</h1>
           <p className="muted">
             Passkeys for this instance are bound to <code>{authState.rp_origin}</code>. This page
@@ -79,7 +86,12 @@ export function Setup({ authState }: { authState: AuthState }) {
   return (
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
-        <p className="eyebrow">{addDevice ? "Add a device" : "First run"}</p>
+        <div className="auth-brand">
+          <span className="brand-mark" aria-hidden="true">
+            <MessageSquare size={14} strokeWidth={2.3} />
+          </span>
+          Fin-Agent
+        </div>
         <h1>{addDevice ? "Add this device" : "Set up Fin-Agent"}</h1>
 
         {setupComplete && (
@@ -112,15 +124,33 @@ export function Setup({ authState }: { authState: AuthState }) {
           required
           minLength={8}
           value={token}
+          aria-describedby="enrollment-token-hint"
           onChange={(event) => setToken(event.target.value)}
         />
+        <p id="enrollment-token-hint" className="fine">
+          Paste the whole token from the enrollment link; it is at least 8 characters.
+        </p>
+        {token.trim().length > 0 && token.trim().length < 8 && (
+          <p className="error fine" role="alert">
+            That token looks too short. Paste the whole token from the link.
+          </p>
+        )}
         {error && (
           <p className="error" role="alert">
             {error}
           </p>
         )}
         <button type="submit" disabled={busy || token.trim().length < 8}>
-          {busy ? "Waiting for your passkey…" : addDevice ? "Add this device" : "Create passkey"}
+          {busy ? (
+            <>
+              <Busy />
+              Waiting for your passkey…
+            </>
+          ) : addDevice ? (
+            "Add this device"
+          ) : (
+            "Create passkey"
+          )}
         </button>
         <p className="fine">
           Passkeys need HTTPS and a stable hostname. This page must be opened at{" "}

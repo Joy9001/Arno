@@ -484,6 +484,7 @@ def _summary(
         "horizon_days": days,
         "end": (inputs.as_of + timedelta(days=days)).isoformat(),
         "floor_paise": floor,
+        "floor_set": floor > 0,
         "floor_threshold": FLOOR_THRESHOLD,
         "floor_probability": round(floor_probability, 4),
         "median_low": {

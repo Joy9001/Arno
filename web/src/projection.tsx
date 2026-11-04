@@ -86,6 +86,7 @@ export type ProjectionPayload = {
   curve: ProjectionPoint[];
   floor?: Money | null;
   floor_paise?: number;
+  floor_set?: boolean;
   floor_probability: number;
   floor_threshold: number;
   median_low: { date: string; amount?: Money; paise?: number };
@@ -93,6 +94,7 @@ export type ProjectionPayload = {
   goals?: ProjectionGoal[];
   obligations_met?: boolean;
   data_quality: ProjectionDataQuality;
+  runs?: number;
   sources?: ProjectionSource[];
   source_ids?: Record<string, string[]>;
   optimistic?: {
@@ -144,17 +146,19 @@ export function ProjectionChart({
     median: point.median_paise,
   }));
   const floor = payload.floor?.paise ?? payload.floor_paise ?? null;
+  const floorSet = payload.floor_set ?? (floor !== null && floor > 0);
+  const showFloor = floorSet && floor !== null;
   return (
     <div className="chart-box projection-chart">
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
-          <CartesianGrid stroke="#1f2a37" vertical={false} />
-          <XAxis dataKey="label" stroke="#93a2b4" fontSize={11} minTickGap={28} />
+          <CartesianGrid stroke="#2a2a2c" vertical={false} />
+          <XAxis dataKey="label" stroke="#8b8b90" fontSize={12} minTickGap={28} />
           <YAxis
-            stroke="#93a2b4"
-            fontSize={11}
+            stroke="#8b8b90"
+            fontSize={12}
             width={78}
-            tickFormatter={(value: number) => formatPaise(value)}
+            tickFormatter={(value: number) => formatPaise(value).replace(".00", "")}
           />
           <Tooltip
             formatter={(value: unknown) => {
@@ -172,24 +176,26 @@ export function ProjectionChart({
             type="monotone"
             dataKey="band"
             stroke="none"
-            fill="#4cc38a"
+            fill="#0b6cf0"
             fillOpacity={0.16}
             name="P10–P90"
+            isAnimationActive={false}
           />
           <Line
             type="monotone"
             dataKey="median"
-            stroke="#4cc38a"
+            stroke="#0b6cf0"
             strokeWidth={2}
             dot={false}
             name="Median"
+            isAnimationActive={false}
           />
-          {floor !== null && (
+          {showFloor && (
             <ReferenceLine
               y={floor}
-              stroke="#ff8a80"
+              stroke="#ff453a"
               strokeDasharray="4 4"
-              label={{ value: "floor", fill: "#ff8a80", fontSize: 11, position: "insideTopLeft" }}
+              label={{ value: "floor", fill: "#ff453a", fontSize: 12, position: "insideBottomRight" }}
             />
           )}
         </ComposedChart>
@@ -270,9 +276,9 @@ function DataQuality({ payload }: { payload: ProjectionPayload }) {
   ];
   if (!notes.length) return null;
   return (
-    <details className="projection-block" open>
+    <details className="projection-block">
       <summary>
-        <strong>Data quality</strong>
+        <strong>Data quality</strong> · {notes.length} {notes.length === 1 ? "note" : "notes"}
       </summary>
       <ul className="projection-list">
         {notes.map((note) => (
@@ -289,6 +295,56 @@ function citationEndpoint(source: ProjectionSource): string | null {
   if (source.kind === "goal") return `/api/goals/${source.id}`;
   if (source.kind === "payee") return "/api/payees";
   return null;
+}
+
+function SourceFacts({ value }: { value: unknown }) {
+  if (!value || typeof value !== "object") return <p className="fine">{String(value)}</p>;
+  const row = value as Record<string, unknown>;
+  const keys = [
+    "id",
+    "kind",
+    "name",
+    "institution",
+    "last4",
+    "balance_paise",
+    "amount_paise",
+    "date",
+    "as_of",
+    "status",
+    "description",
+    "rate_bps",
+    "tenure_months",
+  ];
+  return (
+    <>
+      <dl className="citation-facts">
+        {keys.map((key) => {
+          const raw = row[key];
+          if (raw === undefined || raw === null) return null;
+          const text = key.endsWith("_paise") && typeof raw === "number"
+            ? formatPaise(raw)
+            : key === "rate_bps" && typeof raw === "number"
+              ? `${raw / 100}%`
+              : String(raw);
+          const label = key.endsWith("_paise")
+            ? key.slice(0, -"_paise".length).replaceAll("_", " ")
+            : key === "rate_bps"
+              ? "rate"
+              : key.replaceAll("_", " ");
+          return (
+            <div key={key}>
+              <dt>{label}</dt>
+              <dd>{text}</dd>
+            </div>
+          );
+        })}
+      </dl>
+      <details className="citation-raw">
+        <summary>Raw row</summary>
+        <pre className="citation-json">{JSON.stringify(value, null, 2)}</pre>
+      </details>
+    </>
+  );
 }
 
 function CitationDetail({
@@ -333,7 +389,7 @@ function CitationDetail({
       <p className="fine">{source.detail}</p>
       {loading && <p className="muted">Opening the underlying row…</p>}
       {error && <p className="error">{error}</p>}
-      {detail !== null && <pre className="citation-json">{JSON.stringify(detail, null, 2)}</pre>}
+      {detail !== null && <SourceFacts value={detail} />}
     </div>
   );
 }
@@ -372,20 +428,39 @@ function Citations({ payload }: { payload: ProjectionPayload }) {
 export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const medianLow = lowAmount(payload);
+  const floorText =
+    payload.floor?.text ??
+    (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
+  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
+  const aboveThreshold = payload.floor_probability >= payload.floor_threshold;
   return (
     <>
       <div className="projection-head">
         <div>
-          <span className="badge good">{percent(payload.floor_probability)} above floor</span>{" "}
-          <span className="fine">threshold {percent(payload.floor_threshold)}</span>
+          {floorSet ? (
+            <>
+              <span className={`badge ${aboveThreshold ? "good" : "danger"}`}>
+                {percent(payload.floor_probability)} above floor
+              </span>{" "}
+              <span className="fine">threshold {percent(payload.floor_threshold)}</span>
+            </>
+          ) : (
+            <>
+              <span className="badge muted">No floor set</span>{" "}
+              <a className="inline-link" href="#settings/profile">
+                Set a floor
+              </a>
+            </>
+          )}
         </div>
         {verdict && <span className={verdict.className}>{verdict.text}</span>}
       </div>
       <p className="projection-facts">
+        {floorSet && floorText ? `Floor ${floorText} · ` : ""}
         Lowest median point {formatPaise(medianLow)} on {dateLabel(payload.median_low.date)}
         {payload.first_floor_crossing
-          ? ` · median crosses the floor on ${dateLabel(payload.first_floor_crossing)}`
-          : " · the median never crosses the floor"}
+          ? ` · median crosses ${floorSet ? "the floor" : "₹0"} on ${dateLabel(payload.first_floor_crossing)}`
+          : ` · the median never crosses ${floorSet ? "the floor" : "₹0"}`}
         {payload.optimistic
           ? ` · with unconfirmed income: ${percent(payload.optimistic.floor_probability)} above floor (optimistic only)`
           : ""}
@@ -410,16 +485,35 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
 
 export function ProjectionCard({ data }: { data: Record<string, unknown> }) {
   const payload = data as unknown as ProjectionPayload;
+  const runs = payload.data_quality?.simulation?.runs;
+  const sources = payload.sources?.length ?? 0;
+  const [open, setOpen] = useState(false);
   return (
     <figure className="chat-card projection-card">
       <figcaption>
         <strong>{data.title ? String(data.title) : "Projection"}</strong>
         <span className="fine">
-          {" "}
-          {payload.horizon_days} days from {dateLabel(payload.as_of)}
+          {payload.horizon_days} days · {sources} sources
+          {runs ? ` · ${runs.toLocaleString("en-IN")} runs` : ""}
         </span>
       </figcaption>
-      <ProjectionBody payload={payload} />
+      <ProjectionSummary payload={payload} />
+      <details
+        className="receipt-more"
+        open={open}
+        onToggle={(event) => setOpen(event.currentTarget.open)}
+      >
+        <summary>Open the curve, tradeoffs, and sources</summary>
+        {open && (
+          <>
+            <ProjectionChart payload={payload} />
+            {payload.tradeoffs?.length ? <Tradeoffs tradeoffs={payload.tradeoffs} /> : null}
+            {payload.goals?.length ? <Goals goals={payload.goals} /> : null}
+            <DataQuality payload={payload} />
+            <Citations payload={payload} />
+          </>
+        )}
+      </details>
     </figure>
   );
 }

@@ -18,7 +18,7 @@ import { api, errorMessage } from "../api";
 import { formatRupees } from "./format";
 import { ProjectionCard } from "../projection";
 
-const COLORS = ["#4cc38a", "#5aa9e6", "#f6c85f", "#ff8a80", "#b48ead", "#8fd694"];
+const COLORS = ["#0b6cf0", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff"];
 
 function unitValue(value: number, unit: string): string {
   if (unit === "paise") return formatRupees(value);
@@ -67,6 +67,7 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
                 innerRadius={55}
                 outerRadius={90}
                 paddingAngle={2}
+                isAnimationActive={false}
               >
                 {(series[0]?.points ?? []).map((point, index) => (
                   <Cell key={point.x} fill={COLORS[index % COLORS.length]} />
@@ -77,9 +78,9 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
             </PieChart>
           ) : type === "bar" || type === "stacked_bar" ? (
             <BarChart data={rows}>
-              <CartesianGrid stroke="#1f2a37" vertical={false} />
-              <XAxis dataKey="x" stroke="#93a2b4" fontSize={12} />
-              <YAxis stroke="#93a2b4" fontSize={12} tickFormatter={tick} width={80} />
+              <CartesianGrid stroke="#2a2a2c" vertical={false} />
+              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
+              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
               <Tooltip formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Bar
@@ -87,14 +88,15 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
                   dataKey={line.name}
                   stackId={type === "stacked_bar" ? "stack" : undefined}
                   fill={COLORS[index % COLORS.length]}
+                  isAnimationActive={false}
                 />
               ))}
             </BarChart>
           ) : (
             <LineChart data={rows}>
-              <CartesianGrid stroke="#1f2a37" vertical={false} />
-              <XAxis dataKey="x" stroke="#93a2b4" fontSize={12} />
-              <YAxis stroke="#93a2b4" fontSize={12} tickFormatter={tick} width={80} />
+              <CartesianGrid stroke="#2a2a2c" vertical={false} />
+              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
+              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
               <Tooltip formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Line
@@ -104,6 +106,7 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
                   stroke={COLORS[index % COLORS.length]}
                   dot={false}
                   strokeWidth={2}
+                  isAnimationActive={false}
                 />
               ))}
             </LineChart>
@@ -327,7 +330,8 @@ export function NumberFlags({ amounts }: { amounts: string[] }) {
   if (!amounts.length) return null;
   return (
     <p className="note">
-      Couldn't trace {amounts.join(", ")}. Ask again with the statement it should come from.
+      Not verified against a ledger row: {amounts.join(", ")}. Check them in the ledger before you
+      rely on them.
     </p>
   );
 }

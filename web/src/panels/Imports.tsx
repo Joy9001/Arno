@@ -1,17 +1,35 @@
 import { useEffect, useRef, useState } from "react";
+import { MessageCircle } from "lucide-react";
+import { askAgent } from "../ask";
 import { api, errorMessage } from "../api";
 import { formatDate, formatMoment, formatPaise } from "../format";
+import { Busy, Loading } from "../Loading";
 import type { AccountSummary, ImportList, ImportRecord } from "../types";
 import { useApi } from "../useApi";
 
+const LINE_STATE_LABEL: Record<string, string> = {
+  new: "New",
+  certain: "Matched",
+  ambiguous: "Ambiguous",
+  merged: "Merged",
+  ignored: "Ignored",
+};
+
 function StatusBadge({ status }: { status: ImportRecord["status"] }) {
   const tone =
-    status === "committed" || status === "review"
+    status === "committed"
       ? "good"
-      : status === "failed" || status === "not_a_statement" || status === "rejected"
-        ? "danger"
-        : "muted";
-  return <span className={`badge ${tone}`}>{status.replaceAll("_", " ")}</span>;
+      : ["review", "parsing", "needs_password", "needs_input"].includes(status)
+        ? "warn"
+        : status === "failed" || status === "not_a_statement"
+          ? "danger"
+          : "muted";
+  const label = status.replaceAll("_", " ");
+  return (
+    <span className={`badge ${tone}`}>
+      {label.charAt(0).toUpperCase() + label.slice(1)}
+    </span>
+  );
 }
 
 function LineTable({
@@ -21,6 +39,9 @@ function LineTable({
   detail: ImportRecord;
   accountNames: Map<string, string>;
 }) {
+  const [all, setAll] = useState(false);
+  const limit = 50;
+  const rows = all ? detail.lines : detail.lines.slice(0, limit);
   return (
     <div className="table-wrap">
       <table>
@@ -35,7 +56,7 @@ function LineTable({
           </tr>
         </thead>
         <tbody>
-          {detail.lines.map((line) => (
+          {rows.map((line) => (
             <tr key={line.id}>
               <td>{formatDate(line.date)}</td>
               <td className="narration">{line.description}</td>
@@ -54,13 +75,20 @@ function LineTable({
               </td>
               <td>
                 <span className={`badge ${line.match_state === "ambiguous" ? "danger" : "muted"}`}>
-                  {line.match_state}
+                  {LINE_STATE_LABEL[line.match_state] ?? line.match_state}
                 </span>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {!all && detail.lines.length > limit && (
+        <div className="load-more">
+          <button type="button" className="ghost small" onClick={() => setAll(true)}>
+            Show all {detail.lines.length} rows
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -234,7 +262,9 @@ export function ImportsPanel() {
   const [accountChoice, setAccountChoice] = useState("");
   const [openingRupees, setOpeningRupees] = useState("");
   const [busy, setBusy] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const detailRef = useRef<HTMLElement | null>(null);
   const selectedId = useRef<string | null>(null);
   const pendingTransfers = (selected?.lines ?? []).filter(
     (line) => line.suggested_transfer_account_id && !line.transfer_confirmed,
@@ -271,6 +301,9 @@ export function ImportsPanel() {
     setError(null);
     try {
       setSelected(await api<ImportRecord>(`/api/imports/${importId}`));
+      window.setTimeout(() => {
+        detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 60);
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -278,7 +311,7 @@ export function ImportsPanel() {
 
   async function upload() {
     if (!file) return;
-    setBusy(true);
+    setStarting(true);
     setError(null);
     try {
       const form = new FormData();
@@ -297,10 +330,13 @@ export function ImportsPanel() {
       setSelected(started);
       setFile(null);
       list.reload();
+      window.setTimeout(() => {
+        detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 60);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
-      setBusy(false);
+      setStarting(false);
     }
   }
 
@@ -331,7 +367,6 @@ export function ImportsPanel() {
     <section className="panel">
       <header className="panel-head">
         <div>
-          <p className="eyebrow">Imports</p>
           <h2>Statements in, rows out</h2>
           <p className="muted">
             Upload a statement. A known layout reruns its saved parser with no model call. A new
@@ -347,7 +382,10 @@ export function ImportsPanel() {
       {error && <p className="error">{error}</p>}
 
       <section className="subcard">
-        <h3>Upload a statement</h3>
+        <div className="section-head">
+          <h3>Upload a statement</h3>
+          <span className="fine">PDF, spreadsheet, CSV, or text · 25 MB</span>
+        </div>
         <div className="filters">
           <label>
             File
@@ -370,8 +408,15 @@ export function ImportsPanel() {
                 ))}
             </select>
           </label>
-          <button type="button" disabled={!file || busy} onClick={() => void upload()}>
-            Upload and start
+          <button type="button" disabled={!file || starting} onClick={() => void upload()}>
+            {starting ? (
+              <>
+                <Busy />
+                Starting…
+              </>
+            ) : (
+              "Upload and start"
+            )}
           </button>
         </div>
         <p className="fine">Up to 25 MB. Files stay in the database only until commit or reject.</p>
@@ -379,8 +424,15 @@ export function ImportsPanel() {
 
       <div className="imports-layout">
         <section className="subcard imports-history">
-          <h3>History</h3>
-          {list.loading && !list.data && <p className="muted">Loading…</p>}
+          <div className="section-head">
+            <h3>History</h3>
+            {list.data && (
+              <span className="fine">
+                {list.data.items.length} {list.data.items.length === 1 ? "import" : "imports"}
+              </span>
+            )}
+          </div>
+          {list.loading && !list.data && <Loading label="Loading imports…" />}
           {list.data?.items.length === 0 && <p className="muted">No imports yet.</p>}
           <ul className="plain-list">
             {list.data?.items.map((item) => (
@@ -394,7 +446,7 @@ export function ImportsPanel() {
                     <strong>{item.account ?? "Unassigned"}</strong>
                     <span className="fine">
                       {item.period?.start
-                        ? `${item.period.start} to ${item.period.end}`
+                        ? `${formatDate(item.period.start)} – ${formatDate(item.period.end)}`
                         : formatMoment(item.created_at)}
                     </span>
                   </span>
@@ -405,8 +457,8 @@ export function ImportsPanel() {
           </ul>
         </section>
 
-        <section className="subcard imports-detail">
-          {!selected && <p className="muted">Choose an import to review it.</p>}
+        <section className="subcard imports-detail" ref={detailRef}>
+          {!selected && <p className="empty-state">Choose an import to review it.</p>}
           {selected && (
             <>
               <div className="account-head">
@@ -423,16 +475,26 @@ export function ImportsPanel() {
                     {selected.check ? ` · ${selected.check}` : ""}
                   </p>
                 </div>
-                {selected.status === "committed" && (
+                <div className="button-row">
                   <button
                     type="button"
-                    className="ghost"
-                    disabled={busy}
-                    onClick={() => void act("undo")}
+                    className="ask-link"
+                    onClick={() => askAgent(`Explain import ${selected.import_id}.`)}
                   >
-                    Undo import
+                    <MessageCircle size={13} aria-hidden="true" />
+                    Ask
                   </button>
-                )}
+                  {selected.status === "committed" && (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => void act("undo")}
+                    >
+                      Undo import
+                    </button>
+                  )}
+                </div>
               </div>
 
               {selected.reason && <p className="notice">{selected.reason}</p>}
@@ -515,28 +577,28 @@ export function ImportsPanel() {
               )}
 
               {selected.counts && (
-                <div className="tiles">
-                  <div className="tile">
+                <div className="summary-strip">
+                  <div className="summary-cell">
+                    <span>Rows</span>
+                    <strong>{selected.lines.length}</strong>
+                  </div>
+                  <div className="summary-cell">
                     <span>New</span>
                     <strong>{selected.counts.new}</strong>
                   </div>
-                  <div className="tile">
-                    <span>Merged</span>
+                  <div className="summary-cell">
+                    <span>Matched</span>
                     <strong>{selected.counts.certain}</strong>
                   </div>
-                  <div className="tile">
+                  <div className="summary-cell">
                     <span>Ambiguous</span>
                     <strong>{selected.counts.ambiguous}</strong>
                   </div>
-                  <div className="tile">
+                  <div className="summary-cell">
                     <span>Logged elsewhere</span>
                     <strong>{selected.counts.logged_not_on_statement}</strong>
                   </div>
                 </div>
-              )}
-
-              {selected.lines.length > 0 && (
-                <LineTable detail={selected} accountNames={accountNames} />
               )}
 
               {selected.status === "review" && (
@@ -547,6 +609,20 @@ export function ImportsPanel() {
                     onResolved={setSelected}
                   />
                   <AmbiguousRows detail={selected} onResolved={setSelected} />
+                </>
+              )}
+
+              {selected.lines.length > 0 && (
+                <>
+                  <div className="section-head">
+                    <h3>Statement rows</h3>
+                    <span className="fine">{selected.lines.length} rows</span>
+                  </div>
+                  <LineTable
+                    key={selected.import_id}
+                    detail={selected}
+                    accountNames={accountNames}
+                  />
                 </>
               )}
 
@@ -567,7 +643,8 @@ export function ImportsPanel() {
                 )}
 
               {(selected.status === "review" || selected.status === "failed") && (
-                <div className="row-actions">
+                <>
+                  <div className="row-actions">
                   {selected.status === "review" && (
                     <button
                       type="button"
@@ -589,12 +666,24 @@ export function ImportsPanel() {
                   >
                     Reject
                   </button>
-                </div>
+                  </div>
+                </>
               )}
 
-              {selected.status === "review" && selected.counts?.ambiguous ? (
-                <p className="fine">Resolve every ambiguous line before committing.</p>
-              ) : null}
+              {busy && <Loading label="Updating the import…" />}
+
+              {selected.status === "review" &&
+                ((selected.counts?.ambiguous ?? 0) > 0 || pendingTransfers > 0) && (
+                  <p className="fine">
+                    {selected.counts?.ambiguous
+                      ? "Resolve every ambiguous line"
+                      : "Confirm every own-account transfer"}
+                    {pendingTransfers > 0 && selected.counts?.ambiguous
+                      ? " and every own-account transfer"
+                      : ""}{" "}
+                    before committing.
+                  </p>
+                )}
 
               {selected.parser_saved && (
                 <p className="fine">

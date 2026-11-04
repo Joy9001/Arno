@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import * as Popover from "@radix-ui/react-popover";
 import { DefaultChatTransport, isToolUIPart, getToolName, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { Streamdown } from "streamdown";
 import { api, errorMessage } from "../api";
+import { Busy, Loading, Typing } from "../Loading";
 import { takeSharedImage } from "../share";
 import { Card, NumberFlags } from "./cards";
 import type { ChatMessage, ThreadBody, ThreadList, ThreadSummary } from "./types";
@@ -82,7 +84,14 @@ function ThreadSidebar({
           >
             <span className="thread-title">{thread.title}</span>
             <span className="fine">
-              {thread.running ? "replying…" : `${thread.message_count} message(s)`}
+              {thread.running ? (
+                <>
+                  <Typing />
+                  replying…
+                </>
+              ) : (
+                `${thread.message_count} ${thread.message_count === 1 ? "message" : "messages"}`
+              )}
             </span>
             {thread.snippet && <span className="thread-snippet">{thread.snippet}</span>}
           </button>
@@ -131,6 +140,24 @@ function Part({
   return null;
 }
 
+function ConfirmFacts({ input }: { input: unknown }) {
+  if (!input || typeof input !== "object") return <p className="fine">{String(input)}</p>;
+  const entries = Object.entries(input as Record<string, unknown>);
+  if (!entries.length) return null;
+  return (
+    <dl className="confirm-facts">
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key.replaceAll("_", " ")}</dt>
+          <dd>
+            {typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function Message({
   message,
   busy,
@@ -176,7 +203,7 @@ function Message({
               <div key={index} className="chat-card confirm">
                 <strong>Confirm: {getToolName(part)}</strong>
                 <p>{reason}</p>
-                <pre className="sql">{JSON.stringify(part.input, null, 2)}</pre>
+                <ConfirmFacts input={part.input} />
                 <div className="button-row">
                   <button
                     type="button"
@@ -229,10 +256,16 @@ function Conversation({
   threadId,
   initialMessages,
   onThreadChanged,
+  seed = null,
+  focusSignal,
+  onSeedConsumed,
 }: {
   threadId: string;
   initialMessages: ChatMessage[];
   onThreadChanged: () => void;
+  seed?: { id: number; text: string } | null;
+  focusSignal?: number;
+  onSeedConsumed?: () => void;
 }) {
   const voiceRef = useRef<string | null>(null);
   const transport = useMemo(
@@ -267,6 +300,7 @@ function Conversation({
     setMessages,
     status,
     stop,
+    regenerate,
     error,
     addToolApprovalResponse,
   } = useChat<ChatMessage>({
@@ -279,6 +313,27 @@ function Conversation({
   });
 
   const [input, setInput] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const focusMounted = useRef(false);
+
+  useEffect(() => {
+    if (seed?.text) {
+      // A quick action outside React hands the composer its text; there is no render to fold it
+      // into because the seed arrives after the mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setInput(seed.text);
+      onSeedConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.id]);
+
+  useEffect(() => {
+    if (!focusMounted.current) {
+      focusMounted.current = true;
+      return;
+    }
+    inputRef.current?.focus();
+  }, [focusSignal]);
   const bottom = useRef<HTMLDivElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -524,18 +579,18 @@ function Conversation({
   }
 
   return (
-    <section className="conversation">
-      <header className="conversation-head">
-        <div>
-          <p className="eyebrow">Chat</p>
-          <h2>{threadId.startsWith("cnv_") ? "Conversation" : "Conversation"}</h2>
-        </div>
-        {busy && (
+    <section className="conversation compact">
+      {busy && (
+        <header className="conversation-head">
+          <h2 className="replying">
+            <Typing />
+            Replying…
+          </h2>
           <button type="button" className="ghost" onClick={() => void stopTurn()}>
             Stop
           </button>
-        )}
-      </header>
+        </header>
+      )}
 
       <div className="messages" aria-live="polite">
         {messages.length === 0 && (
@@ -565,7 +620,7 @@ function Conversation({
         {error && (
           <div className="chat-card">
             <p className="error">{errorMessage(error)}</p>
-            <button type="button" className="ghost small" onClick={() => void sendMessage({ text: "Try again" })}>
+            <button type="button" className="ghost small" onClick={() => void regenerate()}>
               Retry
             </button>
           </div>
@@ -576,6 +631,7 @@ function Conversation({
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <div className="composer-main">
           <textarea
+            ref={inputRef}
             value={input}
             rows={2}
             placeholder="Message Fin-Agent…"
@@ -594,7 +650,14 @@ function Conversation({
               onClick={() => fileInput.current?.click()}
               disabled={busy || uploading}
             >
-              {uploading ? "Reading…" : "Photo"}
+              {uploading ? (
+                <>
+                  <Busy />
+                  Reading…
+                </>
+              ) : (
+                "Photo"
+              )}
             </button>
             <input
               ref={fileInput}
@@ -619,7 +682,16 @@ function Conversation({
                   if (holdingRef.current) stopRecording();
                 }}
               >
-                {recording ? "Listening… release" : transcribing ? "Transcribing…" : "Hold to talk"}
+                {recording ? (
+                  "Listening… release"
+                ) : transcribing ? (
+                  <>
+                    <Busy />
+                    Transcribing…
+                  </>
+                ) : (
+                  "Hold to talk"
+                )}
               </button>
             )}
           </div>
@@ -642,20 +714,72 @@ function Conversation({
   );
 }
 
-export function ChatHome({
+export function Assistant({
   focusThreadId,
   onFocusHandled,
+  seed,
+  focusSignal,
+  onSeedConsumed,
+  onClose,
+  onActivity,
 }: {
   focusThreadId?: string | null;
   onFocusHandled?: () => void;
+  seed?: { id: number; text: string } | null;
+  focusSignal?: number;
+  onSeedConsumed?: () => void;
+  onClose?: () => void;
+  onActivity?: () => void;
 }) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [activeId, setActiveId] = useState<string>(() => newThreadId());
+  const [activeId, setActiveId] = useState<string>(() => {
+    const saved = sessionStorage.getItem("fin-agent-thread");
+    return saved || newThreadId();
+  });
   const [initial, setInitial] = useState<ChatMessage[]>([]);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const mounted = useRef(false);
+
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    if (!focusThreadId) return;
+    let alive = true;
+    (async () => {
+      try {
+        const list = await loadThreads("");
+        if (!alive) return;
+        setInitial([]);
+        setLoadedFor(null);
+        setActiveId(
+          list.some((thread) => thread.id === focusThreadId)
+            ? focusThreadId
+            : (list[0]?.id ?? focusThreadId),
+        );
+        onFocusHandled?.();
+      } catch (caught) {
+        if (alive) setError(errorMessage(caught));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusThreadId]);
+
+  function startNew() {
+    const id = newThreadId();
+    setInitial([]);
+    setLoadedFor(id);
+    setActiveId(id);
+    setHistoryOpen(false);
+  }
 
   async function loadThreads(search = query) {
     const result = await api<ThreadList>(
@@ -671,9 +795,13 @@ export function ChatHome({
       try {
         const list = await loadThreads("");
         if (!alive) return;
-        const wanted = focusThreadId && list.some((thread) => thread.id === focusThreadId)
-          ? focusThreadId
-          : list[0]?.id;
+        const saved = sessionStorage.getItem("fin-agent-thread");
+        const wanted =
+          focusThreadId && list.some((thread) => thread.id === focusThreadId)
+            ? focusThreadId
+            : list.some((thread) => thread.id === saved)
+              ? saved
+              : list[0]?.id;
         if (wanted) {
           setActiveId(wanted);
         } else {
@@ -691,6 +819,10 @@ export function ChatHome({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (activeId) sessionStorage.setItem("fin-agent-thread", activeId);
+  }, [activeId]);
 
   useEffect(() => {
     let alive = true;
@@ -731,39 +863,88 @@ export function ChatHome({
   }, [query]);
 
   if (loading) {
-    return <p className="muted">Loading conversations…</p>;
+    return (
+      <section className="assistant">
+        <header className="assistant-head">
+          <h2>Assistant</h2>
+        </header>
+        <div className="chat-loading">
+          <Loading label="Loading conversations…" />
+        </div>
+      </section>
+    );
   }
 
+  const title = threads.find((thread) => thread.id === activeId)?.title ?? "New conversation";
+
   return (
-    <div className="chat-home">
-      <ThreadSidebar
-        threads={threads}
-        activeId={activeId}
-        query={query}
-        onQuery={setQuery}
-        onSelect={(id) => {
-          setInitial([]);
-          setLoadedFor(null);
-          setActiveId(id);
-        }}
-        onNew={() => {
-          const id = newThreadId();
-          setInitial([]);
-          setLoadedFor(id);
-          setActiveId(id);
-        }}
-      />
+    <section className="assistant">
+      <header className="assistant-head">
+        <div>
+          <h2>{title}</h2>
+          <p className="fine">Fin-Agent</p>
+        </div>
+        <div className="assistant-actions">
+          <Popover.Root open={historyOpen} onOpenChange={setHistoryOpen}>
+            <Popover.Trigger asChild>
+              <button type="button" className="ghost small">
+                History
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                className="thread-pop"
+                side="bottom"
+                align="end"
+                sideOffset={8}
+                collisionPadding={8}
+              >
+                <ThreadSidebar
+                  threads={threads}
+                  activeId={activeId}
+                  query={query}
+                  onQuery={setQuery}
+                  onSelect={(id) => {
+                    setInitial([]);
+                    setLoadedFor(null);
+                    setActiveId(id);
+                    setHistoryOpen(false);
+                  }}
+                  onNew={startNew}
+                />
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+          <button type="button" className="ghost small" onClick={startNew}>
+            New
+          </button>
+          {onClose && (
+            <button type="button" className="ghost small" onClick={onClose}>
+              Close
+            </button>
+          )}
+        </div>
+      </header>
+
       {error && <p className="error chat-error">{error}</p>}
       {loadedFor === activeId ? (
         <Conversation
           key={activeId}
           threadId={activeId}
           initialMessages={initial}
-          onThreadChanged={() => void refresh()}
+          onThreadChanged={() => {
+            void refresh();
+            onActivity?.();
+          }}
+          seed={seed}
+          focusSignal={focusSignal}
+          onSeedConsumed={onSeedConsumed}
         />
       ) : (
-        <p className="muted chat-loading">Loading conversation…</p>
+        <div className="chat-loading">
+          <Loading label="Loading conversation…" />
+        </div>
       )}
-    </div>
+    </section>
   );
 }

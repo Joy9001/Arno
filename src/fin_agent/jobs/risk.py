@@ -62,7 +62,7 @@ def risk_warning(conn: psycopg.Connection, *, horizon_days: int = 90) -> dict[st
         row = create_notification(
             conn,
             kind="risk_warning",
-            title="Your projection turned",
+            title="Your projection is riskier",
             body=" ".join(parts),
             data={
                 "floor_probability": probability,

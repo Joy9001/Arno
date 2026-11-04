@@ -87,6 +87,9 @@ Durable constraints:
 ## Brand Commitments
 
 - Name: **Fin-Agent**. License: **MIT**, open source.
+- The interface bar is mainstream platform polish, Apple-quiet in register, dark by default. No
+  thematic metaphor and no decorative world: the product's distinctive surface is the computed
+  receipt — verdict, probability, and a source chip that opens its row.
 - The product speaks plainly and precisely: facts, tradeoffs, and measured results, with no hype
   and no invented proof.
 - Chat replies render links as plain text; external images never load.

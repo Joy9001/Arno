@@ -1,9 +1,22 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import * as Tabs from "@radix-ui/react-tabs";
+import {
+  Activity,
+  Bell,
+  Brain,
+  CalendarClock,
+  DatabaseBackup,
+  Download,
+  KeyRound,
+  Tags,
+  UserRound,
+} from "lucide-react";
 import { api, errorMessage } from "../api";
 import { ensureFreshPasskey } from "../auth";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
+import { Busy, Loading } from "../Loading";
 import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
 import type {
   BackupStatus,
@@ -124,7 +137,14 @@ function NotificationsCard({
           />
         </label>
         <button type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Save notification settings"}
+          {saving ? (
+            <>
+              <Busy />
+              Saving…
+            </>
+          ) : (
+            "Save notification settings"
+          )}
         </button>
       </form>
       {error && <p className="error">{error}</p>}
@@ -246,6 +266,7 @@ function ScheduledQuestionsCard() {
         ceiling of 20 model requests. The default run ceiling is $1 against the shared $20 daily
         ceiling. Answers land in the Inbox.
       </p>
+      {!questions.data && <Loading label="Loading scheduled questions…" />}
       {questions.data?.questions.length === 0 && (
         <p className="muted">No scheduled questions yet.</p>
       )}
@@ -290,7 +311,14 @@ function ScheduledQuestionsCard() {
           />
         </label>
         <button type="submit" disabled={saving}>
-          {saving ? "Saving…" : "Add scheduled question"}
+          {saving ? (
+            <>
+              <Busy />
+              Saving…
+            </>
+          ) : (
+            "Add scheduled question"
+          )}
         </button>
       </form>
       {error && <p className="error">{error}</p>}
@@ -315,7 +343,10 @@ function JobsCard() {
             .join(" · ") || "no jobs yet"}
         </p>
       )}
-      <div className="table-wrap">
+      {!jobs.data && <Loading label="Loading jobs…" />}
+      {jobs.data && (
+        <>
+          <div className="table-wrap">
         <table>
           <thead>
             <tr>
@@ -326,7 +357,7 @@ function JobsCard() {
             </tr>
           </thead>
           <tbody>
-            {jobs.data?.schedules.map((schedule) => (
+            {jobs.data.schedules.map((schedule) => (
               <tr key={schedule.id} className={schedule.active ? "" : "muted-row"}>
                 <td>{schedule.label}</td>
                 <td className="fine">{schedule.rule}</td>
@@ -336,7 +367,7 @@ function JobsCard() {
             ))}
           </tbody>
         </table>
-      </div>
+          </div>
       <h3 className="section-title">Recent jobs</h3>
       <div className="table-wrap">
         <table>
@@ -344,7 +375,7 @@ function JobsCard() {
             <tr>
               <th>Job</th>
               <th>Status</th>
-              <th>Attempts</th>
+              <th>Retries</th>
               <th>Finished</th>
               <th>Error</th>
             </tr>
@@ -366,10 +397,24 @@ function JobsCard() {
           </tbody>
         </table>
       </div>
+        </>
+      )}
       {jobs.error && <p className="error">{jobs.error}</p>}
     </div>
   );
 }
+
+const SECTIONS = [
+  { id: "profile", label: "Profile & floor", Icon: UserRound },
+  { id: "categories", label: "Categories", Icon: Tags },
+  { id: "notifications", label: "Notifications", Icon: Bell },
+  { id: "passkeys", label: "Passkeys", Icon: KeyRound },
+  { id: "questions", label: "Scheduled questions", Icon: CalendarClock },
+  { id: "jobs", label: "Jobs", Icon: Activity },
+  { id: "backups", label: "Backups", Icon: DatabaseBackup },
+  { id: "export", label: "Export", Icon: Download },
+  { id: "memory", label: "Agent memory", Icon: Brain },
+] as const;
 
 export function SettingsPanel() {
   const settings = useApi<SettingsPayload>("/api/settings");
@@ -385,15 +430,33 @@ export function SettingsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [allRules, setAllRules] = useState(false);
+  const [section, setSection] = useState<string>(() => {
+    const [rawPage, rawTab] = window.location.hash.slice(1).split("/");
+    return rawPage === "settings" && SECTIONS.some((item) => item.id === rawTab)
+      ? rawTab
+      : "profile";
+  });
+  const navRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const active = navRef.current?.querySelector<HTMLElement>('[data-state="active"]');
+    active?.scrollIntoView({ inline: "center", block: "nearest" });
+    // The nav mounts only after the payloads arrive, so the first run needs that signal too.
+  }, [section, settings.data]);
 
   const displayName = displayNameDraft ?? settings.data?.profile.display_name ?? "";
   const floor =
     floorDraft ??
-    (settings.data?.floor_paise === null || settings.data?.floor_paise === undefined
-      ? ""
-      : String(Math.round(settings.data.floor_paise / 100)));
+    (settings.data?.floor_paise
+      ? String(Math.round(settings.data.floor_paise / 100))
+      : "");
   const categories = tree.data?.categories ?? [];
   const selectedCategoryId = categoryId || categories[0]?.id || "";
+  const rules = [...(tree.data?.rules ?? [])].sort(
+    (a, b) => b.hits - a.hits || a.merchant_pattern.localeCompare(b.merchant_pattern),
+  );
+  const visibleRules = allRules ? rules : rules.slice(0, 50);
 
   async function saveProfile() {
     setSaving(true);
@@ -401,11 +464,10 @@ export function SettingsPanel() {
     setMessage(null);
     try {
       const body: Record<string, unknown> = { display_name: displayName };
-      if (floor.trim() !== "") {
-        const rupees = Number(floor);
-        if (!Number.isFinite(rupees) || rupees < 0) throw new Error("The floor must be a number.");
-        body.floor_paise = Math.round(rupees * 100);
-      }
+      // 0 is "no floor" here: the projection treats anything at or below zero as unset.
+      const rupees = floor.trim() === "" ? 0 : Number(floor);
+      if (!Number.isFinite(rupees) || rupees < 0) throw new Error("The floor must be a number.");
+      body.floor_paise = Math.round(rupees * 100);
       await api<SettingsPayload>("/api/settings", {
         method: "PATCH",
         body: JSON.stringify(body),
@@ -483,268 +545,369 @@ export function SettingsPanel() {
     }
   }
 
+  const loadError = settings.error ?? tree.error ?? backup.error ?? preferences.error;
+  if (loadError) {
+    return (
+      <section className="panel">
+        <div className="panel-error">
+          <p className="error">{loadError}</p>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => {
+              settings.reload();
+              tree.reload();
+              backup.reload();
+              preferences.reload();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  if (!settings.data || !tree.data || !backup.data || !preferences.data) {
+    return (
+      <section className="panel">
+        <Loading label="Loading settings…" />
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
-      <header className="panel-head">
-        <div>
-          <p className="eyebrow">Settings</p>
-          <h2>Profile, categories, notifications, jobs, backups, export</h2>
-          <p className="muted">
-            These are the L1 and L6 settings sections. Chat and settings write through the same
-            ledger functions and the same audit log.
-          </p>
-        </div>
-      </header>
-
       {error && <p className="error">{error}</p>}
       {message && <p className="notice">{message}</p>}
 
-      <div className="settings-grid">
-        <div className="settings-block">
-          <h3>Profile and floor</h3>
-          <p className="muted">The floor is the balance the projection must never cross.</p>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              void saveProfile();
-            }}
-          >
-            <label>
-              Display name
-              <input value={displayName} onChange={(event) => setDisplayNameDraft(event.target.value)} />
-            </label>
-            <label>
-              Floor in rupees
-              <input
-                inputMode="decimal"
-                value={floor}
-                placeholder="25000"
-                onChange={(event) => setFloorDraft(event.target.value)}
-              />
-            </label>
-            <button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save profile and floor"}
-            </button>
-          </form>
-          {settings.data && (
-            <p className="fine">
-              Base currency {settings.data.base_currency} · {settings.data.time_zone} · horizon{" "}
-              {settings.data.default_horizon_days} days
-            </p>
-          )}
-          {settings.data?.last_model_error_type && (
-            <p className="error fine">
-              Last model error: {settings.data.last_model_error_type}
-              {settings.data.last_model_error_at
-                ? ` · ${formatMoment(settings.data.last_model_error_at)}`
-                : ""}
-            </p>
-          )}
-        </div>
+      <Tabs.Root
+        value={section}
+        onValueChange={(value) => {
+          setSection(value);
+          if (window.location.hash.startsWith("#settings")) {
+            window.history.replaceState(null, "", `#settings/${value}`);
+          }
+        }}
+        orientation="vertical"
+        className="settings-workspace"
+      >
+        <Tabs.List className="settings-nav" aria-label="Settings sections" ref={navRef}>
+          {SECTIONS.map(({ id, label, Icon }) => (
+            <Tabs.Trigger key={id} value={id} className="settings-nav-item">
+              <Icon size={15} strokeWidth={1.7} aria-hidden="true" />
+              {label}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
 
-        {backup.data ? <BackupCard status={backup.data} /> : <div className="settings-block" />}
-
-        {settings.data && (
-          <NotificationsCard settings={settings.data} onSaved={settings.reload} />
-        )}
-
-        <PushCard />
-
-        <PasskeysCard />
-
-        <div className="settings-block wide">
-          <h3>Preferences (the agent's memory)</h3>
-          <p className="muted">
-            Remembered facts and rules. The agent saves these unprompted with a card and undo.
-            Turning one off keeps it listed and reversible; deleting it for good blanks the text in
-            the audit log too, and can't be undone.
-          </p>
-          {preferences.data?.preferences.length === 0 && (
-            <p className="muted">Nothing remembered yet.</p>
-          )}
-          <div className="preference-list">
-            {preferences.data?.preferences.map((item: Preference) => (
-              <div key={item.id} className={item.active ? "preference" : "preference off"}>
-                <div>
-                  <p>{item.body || "(deleted)"}</p>
-                  <p className="fine">
-                    {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
-                    {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
-                  </p>
-                </div>
-                <div className="button-row">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={async () => {
-                      try {
-                        await api(`/api/preferences/${item.id}`, {
-                          method: "PATCH",
-                          body: JSON.stringify({ active: !item.active }),
-                        });
-                        preferences.reload();
-                      } catch (caught) {
-                        setError(errorMessage(caught));
-                      }
-                    }}
-                  >
-                    {item.active ? "Turn off" : "Turn on"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small danger"
-                    onClick={async () => {
-                      if (
-                        !window.confirm(
-                          "Delete this preference for good? Its text is blanked in the audit log and this can't be undone."
-                        )
-                      ) {
-                        return;
-                      }
-                      try {
-                        await api(`/api/preferences/${item.id}`, { method: "DELETE" });
-                        preferences.reload();
-                      } catch (caught) {
-                        setError(errorMessage(caught));
-                      }
-                    }}
-                  >
-                    Delete for good
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="settings-block wide">
-          <h3>Categories</h3>
-          <p className="muted">
-            Reducible categories are the ones an affordability tradeoff may suggest cutting.
-          </p>
-          <div className="chip-list">
-            {tree.data?.categories.map((category) => (
-              <button
-                key={category.id}
-                type="button"
-                className={`chip ${category.reducible ? "reducible" : ""}`}
-                onClick={() => void toggleReducible(category)}
-                title="Toggle whether this category is reducible"
+        <div className="settings-content">
+          <Tabs.Content value="profile" className="settings-section">
+            <div className="settings-block">
+              <p className="muted">The floor is the balance the projection must never cross.</p>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void saveProfile();
+                }}
               >
-                {category.name}
-                {category.reducible && <span> · reducible</span>}
-              </button>
-            ))}
-          </div>
-
-          <h3 className="section-title">Learned rules</h3>
-          {tree.data?.rules.length === 0 && <p className="muted">No rules yet.</p>}
-          {tree.data && tree.data.rules.length > 0 && (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Merchant</th>
-                    <th>Category</th>
-                    <th>Source</th>
-                    <th>Hits</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {tree.data.rules.map((rule) => (
-                    <tr key={rule.id}>
-                      <td>{rule.merchant_pattern}</td>
-                      <td>{rule.category_name}</td>
-                      <td>
-                        <span className={`badge ${rule.source === "user" ? "good" : "muted"}`}>
-                          {rule.source}
-                        </span>
-                      </td>
-                      <td className="num">{rule.hits}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="ghost small"
-                          onClick={() => void removeRule(rule.id)}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                <label>
+                  Display name
+                  <input
+                    value={displayName}
+                    onChange={(event) => setDisplayNameDraft(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Floor in rupees
+                  <input
+                    inputMode="decimal"
+                    value={floor}
+                    placeholder="25000"
+                    onChange={(event) => setFloorDraft(event.target.value)}
+                  />
+                  <span className="fine">Leave blank for no floor.</span>
+                </label>
+                <button type="submit" disabled={saving}>
+                  {saving ? (
+                    <>
+                      <Busy />
+                      Saving…
+                    </>
+                  ) : (
+                    "Save profile and floor"
+                  )}
+                </button>
+              </form>
+              {settings.data && (
+                <p className="fine">
+                  Base currency {settings.data.base_currency} · {settings.data.time_zone} · horizon{" "}
+                  {settings.data.default_horizon_days} days
+                </p>
+              )}
+              {settings.data?.last_model_error_type && (
+                <p className="error fine">
+                  Last model error: {settings.data.last_model_error_type}
+                  {settings.data.last_model_error_at
+                    ? ` · ${formatMoment(settings.data.last_model_error_at)}`
+                    : ""}
+                </p>
+              )}
             </div>
-          )}
+          </Tabs.Content>
 
-          <form className="inline-form" onSubmit={(event) => void addRule(event)}>
-            <label>
-              Merchant
-              <input
-                value={merchant}
-                placeholder="Swiggy"
-                onChange={(event) => setMerchant(event.target.value)}
-              />
-            </label>
-            <label>
-              Category
-              <select value={selectedCategoryId} onChange={(event) => setCategoryId(event.target.value)}>
+          <Tabs.Content value="categories" className="settings-section">
+            <div className="settings-block">
+              <p className="muted">
+                Reducible categories are the ones an affordability tradeoff may suggest cutting.
+              </p>
+              <div className="chip-list">
                 {tree.data?.categories.map((category) => (
-                  <option key={category.id} value={category.id}>
+                  <button
+                    key={category.id}
+                    type="button"
+                    className={`chip ${category.reducible ? "reducible" : ""}`}
+                    onClick={() => void toggleReducible(category)}
+                    title="Toggle whether this category is reducible"
+                  >
                     {category.name}
-                  </option>
+                    {category.reducible && <span> · reducible</span>}
+                  </button>
                 ))}
-              </select>
-            </label>
-            <button type="submit">Add user rule</button>
-          </form>
+              </div>
+
+              <div className="section-head">
+                <h3>Learned rules</h3>
+                {rules.length > 0 && (
+                  <span className="fine">
+                    {rules.length} rules · sorted by hits
+                  </span>
+                )}
+              </div>
+              {rules.length === 0 && <p className="empty-state">No rules yet.</p>}
+              {rules.length > 0 && (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Merchant</th>
+                        <th>Category</th>
+                        <th>Source</th>
+                        <th>Hits</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleRules.map((rule) => (
+                        <tr key={rule.id}>
+                          <td>{rule.merchant_pattern}</td>
+                          <td>{rule.category_name}</td>
+                          <td>
+                            <span
+                              className={`badge ${rule.source === "user" ? "muted" : "warn"}`}
+                            >
+                              {rule.source === "user" ? "You" : "Agent"}
+                            </span>
+                          </td>
+                          <td className="num">{rule.hits}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="ghost small"
+                              onClick={() => void removeRule(rule.id)}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!allRules && rules.length > 50 && (
+                    <div className="load-more">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => setAllRules(true)}
+                      >
+                        Show all {rules.length} rules
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <form className="inline-form" onSubmit={(event) => void addRule(event)}>
+                <label>
+                  Merchant
+                  <input
+                    value={merchant}
+                    placeholder="Swiggy"
+                    onChange={(event) => setMerchant(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Category
+                  <select
+                    value={selectedCategoryId}
+                    onChange={(event) => setCategoryId(event.target.value)}
+                  >
+                    {tree.data?.categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button type="submit">Add user rule</button>
+              </form>
+            </div>
+          </Tabs.Content>
+
+          <Tabs.Content value="notifications" className="settings-section">
+            <div className="settings-grid">
+              {settings.data && (
+                <NotificationsCard settings={settings.data} onSaved={settings.reload} />
+              )}
+              <PushCard />
+            </div>
+          </Tabs.Content>
+
+          <Tabs.Content value="passkeys" className="settings-section">
+            <PasskeysCard />
+          </Tabs.Content>
+
+          <Tabs.Content value="questions" className="settings-section">
+            <ScheduledQuestionsCard />
+          </Tabs.Content>
+
+          <Tabs.Content value="jobs" className="settings-section">
+            <JobsCard />
+          </Tabs.Content>
+
+          <Tabs.Content value="backups" className="settings-section">
+            <div className="settings-grid">
+              {backup.data ? (
+                <BackupCard status={backup.data} />
+              ) : (
+                <Loading label="Loading backup status…" />
+              )}
+            </div>
+          </Tabs.Content>
+
+          <Tabs.Content value="export" className="settings-section">
+            <div className="settings-block">
+              <p className="muted">
+                A full JSON export, one CSV per table in a ZIP, and a plain `pg_dump`. The dump is
+                the complete database, not a report. Each download asks for your passkey first.
+              </p>
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="button"
+                  disabled={downloading}
+                  onClick={() =>
+                    void downloadExport("/api/export/json", "fin-agent-export.json")
+                  }
+                >
+                  Download JSON
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={downloading}
+                  onClick={() =>
+                    void downloadExport("/api/export/csv", "fin-agent-export.zip")
+                  }
+                >
+                  Download CSV ZIP
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  disabled={downloading}
+                  onClick={() =>
+                    void downloadExport("/api/export/pg_dump", "fin-agent-export.sql")
+                  }
+                >
+                  Download pg_dump
+                </button>
+              </div>
+              {downloading && <Loading label="Preparing the export…" />}
+              <p className="fine">
+                The backup sidecar is separate: it dumps, encrypts with restic, and ships off-site.
+                This page shows its last success above.
+              </p>
+            </div>
+          </Tabs.Content>
+
+          <Tabs.Content value="memory" className="settings-section">
+            <div className="settings-block">
+              <p className="muted">
+                Remembered facts and rules. The agent saves these unprompted with a card and undo.
+                Turning one off keeps it listed and reversible; deleting it for good blanks the text
+                in the audit log too, and can't be undone.
+              </p>
+              {preferences.data?.preferences.length === 0 && (
+                <p className="empty-state">Nothing remembered yet.</p>
+              )}
+              <div className="preference-list">
+                {preferences.data?.preferences.map((item: Preference) => (
+                  <div key={item.id} className={item.active ? "preference" : "preference off"}>
+                    <div>
+                      <p>{item.body || "(deleted)"}</p>
+                      <p className="fine">
+                        {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
+                        {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
+                      </p>
+                    </div>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={async () => {
+                          try {
+                            await api(`/api/preferences/${item.id}`, {
+                              method: "PATCH",
+                              body: JSON.stringify({ active: !item.active }),
+                            });
+                            preferences.reload();
+                          } catch (caught) {
+                            setError(errorMessage(caught));
+                          }
+                        }}
+                      >
+                        {item.active ? "Turn off" : "Turn on"}
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost small danger"
+                        onClick={async () => {
+                          if (
+                            !window.confirm(
+                              "Delete this preference for good? Its text is blanked in the audit log and this can't be undone.",
+                            )
+                          ) {
+                            return;
+                          }
+                          try {
+                            await api(`/api/preferences/${item.id}`, { method: "DELETE" });
+                            preferences.reload();
+                          } catch (caught) {
+                            setError(errorMessage(caught));
+                          }
+                        }}
+                      >
+                        Delete for good
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Tabs.Content>
         </div>
-
-        <ScheduledQuestionsCard />
-
-        <JobsCard />
-
-        <div className="settings-block wide">
-          <h3>Export</h3>
-          <p className="muted">
-            A full JSON export, one CSV per table in a ZIP, and a plain `pg_dump`. The dump is the
-            complete database, not a report. Each download asks for your passkey first.
-          </p>
-          <div className="button-row">
-            <button
-              type="button"
-              className="button"
-              disabled={downloading}
-              onClick={() => void downloadExport("/api/export/json", "fin-agent-export.json")}
-            >
-              Download JSON
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={downloading}
-              onClick={() => void downloadExport("/api/export/csv", "fin-agent-export.zip")}
-            >
-              Download CSV ZIP
-            </button>
-            <button
-              type="button"
-              className="button"
-              disabled={downloading}
-              onClick={() => void downloadExport("/api/export/pg_dump", "fin-agent-export.sql")}
-            >
-              Download pg_dump
-            </button>
-          </div>
-          <p className="fine">
-            The backup sidecar is separate: it dumps, encrypts with restic, and ships off-site. This
-            page shows its last success above.
-          </p>
-        </div>
-      </div>
+      </Tabs.Root>
     </section>
   );
 }
-
-

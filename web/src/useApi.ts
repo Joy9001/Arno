@@ -12,8 +12,9 @@ export type ApiState<T> = {
 export function useApi<T>(path: string): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [version, setVersion] = useState(0);
+  const [settled, setSettled] = useState<string | null>(null);
+  const requestKey = `${path}|${version}`;
 
   const reload = useCallback(() => setVersion((value) => value + 1), []);
 
@@ -30,12 +31,14 @@ export function useApi<T>(path: string): ApiState<T> {
         setError(errorMessage(caught));
       })
       .finally(() => {
-        if (active) setLoading(false);
+        if (active) setSettled(requestKey);
       });
     return () => {
       active = false;
     };
-  }, [path, version]);
+  }, [path, requestKey]);
 
-  return { data, error, loading, reload };
+  // A path or version change makes the current key stale, so loading turns on without a
+  // setState at the top of the effect.
+  return { data, error, loading: settled !== requestKey, reload };
 }

@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T22:00:00+05:30",
+  "title": "Design System: Fin-Agent",
+  "extensions": {
+    "colorMeta": {
+      "ground": {
+        "role": "neutral",
+        "displayName": "True Black Ground",
+        "canonical": "#000000",
+        "tonalRamp": ["#000000", "#0a0a0b", "#111112", "#1c1c1e", "#2a2a2c", "#3a3a3c", "#636366", "#8b8b90"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Graphite",
+        "canonical": "#1c1c1e",
+        "tonalRamp": ["#000000", "#0a0a0b", "#111112", "#1c1c1e", "#2a2a2c", "#3a3a3c", "#636366", "#8b8b90"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Warm Ink",
+        "canonical": "#f5f5f7",
+        "tonalRamp": ["#1c1c1e", "#3a3a3c", "#636366", "#8b8b90", "#a1a1a6", "#c7c7cc", "#e5e5ea", "#f5f5f7"]
+      },
+      "action-blue": {
+        "role": "primary",
+        "displayName": "Action Blue",
+        "canonical": "#0b6cf0",
+        "tonalRamp": ["#001a3d", "#00336e", "#004fa6", "#0b6cf0", "#3d8ff5", "#6fb1f9", "#a3cefc", "#d6e8fe"]
+      },
+      "positive": {
+        "role": "secondary",
+        "displayName": "Floor Green",
+        "canonical": "#30d158",
+        "tonalRamp": ["#052b12", "#0a4d20", "#11722f", "#30d158", "#5fdd7e", "#8fe8a6", "#bff2cd", "#e6fbeb"]
+      },
+      "warning": {
+        "role": "tertiary",
+        "displayName": "Due Amber",
+        "canonical": "#ff9f0a",
+        "tonalRamp": ["#3d2400", "#6b3f00", "#9a5c00", "#ff9f0a", "#ffb84a", "#ffd08a", "#ffe6c1", "#fff5e6"]
+      },
+      "negative": {
+        "role": "tertiary",
+        "displayName": "Overdraft Red",
+        "canonical": "#ff453a",
+        "tonalRamp": ["#3d0a06", "#6b1410", "#9a221a", "#ff453a", "#ff736b", "#ff9f99", "#ffc7c3", "#ffe8e6"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles and the spendable figure." },
+      "headline": { "displayName": "Headline", "purpose": "Panel sections and the receipt title." },
+      "body": { "displayName": "Body", "purpose": "Chat prose and panel descriptions, capped at 68ch." },
+      "label": { "displayName": "Label", "purpose": "Nav groups, field labels, metadata." },
+      "mono": { "displayName": "Mono", "purpose": "SQL, source IDs, serial-like identifiers only." }
+    },
+    "shadows": [
+      { "name": "composer", "value": "0 12px 32px rgba(0,0,0,0.5)", "purpose": "The one persistent floating input." },
+      { "name": "sheet", "value": "0 -20px 60px rgba(0,0,0,0.6)", "purpose": "Phone area menu." }
+    ],
+    "motion": [
+      { "name": "settle", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "One 0.35s arrival on the Today strip." },
+      { "name": "state", "value": "120ms ease", "purpose": "Hover and focus transitions." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "900px" },
+      { "name": "narrow-panel", "value": "620px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The only blue control on a screen.",
+      "html": "<button class=\"ds-btn-primary\">Send</button>",
+      "css": ".ds-btn-primary { background: #0b6cf0; color: #fff; border: 0; border-radius: 10px; padding: 9px 16px; font: 600 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 120ms ease; } .ds-btn-primary:hover { background: #2b82ff; } .ds-btn-primary:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: .45; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary actions, retries, filters.",
+      "html": "<button class=\"ds-btn-ghost\">Refresh</button>",
+      "css": ".ds-btn-ghost { background: rgba(118,118,128,.16); color: #f5f5f7; border: 0; border-radius: 10px; padding: 9px 12px; min-height: 32px; font: 500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 120ms ease; } .ds-btn-ghost:hover { background: rgba(118,118,128,.28); } .ds-btn-ghost:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "One destination in the rail; the active row is a gray fill with white text.",
+      "html": "<button class=\"ds-nav-item\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#9c9ca2\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 1 1 16 0Z\"/></svg>Chat</button>",
+      "css": ".ds-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: #d6d6da; font: 500 13.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: left; cursor: pointer; } .ds-nav-item:hover { background: rgba(118,118,128,.14); color: #f5f5f7; } .ds-nav-item.on { background: rgba(118,118,128,.24); color: #fff; } .ds-nav-item:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The only raised surface; never nested.",
+      "html": "<div class=\"ds-card\"><strong style=\"font-size:15px\">SBI savings</strong><p style=\"margin:4px 0 0;color:#a1a1a6;font-size:13px\">Statement covers to 2 Nov</p><p style=\"margin:10px 0 0;font-size:27px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums\">₹1,42,000</p></div>",
+      "css": ".ds-card { background: #1c1c1e; color: #f5f5f7; border: 1px solid rgba(255,255,255,.10); border-radius: 18px; padding: 14px 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Search and form fields; the composer uses the same surface in a pill.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search past messages\" />",
+      "css": ".ds-input { width: 100%; background: #1c1c1e; color: #f5f5f7; border: 1px solid rgba(255,255,255,.10); border-radius: 10px; padding: 9px 12px; font: 400 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; } .ds-input::placeholder { color: #a1a1a6; } .ds-input:focus-visible { outline: 0; border-color: rgba(90,169,255,.65); box-shadow: 0 0 0 3px rgba(11,108,240,.18); }"
+    },
+    {
+      "name": "Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "A quiet state label: kind, reversed, coverage.",
+      "html": "<span class=\"ds-badge\">expense</span>",
+      "css": ".ds-badge { display: inline-block; padding: 2px 8px; border: 1px solid rgba(255,255,255,.10); border-radius: 999px; color: #a1a1a6; font: 500 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-transform: lowercase; }"
+    },
+    {
+      "name": "User Bubble",
+      "kind": "custom",
+      "description": "The user's own voice; the only blue surface in conversation.",
+      "html": "<div class=\"ds-bubble\">Can I buy a ₹68,000 laptop on the Slice card?</div>",
+      "css": ".ds-bubble { max-width: 70%; margin-left: auto; background: #0b6cf0; color: #fff; padding: 9px 14px; border-radius: 18px 18px 4px 18px; font: 400 15px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }"
+    },
+    {
+      "name": "Computed Receipt",
+      "kind": "custom",
+      "description": "The signature card: verdict, probability against threshold, lowest median, sources.",
+      "html": "<figure class=\"ds-receipt\"><figcaption><strong>Affordability · card</strong><span>90 days · 3 sources · 1,000 runs</span></figcaption><div class=\"ds-receipt-head\"><span class=\"ds-receipt-prob\">91% above floor</span><span class=\"ds-receipt-threshold\">threshold 90%</span><span class=\"ds-receipt-verdict\">yes, with a change</span></div><p class=\"ds-receipt-fact\">Lowest median point ₹38,400 on 02 Dec 2026 · the median never crosses the floor</p><p class=\"ds-receipt-reason\">Paid as asked, the floor stays above 90%. Waiting until 21 Nov is safer.</p><details><summary>Open the curve, tradeoffs, and sources</summary></details></figure>",
+      "css": ".ds-receipt { margin: 10px 0 0; padding: 14px 16px; background: #1c1c1e; border: 1px solid rgba(255,255,255,.10); border-radius: 18px; color: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; } .ds-receipt figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; } .ds-receipt figcaption span { color: #8b8b90; font-size: 12px; } .ds-receipt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .ds-receipt-prob { background: rgba(48,209,88,.15); color: #30d158; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; } .ds-receipt-threshold { color: #8b8b90; font-size: 12px; } .ds-receipt-verdict { margin-left: auto; border: 1px solid #ff9f0a; color: #ff9f0a; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; } .ds-receipt-fact { margin: 10px 0 0; color: #e5e5ea; font-size: 13px; } .ds-receipt-reason { margin: 6px 0 10px; color: #a1a1a6; font-size: 12px; } .ds-receipt summary { color: #a1a1a6; font-size: 13px; cursor: pointer; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Ledger",
+    "overview": "Fin-Agent looks like a first-party system app, not a finance dashboard. The ground is true black, surfaces are graphite, and the only saturated colours are the ones that mean something: blue for action, green for a floor that holds, amber for money that is due, red for money that is not there. Type is the platform's own face, so the interface feels installed rather than visited. The product's distinctive surface is the computed receipt: a verdict, the probability that the floor holds against its threshold, the lowest median with its date, the reason, the source count, and one disclosure that opens the curve, tradeoffs, and the rows behind it.",
+    "keyCharacteristics": [
+      "True-black ground; graphite surfaces; 1px hairline borders instead of shadows.",
+      "System type (SF on Apple, Segoe on Windows) with tabular numerals.",
+      "One action blue; semantic green, amber, red only where money state changes.",
+      "The receipt is the signature component; the chat is the shell.",
+      "Flat at rest; depth appears only on the composer and the phone sheet."
+    ],
+    "rules": [
+      { "name": "The One Blue Rule", "body": "Blue is reserved for actions and the user's own voice. If a screen has two blues competing for attention, one of them is wrong.", "section": "colors" },
+      { "name": "The Meaning Rule", "body": "Green, amber, and red may only appear where they carry a money state.", "section": "colors" },
+      { "name": "The 68ch Rule", "body": "Assistant prose never exceeds 68 characters per line, even when the card beside it is wider.", "section": "typography" },
+      { "name": "The Hairline Rule", "body": "If a boundary needs to be visible, use a 1px rgba(255,255,255,0.10) line, not a shadow. Shadows lift; borders separate.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the ground true black and put every surface on Graphite with a 1px hairline.",
+      "Do set every amount in tabular numerals at the largest size the hierarchy allows.",
+      "Do show the verdict, the probability, and the source count before any explanation.",
+      "Do keep the composer pinned and the last message visible above it.",
+      "Do use the platform's system font; never ship a display face for the interface.",
+      "Do pair every warning colour with the number and date that caused it."
+    ],
+    "donts": [
+      "Don't nest cards. The assistant's surface is the page; the card is the only raised object.",
+      "Don't add a kicker or eyebrow above a heading; the heading carries its own weight.",
+      "Don't use blue for anything that is not actionable or the user's own voice.",
+      "Don't hide a destination behind horizontal scrolling on phone; the Areas sheet exists.",
+      "Don't add a gradient, glass, texture, or themed motif that is not data.",
+      "Don't state a number in prose without its receipt or its source chip.",
+      "Don't let a receipt's detail view become raw JSON as the first layer."
+    ]
+  }
+}

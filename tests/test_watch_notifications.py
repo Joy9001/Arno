@@ -18,7 +18,7 @@ def test_unread_badge_and_mark_read(authed_client, db):
     create_notification(
         db,
         kind="risk_warning",
-        title="Your projection turned",
+        title="Your projection is riskier",
         body="The floor probability fell.",
     )
     db.commit()

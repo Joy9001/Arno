@@ -408,8 +408,8 @@ def afford(
             verdict = "yes"
             tradeoffs: list[dict[str, Any]] = []
             verdict_reason = (
-                f"{result['floor_probability']:.0%} of simulated futures stay at or above the "
-                "floor, no obligation is missed, and no goal slips."
+                f"{result['floor_probability']:.0%} of simulated futures "
+                "stay at or above the floor, no obligation is missed, and no goal slips."
             )
         else:
             tradeoffs = []
@@ -441,13 +441,14 @@ def afford(
                 tradeoffs.append(cut)
             verdict = "yes-but" if tradeoffs else "no"
             if slips:
-                verdict_reason = "a goal would slip past its current completion date."
+                verdict_reason = "A goal would slip past its current completion date."
             elif not result["obligations_met"]:
-                verdict_reason = "an obligation cannot be met on its date in some futures."
+                verdict_reason = "An obligation cannot be met on its date in some futures."
             else:
+                where = "the floor" if inputs.floor_paise > 0 else "zero"
                 verdict_reason = (
-                    f"only {result['floor_probability']:.0%} of simulated futures stay above the "
-                    f"floor at the {threshold:.0%} threshold."
+                    f"Only {result['floor_probability']:.0%} of simulated futures stay above "
+                    f"{where} at the {threshold:.0%} threshold."
                 )
         result["verdict"] = verdict
         result["verdict_reason"] = verdict_reason

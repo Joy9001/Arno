@@ -253,11 +253,12 @@ def _spend_categories(
             continue
         by_day = daily.get(category_id, {})
         real_days = sum(1 for amount in by_day.values() if amount > 0)
+        day_label = f"{real_days} real spending day" + ("" if real_days == 1 else "s")
         baseline = baselines.get(category_id)
         if real_days < MIN_REAL_DAYS and baseline is None:
             if by_day:
                 gaps.append(
-                    f"{category['name']} has only {real_days} real spending days and no setup "
+                    f"{category['name']} has only {day_label} and no setup "
                     "estimate, so it is left out"
                 )
             continue
@@ -279,8 +280,8 @@ def _spend_categories(
             )
         if real_days < MIN_REAL_DAYS:
             gaps.append(
-                f"{category['name']} has only {real_days} real spending days; its "
-                f"{baseline_per_day} paise/day {source} estimate is used flat"
+                f"{category['name']} has only {day_label}; its "
+                f"{money(baseline_per_day)['text']}/day {source} estimate is used flat"
             )
         elif share == 0:
             gaps.append(
@@ -584,15 +585,19 @@ def load_inputs(
             }
         )
     for row in baseline_rows:
+        days = int(row["real_days"])
+        origin = (
+            "from your history" if row["source"] == "computed" else "from your setup estimate"
+        )
+        detail = f"{money(int(row['amount_per_day_paise']))['text']}/day {origin}"
+        if days:
+            detail += f" · {days} real day" + ("" if days == 1 else "s")
         sources.append(
             {
                 "kind": "category",
                 "id": row["id"],
                 "name": row["category"],
-                "detail": (
-                    f"baseline {row['amount_per_day_paise']} paise/day · {row['source']} · "
-                    f"{row['real_days']} real days"
-                ),
+                "detail": detail,
                 "amount_paise": int(row["amount_per_day_paise"]),
             }
         )
@@ -684,6 +689,7 @@ def summary(result: dict[str, Any]) -> dict[str, Any]:
         "as_of": result["as_of"],
         "horizon_days": result["horizon_days"],
         "floor": money(result["floor_paise"]),
+        "floor_set": int(result["floor_paise"] or 0) > 0,
         "floor_probability": result["floor_probability"],
         "floor_threshold": result["floor_threshold"],
         "median_low": _money_low(result["median_low"]),
@@ -736,6 +742,7 @@ def card(result: dict[str, Any]) -> dict[str, Any]:
         "horizon_days": result["horizon_days"],
         "end": result["end"],
         "floor": money(result["floor_paise"]),
+        "floor_set": int(result["floor_paise"] or 0) > 0,
         "floor_probability": result["floor_probability"],
         "floor_threshold": result["floor_threshold"],
         "median_low": _money_low(result["median_low"]),

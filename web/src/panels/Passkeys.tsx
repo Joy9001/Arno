@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { errorMessage } from "../api";
 import { createEnrollment, deletePasskey, ensureFreshPasskey, listPasskeys, renamePasskey } from "../auth";
 import { formatMoment } from "../format";
+import { Loading } from "../Loading";
 import type { Enrollment, Passkey } from "../types";
 
 function remainingLabel(expiresAt: string, now: number): { ms: number; label: string } {
@@ -167,7 +168,7 @@ export function PasskeysCard() {
       )}
 
       <div className="passkey-list">
-        {passkeys === null && <p className="muted">Loading…</p>}
+        {passkeys === null && <Loading label="Loading passkeys…" />}
         {passkeys?.map((passkey) => {
           const draft = drafts[passkey.id] ?? passkey.name;
           return (

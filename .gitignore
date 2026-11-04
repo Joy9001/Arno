@@ -18,6 +18,10 @@ venv/
 # uv
 .python-version
 
+# design-taste inspector artifacts
+.taste-skill/
+.impeccable/review/
+
 # Tooling caches
 .ruff_cache/
 .mypy_cache/
