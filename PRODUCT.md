@@ -70,7 +70,8 @@ Durable constraints:
 
 - One user per instance. Multiuser households are out.
 - India is the only country implemented; country-specific code lives in one folder.
-- The UI is English-only. Chat mirrors the user's language mix, including Hinglish.
+- The UI is English-only. Chat replies in English by default and follows the user's language (or
+  mix, such as Hinglish) only when they write in it.
 - Every number in an answer comes from a tool return or a script the agent ran; the model decides
   what to compute, code computes it.
 - The agent never moves money. Advice is limited to facts and tradeoffs.

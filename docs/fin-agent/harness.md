@@ -144,7 +144,8 @@ This applies to the Fin-Agent system prompt as follows:
 - The category list is injected, because every plain-text-accounting project that skipped this
   learned the same lesson about invented categories. It's the user's edited list, not a constant.
 - Two small injected blocks, each owned by data rather than prose: the India prompt notes
-  (Hinglish examples, currency) and an instruction to reply in the user's own language mix.
+  (Hinglish input examples, currency) and the language rule: reply in English by default, and in
+  the user's language or mix only when they write in it.
   Active preferences arrive through the pinned snapshot, not the prompt.
 - The advice boundary is one short rule: facts and tradeoffs, never investment or product
   recommendations ([system design, step 7](system-design.md#the-advice-boundary)).
@@ -203,7 +204,8 @@ Boundaries
 - A statement password goes on the import card, never in chat.
 
 Style
-- Reply in their mix of English and Hinglish. Use ₹ with lakh and crore grouping.
+- Reply in English by default. If they write in another language or a mix like Hinglish, reply in
+  that same language and mix. Use ₹ with lakh and crore grouping.
   Explain terms plainly. Keep it short.
 
 Categories: {the user's list}

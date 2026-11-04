@@ -143,7 +143,8 @@ enough for answers and verdicts on day one. Statements and the 12-month backfill
   FDs never count as spend. A refund offsets the purchase it reverses.
 - **Never moves money.** It reads, records, and models; paying is always done by you, in your own
   bank or UPI app.
-- **Language:** mirrors the user's language mix.
+- **Language:** replies in English by default; follows the user's language or mix when they write
+  in it.
 
 ### Deliberately out
 

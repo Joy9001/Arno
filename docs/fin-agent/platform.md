@@ -96,8 +96,8 @@ The web app has the following parts:
 - **PWA:** `vite-plugin-pwa`, with a manifest and service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
-- **Language:** the UI is English only and isn't translated. The chat mirrors the user's language
-  mix.
+- **Language:** the UI is English only and isn't translated. The chat replies in English by default
+  and follows the user's language or mix only when they write in it.
 
 ---
 
