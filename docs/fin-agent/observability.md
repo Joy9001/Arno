@@ -70,6 +70,28 @@ manage.
 The Phoenix SDK also discovers a `.env.phoenix` file by walking up from the working directory;
 process environment variables win. Do not commit that file.
 
+### Phoenix database setup and password changes
+
+On a fresh Postgres volume, `db` runs `deploy/phoenix-db.sh` once to create the separate
+Phoenix role and database. If `PHOENIX_PASSWORD` is empty, it skips that setup so the app can
+still start; Phoenix refuses to start until all four Phoenix credentials are present.
+
+Postgres does not rerun initialization scripts on an existing volume. If the Phoenix database
+or role is missing, or if you change `PHOENIX_PASSWORD`, set the desired value in `.env` and run:
+
+```bash
+docker compose up -d db
+docker compose exec db sh /docker-entrypoint-initdb.d/phoenix-db.sh
+docker compose up -d phoenix
+```
+
+The first command recreates `db` if its environment changed. The script is safe to rerun: it
+creates missing objects and updates the role password without deleting data. Existing Phoenix
+databases and traces remain in place. The final command recreates Phoenix with its new password.
+This also recovers a fresh volume initialized while `PHOENIX_PASSWORD` was empty. If the script
+reports that setup was skipped, check the value and repeat the commands. Do not delete the
+Postgres volume to run initialization again.
+
 ### Retention
 
 Phoenix's supported default is **0 days, meaning infinite retention**: it does not delete traces

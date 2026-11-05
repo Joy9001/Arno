@@ -86,7 +86,8 @@ PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<long random; Phoenix admin login>
 `PHOENIX_ADMIN_SECRET` must be at least 32 characters, contain a digit and a lowercase letter, and
 differ from `PHOENIX_SECRET`. It also serves as the default local bearer credential for trace
 export, so the normal start needs no Phoenix API key. An empty Phoenix value keeps Phoenix down;
-the app and its database are unaffected. See [`observability.md`](observability.md#settings).
+the app and its database are unaffected. For existing volumes and password changes, follow the
+[Phoenix database setup instructions](observability.md#phoenix-database-setup-and-password-changes).
 
 Find the tailnet name with `tailscale status --json` and read `Self.DNSName`, or open the
 Tailscale admin console. It looks like `mini-pc.tail1234.ts.net`.

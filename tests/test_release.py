@@ -76,9 +76,10 @@ def test_release_workflow_pushes_the_pinned_images():
 def test_phoenix_has_its_own_role_and_database():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
-    assert "CREATE ROLE phoenix LOGIN" in compose
-    assert "CREATE DATABASE phoenix OWNER phoenix" in compose
-    assert "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC" in compose
+    provisioning = (ROOT / "deploy/phoenix-db.sh").read_text(encoding="utf-8")
+    assert "CREATE ROLE phoenix LOGIN" in provisioning
+    assert "CREATE DATABASE phoenix OWNER phoenix" in provisioning
+    assert "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC" in provisioning
     assert "PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}" in compose
 
 
