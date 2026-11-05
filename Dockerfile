@@ -32,6 +32,7 @@ COPY --from=rclone/rclone:1.71.2 /usr/local/bin/rclone /usr/local/bin/rclone
 
 COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=pgclient /usr/lib/postgresql/18/bin/pg_restore /usr/local/bin/pg_restore
+COPY --from=pgclient /usr/lib/postgresql/18/bin/psql /usr/local/bin/psql
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libpq.so.5 /usr/local/lib/libpq.so.5
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libgssapi_krb5.so.2 /usr/local/lib/
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libldap.so.2 /usr/local/lib/
@@ -46,19 +47,18 @@ COPY --from=pgclient /usr/lib/x86_64-linux-gnu/libzstd.so.1 /usr/local/lib/
 COPY --from=pgclient /usr/lib/x86_64-linux-gnu/liblzma.so.5 /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
-COPY --from=uv /uv /uvx /bin/
-COPY pyproject.toml uv.lock ./
-COPY src ./src
-COPY evals ./evals
-COPY LICENSE README.md THIRD_PARTY_NOTICES.md ./
-RUN uv sync --frozen --no-dev --no-editable
-
-COPY --from=web /web/dist ./web/dist
-
 RUN useradd --create-home --uid 10001 fin \
     && mkdir -p /app/pre-migration \
-    && chown -R fin:fin /app
+    && chown fin:fin /app /app/pre-migration
+COPY --chown=fin:fin pyproject.toml uv.lock ./
+COPY --chown=fin:fin src ./src
+COPY --chown=fin:fin evals ./evals
+COPY --chown=fin:fin LICENSE README.md THIRD_PARTY_NOTICES.md ./
 USER fin
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv sync --no-cache --frozen --no-dev --no-editable
+
+COPY --chown=fin:fin --from=web /web/dist ./web/dist
 
 EXPOSE 8000
 CMD ["fin-agent", "serve", "--host", "0.0.0.0", "--port", "8000"]

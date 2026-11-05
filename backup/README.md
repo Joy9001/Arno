@@ -98,3 +98,9 @@ A manual `pg_dump` has no manifest; pass `--allow-no-manifest` to accept its int
 alone. The verified round-trip is `tests/test_l8_ship.py`: a seeded database with preferences,
 conversations, a message, an attachment, schedules, goals, and audit rows goes through a real
 restic repository and comes back into a fresh database, compared table by table.
+
+After building the images, `tests/test_image_runtime.py` can also check the tools and writable
+paths in the actual containers. Set `FIN_AGENT_API_TEST_IMAGE` and `FIN_AGENT_BACKUP_TEST_IMAGE`
+to the image tags, and set `DATABASE_URL` to a disposable database ending in `_test` before
+running `uv run pytest tests/test_image_runtime.py`. Like the rest of the test suite, these tests
+reset that database.
