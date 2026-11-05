@@ -50,6 +50,8 @@ statements/
 # Claude Code local settings (machine-specific, not shared)
 .claude/settings.local.json
 
+# Codex local config
+.codex/config.toml
 
 # OS
 .DS_Store

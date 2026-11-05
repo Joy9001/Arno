@@ -5,7 +5,8 @@
       "source": "pydantic/skills",
       "sourceType": "github",
       "skillPath": "skills/building-pydantic-ai-agents/SKILL.md",
-      "computedHash": "825d4a36f3a0404e53fa577f1f068ecef7b65bef10b8544add01ad5698c7521a"
+      "computedHash": "825d4a36f3a0404e53fa577f1f068ecef7b65bef10b8544add01ad5698c7521a",
+      "installMode": "copy"
     },
     "design-taste-frontend": {
       "source": "Leonxlnx/taste-skill",
@@ -17,13 +18,15 @@
       "source": "pydantic/skills",
       "sourceType": "github",
       "skillPath": "skills/pydantic/SKILL.md",
-      "computedHash": "5e9c70289cf543ee4664431b6b9566c36f2efa53a938613c2e38defca4984c9a"
+      "computedHash": "5e9c70289cf543ee4664431b6b9566c36f2efa53a938613c2e38defca4984c9a",
+      "installMode": "copy"
     },
     "pydantic-ai-harness": {
       "source": "pydantic/skills",
       "sourceType": "github",
       "skillPath": "skills/pydantic-ai-harness/SKILL.md",
-      "computedHash": "37b68907ba3385d8e24e41534d8a067df5147144bc718d071b8b803a0f929b59"
+      "computedHash": "37b68907ba3385d8e24e41534d8a067df5147144bc718d071b8b803a0f929b59",
+      "installMode": "copy"
     }
   }
 }
