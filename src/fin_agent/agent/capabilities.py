@@ -44,6 +44,7 @@ from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.models import DEFAULT_CONTEXT_WINDOW
+from fin_agent.agent.redaction import redact_text
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
 
@@ -114,7 +115,9 @@ class RootSpanIO(AbstractCapability[Any]):
         if ctx.trace_include_content and span.is_recording():
             text = _current_user_text(ctx)
             if text:
-                span.set_attribute("input.value", text)
+                # Same policy as the guardrail and stored history: this runs before the
+                # guardrail, so the preview would otherwise show the raw prompt.
+                span.set_attribute("input.value", redact_text(text))
                 span.set_attribute("input.mime_type", "text/plain")
         result = await handler()
         if ctx.trace_include_content and span.is_recording():

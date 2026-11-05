@@ -15,7 +15,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai_harness.compaction import pin
 
-from fin_agent.agent.capabilities import RootSpanIO
+from fin_agent.agent.capabilities import RootSpanIO, redaction_guardrail
 from fin_agent.agent.deps import AgentDeps
 
 
@@ -40,20 +40,23 @@ def _fail(messages, info: AgentInfo) -> ModelResponse:
     raise ModelAPIError("test", "down")
 
 
-def _agent(script, *, include_content: bool = True, stream_script=None):
+def _agent(script, *, include_content: bool = True, stream_script=None, redact=False):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
+    capabilities = [RootSpanIO()]
+    if redact:
+        capabilities.append(redaction_guardrail())
+    capabilities.append(
+        Instrumentation(
+            settings=InstrumentationSettings(
+                tracer_provider=provider, include_content=include_content
+            )
+        )
+    )
     agent = Agent(
         FunctionModel(script, stream_function=stream_script),
-        capabilities=[
-            RootSpanIO(),
-            Instrumentation(
-                settings=InstrumentationSettings(
-                    tracer_provider=provider, include_content=include_content
-                )
-            ),
-        ],
+        capabilities=capabilities,
     )
     return agent, exporter
 
@@ -96,6 +99,33 @@ async def test_root_span_preview_uses_the_run_prompt_when_there_is_one():
 
     root = _root(exporter)
     assert root.attributes["input.value"] == "Hello prompt"
+    assert root.attributes["output.value"] == "Anytime."
+    assert root.attributes["user.id"] == "local-user"
+
+
+async def test_root_span_preview_redacts_input_before_the_guardrail():
+    seen: list[str] = []
+
+    def script(messages, info: AgentInfo) -> ModelResponse:
+        del info
+        for message in messages:
+            for part in getattr(message, "parts", []):
+                content = getattr(part, "content", "")
+                if isinstance(content, str):
+                    seen.append(content)
+        return ModelResponse(parts=[TextPart("Anytime.")])
+
+    agent, exporter = _agent(script, redact=True)
+    secret = "sk-" + "z" * 24
+
+    await agent.run(f"my key is {secret}")
+
+    root = _root(exporter)
+    assert secret not in root.attributes["input.value"]
+    assert secret not in "\n".join(seen)
+    assert "[redacted:openai_key]" in root.attributes["input.value"]
+    assert root.attributes["input.value"] in "\n".join(seen)
+    assert root.attributes["input.mime_type"] == "text/plain"
     assert root.attributes["output.value"] == "Anytime."
     assert root.attributes["user.id"] == "local-user"
 

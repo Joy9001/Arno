@@ -18,8 +18,9 @@ not count as a completed user journey.
 - No real statement was imported by the journey-planning work. No financial data was changed.
 - All 360 catalog cases start Not run. The observed greeting subchecks do not mean that all
   steps and variations of J01 were executed.
-- No commits or PRs were created in this session. Record the actual build and dirty-diff
-  identity before the next execution; a commit SHA alone is insufficient for this working tree.
+- Checkpoint `55e1156` and a separate follow-up fix commit are on the current branch; no PR was
+  opened. Record the actual build and dirty-diff identity before the next execution; a commit SHA
+  alone is insufficient for this working tree.
 
 ## Observed greeting evidence
 
@@ -111,6 +112,19 @@ Unresolved findings from this subcheck, reported to the parent for classificatio
   demonstrating it live would require writing a fake bank transaction to the owner instance.
 
 J02 is Partial: the first setup turn and the card retry state are observed. J03 remains Not run.
+
+### Trace preview privacy fix (5 November 2026)
+
+- Defect: `RootSpanIO` wrote the raw current prompt to `input.value` before the input guardrail
+  sanitized it, so a pasted secret could appear in the Phoenix trace preview even though the model
+  received only the redacted text.
+- Fix: the capability now applies the existing `fin_agent.agent.redaction.redact_text` policy
+  before setting `input.value`. No second detector copy, SDK patch, or temporary raw write was
+  added; `include_content`, status, and `user.id` behavior are unchanged.
+- Regression: a synthetic vendor-shaped key in `tests/test_agent_trace_preview.py` uses an
+  in-memory exporter to assert the trace preview and the model-visible prompt contain no raw key
+  and that the redacted placeholder reaches both. Trace-preview, native tracing smoke, and
+  redaction/safety tests passed. No real secret or owner data was used.
 
 ## Run header
 

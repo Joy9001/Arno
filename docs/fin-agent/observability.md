@@ -32,7 +32,10 @@ those native attributes to OpenInference on ingestion.
   or approval-pending run has no output. This is two attributes on the existing span, not a
   second trace or a wrapper root. The full history and `final_result` remain on the same span.
   The capability is `RootSpanIO` in `fin_agent.agent.capabilities`; it follows the run's
-  `include_content` setting.
+  `include_content` setting. The input preview goes through
+  `fin_agent.agent.redaction.redact_text`, the same policy the input guardrail and stored history
+  use, so a pasted credential appears as its `[redacted:...]` placeholder rather than raw text.
+  This matters because `RootSpanIO` runs before the guardrail rewrites the prompt.
 - The same span carries `user.id`, outside the content switch: it is attribution, not message
   text. Chat runs use the opaque `users.id` of the signed-in passkey principal, so every
   conversation by that user gets the same value. CLI and scheduled runs have no session and use
