@@ -77,6 +77,7 @@ async def run_script(
     context: ScriptContext | None = None,
     *,
     with_prelude: bool = True,
+    stage: str = "replay",
 ) -> ScriptResult:
     context = context or ScriptContext()
     stats: dict[str, Any] = {"calls": {}, "bytes": 0}
@@ -146,21 +147,28 @@ async def run_script(
             stats=stats,
         )
     except MontySyntaxError as exc:
-        return ScriptResult(error=f"SyntaxError: {str(exc)[:MAX_ERROR_CHARS]}", stats=stats)
+        return _failed(stage, f"SyntaxError: {str(exc)[:MAX_ERROR_CHARS]}", started, stats)
     except MontyRuntimeError as exc:
-        return ScriptResult(
-            error=f"RuntimeError: {str(exc)[-MAX_ERROR_CHARS:]}",
-            seconds=time.perf_counter() - started,
-            stats=stats,
-        )
+        return _failed(stage, f"RuntimeError: {str(exc)[-MAX_ERROR_CHARS:]}", started, stats)
     except MontyCrashedError as exc:
-        return ScriptResult(error=f"Crashed: {str(exc)[:300]}", stats=stats)
+        return _failed(stage, f"Crashed: {str(exc)[:300]}", started, stats)
     except Exception as exc:  # noqa: BLE001 - a sandbox fault is a readable parse failure
-        return ScriptResult(
-            error=f"{type(exc).__name__}: {str(exc)[:300]}",
-            seconds=time.perf_counter() - started,
-            stats=stats,
-        )
+        return _failed(stage, f"{type(exc).__name__}: {str(exc)[:300]}", started, stats)
+
+
+def _failed(
+    stage: str,
+    error: str,
+    started: float,
+    stats: dict[str, Any],
+) -> ScriptResult:
+    """A sandbox failure carries its type, never the script text or the error's full message."""
+    del stage
+    return ScriptResult(
+        error=error,
+        seconds=time.perf_counter() - started,
+        stats=stats,
+    )
 
 
 def normalize_accounts(output: Any) -> tuple[list[dict[str, Any]], str | None]:

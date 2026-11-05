@@ -303,6 +303,31 @@ def _finalize(
     fingerprint: str | None,
     period: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    return _finalize_body(
+        conn,
+        import_id=import_id,
+        account=account,
+        parsed_account=parsed_account,
+        check=check,
+        script=script,
+        helper_version=helper_version,
+        fingerprint=fingerprint,
+        period=period,
+    )
+
+
+def _finalize_body(
+    conn: psycopg.Connection,
+    *,
+    import_id: str,
+    account: dict[str, Any],
+    parsed_account: dict[str, Any],
+    check: dict[str, Any],
+    script: str,
+    helper_version: str | None,
+    fingerprint: str | None,
+    period: dict[str, Any] | None,
+) -> dict[str, Any]:
     _finish_open_transaction(conn)
     with conn.transaction():
         conn.execute("DELETE FROM statement_lines WHERE import_id = %s", (import_id,))
@@ -348,6 +373,15 @@ def _finalize(
 
 
 async def _run_import(
+    import_id: str,
+    *,
+    parser_runner: PARSER_RUNNER | None = None,
+) -> None:
+    """Run one import: read, replay or parse, finalize, categorize."""
+    await _run_import_body(import_id, parser_runner=parser_runner)
+
+
+async def _run_import_body(
     import_id: str,
     *,
     parser_runner: PARSER_RUNNER | None = None,
@@ -440,7 +474,7 @@ async def _run_import(
         )
 
     if layout is not None:
-        replayed = await run_script(doc, layout["parser"], context)
+        replayed = await run_script(doc, layout["parser"], context, stage="layout_replay")
         parsed_accounts, reason = normalize_accounts(replayed.output)
         if replayed.output is not None and not reason and parsed_accounts:
             parsed = parsed_accounts[0]
@@ -505,7 +539,7 @@ async def _run_import(
         return
 
     with closing(connect()) as conn:
-        fresh = await run_script(doc, parse_result.script, context)
+        fresh = await run_script(doc, parse_result.script, context, stage="fresh_replay")
         parsed_accounts, reason = normalize_accounts(fresh.output)
         if not parsed_accounts:
             _set_status(

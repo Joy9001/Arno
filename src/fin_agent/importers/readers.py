@@ -549,6 +549,10 @@ class Doc:
 
 def open_documents(data: bytes, *, password: str | None = None) -> list[Doc]:
     """Open a file, or every statement inside a ZIP, each on its own."""
+    return _open_documents(data, password=password)
+
+
+def _open_documents(data: bytes, *, password: str | None = None) -> list[Doc]:
     doc = Doc(data, password=password)
     if doc.kind != "zip":
         return [doc]

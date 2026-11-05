@@ -19,6 +19,18 @@ fin-agent eval --model X --per-category 2         # a short balanced smoke run
 `fin-agent eval` is the only path that turns `models.ALLOW_MODEL_REQUESTS` on. Every other test
 and command keeps it off.
 
+In the app image, `FIN_AGENT_REPO_ROOT=/app` makes the installed command find `evals/`; no
+`PYTHONPATH` is needed. Persist the scorecards by mounting the results directory:
+
+```bash
+mkdir -p evals/results
+docker compose run --rm \
+  -v "$PWD/evals/results:/app/evals/results" \
+  api fin-agent eval --model X --no-publish
+```
+
+`--no-publish` leaves the README scorecard untouched; use it for smoke or acceptance runs.
+
 Set `EVAL_JUDGE_MODEL` (or `--judge-model`) to an exact dated model for the advice rubric. Without
 it the model under test also judges the advice cases, which is convenient but not independent.
 

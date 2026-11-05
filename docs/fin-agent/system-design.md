@@ -1048,6 +1048,11 @@ DBOS were read in their docs only.
 How it's tested, measured, and traced for each model. Agreed November 1, 2026. The test and eval setup
 and the configuration are in [`harness.md`](harness.md#tests-and-evals).
 
+> Accepted tracing decision, not a rewrite of this step: native Pydantic AI OpenTelemetry spans
+> export directly to Phoenix; standard Python/Uvicorn logs stay on Docker stdout. See
+> [`observability.md`](observability.md) for the operator view. The historical decisions below are
+> unchanged where they still apply.
+
 ![Three layers measure the agent](diagrams/sd-measure-layers.png)
 
 *Figure: when each layer runs, what runs, and where its results go. Real use feeds the evals, because a
@@ -1162,7 +1167,7 @@ Phoenix and MLflow, tested with our agent:
 |---|---|---|
 | Full trace of a turn, including a script's nested read | Yes | Yes |
 | Model calls shown as a conversation, with tokens and cost | Yes | Yes, as raw YAML |
-| Input and reply on the trace itself | Needs [OpenInference's span processor](https://github.com/Arize-ai/openinference), Apache 2.0 | Blank over OTLP |
+| Input and reply on the trace itself | Yes; Phoenix converts native `gen_ai.*` attributes on ingestion | Blank over OTLP |
 | Outside connections, with privacy switches on | **None**, with `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false` | **2 to GitHub hosts** with telemetry off, not identified |
 | Retention | An environment variable, not seen deleting yet | Run `mlflow gc` yourself |
 | Memory, idle on Windows | About 380-420 MB | About 450 MB |
@@ -1175,16 +1180,17 @@ internet access would be cut with a Compose `internal` network.
 
 How it fits in:
 
-- **Optional.** It's a Compose profile, so a self-hoster can skip it and the app works the same. With the
-  tool down, a turn took 46 ms against 42 ms, because export runs in the background.
-- **Our own facts** (ending, untraced numbers, tap) go on one parent span per turn. First-output time is
-  already on each model call's span.
-- **Storage.** Traces get their own database on our Postgres and stay out of backups, with 90-day
-  retention. Images and audio stay out with `include_binary_content=False`.
-- **Privacy.** The card number appeared in no span, on either tool. Phoenix listens on the host's
-  loopback only, and reaching it over the tailnet needs its login on. It gets its own role, which owns
-  only its database, and `agent_ro` can't connect to that database.
-- **Evals.** Trials export to their own project, so a failed trial is easy to read.
+- **Fail-open.** Phoenix starts by default, but the app works the same with it down. Export is
+  outside the request path.
+- **Native spans only.** Pydantic AI emits the agent run, model requests, and tool calls. Fin-Agent
+  adds no parent span, business metric, or custom end-to-end trace.
+- **Storage.** Traces get their own database on our Postgres and stay out of backups. Retention uses
+  Phoenix's built-in default (0, infinite) unless the operator sets a policy. Pydantic AI's default
+  instrumentation includes prompts, replies, and tool content.
+- **Privacy.** Phoenix listens on the host's loopback only, and reaching it over the tailnet needs
+  its login on. It gets its own role, which owns only its database, and `agent_ro` can't connect to
+  that database. Phoenix authentication is unchanged.
+- **Evals.** Trials export to the one configured Phoenix project, like the app.
 
 **What stays in Postgres,** because the app itself reads it:
 
@@ -1193,7 +1199,7 @@ How it fits in:
   That pool recovered as soon as Postgres came back, so it doesn't reopen
   [step 8's rule](#what-still-works-when-something-is-down) for everything else.
 - `audit_log`, and job and backup status.
-- A flagged reply, with its trace ID.
+- A flagged reply. Historical `messages.trace_id` values remain; new rows do not write one.
 
 Settings shows only those, plus the last model error, and links to Phoenix for the rest.
 
@@ -1240,8 +1246,7 @@ and MLflow took traces from the real OpenAI client against a local stub. The scr
 
 **Not tested:** traces from a real LLM, how often a real model gets fooled, judge quality, the suite's
 real cost, the number check on real replies, Phoenix's login, retention actually deleting anything,
-filtering traces by our own facts, eval trials in Phoenix, `include_binary_content=False`, and Docker
-and Linux, including the `internal` network.
+eval trials in Phoenix, and Docker and Linux, including the `internal` network.
 
 ---
 

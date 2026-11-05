@@ -50,6 +50,10 @@ def detect_header_row(rows: list[list[Any]]) -> list[Any] | None:
 
 def detect_fingerprint(doc: Doc) -> str | None:
     """The header fingerprint from the document itself, before any parser runs."""
+    return _detect_fingerprint(doc)
+
+
+def _detect_fingerprint(doc: Doc) -> str | None:
     if doc.kind in ("xlsx", "xls", "xlsb", "ods", "docx", "html", "rtf"):
         try:
             for index in range(max(1, len(doc.info().get("sheets", [])))):

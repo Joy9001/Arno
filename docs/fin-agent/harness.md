@@ -83,7 +83,7 @@ The following capabilities are on from the start:
 | Tool Output Limits | Trims a big `run_code` return—most likely a wide `run_query` result—so it isn't re-sent with every later request. See [Context and memory](#context-and-memory) |
 | System Reminders | Today's date and what changed since the snapshot, after the cache, so they can't break it. See [Context and memory](#context-and-memory) |
 | Caching and Warn On Cache Busts | Prompt caching is the main cost lever, and the warning shows when it stops working. The warning only observes |
-| Instrumentation, exported to Phoenix when it's on | Every run's model, tokens, cost, tool calls, and results, in a local tool rather than one we build. Off, it costs nothing ([system design, step 9](system-design.md#traces-phoenix)). See [Tests and evals](#tests-and-evals) |
+| Automatic instrumentation, exported to Phoenix by default | Every run's model, tokens, cost, tool calls, and results, in a local tool rather than one Fin-Agent builds. The process bootstrap calls `Agent.instrument_all()`; `OTEL_SDK_DISABLED=true` disables export ([system design, step 9](system-design.md#traces-phoenix)). See [Traces](#traces) and [Tests and evals](#tests-and-evals) |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
@@ -262,9 +262,10 @@ agent = Agent(
         ModelFallback(backup), # sticky=False: the next request tries the main model again
         SpendLimits(budgets=[Budget(usd=Decimal("5"), window="run"), Budget(usd=Decimal("20"), window="day")],
                     store=PostgresSpendStore(asyncpg_pool)),
-        Instrumentation(settings=InstrumentationSettings(tracer_provider=provider, include_binary_content=False)),
     ],
 )
+# Instrumentation is process-wide: fin_agent.observability.bootstrap_observability()
+# calls Agent.instrument_all(...), so this agent and every lazy agent share one trace.
 
 # A new thread's history. The snapshot is its own exchange, so redaction can replace your message.
 history = [ModelRequest(parts=[pin(snapshot)]), ModelResponse(parts=[TextPart("Snapshot read.")])]
@@ -400,13 +401,20 @@ prompt-injection notes, a fresh cloned database for each trial, and the scorecar
 
 ### Traces
 
-Spans go to [Phoenix](system-design.md#traces-phoenix) over OTLP, only when an endpoint is set.
+[`fin_agent/observability.py`](../../src/fin_agent/observability.py) makes one
+`phoenix.otel.register()` call per process, then calls `Agent.instrument_all()`. Pydantic AI emits
+its own agent, model-request, and tool spans; Phoenix receives them directly over OTLP/HTTP and
+converts the native `gen_ai.*` attributes on ingestion. There is no custom span processor, meter
+provider, framework instrumentation, or log bridge. A Phoenix outage fails export only, and the
+app still serves. The operator journey and settings are in [`observability.md`](observability.md).
 
 ```python
-provider = TracerProvider(resource=Resource.create({"openinference.project.name": "fin-agent"}))
-provider.add_span_processor(OpenInferenceSpanProcessor())  # readable input and reply in Phoenix
-if OTEL_EXPORTER_OTLP_ENDPOINT:                            # unset, nothing is exported
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+from fin_agent.observability import bootstrap_observability, shutdown_observability
+
+bootstrap_observability()
+# ... serve, run jobs, run one CLI command, or run evals ...
+shutdown_observability()  # flush and close the exporter
 ```
 
-Eval runs set their own project name, so a failed trial is easy to find and read.
+The API, CLI chat, CLI eval, and eval runner all use the same `PHOENIX_PROJECT_NAME` (default
+`fin-agent`). No eval-only project or root span exists.

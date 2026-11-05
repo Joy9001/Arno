@@ -44,6 +44,20 @@ services:
       FIN_AGENT_WEB_DIR: /app/web/dist
       FIN_AGENT_AUTO_MIGRATE: "1"
       FIN_AGENT_PRE_MIGRATION_DIR: /app/pre-migration
+      # Native Pydantic AI traces go straight to Phoenix over OTLP/HTTP. This Compose Phoenix
+      # requires authentication. By default the local Phoenix admin secret is the bearer token,
+      # so a normal start exports with no extra provisioning step. PHOENIX_API_KEY overrides it
+      # when the operator has a real Phoenix API key.
+      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:6006/v1/traces}
+      PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-fin-agent}
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+      # The shared env_file also contains backend credentials. The app gets only the single
+      # bearer credential above, never these Phoenix values under their own names.
+      PHOENIX_SECRET: ""
+      PHOENIX_ADMIN_SECRET: ""
+      PHOENIX_PASSWORD: ""
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ""
     volumes:
       # A dump from before each migration. The image creates this path owned by the API user.
       - pre-migration-data:/app/pre-migration
@@ -128,10 +142,9 @@ services:
       # Host development only. The API inside Compose reaches it at http://speaches:8000/v1.
       - "127.0.0.1:8001:8000"
 
-  # `docker compose --profile traces up`: Phoenix on its own database and role.
+  # Phoenix on its own database and role on the existing Postgres server. No extra DB server.
   phoenix-init:
     image: postgres:18.6
-    profiles: ["traces"]
     restart: "no"
     logging: *default-logging
     env_file:
@@ -142,7 +155,14 @@ services:
       PGUSER: app
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       PGDATABASE: fin_agent
-      PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-phoenix-local-only}
+      # Observability-only credentials default to empty so a missing value does not abort
+      # `docker compose config` or an app-only start. The guard below refuses this one-time
+      # init, which keeps Phoenix down rather than creating an empty database password or an
+      # unauthenticated UI. The app is unaffected.
+      PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-}
+      PHOENIX_SECRET: ${PHOENIX_SECRET:-}
+      PHOENIX_ADMIN_SECRET: ${PHOENIX_ADMIN_SECRET:-}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:-}
     depends_on:
       db:
         condition: service_healthy
@@ -151,10 +171,22 @@ services:
       - -c
       - |
         set -eu
+        if [ -z "$$PHOENIX_PASSWORD" ]; then
+          echo "phoenix-init: PHOENIX_PASSWORD is not set; Phoenix stays down. The app and its database are unaffected." >&2
+          exit 78
+        fi
+        if [ -z "$$PHOENIX_SECRET" ] || [ -z "$$PHOENIX_ADMIN_SECRET" ] || [ -z "$$PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD" ]; then
+          echo "phoenix-init: a Phoenix auth secret is not set; Phoenix stays down. The app and its database are unaffected." >&2
+          exit 78
+        fi
         if psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='phoenix'" | grep -q 1; then
-          psql -v ON_ERROR_STOP=1 -c "ALTER ROLE phoenix PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}'"
+          psql -v ON_ERROR_STOP=1 -v pwd="$$PHOENIX_PASSWORD" <<'SQL'
+        ALTER ROLE phoenix PASSWORD :'pwd';
+        SQL
         else
-          psql -v ON_ERROR_STOP=1 -c "CREATE ROLE phoenix LOGIN PASSWORD '${PHOENIX_PASSWORD:-phoenix-local-only}'"
+          psql -v ON_ERROR_STOP=1 -v pwd="$$PHOENIX_PASSWORD" <<'SQL'
+        CREATE ROLE phoenix LOGIN PASSWORD :'pwd';
+        SQL
         fi
         if ! psql -tAc "SELECT 1 FROM pg_database WHERE datname='phoenix'" | grep -q 1; then
           psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE phoenix OWNER phoenix"
@@ -163,24 +195,42 @@ services:
 
   phoenix:
     image: arizephoenix/phoenix:21.0
-    profiles: ["traces"]
     restart: unless-stopped
     logging: *default-logging
     environment:
-      PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-phoenix-local-only}@db:5432/phoenix
-      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
-      # Loopback only. To expose Phoenix over the tailnet, turn auth on and use its login.
-      PHOENIX_ENABLE_AUTH: "false"
-      PHOENIX_DEFAULT_RETENTION_POLICY_DAYS: "90"
+      PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-}@db:5432/phoenix
+      # Auth is explicit. The container binds :: (non-loopback), so an unauthenticated UI would be
+      # reachable from the Compose network. The host publish below is loopback-only. Empty values
+      # are gated by phoenix-init: Phoenix does not start without all four Phoenix credentials.
+      PHOENIX_HOST: "::"
+      PHOENIX_ENABLE_AUTH: "true"
+      PHOENIX_SECRET: ${PHOENIX_SECRET:-}
+      PHOENIX_ADMIN_SECRET: ${PHOENIX_ADMIN_SECRET:-}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:-}
+      PHOENIX_ENABLE_STRONG_PASSWORD_POLICY: "true"
+      PHOENIX_CSRF_TRUSTED_ORIGINS: ${PHOENIX_CSRF_TRUSTED_ORIGINS:-http://127.0.0.1:6006}
       PHOENIX_WORKING_DIR: /data
     volumes:
       - phoenix-data:/data
     ports:
-      # Loopback only, like the app. Reaching it over the tailnet needs its login.
-      - "127.0.0.1:6006:6006"
+      # Loopback only. Reaching it over the tailnet needs a deliberate change and its login.
+      - "127.0.0.1:${PHOENIX_UI_PORT:-6006}:6006"
     depends_on:
       phoenix-init:
         condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 30s
 
 volumes:
   db-data:

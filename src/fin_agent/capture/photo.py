@@ -11,7 +11,7 @@ The caller marks the text fields before they reach the chat model.
 from __future__ import annotations
 
 from datetime import date as Date
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
@@ -51,20 +51,28 @@ async def extract_payment_photo(
     *,
     media_type: str,
     model: Model | None = None,
+    spend_store: Any = None,
 ) -> PaymentPhoto:
     """No tools, no history, no ledger access. A test may pass a scripted model."""
-    agent = Agent(
-        model or vision_model(),
-        output_type=PaymentPhoto,
-        instructions=INSTRUCTIONS,
-    )
-    result = await agent.run(
-        [
-            "Read this receipt or payment screenshot into the typed fields.",
-            BinaryContent(data=data, media_type=media_type or "image/png"),
-        ]
-    )
-    return result.output
+    from fin_agent.agent.capabilities import spend_limits
+    from fin_agent.agent.spend import spend_store_scope
+
+    async with spend_store_scope(spend_store) as store:
+        limits = spend_limits(store)
+        agent = Agent(
+            model or vision_model(),
+            output_type=PaymentPhoto,
+            instructions=INSTRUCTIONS,
+            capabilities=[limits] if limits is not None else None,
+            name="receipt-vision",
+        )
+        result = await agent.run(
+            [
+                "Read this receipt or payment screenshot into the typed fields.",
+                BinaryContent(data=data, media_type=media_type or "image/png"),
+            ]
+        )
+        return result.output
 
 
 __all__ = [

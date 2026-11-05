@@ -18,6 +18,7 @@ FROM postgres:18.6 AS pgclient
 FROM python:3.14-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    FIN_AGENT_REPO_ROOT=/app \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 

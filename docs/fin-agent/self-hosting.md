@@ -15,7 +15,7 @@ native systemd install, arm64 images, and public-internet hosting are deliberate
 | Need | Why |
 |---|---|
 | An x86-64 Linux host, Docker Desktop, or a VPS with Docker Compose | The shipped images are amd64 |
-| About 2 GB of RAM free (4 GB with `--profile local-llm` or `--profile traces`) | Postgres, the API, and the optional services |
+| About 2 GB of RAM free, plus Phoenix (4 GB with `--profile local-llm`) | Postgres, the API, Phoenix, and the optional services |
 | Tailscale on the host, and the Tailscale app on every device you will use | The only network path to the app |
 | Host disk encryption **on** | It is what protects the database at rest |
 | A password manager, and somewhere off this machine for the restic password | Losing the restic password makes every backup unreadable |
@@ -72,6 +72,21 @@ FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net
 Generate values with `openssl rand -base64 32` (or `python -c "import secrets;
 print(secrets.token_urlsafe(32))"`). `RESTIC_PASSWORD` is the one secret that must live somewhere
 other than this machine.
+
+The normal start also runs Phoenix. Set these on the host, with long random values; never paste
+them into chat:
+
+```dotenv
+PHOENIX_PASSWORD=<long random; the Phoenix database role>
+PHOENIX_SECRET=<long random; Phoenix auth>
+PHOENIX_ADMIN_SECRET=<long random; Phoenix admin>
+PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<long random; Phoenix admin login>
+```
+
+`PHOENIX_ADMIN_SECRET` must be at least 32 characters, contain a digit and a lowercase letter, and
+differ from `PHOENIX_SECRET`. It also serves as the default local bearer credential for trace
+export, so the normal start needs no Phoenix API key. An empty Phoenix value keeps Phoenix down;
+the app and its database are unaffected. See [`observability.md`](observability.md#settings).
 
 Find the tailnet name with `tailscale status --json` and read `Self.DNSName`, or open the
 Tailscale admin console. It looks like `mini-pc.tail1234.ts.net`.
@@ -434,31 +449,43 @@ verifies the ledger and every table before it reports success.
 - **Database roles:** `app` owns the schema; `agent_ro` is SELECT-only on the ledger, plan,
   people, categorization, settings, and conversation tables, with no auth tables, no `TEMP`, and a
   two-second statement timeout; `backup` can SELECT for `pg_dump` and INSERT into `backup_runs`
-  only. Phoenix, when enabled, owns only its own database and `agent_ro` cannot connect to it.
-- **Logs:** only IDs, timings, and error types. Amounts and Postgres `DETAIL` lines are filtered
-  before a handler writes them. Traces do contain content, which is why Phoenix stays local.
+  only. Phoenix owns only its own database and `agent_ro` cannot connect to it.
+- **Logs:** standard Python/Uvicorn stdout, kept on the host. They are not shipped to a central
+  log store. Traces include prompts, replies, and tool data because Pydantic AI's default
+  instrumentation is used, which is why Phoenix stays local. There is no custom metadata-only mode.
 - **Not defended:** a VPS provider reading the running disk, and a live host compromise. Both are
   stated rather than papered over; in-database encryption is parked with the first as its trigger.
 
 ---
 
-## 8. Traces with Phoenix (optional)
+## 8. Observability
 
-```bash
-docker compose --profile traces up -d
-```
+The normal start runs [Phoenix](system-design.md#traces-phoenix) beside the app. Native Pydantic AI
+agent, model, and tool spans export directly over OTLP/HTTP; there is no Collector, Loki,
+Prometheus, Grafana, custom metric, or log shipper. Standard Python/Uvicorn logs stay on Docker
+stdout, capped at three 10 MB files per service. Phoenix publishes only on loopback at
+<http://127.0.0.1:6006> and requires authentication; its own database and role stay separate from
+the ledger.
 
-Set this in the API environment, then restart the API:
+Compose sets `PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces` and
+`PHOENIX_PROJECT_NAME=fin-agent`. It also maps `PHOENIX_API_KEY` to
+`PHOENIX_ADMIN_SECRET` by default, so the normal start exports with no key creation and no second
+restart. Set `PHOENIX_API_KEY` only to use a real Phoenix API key; it wins over the fallback. A
+host CLI or eval that should export needs `PHOENIX_COLLECTOR_ENDPOINT=http://127.0.0.1:6006/v1/traces`
+and a bearer credential in `PHOENIX_API_KEY`; a container command already has the Compose values.
 
-```dotenv
-PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces
-```
+The app starts and answers when Phoenix is down. Export is fail-open. The standard
+`OTEL_SDK_DISABLED=true` kill switch disables export and agent instrumentation; there is no other
+tracing switch. Keep the volumes and never use `docker compose down -v` or `docker system prune`
+during rollback.
 
-Phoenix uses its own database and role on the same Postgres server, keeps traces 90 days, and runs
-with `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false`. It is published on `127.0.0.1:6006` only. To view it
-from another device, turn its login on and expose it with a separate
-`tailscale serve --bg 6006`; do not put it on the public internet. The app works the same without
-it.
+Phoenix keeps its built-in retention default of **0 days (infinite)** unless the operator sets a
+policy in Phoenix or through `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS`. The app database is backed up;
+Phoenix data is not, and a ledger restore leaves it untouched. Pydantic AI's default instrumentation
+records prompts, replies, and tool data, so Phoenix stays local and loopback-only.
+
+The operator journey, settings, recovery, and owner commands are in
+[`observability.md`](observability.md).
 
 ---
 
@@ -473,7 +500,7 @@ it.
 | Backups stopped | Settings → Backup status; `docker compose logs backup`; test `restic snapshots` |
 | A restore refuses | The target has tables; use a fresh database, or `--force` if replacement is intended |
 | The UI is blank | Check the CSP console; the supported build has no inline scripts. Rebuild with `docker compose build api` |
-| Traces are missing | `PHOENIX_COLLECTOR_ENDPOINT` is set and the `traces` profile is up; Phoenix binds loopback only |
+| Telemetry is missing or degraded | `docker compose ps`; `docker compose logs api` for an exporter error; confirm `PHOENIX_COLLECTOR_ENDPOINT` and `PHOENIX_PROJECT_NAME`; a 401 fails export only; the default bearer credential is `PHOENIX_ADMIN_SECRET`, and `PHOENIX_API_KEY` overrides it; Phoenix is loopback-only |
 
 Admin commands run on the host, never over HTTP:
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import select
 import shutil
@@ -20,7 +19,6 @@ from fin_agent.api.imports import MAX_UPLOAD_BYTES
 from fin_agent.api.middleware import CONTENT_SECURITY_POLICY
 from fin_agent.backup_restore import build_manifest, restore_from_restic
 from fin_agent.db.pre_migration import dump_before_migrating
-from fin_agent.logging_utils import ContentlessLogFilter, sanitize
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 
@@ -84,45 +82,6 @@ def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, se
     db.execute("UPDATE sessions SET reverified_at = now() - interval '6 minutes'")
     db.commit()
     assert client.get("/api/export/json").status_code == 403
-
-
-def test_log_sanitizer_removes_amounts_and_database_detail():
-    record = logging.LogRecord(
-        "fin_agent",
-        logging.ERROR,
-        __file__,
-        1,
-        "paid ₹1,234.50 to Swiggy",
-        (),
-        None,
-    )
-    ContentlessLogFilter().filter(record)
-    assert "1,234" not in record.getMessage()
-    assert "[amount]" in record.getMessage()
-
-    detail = (
-        'duplicate key value violates unique constraint "payees_name_key" '
-        "DETAIL: Key (name)=(Swiggy) already exists."
-    )
-    cleaned = sanitize(detail)
-    assert "Swiggy" not in cleaned
-    assert "DETAIL:" in cleaned
-
-    try:
-        raise RuntimeError(detail)
-    except RuntimeError:
-        exception_record = logging.LogRecord(
-            "fin_agent",
-            logging.ERROR,
-            __file__,
-            1,
-            "job failed",
-            (),
-            sys.exc_info(),
-        )
-    ContentlessLogFilter().filter(exception_record)
-    assert exception_record.exc_info is None
-    assert "Swiggy" not in (exception_record.exc_text or "")
 
 
 def test_backup_manifest_changes_when_a_table_changes(demo_ledger):

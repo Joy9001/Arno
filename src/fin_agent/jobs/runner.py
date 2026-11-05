@@ -80,7 +80,11 @@ def enqueue_job(
     payload: dict[str, Any] | None = None,
     run_at: Any = None,
 ) -> str:
-    """Insert one job in the caller's transaction. A duplicate key returns the existing id."""
+    """Insert one job in the caller's transaction. A duplicate key returns the existing id.
+
+    `jobs.trace_context` remains nullable for historical rows; new jobs leave it empty and
+    each attempt starts its own native Pydantic AI trace.
+    """
     row = conn.execute(
         """
         INSERT INTO jobs (key, kind, payload, run_at)
@@ -310,16 +314,15 @@ class JobRunner:
     async def tick(self) -> int:
         """Claim and run as many jobs as the concurrency limit allows."""
         self._prepare_schedules()
-        free = self.concurrency - len(self._running)
-        if free <= 0:
-            return 0
-        jobs: list[dict[str, Any]] = []
         with closing(connect()) as conn:
-            for _ in range(free):
-                job = _claim_one(conn)
-                if job is None:
-                    break
-                jobs.append(job)
+            free = self.concurrency - len(self._running)
+            jobs: list[dict[str, Any]] = []
+            if free > 0:
+                for _ in range(free):
+                    job = _claim_one(conn)
+                    if job is None:
+                        break
+                    jobs.append(job)
         for job in jobs:
             task = asyncio.create_task(self._run_job(job), name=f"job-{job['key']}")
             self._running.add(task)
@@ -328,8 +331,8 @@ class JobRunner:
 
     async def run_once(self) -> int:
         """Claim every currently due job and await it. Tests use this instead of the loop."""
-        self._prepare_schedules()
         claimed = 0
+        self._prepare_schedules()
         while True:
             with closing(connect()) as conn:
                 job = _claim_one(conn)
@@ -339,11 +342,15 @@ class JobRunner:
             claimed += 1
 
     async def _run_job(self, job: dict[str, Any]) -> None:
+        await self._execute_job(job)
+
+    async def _execute_job(self, job: dict[str, Any]) -> None:
         kind = str(job["kind"])
+        job_id = str(job["id"])
         handler = self.registry.get(kind)
         if handler is None:
             with closing(connect()) as conn:
-                _finish(conn, str(job["id"]), status="failed", error=f"no handler for {kind}")
+                _finish(conn, job_id, status="failed", error=f"no handler for {kind}")
             return
         timeout = float(self.timeouts.get(kind, 120))
         try:
@@ -353,7 +360,7 @@ class JobRunner:
             else:
                 await asyncio.wait_for(asyncio.to_thread(handler, payload), timeout=timeout)
             with closing(connect()) as conn:
-                _finish(conn, str(job["id"]), status="done")
+                _finish(conn, job_id, status="done")
         except asyncio.CancelledError:
             raise
         except TimeoutError:

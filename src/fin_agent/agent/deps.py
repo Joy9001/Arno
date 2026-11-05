@@ -22,6 +22,8 @@ class AgentDeps:
     cards: list[dict[str, object]] = field(default_factory=list)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.
     approvals: int = 0
+    # How many approval cards this turn offered. Offered and approved read as two states.
+    approvals_offered: int = 0
 
 
 __all__ = ["AgentDeps"]

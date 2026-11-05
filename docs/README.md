@@ -25,6 +25,7 @@ plan wins. The project has the following docs:
 | [`import.md`](fin-agent/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`observability.md`](fin-agent/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
 
 **Rule for keeping these readable:** a decision and its one-line rationale go in the `plan.md`
 file. Anything that needs a table, a schema, or three paragraphs of justification goes in a

@@ -217,25 +217,36 @@ def render_template(numbers: dict[str, Any]) -> str:
     )
 
 
-async def write_prose(numbers: dict[str, Any], *, model: Any = None) -> str:
+async def write_prose(
+    numbers: dict[str, Any], *, model: Any = None, spend_store: Any = None
+) -> str:
     """One CHAT call, and only one. The caller falls back to the template on any failure."""
     # TODO(L6): exercised with scripted models and the fallback; rerun against the configured
     # CHAT endpoint so a real provider's prose and timeout behavior are measured.
     from pydantic_ai import Agent, UsageLimits
 
-    from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS
+    from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, spend_limits
+    from fin_agent.agent.spend import spend_store_scope
 
-    agent = Agent(model or primary_model(), output_type=str, instructions=BRIEFING_INSTRUCTIONS)
-    result = await agent.run(
-        "Write the brief from this JSON. Use only these numbers.\n"
-        + json.dumps(numbers, ensure_ascii=False, default=str),
-        model_settings=RUN_MODEL_SETTINGS,
-        usage_limits=UsageLimits(request_limit=1),
-    )
-    text = str(result.output or "").strip()
-    if not text:
-        raise ValueError("the briefing model returned no prose")
-    return text
+    async with spend_store_scope(spend_store) as store:
+        limits = spend_limits(store)
+        agent = Agent(
+            model or primary_model(),
+            output_type=str,
+            instructions=BRIEFING_INSTRUCTIONS,
+            capabilities=[limits] if limits is not None else None,
+            name="weekly-briefing",
+        )
+        result = await agent.run(
+            "Write the brief from this JSON. Use only these numbers.\n"
+            + json.dumps(numbers, ensure_ascii=False, default=str),
+            model_settings=RUN_MODEL_SETTINGS,
+            usage_limits=UsageLimits(request_limit=1),
+        )
+        text = str(result.output or "").strip()
+        if not text:
+            raise ValueError("the briefing model returned no prose")
+        return text
 
 
 def compose_briefing(conn: psycopg.Connection, *, as_of: date | None = None) -> dict[str, Any]:
@@ -249,6 +260,7 @@ async def send_weekly_briefing(
     as_of: date | None = None,
     period: str | None = None,
     model: Any = None,
+    spend_store: Any = None,
 ) -> dict[str, Any] | None:
     numbers = briefing_numbers(conn, as_of=as_of)
     template = render_template(numbers)
@@ -257,7 +269,7 @@ async def send_weekly_briefing(
     body = template
     prose_error = None
     try:
-        body = await write_prose(numbers, model=model)
+        body = await write_prose(numbers, model=model, spend_store=spend_store)
     except Exception as exc:  # noqa: BLE001 - the numbers still go out
         prose_error = type(exc).__name__
         logger.info(

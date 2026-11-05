@@ -10,6 +10,9 @@ in CI and the versioned images are published. Two kinds of gap remain:
 - The human gates haven't started. The live ledger now has 5 accounts, 11 transfers, and
   0 conversations, so the four-week clock for milestone 41 still isn't running.
 
+The observability reconciliation on November 5, 2026 updates section D and the plan's T/A tracker.
+It records what is verified and what remains; it does not change the overall verdict.
+
 Work the groups in order, because each depends on the one before it.
 
 ## A. Code and docs: closable now
@@ -180,3 +183,33 @@ These start only after group B's durability and import work is done.
       gap they report in the docs.
 - [ ] **Freeze:** no fix pushed for one week after the last item, per "What 'shipped' means".
 - [ ] Remove the TODO in `src/fin_agent/__init__.py`, and mark plan.md as shipped.
+
+## D. Observability
+
+Reconciled November 5, 2026. Fin-Agent uses Pydantic AI's native OpenTelemetry instrumentation
+and the standard Phoenix SDK, exporting directly to Phoenix. Standard Python/Uvicorn logs stay on
+Docker stdout. There is no Collector, Loki, Prometheus, Grafana, custom metric, manual span, log
+bridge, dashboard, or alert pipeline. The operator path is
+[`observability.md`](observability.md).
+
+- [x] **Source and Compose.** One `phoenix.otel.register()` and `Agent.instrument_all()` per
+      process; Phoenix is the only telemetry service. Its authentication, loopback UI, and own
+      Postgres database and role remain.
+- [x] **Removed custom stack.** Domain spans, metrics, the custom JSON formatter and access-log
+      middleware, Collector/Loki/Prometheus/Grafana configs, probes, runbooks, dashboards, alerts,
+      and their tests are gone.
+- [x] **Business behavior preserved.** Shared daily spending enforcement, summarizer budgeting,
+      approvals and guardrails, real error messages, the CLI store close, and the installed eval
+      `REPO_ROOT` fix are unchanged.
+- [x] **Native integration smoke.** A stub Phoenix OTLP endpoint receives Pydantic AI agent, model,
+      and tool spans with one root, real parent links, and no SQL spans.
+- [x] **Standard logs.** `logging.basicConfig` plus Uvicorn; Docker `json-file` rotation at three
+      10 MB files per service; no central log store.
+- [ ] **Owner deployment update.** Rebuild and recreate the API and Phoenix on the host with the
+      commands in [`observability.md`](observability.md#owner-commands), without deleting volumes.
+      Defaults are not claimed as deployed until the owner does this.
+- [x] **Trace authentication.** Compose maps `PHOENIX_API_KEY` to the local
+      `PHOENIX_ADMIN_SECRET` by default, so the normal start exports with no API-key creation or
+      second restart. An explicit `PHOENIX_API_KEY` overrides the fallback.
+- [x] **Retention.** Phoenix's supported default is 0 days (infinite); the repository sets no
+      custom retention.

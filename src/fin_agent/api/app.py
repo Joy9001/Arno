@@ -15,7 +15,6 @@ from fin_agent import __version__
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.history import recover_crashed_runs
 from fin_agent.agent.spend import make_spend_store
-from fin_agent.agent.tracing import build_tracer_provider
 from fin_agent.agent.turns import TurnManager
 from fin_agent.api import auth, capture, chat, health, home, imports, ledger, static, watch
 from fin_agent.api.middleware import SecurityHeadersMiddleware
@@ -32,13 +31,15 @@ from fin_agent.jobs.schedules import ensure_builtin_schedules, sync_scheduled_qu
 from fin_agent.ledger.accounts import ensure_system_accounts
 from fin_agent.ledger.categories import ensure_default_categories
 from fin_agent.ledger.errors import LedgerError
-from fin_agent.logging_utils import install as install_log_sanitizer
+from fin_agent.logging_utils import configure_logging
 from fin_agent.notifications import ensure_vapid_keys
+from fin_agent.observability import bootstrap_observability, shutdown_observability
 
 logger = logging.getLogger("fin_agent")
 
 
-def _bootstrap(settings: Settings) -> None:
+def _bootstrap(settings: Settings) -> list[int]:
+    applied: list[int] = []
     conn = connect(settings.database_url)
     try:
         if settings.auto_migrate:
@@ -64,6 +65,9 @@ def _bootstrap(settings: Settings) -> None:
                         token,
                         title="First-run setup is open.",
                     ),
+                    # The link embeds a one-time enrollment secret. It belongs on the operator's
+                    # local console; standard logs stay on the host.
+                    extra={"console_only": True},
                 )
             else:
                 logger.warning(
@@ -71,10 +75,12 @@ def _bootstrap(settings: Settings) -> None:
                 )
     finally:
         conn.close()
+    return applied
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    pool = None
     _bootstrap(app.state.settings)
     conn = connect(app.state.settings.database_url)
     try:
@@ -89,31 +95,30 @@ async def lifespan(app: FastAPI):
     finally:
         conn.close()
     spend_store, pool = await make_spend_store(app.state.settings.database_url)
-    tracer_provider = build_tracer_provider()
     app.state.spend_store = spend_store
     app.state.spend_pool = pool
-    app.state.tracer_provider = tracer_provider
-    app.state.agent = build_agent(spend_store=spend_store, tracer_provider=tracer_provider)
+    app.state.agent = build_agent(spend_store=spend_store)
     app.state.turns = TurnManager(app.state.agent)
     app.state.jobs = JobRunner()
     if app.state.settings.jobs_enabled:
         app.state.jobs.start()
+
     try:
         yield
     finally:
-        await app.state.jobs.stop()
-        await app.state.turns.drain()
-        if pool is not None:
-            await pool.close()
+        try:
+            await app.state.jobs.stop()
+            await app.state.turns.drain()
+        finally:
+            if pool is not None:
+                await pool.close()
+            shutdown_observability()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    install_log_sanitizer()
+    configure_logging()
+    bootstrap_observability()
 
     app = FastAPI(
         title="Fin-Agent",
@@ -150,7 +155,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(psycopg.OperationalError)
     async def database_unreachable(request: Request, exc: psycopg.OperationalError):
-        logger.warning("database unreachable while serving %s", request.url.path)
+        route = request.scope.get("route")
+        logger.warning(
+            "database unreachable while serving %s",
+            getattr(route, "path", request.method),
+        )
         return problem(503, detail="The database is unreachable.")
 
     @app.exception_handler(LedgerError)

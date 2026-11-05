@@ -75,6 +75,23 @@ async def transcribe_audio(
     timeout: float | None = None,
 ) -> str:
     """Return the transcript, or raise `TranscriptionError` with a safe message."""
+    return await _transcribe_audio(
+        data,
+        content_type=content_type,
+        filename=filename,
+        prompt=prompt,
+        timeout=timeout,
+    )
+
+
+async def _transcribe_audio(
+    data: bytes,
+    *,
+    content_type: str,
+    filename: str = "voice.webm",
+    prompt: str | None = None,
+    timeout: float | None = None,
+) -> str:
     if not configured():
         raise TranscriptionError("Speech-to-text is not configured.")
 

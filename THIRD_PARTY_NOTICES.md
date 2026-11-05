@@ -109,12 +109,13 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | Package | License |
 |---|---|
 | `asyncpg` | Apache-2.0 |
+| `arize-phoenix-otel` | Apache-2.0 |
 | `fastapi` | MIT |
 | `holidays` | MIT |
 | `httpx` | BSD-3-Clause |
 | `msoffcrypto-tool` | MIT |
 | `olefile` | BSD |
-| `openinference-instrumentation-pydantic-ai` | Apache-2.0 |
+| `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | Apache-2.0 |
 | `psycopg`, `psycopg-binary`, `psycopg-pool` | LGPL-3.0 |
 | `pydantic` | MIT |
 | `pydantic-ai`, `pydantic-ai-harness`, `pydantic-evals` | MIT |
@@ -131,8 +132,10 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `webauthn` | BSD-3-Clause |
 
 Weak-copyleft libraries are used unmodified: `psycopg` is LGPL-3.0, and `pywebpush` is MPL-2.0.
-Neither is GPL or AGPL. No GPL or AGPL package, vendored code, or base image ships in the
-Fin-Agent image.
+These are the direct dependency licenses. Fin-Agent's own source is MIT (`LICENSE`). The
+`python:3.14-slim` base image ships Debian packages under their own licenses, and the database
+and Phoenix services run as separate Compose images with their own licenses, listed under
+[Compose service images](#compose-service-images); Phoenix uses Elastic License 2.0.
 
 ## Web dependencies
 
@@ -155,17 +158,30 @@ The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix 
 
 The build writes the complete license text of every resolved web package to
 `/THIRD_PARTY_NOTICES.txt`, which the app serves at that path and which ships in the image.
-`scripts/license_audit.py` fails the build on a GPL, AGPL, SSPL, Elastic, or unknown license.
+`scripts/license_audit.py` fails the build on a GPL, AGPL, SSPL, Elastic, or unknown license in
+the application's Python and web dependencies. It does not audit the base image's Debian
+packages or the separate container images.
 
-## Base images and tools
+## Compose service images
 
-- PostgreSQL (`postgres:18.6`, also the API's `pg_dump`/`pg_restore` and the backup image) —
-  PostgreSQL License.
+These images run as separate Compose services. They are not part of the Fin-Agent application
+image, and each ships its own license file. Where the image has one project license, the
+identifier below was checked against the official `LICENSE` file for the pinned version.
+
+| Image | License |
+|---|---|
+| `postgres:18.6` (database, Phoenix init, API tools) | PostgreSQL License |
+| `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2) |
+| `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
+| `ghcr.io/speaches-ai/speaches:0.8.3-cpu` (optional `local-stt` profile) | MIT |
+| `ghcr.io/joy9001/fin-agent` (this repository) | MIT for Fin-Agent code; bundled dependencies as listed above |
+| `ghcr.io/joy9001/fin-agent-backup` (this repository) | MIT for Fin-Agent code; `restic` BSD-2-Clause, `jq` MIT |
+
+## Base images and build tools
+
 - Python (`python:3.14-slim`) — PSF-2.0, plus Debian packages under their own licenses.
 - Node (`node:24-alpine`) and pnpm — MIT, used only in the build stage.
 - `uv` — Apache-2.0 or MIT, used only in the build stage.
 - `jq` in the backup image — MIT.
 - Tailscale is installed on the host, not in the image, under its own license.
-- Phoenix (`arizephoenix/phoenix:21.0`) is the optional `--profile traces` image; it is covered by
-  the Elastic 2.0 license and is not part of the Fin-Agent image.
 

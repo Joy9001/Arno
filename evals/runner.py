@@ -48,10 +48,10 @@ from fin_agent.agent.history import (
 )
 from fin_agent.agent.models import model_for
 from fin_agent.agent.number_check import check_messages, classify_messages
-from fin_agent.agent.tracing import build_tracer_provider
 from fin_agent.config import REPO_ROOT, get_settings
 from fin_agent.db.conn import connect, current_database_url
 from fin_agent.demo.template import drop_database
+from fin_agent.observability import bootstrap_observability
 
 from evals.cases import build_cases, summarize
 from evals.graders import Judge, grade_case
@@ -79,13 +79,6 @@ def _slug(value: str) -> str:
     return "".join(char if char.isalnum() or char in "-_." else "-" for char in value)[
         :80
     ]
-
-
-def _project_name(model_name: str, case_id: str) -> str:
-    # One project for each trial, not only each case: a repeat's failed trial is easy to find.
-    return (
-        f"fin-agent-evals-{_slug(model_name)}-{_slug(case_id)}-{uuid.uuid4().hex[:6]}"
-    )
 
 
 def _reply(result: Any) -> str:
@@ -175,11 +168,35 @@ async def run_turn(
     project_name: str | None = None,
     run_budget_usd: Decimal = Decimal("2"),
 ) -> EvalOutput:
+    """One eval trial. Native Pydantic AI spans come from the process bootstrap."""
+    del project_name
+    return await _run_turn(
+        inp,
+        meta=meta,
+        model=model,
+        model_factory=model_factory,
+        model_name=model_name,
+        judge=judge,
+        run_budget_usd=run_budget_usd,
+    )
+
+
+async def _run_turn(
+    inp: EvalInput,
+    *,
+    meta: EvalMeta,
+    model: Model | None = None,
+    model_factory: Callable[[], Model] | None = None,
+    model_name: str,
+    judge: Judge | None = None,
+    run_budget_usd: Decimal = Decimal("2"),
+) -> EvalOutput:
     """Run one trial and return what the graders need.
 
     The database context variable is already set by the lifecycle. The agent is built per
-    trial so the spend counter, context window, and Phoenix project belong to this trial alone.
-    A factory builds a fresh model, and therefore a fresh provider session, for each trial.
+    trial so the spend counter and context window belong to this trial alone. A factory builds
+    a fresh model, and therefore a fresh provider session, for each trial. Instrumentation is
+    the process bootstrap's one provider and eval project, not one provider per trial.
     """
     del judge  # the evaluator, not the task, calls the judge
     if model_factory is not None:
@@ -202,16 +219,11 @@ async def run_turn(
     history: list[ModelMessage] = []
     latency = 0.0
 
-    tracer = None
-    if project_name:
-        tracer = build_tracer_provider(project_name=project_name, set_global=False)
-
     spend_store = InMemorySpendStore()
     agent = build_agent(
         model=model,
         backup=None,
         spend_store=spend_store,
-        tracer_provider=tracer,
         run_budget_usd=run_budget_usd,
         context_window=meta.long_thread.context_window if meta.long_thread else None,
     )
@@ -416,7 +428,6 @@ async def evaluate_model(
             model=model,
             model_factory=model_factory,
             model_name=model_name,
-            project_name=_project_name(model_name, inp.case_id),
             run_budget_usd=run_budget_usd,
         )
 
@@ -879,6 +890,45 @@ def failure_transcript(
 
 
 def run_eval(
+    *,
+    model_names: list[str],
+    repeat: int = 3,
+    template: str = DEFAULT_TEMPLATE,
+    judge_model: str | None = None,
+    categories: set[str] | None = None,
+    tags: set[str] | None = None,
+    case_ids: set[str] | None = None,
+    limit: int | None = None,
+    per_category: int | None = None,
+    max_concurrency: int = 2,
+    run_budget_usd: Decimal = Decimal("2"),
+    publish: bool = True,
+    readme: Path = README_PATH,
+    results_dir: Path = RESULTS_DIR,
+    note: str = "",
+) -> list[Scorecard]:
+    """Run the suite under the one process-wide Phoenix project."""
+    bootstrap_observability()
+    return _run_eval(
+        model_names=model_names,
+        repeat=repeat,
+        template=template,
+        judge_model=judge_model,
+        categories=categories,
+        tags=tags,
+        case_ids=case_ids,
+        limit=limit,
+        per_category=per_category,
+        max_concurrency=max_concurrency,
+        run_budget_usd=run_budget_usd,
+        publish=publish,
+        readme=readme,
+        results_dir=results_dir,
+        note=note,
+    )
+
+
+def _run_eval(
     *,
     model_names: list[str],
     repeat: int = 3,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 from decimal import Decimal
@@ -15,7 +16,7 @@ from pydantic_ai_harness.spend import SpendEntry
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, turn_limits
 from fin_agent.agent.models import WindowLimited
-from fin_agent.agent.spend import make_spend_store
+from fin_agent.agent.spend import _SingleConnectionPool, make_spend_store
 from fin_agent.config import get_settings
 from tests.agent_helpers import streaming_model
 
@@ -44,6 +45,47 @@ async def test_the_daily_ceiling_survives_a_new_pool(db):
     spent = (await store2.get_many([key]))[key]
     assert spent.usd == Decimal("3.25")
     await pool2.close()
+
+
+class _FakeConnection:
+    def __init__(self) -> None:
+        self.terminated = 0
+        self._closed = False
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def terminate(self) -> None:
+        self.terminated += 1
+        self._closed = True
+
+
+def test_the_cli_connection_is_replaced_across_loops_and_closed_explicitly(monkeypatch):
+    created: list[_FakeConnection] = []
+
+    async def connect(dsn, **kwargs):
+        del dsn, kwargs
+        connection = _FakeConnection()
+        created.append(connection)
+        return connection
+
+    monkeypatch.setattr("fin_agent.agent.spend.asyncpg.connect", connect)
+    pool = _SingleConnectionPool("postgresql://unused")
+
+    async def use():
+        async with pool.acquire() as connection:
+            return connection
+
+    first = asyncio.run(use())
+    second = asyncio.run(use())
+    assert len(created) == 2
+    assert first.terminated == 1
+    assert second.terminated == 0
+
+    pool.close()
+    assert second.terminated == 1
+    pool.close()
+    assert second.terminated == 1
 
 
 def test_the_backup_model_takes_over_without_sticking(demo_ledger):

@@ -38,6 +38,8 @@ from fin_agent.db.pre_migration import dump_before_migrating
 from fin_agent.demo.persona import seed_demo
 from fin_agent.demo.template import clone_database
 from fin_agent.ledger import export as ledger_export
+from fin_agent.logging_utils import configure_logging
+from fin_agent.observability import bootstrap_observability
 
 app = typer.Typer(
     add_completion=False,
@@ -96,13 +98,7 @@ def serve(
 ) -> None:
     """Run the API and the static web build."""
     _settings()
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
-    from fin_agent.logging_utils import install as install_log_sanitizer
-
-    install_log_sanitizer()
+    configure_logging()
     uvicorn.run(
         "fin_agent.api.app:create_app",
         factory=True,
@@ -202,34 +198,46 @@ def chat(
 ) -> None:
     """Chat with the agent in the terminal."""
     settings = _settings()
-    agent = build_agent()
-    conn = connect(settings.database_url)
+    configure_logging()
+    bootstrap_observability()
+    _run_chat_command(settings, thread_id, message)
+
+
+def _run_chat_command(settings, thread_id: str | None, message: str | None) -> None:
+    from fin_agent.agent.spend import SharedSpendStore
+
+    spend_store = SharedSpendStore()
     try:
-        thread = get_thread(conn, thread_id) if thread_id else None
-        if thread is None:
-            thread = create_thread(conn, title=title_for(message or "Terminal chat"))
+        agent = build_agent(spend_store=spend_store)
+        conn = connect(settings.database_url)
+        try:
+            thread = get_thread(conn, thread_id) if thread_id else None
+            if thread is None:
+                thread = create_thread(conn, title=title_for(message or "Terminal chat"))
+                conn.commit()
+            thread_id = str(thread["id"])
+            history, _outside = ensure_history(conn, thread)
+            history, _swap = refresh_snapshot(conn, thread, history)
             conn.commit()
-        thread_id = str(thread["id"])
-        history, _outside = ensure_history(conn, thread)
-        history, _swap = refresh_snapshot(conn, thread, history)
-        conn.commit()
 
-        if message is not None:
-            _run_cli_turn(conn, agent, thread, history, message)
-            return
-
-        typer.echo(f"Fin-Agent chat ({thread_id}). Ctrl-D to leave.")
-        while True:
-            try:
-                text = typer.prompt("you")
-            except EOFError, KeyboardInterrupt:
-                typer.echo()
+            if message is not None:
+                _run_cli_turn(conn, agent, thread, history, message)
                 return
-            if not text.strip():
-                continue
-            history = _run_cli_turn(conn, agent, thread, history, text)
+
+            typer.echo(f"Fin-Agent chat ({thread_id}). Ctrl-D to leave.")
+            while True:
+                try:
+                    text = typer.prompt("you")
+                except EOFError, KeyboardInterrupt:
+                    typer.echo()
+                    return
+                if not text.strip():
+                    continue
+                history = _run_cli_turn(conn, agent, thread, history, text)
+        finally:
+            conn.close()
     finally:
-        conn.close()
+        spend_store.close()
 
 
 def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
@@ -349,6 +357,8 @@ def eval_command(
 
     from decimal import Decimal
 
+    configure_logging()
+    bootstrap_observability()
     cards = run_eval(
         model_names=list(model),
         repeat=repeat,

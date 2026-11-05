@@ -40,34 +40,41 @@ INSTRUCTIONS = (
 )
 
 
-async def transcribe_page(doc: Doc, page: int = 0) -> dict[str, Any]:
+async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -> dict[str, Any]:
     """No tools, no history, no ledger access. Returns plain JSON-native data."""
-    try:
-        image = doc.page_png(page)
-        media_type = "image/png"
-        if image[:3] == b"\xff\xd8\xff":
-            media_type = "image/jpeg"
-        elif image[:4] == b"RIFF":
-            media_type = "image/webp"
-        agent = Agent(
-            vision_model(),
-            output_type=TranscribedPage,
-            instructions=INSTRUCTIONS,
-        )
-        result = await agent.run(
-            [
-                "Transcribe this statement page into the typed structure.",
-                BinaryContent(data=image, media_type=media_type),
-            ]
-        )
-        return result.output.model_dump()
-    except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
-        logger.warning("vision transcription failed: %s", type(exc).__name__)
-        return {
-            "is_statement": False,
-            "rows": [],
-            "note": f"vision failed: {type(exc).__name__}",
-        }
+    from fin_agent.agent.capabilities import spend_limits
+    from fin_agent.agent.spend import spend_store_scope
+
+    async with spend_store_scope(spend_store) as store:
+        limits = spend_limits(store)
+        try:
+            image = doc.page_png(page)
+            media_type = "image/png"
+            if image[:3] == b"\xff\xd8\xff":
+                media_type = "image/jpeg"
+            elif image[:4] == b"RIFF":
+                media_type = "image/webp"
+            agent = Agent(
+                vision_model(),
+                output_type=TranscribedPage,
+                instructions=INSTRUCTIONS,
+                capabilities=[limits] if limits is not None else None,
+                name="statement-vision",
+            )
+            result = await agent.run(
+                [
+                    "Transcribe this statement page into the typed structure.",
+                    BinaryContent(data=image, media_type=media_type),
+                ]
+            )
+            return result.output.model_dump()
+        except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
+            logger.warning("vision transcription failed: %s", type(exc).__name__)
+            return {
+                "is_statement": False,
+                "rows": [],
+                "note": f"vision failed: {type(exc).__name__}",
+            }
 
 
 __all__ = ["TranscribedPage", "TranscribedRow", "transcribe_page"]

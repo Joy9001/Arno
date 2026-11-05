@@ -359,6 +359,7 @@ def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
     row, not only from the snapshot taken when the turn started.
     """
     if _conversation_flagged(ctx) and not ctx.tool_call_approved:
+        ctx.deps.approvals_offered += 1
         raise ApprovalRequired(
             {
                 "change": change,

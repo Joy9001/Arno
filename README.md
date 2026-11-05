@@ -33,7 +33,8 @@ question about it — including whether you can afford something, and what it wo
   are in [plan §3](docs/fin-agent/plan.md#3-stack).
 
 Fin-Agent itself is MIT licensed. Every shipped dependency's license is audited in CI; no GPL,
-AGPL, SSPL, or Elastic code is in the image. Weak-copyleft libraries are used unmodified and named
+AGPL, SSPL, or Elastic code is in the Fin-Agent image. Phoenix is a separate, source-available
+Elastic 2.0 service in the telemetry stack. Weak-copyleft libraries are used unmodified and named
 in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Run it
@@ -53,11 +54,20 @@ docker compose up -d --build
 # Or pull the pinned release image: docker compose pull && docker compose up -d
 # Local models: docker compose --profile local-llm up -d
 # Local STT:    docker compose --profile local-stt up -d
-# Traces:       docker compose --profile traces up -d  (set PHOENIX_COLLECTOR_ENDPOINT)
+# Native agent traces: Phoenix only, included in the normal start. Set the four Phoenix
+# credentials in .env first; no API key or second restart is needed.
+# See docs/fin-agent/observability.md.
 ```
 
+The normal start also runs Phoenix, which receives native Pydantic AI agent, model, and tool
+spans directly over OTLP/HTTP. There is no Collector, Loki, Prometheus, or Grafana, and no
+custom metrics or alerting. Python and Uvicorn logs stay standard on Docker stdout. The kill
+switch is the standard `OTEL_SDK_DISABLED=true`. The app still serves if Phoenix is down. The
+operator path is in [`docs/fin-agent/observability.md`](docs/fin-agent/observability.md).
+
 The first start applies the migrations and prints an enrollment link plus a terminal QR code. Scan
-the code, or open the link, on a device on your tailnet:
+the code, or open the link, on a device on your tailnet. The API prints that startup record for the
+trusted local console:
 
 ```bash
 docker compose logs api                      # the link and QR code are in this log
@@ -223,11 +233,14 @@ projection/verdict cards read `GET /api/projection`; there is no write path from
 - The database has three roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
   people, categorization, settings, and conversation tables and views, no auth tables, no `TEMP`,
   read-only by default, and a two-second statement timeout; `backup` can `SELECT` for `pg_dump`
-  and `INSERT` into `backup_runs` only. Phoenix, when enabled, owns only its own database and
-  `agent_ro` cannot connect to it.
+  and `INSERT` into `backup_runs` only. Phoenix owns only its own database and `agent_ro` cannot
+  connect to it.
 - Secrets live in `.env`, never in the database. Host disk encryption is an install requirement.
-- Logs carry IDs and timings, never amounts, merchants, or message content. A filter also redacts
-  Postgres `DETAIL` lines and exception text.
+- Logs are standard Python and Uvicorn output on Docker stdout, capped by Compose's `json-file`
+  rotation. There is no log shipper or central log store.
+- Traces stay on the host. Phoenix publishes on `127.0.0.1` only and uses its built-in retention
+  default (0, infinite) unless the operator sets a policy in Phoenix. Pydantic AI's default
+  instrumentation records prompts, replies, and tool data in the local Phoenix project.
 - `scripts/license_audit.py` checks every Python and web dependency for a permissive or explicitly
   noticed weak-copyleft license; `pip-audit` and `pnpm audit` run in CI. No GPL, AGPL, SSPL, or
   Elastic code ships in the image. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the

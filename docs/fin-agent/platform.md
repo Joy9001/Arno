@@ -92,7 +92,9 @@ The web app has the following parts:
 - **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
   Settings.
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory: turn one
-  on or off, or delete it for good), notification times, passkeys and sessions, backup and job status, the last model error, and a link to Phoenix for everything else. Each section lands with its layer.
+  on or off, or delete it for good), notification times, passkeys and sessions, backup and job
+  status, the last model error, and a link to Phoenix for agent traces. Each section lands
+  with its layer. The app renders no trace link.
 - **PWA:** `vite-plugin-pwa`, with a manifest and service worker for install, push, and a _share target_—on Android, sharing
   a UPI screenshot from GPay or PhonePe opens Fin-Agent with the image attached. Recharts draws
   the charts.
@@ -140,7 +142,8 @@ https://<machine>.<tailnet>.ts.net/setup#t=<token>
   as a fallback.
 - **Terminal QR code.** The CLI and the startup log print the link as a QR code (`segno`) as well,
   so the owner can set up from their phone. The log only carries one when it had to issue a token;
-  a restart with a live link tells you to run `fin-agent setup`. The Settings page draws the
+  a restart with a live link tells you to run `fin-agent setup`. That startup record goes to the
+  trusted local Docker stdout, not a central log store. The Settings page draws the
   add-device QR in the browser (`qrcode.react`) instead of an inline image, so `img-src 'self'`
   stays intact. Registering the phone's passkey first is the easiest path. Synced passkeys
   (iCloud Keychain, Google Password Manager) appear on the owner's other devices on the same
@@ -218,9 +221,9 @@ services:
   api:        # FastAPI + agent + job loop + static web build; stop_grace_period: 30s
   db:         # postgres, one pinned major version; volume for its data
   backup:     # pg_dump → restic → off-site, when the last success is over 24 hours old
+  phoenix:    # native Pydantic AI traces; own database; loopback UI; auth on
   ollama:     # profile: local-llm
   speaches:   # profile: local-stt  (OpenAI-compatible faster-whisper)
-  phoenix:    # profile: traces  (its own image and database; loopback only)
 ```
 
 A deployment works as follows:
@@ -247,10 +250,14 @@ A deployment works as follows:
 - `CHAT_FALLBACK_CONTEXT_WINDOW` and, for a local main model, `LLM_CONTEXT_WINDOW` must match what the
   server really uses, such as Ollama's `OLLAMA_CONTEXT_LENGTH`. The install docs say so
   ([step 8](system-design.md#when-a-model-fails)).
-- `--profile traces` starts [Phoenix](system-design.md#traces-phoenix) with
-  `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false`, `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS=90`, and its own
-  database on the same Postgres server. It needs about 400 MB of memory, and the app works the same
-  without it.
+- A normal `docker compose up` starts [Phoenix](system-design.md#traces-phoenix) beside the app.
+  Pydantic AI spans export directly over OTLP/HTTP; there is no Collector, Loki, Prometheus,
+  Grafana, custom metric, or log shipper. Standard Python/Uvicorn logs stay on Docker stdout.
+  Phoenix uses its own database on the same Postgres server, requires authentication, and publishes
+  only on loopback. Its retention stays at the Phoenix default (0, infinite) unless the operator sets a
+  policy. The app has no telemetry health dependency and keeps serving when Phoenix is down. The
+  standard `OTEL_SDK_DISABLED` kill switch and operator journey are in
+  [`observability.md`](observability.md).
 - The API opens one database connection per use rather than a pool, so a Postgres restart leaves
   nothing to recover. The one exception is a small asyncpg pool for the harness's spend store. While Postgres is down, the API answers with a plain "database unreachable" and
   spends nothing on the LLM.
@@ -265,7 +272,8 @@ A deployment works as follows:
   snapshot, so a mid-backup write is in both or neither. It hands both files to restic, which
   encrypts, dedupes, and ships them to any S3-compatible target (R2, B2, S3) or an rclone remote.
   It's independent
-  of the API process. It dumps the app's database only, so traces stay out of backups.
+  of the API process. It dumps the app's database only, so telemetry volumes stay out of backups;
+  the ledger, `audit_log`, job status, and backup status remain in Postgres and are backed up.
 - The sidecar records each success in Postgres, through its own role, which can read for `pg_dump` and
   write only that record. A daily job checks it, and no success for 48
   hours sends an inbox item and a push.
@@ -284,7 +292,8 @@ it makes the off-site copies unreadable—the install docs say so in bold.
 
 ## Security
 
-The following table is the threat model, refreshed at L8 on November 3, 2026:
+The following table is the threat model, refreshed at L8 on November 3, 2026; its observability rows
+were updated on November 4, 2026:
 
 | Threat | Defense |
 |---|---|
@@ -305,11 +314,12 @@ The following table is the threat model, refreshed at L8 on November 3, 2026:
 | Malicious or compromised dependency | Lockfiles, the permissive-license allowlist in `scripts/license_audit.py`, and `pip-audit` + `pnpm audit` in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
 | GPL, AGPL, or unknown license in the image | The same audit fails the build. Weak copyleft (`psycopg` LGPL-3.0, `pywebpush` MPL-2.0) is allowed only as unmodified libraries and is named in `THIRD_PARTY_NOTICES.md` |
 | Upload flood or a huge file | 25 MB cap on statements, photos, and audio; one user behind a passkey; spend ceilings |
-| Logs leak finances | Logs carry IDs and timings only, and a filter redacts amounts, Postgres `DETAIL` lines, and exception text before a handler writes them |
-| Traces hold your finances | Phoenix stays on the host's loopback with outside requests off. It uses its own role, which owns only its database, and `agent_ro` can't connect to that database. Traces last 90 days. Reaching it over the tailnet needs its login on. Redaction runs before spans are written |
+| Logs leak finances | Logs are standard Python/Uvicorn stdout, kept on the host. They are not shipped to a central log store |
+| Traces hold your finances | Phoenix stays on the host's loopback with outside requests off and authentication on. It uses its own role, which owns only its database, and `agent_ro` can't connect to that database. Retention is the Phoenix default (0, infinite) unless the operator sets a policy. Reaching it over the tailnet needs a deliberate change and its login. Pydantic AI's default instrumentation records prompts, replies, and tool data. There is no custom pre-export redaction |
 
-Logs never contain amounts, merchants, or message content—only IDs and timings. Traces do include
-content, which is why they stay on this machine.
+Logs are standard application output and stay on the host. Traces include prompt, reply, and tool
+content because Pydantic AI's default instrumentation is used; that is why Phoenix stays on this
+machine. There is no Loki, Grafana, or Collector in the path.
 
 The `agent_ro` setup, tested on Postgres 18.6:
 
@@ -319,7 +329,7 @@ ALTER ROLE agent_ro SET statement_timeout = '2s';
 GRANT SELECT ON <the ledger, plan, people, categorization, and conversation tables and views> TO agent_ro;
 REVOKE TEMP ON DATABASE fin_agent FROM PUBLIC;
 
--- With --profile traces: Phoenix owns only its own database, and agent_ro can't connect to it.
+-- Phoenix owns only its own database, and agent_ro can't connect to it.
 CREATE ROLE phoenix LOGIN;
 CREATE DATABASE phoenix OWNER phoenix;
 REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC;
@@ -338,8 +348,8 @@ The following table lists what leaves the box, by role:
 | Backups, push | Encrypted backups; contentless pings | Nightly; on notification |
 | Never | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
 
-There are no analytics, and traces stay on this machine. A local model for a role means nothing leaves
-for that role.
+There is no third-party analytics; traces and logs stay on this machine. A local model for a role
+means nothing leaves for that role.
 
 ### What providers keep
 

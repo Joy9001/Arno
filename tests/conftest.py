@@ -30,6 +30,18 @@ for _role in ("CHAT", "VISION", "STT"):
 # The job loop is tested directly; the API tests must not race it.
 os.environ.setdefault("FIN_AGENT_JOBS_ENABLED", "0")
 
+# Tests never export ambient telemetry. The standard SDK kill switch stops the process
+# bootstrap from installing Phoenix; a smoke test uses its own isolated process.
+for _otel_name in (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    "PHOENIX_COLLECTOR_ENDPOINT",
+    "PHOENIX_API_KEY",
+):
+    os.environ.pop(_otel_name, None)
+os.environ["OTEL_SDK_DISABLED"] = "true"
+
 # No test can spend money. Only evals turn this on.
 from pydantic_ai import models  # noqa: E402
 

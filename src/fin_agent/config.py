@@ -7,7 +7,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# Installed console commands need the runtime workspace, rather than site-packages.
+REPO_ROOT = Path(
+    os.environ.get("FIN_AGENT_REPO_ROOT") or Path(__file__).resolve().parents[2]
+).resolve()
 
 DEFAULT_TRUSTED_HOSTS = ("localhost", "127.0.0.1", "testserver", "*.ts.net")
 

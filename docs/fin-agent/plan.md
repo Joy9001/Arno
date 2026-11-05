@@ -167,7 +167,7 @@ The following table states what each requirement demands:
 | Requirement | Target |
 |---|---|
 | Scale | One user for each instance, and the data is small ([assumptions](system-design.md#scale-assumptions)) |
-| Latency | Targets that traces measure from L2: about 2 s to first visible output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if, on a cloud model. Local models may be slower |
+| Latency | Backend traces measure first streamed output and turn completion: targets are about 2 s to first output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if on a cloud model. Browser render timing is deferred. Local models may be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
 | Durability | Do not lose the ledger. A daily `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
 | Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
@@ -211,7 +211,7 @@ it to each piece:
 | Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
 | Off-site backup | Buy: restic | Encrypts, dedupes, any S3-compatible target, zero app code |
 | Agent evals | Buy: `pydantic_evals` | Ships with PydanticAI, and runs the agent unchanged. [System design, step 9](system-design.md#agent-evals) |
-| Tracing | Buy: Phoenix, optional | One local container, outside requests switched off, and the trace view is already built. [System design, step 9](system-design.md#traces-phoenix) |
+| Observability | Buy: Phoenix and the standard Phoenix OpenTelemetry SDK | Native Pydantic AI agent, model, and tool traces export directly to Phoenix; standard Python/Uvicorn logs stay on Docker stdout. No Collector, Loki, Prometheus, or Grafana. See the [operator guide](observability.md) |
 | Double-entry ledger core | Buy: pgledger, vendored | MIT, pure Postgres SQL, built-in idempotency. Credited in `THIRD_PARTY_NOTICES.md` and the README. Fit check in [system design, step 4](system-design.md#step-4-ground-truth) |
 | Mapping extracted rows → the Fin-Agent schema | Build | No library knows the Fin-Agent data model |
 | Projection and affordability engine | Build | This _is_ the product |
@@ -234,8 +234,8 @@ The following table records the choice for each layer:
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
-| Distribution | Docker Compose: API + Postgres + backup sidecar, optional Ollama, speaches, and Phoenix | Runs anywhere; one command; the agent's container can't see your other files. Re-checked against other options in [system design, step 10](system-design.md#step-10-interfaces-and-operations) |
-| License | MIT, settled at L8 | All shipped dependencies are permissive or explicitly noticed weak copyleft; no GPL/AGPL. Phoenix is Elastic 2.0, but it's optional and runs as its own image |
+| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP. The agent container retains its separate filesystem boundary |
+| License | Application code: MIT | Runtime dependencies and standalone service images have their own licenses, recorded in `THIRD_PARTY_NOTICES.md`. Phoenix is included in normal startup and can be disabled with the standard `OTEL_SDK_DISABLED` |
 
 ### Provider switch
 
@@ -277,7 +277,7 @@ The following diagram shows the processes and how requests flow between them:
  CLI (on host) ──┘                            REST, chat (Vercel AI stream)
                                               PydanticAI agent ─> tools ─> ledger / engine
                                               job loop: parsing, briefing, reminders, patterns, risk
-                                                    │  └──spans──> [Phoenix, optional, local]
+                                                    │  └──native spans──> [Phoenix]
                                                     v
                                               [Postgres] ──pg_dump──> [backup sidecar] ──restic──> off-site
 ```
@@ -354,9 +354,9 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     leave, reattach, or stop it, and every ending saves both records
     ([step 8](system-design.md#every-ending-saves-the-same-two-records)).
 15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
-    Limits with counters in Postgres; a backup model and timeouts; traces in Phoenix, on a Compose
-    profile. The scripts in [`design-probes`](../research/design-probes/README.md) become the first
-    tests.
+    Limits with counters in Postgres; a backup model and timeouts. Phoenix starts with Compose and
+    receives native Pydantic AI traces; see the [operator guide](observability.md). Design probes
+    inform tests but do not replace product-level acceptance checks.
 16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
     `amortize` and `compound` functions, and `show_chart`; zero versus unknown, data age, and source
     IDs (for citations) in every return. Code Mode over the read tools, so the agent can run
@@ -441,6 +441,12 @@ Phoenix isolation, and the Python + web license audit with `pip-audit`/`pnpm aud
 `fin-agent-backup` images, the release workflow, a pre-migration `pg_dump`, 10 MB log rotation, and
 [`self-hosting.md`](self-hosting.md). The `v0.1.0` tag is published: its release workflow pushed
 `0.1.0` and `v0.1.0` for both `ghcr.io/joy9001/fin-agent` and `fin-agent-backup` (run 41628402245).
+
+**Observability status, November 5, 2026.** The production stack uses Pydantic AI's native
+OpenTelemetry instrumentation and the standard Phoenix SDK, exporting agent, model, and tool spans
+directly to Phoenix. Standard Python/Uvicorn logs stay on Docker stdout. The custom Collector,
+Loki, Prometheus, Grafana, dashboards, alerts, metric helpers, manual spans, and log bridge were
+removed from source, Compose, and tests. Existing Phoenix and Postgres volumes are untouched.
 
 Milestones 40 and 41 are **not** done, and no code change can make them done. 40 needs a second
 person to install from the docs alone; 41 needs four weeks of the owner's daily use without a

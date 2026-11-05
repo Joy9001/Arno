@@ -15,7 +15,6 @@ from pydantic_ai import ModelSettings, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
     Caching,
-    Instrumentation,
     ModelFallback,
 )
 from pydantic_ai.models import Model
@@ -47,6 +46,9 @@ from fin_agent.ledger.common import today as ledger_today
 
 logger = logging.getLogger("fin_agent.agent")
 
+DAILY_CEILING_USD = Decimal("20")
+SHARED_DAILY_BUDGET = "shared daily"
+
 WRITE_TOOLS = frozenset(
     {"record_movement", "correct_movement", "update_setup", "preference", "import_document", "undo"}
 )
@@ -77,6 +79,22 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
             "tool": call.tool_name,
             "message": "The tool failed. Tell the user plainly and say what is missing.",
         }
+
+
+def shared_daily_budget() -> Budget:
+    """The `$20/day` ceiling promised across chat, schedules, parse, vision, and briefing.
+
+    All paths use this name and window, so they read and write one Postgres counter instead of
+    each keeping a private ceiling.
+    """
+    return Budget(usd=DAILY_CEILING_USD, window="day", name=SHARED_DAILY_BUDGET)
+
+
+def spend_limits(store: Any, *, budgets: list[Budget] | None = None) -> SpendLimits | None:
+    """`SpendLimits` for a domain agent, or `None` when no store is available."""
+    if store is None:
+        return None
+    return SpendLimits(budgets=budgets or [shared_daily_budget()], store=store)
 
 
 def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
@@ -123,7 +141,6 @@ def build_capabilities(
     primary: Model,
     backup: Model | None = None,
     spend_store: Any = None,
-    tracer_provider: Any = None,
     run_budget_usd: Decimal | None = None,
     question_budget_usd: Decimal | None = None,
     context_window: int | None = None,
@@ -133,6 +150,42 @@ def build_capabilities(
     )
     target = min(100_000, window // 2)
     keep = max(target // 5, 1)
+
+    budgets: list[Budget] | None = None
+    if spend_store is not None:
+        if run_budget_usd is not None:
+            # An eval trial is one conversation and may have several turns. A conversation
+            # budget is the only window that caps the whole trial, not each turn in it.
+            budgets = [
+                Budget(
+                    usd=run_budget_usd,
+                    tokens=1_000_000,
+                    window="conversation",
+                    name="trial",
+                )
+            ]
+        elif question_budget_usd is not None:
+            # A scheduled question has its own small run ceiling, while the daily ceiling is
+            # shared with chat and every other agent run.
+            budgets = [
+                Budget(usd=question_budget_usd, window="run", name="scheduled question"),
+                shared_daily_budget(),
+            ]
+        else:
+            budgets = [
+                Budget(usd=Decimal("5"), window="run", name="turn"),
+                shared_daily_budget(),
+            ]
+
+    # The summary runs on its own Agent, so it needs its own SpendLimits. Only windows keyed by
+    # the day or the conversation share the outer ledger; a `run` window would key a fresh
+    # summarizer run and charge a second budget instead of the outer one.
+    summary_budgets = [budget for budget in budgets or [] if budget.window != "run"]
+    summarization_capabilities = (
+        [SpendLimits(budgets=summary_budgets, store=spend_store)]
+        if summary_budgets and spend_store is not None
+        else []
+    )
 
     summary_model: Model = FallbackModel(primary, backup) if backup is not None else primary
     capabilities: list[AbstractCapability[Any]] = [
@@ -163,6 +216,7 @@ def build_capabilities(
                             keep_user_messages=True,
                             receipts=True,
                             summary_prompt=SUMMARY_PROMPT,
+                            summarization_capabilities=summarization_capabilities,
                         ),
                         SlidingWindowCompaction(max_messages=1, keep_tokens=keep, receipts=True),
                     ]
@@ -174,41 +228,8 @@ def build_capabilities(
     ]
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
-    if spend_store is not None:
-        if run_budget_usd is not None:
-            # An eval trial is one conversation and may have several turns. A conversation
-            # budget is the only window that caps the whole trial, not each turn in it.
-            budgets = [
-                Budget(
-                    usd=run_budget_usd,
-                    tokens=1_000_000,
-                    window="conversation",
-                    name="trial",
-                )
-            ]
-        elif question_budget_usd is not None:
-            # A scheduled question has its own small ceiling, while the daily ceiling is shared
-            # with chat and every other agent run.
-            budgets = [
-                Budget(usd=question_budget_usd, window="run", name="scheduled question"),
-                Budget(usd=Decimal("20"), window="day", name="shared daily"),
-            ]
-        else:
-            budgets = [
-                Budget(usd=Decimal("5"), window="run"),
-                Budget(usd=Decimal("20"), window="day"),
-            ]
+    if budgets is not None:
         capabilities.append(SpendLimits(budgets=budgets, store=spend_store))
-    if tracer_provider is not None:
-        from pydantic_ai.models.instrumented import InstrumentationSettings
-
-        capabilities.append(
-            Instrumentation(
-                settings=InstrumentationSettings(
-                    tracer_provider=tracer_provider, include_binary_content=False
-                )
-            )
-        )
     return capabilities
 
 
@@ -222,12 +243,16 @@ def turn_limits() -> Any:
 
 
 __all__ = [
+    "DAILY_CEILING_USD",
     "RUN_MODEL_SETTINGS",
+    "SHARED_DAILY_BUDGET",
     "SUMMARY_PROMPT",
     "ToolErrorsToModel",
     "WRITE_TOOLS",
     "build_capabilities",
     "date_and_changes",
     "redaction_guardrail",
+    "shared_daily_budget",
+    "spend_limits",
     "turn_limits",
 ]

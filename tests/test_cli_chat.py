@@ -9,13 +9,24 @@ from fin_agent.agent.builder import build_agent
 from fin_agent.cli import app as cli_app
 
 
+class _SpyStore:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def test_cli_chat_runs_one_turn_and_saves_it(monkeypatch, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Hello from the CLI.")
-    monkeypatch.setattr("fin_agent.cli.build_agent", lambda: build_agent(model=model))
+    store = _SpyStore()
+    monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: store)
+    monkeypatch.setattr("fin_agent.cli.build_agent", lambda **_kwargs: build_agent(model=model))
     runner = CliRunner()
     result = runner.invoke(cli_app, ["chat", "--message", "hi there"])
     assert result.exit_code == 0, result.output
     assert "Hello from the CLI." in result.output
+    assert store.closed
     row = demo_ledger.execute(
         "SELECT count(*) AS n FROM messages WHERE role = 'assistant'"
     ).fetchone()

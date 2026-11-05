@@ -60,21 +60,28 @@ def build_agent(
     model: Any = None,
     backup: Any = None,
     spend_store: Any = None,
-    tracer_provider: Any = None,
     run_budget_usd: Decimal | None = None,
     question_budget_usd: Decimal | None = None,
     context_window: int | None = None,
     read_only: bool = False,
+    name: str | None = None,
 ) -> Agent[AgentDeps, str]:
     """Build an agent. Tests pass a `TestModel` or `FunctionModel`; production reads env.
 
     `run_budget_usd` and `context_window` exist for eval trials: one spend ceiling for the
     whole trial, and a smaller window so a long thread really compacts. `read_only` builds the
     scheduled-question agent: the same read tools and Code Mode, no write tools, one run ceiling.
+    `name` becomes the native `gen_ai.agent.name`; instrumentation is the process default.
     """
     primary = model or primary_model()
     if backup is None and model is None:
         backup = backup_model()
+    if spend_store is None and model is None:
+        # A production caller (CLI chat, a host command) gets the same daily ledger as the API
+        # instead of a private, absent cap. Tests and evals pass their own model and store.
+        from fin_agent.agent.spend import SharedSpendStore
+
+        spend_store = SharedSpendStore()
     if read_only:
         toolsets = [build_read_toolset()]
     else:
@@ -85,11 +92,11 @@ def build_agent(
         output_type=[str, DeferredToolRequests],
         instructions=lambda ctx: _instructions(ctx, read_only=read_only),
         toolsets=toolsets,
+        name=name or ("fin-agent-scheduled-question" if read_only else "fin-agent"),
         capabilities=build_capabilities(
             primary=primary,
             backup=backup,
             spend_store=spend_store,
-            tracer_provider=tracer_provider,
             run_budget_usd=run_budget_usd,
             question_budget_usd=question_budget_usd,
             context_window=context_window,

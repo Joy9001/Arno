@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -74,4 +79,58 @@ def test_phoenix_has_its_own_role_and_database():
     assert "CREATE ROLE phoenix LOGIN" in compose
     assert "CREATE DATABASE phoenix OWNER phoenix" in compose
     assert "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC" in compose
-    assert 'PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"' in compose
+    assert "PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}" in compose
+
+
+def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
+    if shutil.which("docker") is None:
+        pytest.skip("docker compose is unavailable")
+    with tempfile.TemporaryDirectory() as tmp:
+        env_file = Path(tmp) / "empty.env"
+        env_file.write_text("", encoding="utf-8")
+        env = os.environ.copy()
+        env.pop("PHOENIX_API_KEY", None)
+        env.pop("PHOENIX_ADMIN_SECRET", None)
+        env.update(
+            {
+                "POSTGRES_PASSWORD": "dummy-postgres-password",
+                "BACKUP_PASSWORD": "dummy-backup-password",
+                "RESTIC_PASSWORD": "dummy-restic-password",
+                "FIN_AGENT_ENV_FILE": str(env_file),
+                **overrides,
+            }
+        )
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(env_file),
+                "-f",
+                str(ROOT / "compose.yaml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    if result.returncode != 0 and "is not a docker command" in result.stderr:
+        pytest.skip(f"docker compose config is unavailable: {result.stderr.strip()[:200]}")
+    assert result.returncode == 0, result.stderr.strip()[:300]
+    return json.loads(result.stdout)["services"]["api"]["environment"]
+
+
+def test_compose_phoenix_bearer_falls_back_and_allows_override():
+    admin_secret = "dummy-admin-secret-for-test"
+    fallback = _compose_api_environment({"PHOENIX_ADMIN_SECRET": admin_secret})
+    assert fallback["PHOENIX_API_KEY"] == admin_secret
+    assert fallback["PHOENIX_ADMIN_SECRET"] == ""
+
+    override = _compose_api_environment(
+        {"PHOENIX_ADMIN_SECRET": admin_secret, "PHOENIX_API_KEY": "dummy-explicit-api-key"}
+    )
+    assert override["PHOENIX_API_KEY"] == "dummy-explicit-api-key"

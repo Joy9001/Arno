@@ -130,7 +130,10 @@ async def post_chat(request: Request) -> Response:
             # saved reply instead of redoing the write.
             turn = app.state.turns.get(str(existing["conversation_id"]))
             if turn is not None and not turn.done.is_set() and turn.message_id == message_id:
-                return _stream_response(turn.follow(0), thread_id=str(existing["conversation_id"]))
+                return _stream_response(
+                    turn.follow(0),
+                    thread_id=str(existing["conversation_id"]),
+                )
             saved = conn.execute(
                 """
                 SELECT content FROM messages
@@ -235,7 +238,10 @@ async def get_chat_stream(request: Request, thread_id: str) -> Response:
 @router.post("/chat/{thread_id}/stop")
 async def post_chat_stop(request: Request, thread_id: str) -> dict[str, Any]:
     stopped = request.app.state.turns.stop(thread_id)
-    return {"stopped": stopped, "thread_id": thread_id}
+    return {
+        "stopped": stopped,
+        "thread_id": thread_id,
+    }
 
 
 @router.get("/threads")

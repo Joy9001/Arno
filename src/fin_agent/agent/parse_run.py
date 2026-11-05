@@ -115,6 +115,8 @@ def _check_accounts(deps: ParseDeps, accounts: list[dict[str, Any]]) -> list[dic
 def build_parse_agent(
     model: Any = None,
     deps_type: type[ParseDeps] = ParseDeps,
+    *,
+    spend_store: Any = None,
 ) -> Agent[ParseDeps, str]:
     async def doc_info(ctx: RunContext[ParseDeps]) -> dict[str, Any]:
         """What the file is: kind, pages, text-layer pages, sheets, delimiter, encoding."""
@@ -182,6 +184,7 @@ def build_parse_agent(
             ctx.deps.doc,
             code,
             ctx.deps.context,
+            stage="submission",
         )
         if result.error:
             return {"status": "failed", "reason": result.error, "counts": {}}
@@ -263,13 +266,20 @@ def build_parse_agent(
         workspace=LocalFilesBackend(SKILLS_ROOT.parent),
         include=["parse-statement"],
     )
+    from fin_agent.agent.capabilities import spend_limits
+
+    limits = spend_limits(spend_store)
+    capabilities: list[Any] = [CodeMode(tools={"code_mode": True}), skills]
+    if limits is not None:
+        capabilities.append(limits)
     return Agent(
         model or primary_model(),
         deps_type=deps_type,
         output_type=str,
         instructions=INSTRUCTIONS,
         toolsets=[toolset],
-        capabilities=[CodeMode(tools={"code_mode": True}), skills],
+        capabilities=capabilities,
+        name="parse-run",
     )
 
 
@@ -279,9 +289,39 @@ async def run_parse(
     *,
     account_name: str | None,
     model: Any = None,
+    spend_store: Any = None,
+) -> ParseResult:
+    return await _run_parse(
+        doc, context, account_name=account_name, model=model, spend_store=spend_store
+    )
+
+
+async def _run_parse(
+    doc: Doc,
+    context: ScriptContext,
+    *,
+    account_name: str | None,
+    model: Any = None,
+    spend_store: Any = None,
+) -> ParseResult:
+    from fin_agent.agent.spend import spend_store_scope
+
+    async with spend_store_scope(spend_store) as store:
+        return await _parse_with_agent(
+            doc, context, account_name=account_name, model=model, spend_store=store
+        )
+
+
+async def _parse_with_agent(
+    doc: Doc,
+    context: ScriptContext,
+    *,
+    account_name: str | None,
+    model: Any = None,
+    spend_store: Any = None,
 ) -> ParseResult:
     deps = ParseDeps(doc=doc, context=context, account_name=account_name)
-    agent = build_parse_agent(model)
+    agent = build_parse_agent(model, spend_store=spend_store)
     prompt = PROMPT.format(
         account=account_name or "unknown",
         kind=doc.kind,
@@ -298,6 +338,12 @@ async def run_parse(
             usage_limits=turn_limits(),
         )
     except Exception as exc:  # noqa: BLE001 - a failed run becomes a card, not a crashed job
+        from fin_agent.agent.spend import ceiling_name
+
+        ceiling = ceiling_name(exc)
+        if ceiling:
+            logger.warning("parse run stopped at the %s ceiling", ceiling)
+            return ParseResult(status="gave_up", reason=f"spend ceiling hit: {ceiling}")
         logger.warning("parse run failed: %s", type(exc).__name__)
         return ParseResult(status="gave_up", reason=f"parse run failed: {type(exc).__name__}")
     submitted = deps.submitted

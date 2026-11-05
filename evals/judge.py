@@ -30,7 +30,7 @@ Do not grade tone, length, or whether the user liked it. Judge only those two po
 class LLMJudge:
     def __init__(self, model: Any, *, name: str) -> None:
         self.name = name
-        self.agent = Agent(model, output_type=str, instructions=JUDGE_INSTRUCTIONS)
+        self.agent = Agent(model, output_type=str, instructions=JUDGE_INSTRUCTIONS, name="eval-judge")
 
     async def score(
         self, question: str, reply: str, rubric: str

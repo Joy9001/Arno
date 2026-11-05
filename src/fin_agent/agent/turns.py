@@ -12,7 +12,6 @@ import logging
 import uuid
 from contextlib import closing
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from pydantic_ai import capture_run_messages
@@ -25,7 +24,6 @@ from fin_agent.agent.cards import cards_from_messages, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import save_records
 from fin_agent.agent.number_check import check_messages
-from fin_agent.agent.tracing import current_trace_id, tracer
 from fin_agent.db.conn import connect
 
 logger = logging.getLogger("fin_agent.chat")
@@ -50,10 +48,8 @@ class ChatTurn:
     saved: bool = False
     error: str | None = None
     task: asyncio.Task[Any] | None = None
-    started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     model_name: str | None = None
     number_flags: list[str] = field(default_factory=list)
-    trace_id: str | None = None
     ending: str | None = None
 
     async def push(self, chunk: str) -> None:
@@ -230,7 +226,6 @@ class TurnManager:
                     history=turn.history,
                     turn_messages=messages,
                     ending=ending,
-                    trace_id=turn.trace_id,
                     number_flags=flags,
                     model_badge=badge,
                     save_note=note,
@@ -255,33 +250,22 @@ class TurnManager:
     async def _run(self, turn: ChatTurn, adapter: VercelAIAdapter[Any, Any]) -> None:
         captured: list[Any] = []
         captured_ref = [captured]
-        span = tracer().start_span(
-            "chat turn",
-            attributes={
-                "session.id": turn.thread_id,
-                "fin_agent.flagged": turn.deps.flagged,
-            },
-        )
-        context_token = None
         try:
-            from opentelemetry import context as otel_context
-            from opentelemetry import trace as otel_trace
-
-            context_token = otel_context.attach(otel_trace.set_span_in_context(span))
-            turn.trace_id = current_trace_id()
 
             async def on_complete(result: Any) -> None:
                 messages = result.all_messages()
                 turn_messages = _this_turn(messages, turn.history, turn.run_id, turn.message_id)
                 failed: list[str] = []
-                for message in reversed(messages):
-                    if isinstance(message, ModelResponse):
-                        for item in message.failed_attempts or []:
-                            if isinstance(item, dict):
-                                failed.append(str(item.get("model_name") or item.get("model")))
-                            else:
-                                failed.append(str(getattr(item, "model_name", item)))
-                        break
+                # Every model call in this turn, not only the last one: a fallback in an
+                # earlier tool-loop request must still be counted once.
+                for message in turn_messages:
+                    if not isinstance(message, ModelResponse):
+                        continue
+                    for item in message.failed_attempts or []:
+                        if isinstance(item, dict):
+                            failed.append(str(item.get("model_name") or item.get("model")))
+                        else:
+                            failed.append(str(getattr(item, "model_name", item)))
                 await self._save(
                     turn,
                     turn_messages,
@@ -344,7 +328,6 @@ class TurnManager:
                     ending="failed",
                     note="The turn stopped before it could save normally.",
                 )
-            span.set_attribute("fin_agent.ending", turn.ending or "interrupted")
             raise
         except Exception as exc:  # noqa: BLE001 - every failure must save
             logger.error("chat turn failed (%s)", type(exc).__name__)
@@ -375,17 +358,7 @@ class TurnManager:
                     }
                 )
             )
-            span.set_attribute("fin_agent.ending", "failed")
         finally:
-            if context_token is not None:
-                from opentelemetry import context as otel_context
-
-                otel_context.detach(context_token)
-            span.set_attribute("fin_agent.ending", turn.ending or "unknown")
-            span.set_attribute("fin_agent.number_flags", len(turn.number_flags))
-            span.set_attribute("fin_agent.flagged_thread", turn.deps.flagged)
-            span.set_attribute("fin_agent.approvals", turn.deps.approvals)
-            span.end()
             await turn.finish()
             async with self._guard:
                 if self.turns.get(turn.thread_id) is turn:
