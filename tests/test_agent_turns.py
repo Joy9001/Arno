@@ -170,6 +170,11 @@ async def test_a_model_failure_saves_a_plain_note(app, db, monkeypatch):
             for message in thread["messages"]
             for part in message.get("parts", [])
         )
+        assert all(
+            part.get("type") != "data-reply-model"
+            for message in thread["messages"]
+            for part in message.get("parts", [])
+        )
 
 
 def test_crash_recovery_leaves_a_note_and_clears_the_marker(db):

@@ -228,6 +228,14 @@ def _card(kind: str, **values: Any) -> dict[str, Any]:
     return {"card": kind, **values}
 
 
+def _audited_undo_id(conn: psycopg.Connection, undo_id: str | None) -> str | None:
+    """Only an audit group with a real change gets an undo button."""
+    if not undo_id:
+        return None
+    row = conn.execute("SELECT 1 FROM audit_log WHERE group_id = %s LIMIT 1", (undo_id,)).fetchone()
+    return undo_id if row else None
+
+
 def _movement_summary(result: dict[str, Any], amount_paise: int) -> str:
     transfers = result.get("transfers") or []
     if not transfers:
@@ -332,6 +340,7 @@ def record_movement(
                 title="Logged",
                 summary=_movement_summary(result, amount),
                 amount=money(amount),
+                undo_id=result["undo_id"],
                 movement=result,
             ),
         }
@@ -368,6 +377,7 @@ def record_movement(
                 title="Logged income",
                 summary=result["description"],
                 amount=money(amount),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -393,7 +403,11 @@ def record_movement(
             "summary": result["description"],
             "transfers": result["transfers"],
             "card": _card(
-                "movement", title="Transferred", summary=result["description"], amount=money(amount)
+                "movement",
+                title="Transferred",
+                summary=result["description"],
+                amount=money(amount),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -451,7 +465,11 @@ def record_movement(
             "summary": result["description"],
             "transfers": result["transfers"],
             "card": _card(
-                "movement", title="Split logged", summary=result["description"], amount=money(total)
+                "movement",
+                title="Split logged",
+                summary=result["description"],
+                amount=money(total),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -500,6 +518,7 @@ def record_movement(
                 title="Loan payment logged",
                 summary=result["description"],
                 amount=money(amount),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -535,6 +554,7 @@ def record_movement(
                 title="Refund logged",
                 summary=result["description"],
                 amount=money(amount),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -573,6 +593,7 @@ def record_movement(
                 title="Settlement logged",
                 summary=result["description"],
                 amount=money(amount),
+                undo_id=result["undo_id"],
             ),
         }
 
@@ -619,6 +640,7 @@ def correct_movement(
         + " → "
         + str(result["movement"].get("category_name"))
     )
+    undo_id = _audited_undo_id(conn, result["undo_id"])
     return {
         "status": result["status"],
         "undo_id": result["undo_id"],
@@ -632,6 +654,7 @@ def correct_movement(
             summary=summary,
             rows_changed=result["rows_changed"],
             rule=result.get("rule"),
+            undo_id=undo_id,
         ),
     }
 
@@ -726,7 +749,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "balance":
@@ -747,7 +772,12 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Balance saved", summary=summary),
+            "card": _card(
+                "setup",
+                title="Balance saved",
+                summary=summary,
+                undo_id=result.get("undo_id"),
+            ),
         }
 
     if entity == "schedule":
@@ -808,7 +838,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "goal":
@@ -850,7 +882,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "category":
@@ -885,7 +919,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "payee":
@@ -926,7 +962,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "settings":
@@ -952,7 +990,9 @@ def update_setup_item(
             "undo_id": result["undo_id"],
             "summary": summary,
             "result": result,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "scheduled_question":
@@ -1004,7 +1044,9 @@ def update_setup_item(
             "status": "saved",
             "undo_id": result["undo_id"],
             "summary": summary,
-            "card": _card("setup", title="Setup saved", summary=summary),
+            "card": _card(
+                "setup", title="Setup saved", summary=summary, undo_id=result.get("undo_id")
+            ),
         }
 
     if entity == "baseline":
@@ -1036,7 +1078,9 @@ def update_setup_item(
             "status": "saved",
             "undo_id": group.group_id,
             "summary": summary,
-            "card": _card("setup", title="Baseline estimated", summary=summary),
+            "card": _card(
+                "setup", title="Baseline estimated", summary=summary, undo_id=group.group_id
+            ),
         }
 
     raise ToolInputError(f"unknown setup entity {entity!r}")
@@ -1084,7 +1128,12 @@ def preference(
             "id": row["id"],
             "undo_id": group.group_id,
             "text": row["body"],
-            "card": _card("preference", title="Remembered", text=row["body"]),
+            "card": _card(
+                "preference",
+                title="Remembered",
+                text=row["body"],
+                undo_id=group.group_id,
+            ),
         }
 
     if action == "forget":
@@ -1120,7 +1169,12 @@ def preference(
             "id": row["id"],
             "undo_id": group.group_id,
             "text": row["body"],
-            "card": _card("preference", title="Forgotten", text=row["body"]),
+            "card": _card(
+                "preference",
+                title="Forgotten",
+                text=row["body"],
+                undo_id=group.group_id,
+            ),
         }
 
     raise ToolInputError("action is remember or forget")

@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from fin_agent.api import import_history
+from fin_agent.api import import_history, provenance, runtime_info
 from fin_agent.api.deps import Database, FreshSession, current_session
 from fin_agent.ledger import (
     accounts,
@@ -19,6 +19,7 @@ from fin_agent.ledger import (
     goals,
     movements,
     payees,
+    preference_edits,
     schedules,
     settings,
 )
@@ -290,6 +291,14 @@ class SettingsUpdate(ApiModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+class PreferenceContentUpdate(ApiModel):
+    body: str = Field(
+        min_length=1,
+        max_length=preference_edits.MAX_PREFERENCE_BODY,
+        pattern=r"\S",
+    )
+
+
 def _named(items: list[dict[str, Any]], key: str = "items") -> dict[str, Any]:
     return {key: items, "as_of": ledger_today().isoformat()}
 
@@ -381,7 +390,7 @@ def post_movement(body: MovementIn, conn: Database) -> dict[str, Any]:
 
 @router.get("/movements/{movement_id}")
 def get_movement(movement_id: str, conn: Database) -> dict[str, Any]:
-    return movements.get_movement(conn, movement_id)
+    return provenance.attach_sources(conn, movement_id, movements.get_movement(conn, movement_id))
 
 
 @router.post("/movements/{movement_id}/correct")
@@ -553,9 +562,22 @@ def patch_settings(body: SettingsUpdate, conn: Database) -> dict[str, Any]:
     return settings.update_settings(conn, **body.model_dump(exclude_unset=True))
 
 
+@router.patch("/preferences/{preference_id}/content")
+def patch_preference_content(
+    preference_id: str, body: PreferenceContentUpdate, conn: Database
+) -> dict[str, Any]:
+    return preference_edits.update_preference_body(conn, preference_id, body.body)
+
+
 @router.get("/backup/status")
 def get_backup_status(conn: Database) -> dict[str, Any]:
     return settings.backup_status(conn)
+
+
+@router.get("/runtime-info")
+def get_runtime_info() -> dict[str, Any]:
+    """Configured model hosts and an explicitly configured Phoenix browser URL, nothing more."""
+    return runtime_info.payload()
 
 
 @router.get("/export/json")

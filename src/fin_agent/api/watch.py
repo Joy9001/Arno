@@ -162,9 +162,11 @@ def delete_push_subscribe(body: PushUnsubscribe, conn: Database) -> dict[str, An
 
 
 @router.get("/scheduled-questions")
-def get_scheduled_questions(conn: Database) -> dict[str, Any]:
+def get_scheduled_questions(
+    conn: Database, include_inactive: bool = Query(default=False)
+) -> dict[str, Any]:
     return {
-        "questions": questions_mod.list_questions(conn),
+        "questions": questions_mod.list_questions(conn, include_inactive=include_inactive),
         "default_spend_limit_usd": str(questions_mod.DEFAULT_SPEND_LIMIT_USD),
         "as_of": ledger_today().isoformat(),
     }

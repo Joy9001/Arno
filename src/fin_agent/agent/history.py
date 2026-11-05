@@ -263,6 +263,8 @@ def save_records(
     trace_id: str | None = None,
     number_flags: list[str] | None = None,
     model_badge: str | None = None,
+    reply_model: str | None = None,
+    reply_fallback: bool = False,
     save_note: str | None = None,
     title: str | None = None,
     all_messages: list[Any] | None = None,
@@ -300,6 +302,12 @@ def save_records(
             with_data(last_assistant, "data-number-flags", {"amounts": number_flags})
         if model_badge:
             with_data(last_assistant, "data-model-badge", {"model": model_badge})
+        if reply_model:
+            with_data(
+                last_assistant,
+                "data-reply-model",
+                {"model": reply_model, "fallback": reply_fallback},
+            )
         if save_note:
             with_data(last_assistant, "data-ending", {"note": save_note})
         if ending == "cancelled":

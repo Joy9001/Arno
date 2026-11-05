@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Code2 } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -16,6 +17,7 @@ import {
 } from "recharts";
 import { api, errorMessage } from "../api";
 import { formatRupees } from "./format";
+import { formatMoment } from "../format";
 import { ProjectionCard, type ProjectionPayload } from "../projection";
 
 const COLORS = ["#0b6cf0", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff"];
@@ -47,6 +49,8 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
   const unit = String(data.unit ?? "paise");
   const series = (data.series as Series[] | undefined) ?? [];
   const asOf = data.as_of ? String(data.as_of) : null;
+  const computedAt = data.computed_at ? String(data.computed_at) : null;
+  const script = typeof data.script === "string" ? data.script : null;
   const rows = chartRows(series);
   const tick = (value: number) => unitValue(value, unit);
 
@@ -54,7 +58,11 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
     <figure className="chat-card chart-card">
       <figcaption>
         <strong>{title}</strong>
-        {asOf && <span className="fine"> as of {asOf}</span>}
+        <span className="fine">
+          {computedAt ? `Calculated ${formatMoment(computedAt)}` : ""}
+          {computedAt && asOf ? " · " : ""}
+          {asOf ? `as of ${asOf}` : ""}
+        </span>
       </figcaption>
       <div className="chart-box">
         <ResponsiveContainer width="100%" height={240}>
@@ -113,6 +121,19 @@ export function ChartCard({ data }: { data: Record<string, unknown> }) {
           )}
         </ResponsiveContainer>
       </div>
+      <details>
+        <summary className="fine">
+          <Code2 size={14} strokeWidth={1.8} aria-hidden="true" />{" "}
+          {script ? "Script behind this chart" : "Source unavailable"}
+        </summary>
+        {script ? (
+          <pre className="sql">{script}</pre>
+        ) : (
+          <p className="fine">
+            The script that calculated this chart was not saved for this reply.
+          </p>
+        )}
+      </details>
     </figure>
   );
 }

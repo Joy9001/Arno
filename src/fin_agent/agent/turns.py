@@ -49,7 +49,9 @@ class ChatTurn:
     error: str | None = None
     task: asyncio.Task[Any] | None = None
     model_name: str | None = None
+    used_fallback: bool = False
     number_flags: list[str] = field(default_factory=list)
+    note: str | None = None
     ending: str | None = None
 
     async def push(self, chunk: str) -> None:
@@ -199,6 +201,7 @@ class TurnManager:
     ) -> None:
         reply = ""
         finish_reason = None
+        reply_fallback = False
         for message in reversed(messages):
             if isinstance(message, ModelResponse):
                 reply = "\n".join(
@@ -206,6 +209,7 @@ class TurnManager:
                 )
                 model_name = model_name or message.model_name
                 finish_reason = getattr(message, "finish_reason", None)
+                reply_fallback = bool(message.failed_attempts)
                 break
         if finish_reason == "length" and note is None:
             note = "The reply hit the output cap. Ask for the rest."
@@ -228,6 +232,8 @@ class TurnManager:
                     ending=ending,
                     number_flags=flags,
                     model_badge=badge,
+                    reply_model=model_name,
+                    reply_fallback=reply_fallback,
                     save_note=note,
                     title=turn.title,
                     all_messages=all_messages,
@@ -244,6 +250,8 @@ class TurnManager:
                     )
         turn.number_flags = flags
         turn.model_name = model_name
+        turn.used_fallback = reply_fallback
+        turn.note = note
         turn.ending = ending
         turn.saved = True
 
@@ -389,6 +397,18 @@ class TurnManager:
                     yield _event_chunk(
                         {"type": "data-model-badge", "data": {"model": turn.model_name}}
                     )
+                if turn.model_name:
+                    yield _event_chunk(
+                        {
+                            "type": "data-reply-model",
+                            "data": {
+                                "model": turn.model_name,
+                                "fallback": turn.used_fallback,
+                            },
+                        }
+                    )
+                if turn.ending == "complete" and turn.note:
+                    yield _event_chunk({"type": "data-ending", "data": {"note": turn.note}})
             yield chunk
 
     async def drain(self) -> None:

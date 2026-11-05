@@ -277,6 +277,38 @@ export function ProjectionPanel() {
           )}
           {staleNote && <p className="moneyv-basis moneyv-warning">{staleNote}</p>}
 
+          <MoneySection title="Assumptions" note="From the projection engine">
+            <ul className="evidence-list">
+              <li>
+                {data.horizon_days} days from {formatDate(data.as_of)}
+              </li>
+              {data.runs !== undefined && (
+                <li>
+                  {data.runs.toLocaleString("en-IN")} simulated runs ·{" "}
+                  {percent(data.floor_threshold)} threshold
+                </li>
+              )}
+              {purchase?.amount_paise !== undefined && (
+                <li>
+                  Purchase of {formatPaise(purchase.amount_paise)}
+                  {purchase.date ? ` on ${formatDate(purchase.date)}` : ""}
+                  {paymentMethodLabel(purchase.method)
+                    ? ` · ${paymentMethodLabel(purchase.method)}`
+                    : ""}
+                  {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}
+                </li>
+              )}
+              {data.optimistic && (
+                <li>
+                  Unconfirmed income is shown separately:{" "}
+                  {percent(data.optimistic.floor_probability)} above{" "}
+                  {floorSet ? "floor" : "zero"}, optimistic only
+                </li>
+              )}
+              {data.obligations_met === false && <li>{OBLIGATION_WARNING}</li>}
+            </ul>
+          </MoneySection>
+
           <MoneySection title={data.hypothetical ? "If you buy it" : "The projection"} note={`Next ${data.horizon_days} days`}>
             <p className="moneyv-legend">
               <span>

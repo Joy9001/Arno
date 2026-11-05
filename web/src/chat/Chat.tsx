@@ -6,6 +6,7 @@ import {
   Calculator,
   Camera,
   History,
+  LogIn,
   Mic,
   Plus,
   ReceiptText,
@@ -15,7 +16,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { DefaultChatTransport, isToolUIPart, getToolName, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
+import { APICallError, DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { Streamdown } from "streamdown";
 import { api, errorMessage } from "../api";
@@ -24,6 +25,7 @@ import type { ProjectionPayload } from "../projection";
 import { takeSharedImage } from "../share";
 import { ConversationSkeleton } from "../Skeleton";
 import { Card, NumberFlags } from "./cards";
+import { ToolPart } from "./ToolPart";
 import type { ChatMessage, ThreadBody, ThreadList, ThreadSummary } from "./types";
 
 type CaptureCard = Record<string, unknown>;
@@ -51,6 +53,19 @@ const STARTERS = [
 
 function newThreadId(): string {
   return `cnv_${crypto.randomUUID()}`;
+}
+
+/** One short sentence for the user; provider payloads stay out of the transcript. */
+function chatErrorMessage(error: Error): string {
+  if (APICallError.isInstance(error)) {
+    if (error.statusCode === 401) {
+      return "Your session expired. Reload the page and sign in again.";
+    }
+    if (error.isRetryable) {
+      return "Fin-Agent could not be reached or is temporarily unavailable. Try again.";
+    }
+  }
+  return "Fin-Agent could not finish that answer. Your earlier messages are still here. Try again.";
 }
 
 function groupMessages(messages: ChatMessage[]): ChatMessage[] {
@@ -133,10 +148,12 @@ function Part({
   part,
   onRetryCapture,
   onEvidence,
+  hideLegacyBadge,
 }: {
   part: ChatMessage["parts"][number];
   onRetryCapture?: (kind: string, attachmentId: string) => void;
   onEvidence?: (payload: ProjectionPayload) => void;
+  hideLegacyBadge?: boolean;
 }) {
   if (part.type === "text") {
     return (
@@ -145,50 +162,36 @@ function Part({
       </Streamdown>
     );
   }
-  if (part.type.startsWith("data-")) {
-    const data = (part as { data?: unknown }).data;
-    if (part.type === "data-card" && data && typeof data === "object") {
-      return (
-        <Card
-          data={data as Record<string, unknown>}
-          onRetryCapture={onRetryCapture}
-          onEvidence={onEvidence}
-        />
-      );
-    }
-    if (part.type === "data-number-flags") {
-      const amounts = (data as { amounts?: string[] } | undefined)?.amounts ?? [];
-      return <NumberFlags amounts={amounts} />;
-    }
-    if (part.type === "data-model-badge") {
-      const model = String((data as { model?: string } | undefined)?.model ?? "backup");
-      return <p className="note">Answered by the backup model ({model}).</p>;
-    }
-    if (part.type === "data-ending") {
-      const note = String((data as { note?: string } | undefined)?.note ?? "");
-      return note ? <p className="note">{note}</p> : null;
-    }
-    return null;
+  if (part.type === "data-card") {
+    return (
+      <Card
+        data={part.data}
+        onRetryCapture={onRetryCapture}
+        onEvidence={onEvidence}
+      />
+    );
+  }
+  if (part.type === "data-number-flags") {
+    return <NumberFlags amounts={part.data.amounts} />;
+  }
+  if (part.type === "data-model-badge") {
+    // New saves carry data-reply-model with the model that really answered; the old badge is
+    // only kept for transcripts saved before that part existed.
+    if (hideLegacyBadge) return null;
+    return <p className="note">Answered by the backup model ({part.data.model}).</p>;
+  }
+  if (part.type === "data-reply-model") {
+    return (
+      <p className="fine">
+        Model: {part.data.model}
+        {part.data.fallback ? " (fallback)" : ""}
+      </p>
+    );
+  }
+  if (part.type === "data-ending") {
+    return part.data.note ? <p className="note">{part.data.note}</p> : null;
   }
   return null;
-}
-
-function ConfirmFacts({ input }: { input: unknown }) {
-  if (!input || typeof input !== "object") return <p className="fine">{String(input)}</p>;
-  const entries = Object.entries(input as Record<string, unknown>);
-  if (!entries.length) return null;
-  return (
-    <dl className="confirm-facts">
-      {entries.map(([key, value]) => (
-        <div key={key}>
-          <dt>{key.replaceAll("_", " ")}</dt>
-          <dd>
-            {typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
 }
 
 function Message({
@@ -208,8 +211,16 @@ function Message({
 }) {
   const [flagged, setFlagged] = useState(Boolean(message.metadata?.flagged_at));
   const role = message.role;
+  const serverId = message.metadata?.server_id;
+  const hasReplyModel = message.parts.some((part) => part.type === "data-reply-model");
+  // "assistant" is the panel's layout class; a bubble wearing it became a flex item and
+  // overflowed its own height. Use a role class the panel never matches.
   return (
-    <article className={`bubble ${role}`}>
+    <article
+      id={serverId ? `message-${serverId}` : undefined}
+      tabIndex={serverId ? -1 : undefined}
+      className={`bubble ${role === "assistant" ? "agent" : role}`}
+    >
       <div className="bubble-head">
         <span className="eyebrow">{role === "user" ? "You" : "Fin-Agent"}</span>
         {role === "assistant" && (
@@ -229,48 +240,13 @@ function Message({
 
       {message.parts.map((part, index) => {
         if (isToolUIPart(part)) {
-          const state = part.state;
-          if (state === "approval-requested") {
-            const reason =
-              (part.approval as { requestReason?: string }).requestReason ??
-              "This change lasts. Confirm it?";
-            return (
-              <div key={index} className="chat-card confirm">
-                <strong>Confirm: {getToolName(part)}</strong>
-                <p>{reason}</p>
-                <ConfirmFacts input={part.input} />
-                <div className="button-row">
-                  <button
-                    type="button"
-                    onClick={() => onApprove(part.approval.id, true)}
-                    disabled={busy}
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => onApprove(part.approval.id, false)}
-                    disabled={busy}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            );
-          }
-          const toolName = getToolName(part);
-          const output =
-            state === "output-available" ? (part as { output?: unknown }).output : undefined;
-          const outputText =
-            typeof output === "string" ? output : output ? JSON.stringify(output, null, 2) : "";
           return (
-            <details key={index} className="tool-line">
-              <summary>
-                {toolName} · {state.replaceAll("-", " ")}
-              </summary>
-              {outputText && <pre className="sql">{outputText.slice(0, 4000)}</pre>}
-            </details>
+            <ToolPart
+              key={index}
+              part={part}
+              busy={busy}
+              onApprove={onApprove}
+            />
           );
         }
         return (
@@ -278,6 +254,7 @@ function Message({
             key={index}
             part={part}
             onEvidence={onEvidence}
+            hideLegacyBadge={hasReplyModel}
             onRetryCapture={(kind, attachmentId) =>
               onRetryCapture(kind, attachmentId, message.id)
             }
@@ -296,6 +273,7 @@ function Conversation({
   focusSignal,
   onSeedConsumed,
   onEvidence,
+  focusMessage = null,
 }: {
   threadId: string;
   initialMessages: ChatMessage[];
@@ -304,6 +282,7 @@ function Conversation({
   focusSignal?: number;
   onSeedConsumed?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
+  focusMessage?: { id: string; token: number } | null;
 }) {
   const voiceRef = useRef<string | null>(null);
   const transport = useMemo(
@@ -338,7 +317,6 @@ function Conversation({
     setMessages,
     status,
     stop,
-    regenerate,
     error,
     addToolApprovalResponse,
   } = useChat<ChatMessage>({
@@ -380,6 +358,10 @@ function Conversation({
     inputRef.current?.focus();
   }, [focusSignal]);
   const bottom = useRef<HTMLDivElement>(null);
+  // A source link opens an article, not the end of the thread; the first paint keeps its place,
+  // and later streamed turns scroll as before.
+  const pendingFocus = useRef<string | null>(focusMessage?.id ?? null);
+  const firstScroll = useRef(true);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -393,6 +375,7 @@ function Conversation({
   const [transcribing, setTranscribing] = useState(false);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const busy = status === "submitted" || status === "streaming";
+  const needsSignIn = APICallError.isInstance(error) && error.statusCode === 401;
   const visibleMessages = useMemo(() => groupMessages(messages), [messages]);
 
   useEffect(() => {
@@ -404,8 +387,22 @@ function Conversation({
   }, []);
 
   useEffect(() => {
+    if (firstScroll.current) {
+      firstScroll.current = false;
+      if (pendingFocus.current) return;
+    }
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, status]);
+
+  useEffect(() => {
+    const id = pendingFocus.current;
+    if (!id) return;
+    const article = document.getElementById(`message-${id}`);
+    pendingFocus.current = null;
+    if (!article) return;
+    article.scrollIntoView({ block: "center" });
+    article.focus({ preventScroll: true });
+  }, [focusMessage?.token]);
 
   function appendCard(card: Record<string, unknown>, id: string) {
     setMessages((current) => [
@@ -414,7 +411,7 @@ function Conversation({
         id,
         role: "assistant",
         parts: [{ type: "data-card", id, data: card }],
-      } as unknown as ChatMessage,
+      },
     ]);
   }
 
@@ -681,10 +678,22 @@ function Conversation({
         {status === "submitted" && <p className="muted fine">Thinking…</p>}
         {error && (
           <div className="chat-card">
-            <p className="error">{errorMessage(error)}</p>
-            <button type="button" className="ghost small" onClick={() => void regenerate()}>
-              <RotateCcw size={13} strokeWidth={1.8} aria-hidden="true" />
-              Retry
+            <p className="error">{chatErrorMessage(error)}</p>
+            <button
+              type="button"
+              className="ghost small"
+              disabled={busy}
+              onClick={() => {
+                if (needsSignIn) window.location.reload();
+                else void sendMessage({ text: "Try again" });
+              }}
+            >
+              {needsSignIn ? (
+                <LogIn size={13} strokeWidth={1.8} aria-hidden="true" />
+              ) : (
+                <RotateCcw size={13} strokeWidth={1.8} aria-hidden="true" />
+              )}
+              {needsSignIn ? "Sign in again" : "Retry"}
             </button>
           </div>
         )}
@@ -792,6 +801,7 @@ function Conversation({
 
 export function Assistant({
   focusThreadId,
+  focusMessageId,
   onFocusHandled,
   seed,
   focusSignal,
@@ -801,6 +811,7 @@ export function Assistant({
   onEvidence,
 }: {
   focusThreadId?: string | null;
+  focusMessageId?: string | null;
   onFocusHandled?: () => void;
   seed?: { id: number; text: string } | null;
   focusSignal?: number;
@@ -820,6 +831,13 @@ export function Assistant({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // A validated source thread can be older than the first /threads page; load it directly.
+  const [directId, setDirectId] = useState<string | null>(null);
+  const [directTitle, setDirectTitle] = useState<string | null>(null);
+  const [focusMessage, setFocusMessage] = useState<{ id: string; token: number } | null>(null);
+  const [focusError, setFocusError] = useState<string | null>(null);
+  const [focusAttempt, setFocusAttempt] = useState(0);
+  const focusToken = useRef(0);
   const mounted = useRef(false);
 
   useEffect(() => {
@@ -828,26 +846,26 @@ export function Assistant({
       return;
     }
     if (!focusThreadId) return;
-    let alive = true;
-    (async () => {
-      try {
-        const list = await loadThreads("");
-        if (!alive) return;
-        setInitial([]);
-        setLoadedFor(null);
-        setActiveId(
-          list.some((thread) => thread.id === focusThreadId)
-            ? focusThreadId
-            : (list[0]?.id ?? focusThreadId),
-        );
-        onFocusHandled?.();
-      } catch (caught) {
-        if (alive) setError(errorMessage(caught));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    const nextFocus = focusMessageId
+      ? { id: focusMessageId, token: ++focusToken.current }
+      : null;
+    if (focusThreadId === activeId && loadedFor === activeId) {
+      if (nextFocus) setFocusMessage(nextFocus);
+      onFocusHandled?.();
+      return;
+    }
+    // Shell has already asked the server whether this thread exists, so do not fall back to the
+    // newest thread when it is missing from the loaded history page.
+    setError(null);
+    setFocusError(null);
+    setDirectTitle(null);
+    setInitial([]);
+    setLoadedFor(null);
+    setDirectId(focusThreadId);
+    setActiveId(focusThreadId);
+    if (nextFocus) setFocusMessage(nextFocus);
+    setFocusAttempt((value) => value + 1);
+    onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusThreadId]);
 
@@ -856,7 +874,27 @@ export function Assistant({
     setInitial([]);
     setLoadedFor(id);
     setActiveId(id);
+    setDirectId(null);
+    setDirectTitle(null);
+    setFocusMessage(null);
+    setFocusError(null);
     setHistoryOpen(false);
+  }
+
+  function selectThread(id: string) {
+    setInitial([]);
+    setLoadedFor(null);
+    setActiveId(id);
+    setDirectId(null);
+    setDirectTitle(null);
+    setFocusMessage(null);
+    setFocusError(null);
+    setHistoryOpen(false);
+  }
+
+  function retryFocus() {
+    setFocusError(null);
+    setFocusAttempt((value) => value + 1);
   }
 
   async function loadThreads(search = query) {
@@ -875,17 +913,20 @@ export function Assistant({
         if (!alive) return;
         const saved = sessionStorage.getItem("fin-agent-thread");
         const wanted =
-          focusThreadId && list.some((thread) => thread.id === focusThreadId)
-            ? focusThreadId
-            : list.some((thread) => thread.id === saved)
-              ? saved
-              : list[0]?.id;
+          focusThreadId ??
+          (list.some((thread) => thread.id === saved) ? saved : list[0]?.id);
         if (wanted) {
           setActiveId(wanted);
         } else {
           setLoadedFor(activeId);
         }
-        if (focusThreadId) onFocusHandled?.();
+        if (focusThreadId) {
+          setDirectId(focusThreadId);
+          if (focusMessageId) {
+            setFocusMessage({ id: focusMessageId, token: ++focusToken.current });
+          }
+          onFocusHandled?.();
+        }
       } catch (caught) {
         if (alive) setError(errorMessage(caught));
       } finally {
@@ -904,7 +945,7 @@ export function Assistant({
 
   useEffect(() => {
     let alive = true;
-    if (!threads.some((thread) => thread.id === activeId)) {
+    if (!threads.some((thread) => thread.id === activeId) && activeId !== directId) {
       return () => {
         alive = false;
       };
@@ -914,15 +955,19 @@ export function Assistant({
         if (alive) {
           setInitial(body.messages);
           setLoadedFor(activeId);
+          setFocusError(null);
+          if (activeId === directId) setDirectTitle(body.thread.title);
         }
       })
       .catch((caught: unknown) => {
-        if (alive) setError(errorMessage(caught));
+        if (!alive) return;
+        if (activeId === directId) setFocusError(errorMessage(caught));
+        else setError(errorMessage(caught));
       });
     return () => {
       alive = false;
     };
-  }, [activeId, threads]);
+  }, [activeId, threads, directId, focusAttempt]);
 
   async function refresh() {
     try {
@@ -956,7 +1001,10 @@ export function Assistant({
     );
   }
 
-  const title = threads.find((thread) => thread.id === activeId)?.title ?? "New conversation";
+  const title =
+    threads.find((thread) => thread.id === activeId)?.title ??
+    directTitle ??
+    (focusError ? "Conversation unavailable" : "New conversation");
 
   return (
     <section className="assistant">
@@ -986,12 +1034,7 @@ export function Assistant({
                   activeId={activeId}
                   query={query}
                   onQuery={setQuery}
-                  onSelect={(id) => {
-                    setInitial([]);
-                    setLoadedFor(null);
-                    setActiveId(id);
-                    setHistoryOpen(false);
-                  }}
+                  onSelect={selectThread}
                   onNew={startNew}
                 />
               </Popover.Content>
@@ -1016,7 +1059,22 @@ export function Assistant({
       </header>
 
       {error && <p className="error chat-error">{error}</p>}
-      {loadedFor === activeId ? (
+      {focusError ? (
+        <div className="chat-card" role="alert">
+          <p className="error">
+            This conversation could not be opened. It may have been deleted or is unavailable.
+          </p>
+          <p className="fine">{focusError}</p>
+          <div className="button-row">
+            <button type="button" className="ghost small" onClick={retryFocus}>
+              Try again
+            </button>
+            <button type="button" className="ghost small" onClick={startNew}>
+              Start a new chat
+            </button>
+          </div>
+        </div>
+      ) : loadedFor === activeId ? (
         <Conversation
           key={activeId}
           threadId={activeId}
@@ -1029,6 +1087,7 @@ export function Assistant({
           focusSignal={focusSignal}
           onSeedConsumed={onSeedConsumed}
           onEvidence={onEvidence}
+          focusMessage={focusMessage}
         />
       ) : (
         <div className="chat-loading">

@@ -2194,6 +2194,12 @@ button.chip.reducible {
   max-width: 720px;
 }
 
+/* Message rows are flex items in a column scroller; never let them shrink below their content. */
+.messages > .bubble {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .bubble.user {
   align-self: flex-end;
   max-width: 70%;
@@ -2203,7 +2209,7 @@ button.chip.reducible {
   color: #fff;
 }
 
-.bubble.assistant {
+.bubble.agent {
   align-self: stretch;
   max-width: 760px;
 }
@@ -2216,7 +2222,7 @@ button.chip.reducible {
   margin-bottom: 6px;
 }
 
-.bubble.assistant .bubble-head .eyebrow {
+.bubble.agent .bubble-head .eyebrow {
   color: var(--ter);
 }
 
@@ -2233,6 +2239,7 @@ button.chip.reducible {
   font-size: 15px;
   line-height: 1.55;
   max-width: 68ch;
+  overflow-wrap: anywhere;
 }
 
 .markdown p {
@@ -2325,6 +2332,51 @@ button.chip.reducible {
 
 .tool-line summary {
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-line .tool-spin {
+  flex: 0 0 auto;
+  animation: tool-spin 0.9s linear infinite;
+}
+
+.tool-error {
+  margin: 2px 0 6px;
+}
+
+.tool-body {
+  margin-top: 6px;
+}
+
+.tool-section {
+  margin-top: 6px;
+}
+
+.tool-section-label {
+  font-size: 11px;
+  color: var(--sub);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tool-code {
+  max-height: 220px;
+  margin: 4px 0 0;
+  padding: 8px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+@keyframes tool-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .composer {
@@ -3705,7 +3757,7 @@ button.icon-only {
   max-width: 900px;
 }
 
-.bubble.assistant {
+.bubble.agent {
   max-width: 760px;
 }
 

@@ -62,8 +62,21 @@ function useCompactViewport(): boolean {
   return compact;
 }
 
-function readHash(): { page: PageId; money: MoneyTab; activity: ActivityTab } {
-  const [rawPage, rawTab] = window.location.hash.slice(1).split("/");
+const THREAD_ID = /^[A-Za-z0-9_-]{1,120}$/;
+
+type OpenThreadDetail =
+  | string
+  | { threadId?: unknown; messageId?: unknown }
+  | null;
+
+function readHash(): {
+  page: PageId;
+  money: MoneyTab;
+  activity: ActivityTab;
+  thread: string | null;
+  message: string | null;
+} {
+  const [rawPage, rawTab, rawMessage] = window.location.hash.slice(1).split("/");
   const page = NAV.some((item) => item.id === rawPage) ? (rawPage as PageId) : "home";
   const money = ["accounts", "projection", "schedules", "goals", "people"].includes(rawTab)
     ? (rawTab as MoneyTab)
@@ -71,7 +84,29 @@ function readHash(): { page: PageId; money: MoneyTab; activity: ActivityTab } {
   const activity = ["ledger", "imports"].includes(rawTab)
     ? (rawTab as ActivityTab)
     : "ledger";
-  return { page, money, activity };
+  const thread = page === "home" && rawTab && THREAD_ID.test(rawTab) ? rawTab : null;
+  const message =
+    thread && rawMessage && THREAD_ID.test(rawMessage) ? rawMessage : null;
+  return { page, money, activity, thread, message };
+}
+
+function openThreadDetail(detail: OpenThreadDetail): {
+  thread: string;
+  message: string | null;
+} {
+  if (typeof detail === "string") return { thread: detail.trim(), message: null };
+  const thread = String(detail?.threadId ?? "").trim();
+  const message = String(detail?.messageId ?? "").trim();
+  return { thread, message: message || null };
+}
+
+async function threadExists(threadId: string): Promise<boolean> {
+  try {
+    await api<unknown>(`/api/threads/${encodeURIComponent(threadId)}/messages`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: () => void }) {
@@ -82,6 +117,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
   const [focusThreadId, setFocusThreadId] = useState<string | null>(null);
+  const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [seed, setSeed] = useState<{ id: number; text: string } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -90,14 +126,14 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
   const compact = useCompactViewport();
 
-  function go(next: PageId, sub?: string) {
+  const go = useCallback((next: PageId, sub?: string) => {
     setEvidence(null);
     setPage(next);
     const hash = sub ? `${next}/${sub}` : next;
     if (window.location.hash !== `#${hash}`) {
       window.history.pushState(null, "", `#${hash}`);
     }
-  }
+  }, []);
 
   useEffect(() => {
     const onPop = () => {
@@ -106,10 +142,54 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       setMoneyTab(next.money);
       setActivityTab(next.activity);
       setEvidence(null);
+      if (next.thread) {
+        void threadExists(next.thread).then((exists) => {
+          setFocusThreadId(exists ? next.thread : null);
+          setFocusMessageId(exists ? next.message : null);
+        });
+      } else {
+        setFocusThreadId(null);
+        setFocusMessageId(null);
+      }
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  // A deep link such as #home/cnv_… opens that conversation, but only when the thread really
+  // exists; otherwise the current page and navigation stay untouched.
+  useEffect(() => {
+    const { thread, message } = readHash();
+    if (!thread) return;
+    void threadExists(thread).then((exists) => {
+      if (exists) {
+        setFocusThreadId(thread);
+        setFocusMessageId(message);
+      } else if (window.location.hash.startsWith("#home/")) {
+        window.history.replaceState(null, "", "#home");
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    const onOpenThread = (event: Event) => {
+      const { thread, message } = openThreadDetail(
+        (event as CustomEvent<OpenThreadDetail>).detail,
+      );
+      if (!THREAD_ID.test(thread) || (message && !THREAD_ID.test(message))) return;
+      void threadExists(thread).then((exists) => {
+        if (!exists) return;
+        setFocusThreadId(thread);
+        setFocusMessageId(message);
+        setTodayOpen(false);
+        setEvidence(null);
+        if (compact && page !== "home") setAssistantOpen(true);
+        go("home", message ? `${thread}/${message}` : thread);
+      });
+    };
+    window.addEventListener("fin-agent:open-thread", onOpenThread);
+    return () => window.removeEventListener("fin-agent:open-thread", onOpenThread);
+  }, [compact, page, go]);
 
   const refreshUnread = useCallback(async () => {
     try {
@@ -177,6 +257,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
 
   function openChat(threadId: string) {
     setFocusThreadId(threadId);
+    setFocusMessageId(null);
     setTodayOpen(false);
     if (compact && page !== "home") setAssistantOpen(true);
     go("home");
@@ -207,7 +288,11 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       focusSignal={focusSignal}
       onSeedConsumed={() => setSeed(null)}
       focusThreadId={focusThreadId}
-      onFocusHandled={() => setFocusThreadId(null)}
+      focusMessageId={focusMessageId}
+      onFocusHandled={() => {
+        setFocusThreadId(null);
+        setFocusMessageId(null);
+      }}
       onClose={compact ? () => setAssistantOpen(false) : undefined}
       onActivity={() => setHomeVersion((value) => value + 1)}
     />
@@ -354,7 +439,11 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               focusSignal={focusSignal}
               onSeedConsumed={() => setSeed(null)}
               focusThreadId={focusThreadId}
-              onFocusHandled={() => setFocusThreadId(null)}
+              focusMessageId={focusMessageId}
+              onFocusHandled={() => {
+                setFocusThreadId(null);
+                setFocusMessageId(null);
+              }}
               onActivity={() => setHomeVersion((value) => value + 1)}
               onEvidence={showEvidence}
             />

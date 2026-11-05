@@ -61,6 +61,25 @@ type Loaded = {
   index: number;
 };
 
+type MovementSource = {
+  kind: string;
+  ref: string | null;
+  message_id: string | null;
+  conversation_id: string | null;
+};
+
+type MovementDetail = Movement & { sources?: MovementSource[] };
+
+const THREAD_ID = /^[A-Za-z0-9_-]{1,120}$/;
+
+/** Ask Shell to open the exact message that recorded this row; never guess a thread. */
+function openConversation(threadId: string, messageId: string | null) {
+  if (!THREAD_ID.test(threadId)) return;
+  const detail =
+    messageId && THREAD_ID.test(messageId) ? { threadId, messageId } : threadId;
+  window.dispatchEvent(new CustomEvent("fin-agent:open-thread", { detail }));
+}
+
 function buildParams(filters: Filters, cursor: string | null): string {
   const params = new URLSearchParams({
     limit: String(PAGE_SIZE),
@@ -162,6 +181,9 @@ export function LedgerPanel() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
+  const [detail, setDetail] = useState<MovementDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const accounts = useApi<AccountSummary>("/api/accounts");
 
   const cursor = request.cursors[request.index] ?? null;
@@ -194,6 +216,31 @@ export function LedgerPanel() {
       alive = false;
     };
   }, [request, cursor, requestKey]);
+
+  useEffect(() => {
+    if (!openMovement) return;
+    let alive = true;
+    api<MovementDetail>(`/api/movements/${openMovement.id}`)
+      .then((value) => {
+        if (alive) setDetail(value);
+      })
+      .catch((caught: unknown) => {
+        if (alive) setDetailError(errorMessage(caught));
+      })
+      .finally(() => {
+        if (alive) setDetailLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [openMovement]);
+
+  function openDetails(movement: Movement) {
+    setDetail(null);
+    setDetailError(null);
+    setDetailLoading(true);
+    setOpenMovement(movement);
+  }
 
   function reload(filters: Filters) {
     setRequest((current) => ({
@@ -234,6 +281,7 @@ export function LedgerPanel() {
       ? loaded.items.filter((movement) => matchesSearch(movement, query))
       : loaded.items
     : [];
+  const chatSources = (detail?.sources ?? []).filter((source) => source.conversation_id);
 
   return (
     <section className="panel act-ledger">
@@ -446,7 +494,7 @@ export function LedgerPanel() {
             <span />
           </div>
           {visible.map((movement) => (
-            <MovementRow key={movement.id} movement={movement} onOpen={setOpenMovement} />
+            <MovementRow key={movement.id} movement={movement} onOpen={openDetails} />
           ))}
         </div>
       )}
@@ -522,6 +570,39 @@ export function LedgerPanel() {
                     : "none"}
                 </dd>
               </dl>
+              <h3 className="section-title">Recorded from</h3>
+              {detailLoading && <p className="fine">Opening the source row…</p>}
+              {detailError && (
+                <p className="error" role="alert">
+                  {detailError}
+                </p>
+              )}
+              {!detailLoading && !detailError && chatSources.length === 0 && (
+                <p className="fine">No originating chat message is recorded for this movement.</p>
+              )}
+              {chatSources.length > 0 && (
+                <ul className="transfers">
+                  {chatSources.map((source) => {
+                    const thread = source.conversation_id;
+                    if (!thread) return null;
+                    return (
+                      <li key={source.message_id ?? source.ref ?? thread}>
+                        <span>Chat message</span>
+                        <button
+                          type="button"
+                          className="inline-link"
+                          onClick={() => {
+                            openConversation(thread, source.message_id);
+                            setOpenMovement(null);
+                          }}
+                        >
+                          {source.message_id ? "Open message" : "Open conversation"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
               <h3 className="section-title">Transfers</h3>
               {openMovement.transfers.length > 0 ? (
                 <ul className="transfers">

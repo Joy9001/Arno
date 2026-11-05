@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { Skeleton } from "@radix-ui/themes";
+import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
 import {
   Activity,
-  Archive,
   Bell,
   BellOff,
   BellRing,
@@ -19,20 +18,26 @@ import {
   FileJson,
   FileSpreadsheet,
   KeyRound,
+  Pause,
+  Pencil,
+  Play,
   Plus,
   Power,
   PowerOff,
   RefreshCw,
+  RotateCcw,
   Save,
   ShieldCheck,
   Tag,
   Tags,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { api, errorMessage } from "../api";
 import { ensureFreshPasskey } from "../auth";
+import { RuntimeInfo } from "./RuntimeInfo";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
 import { Busy } from "../Loading";
@@ -78,6 +83,7 @@ const SECTION_GROUPS: Array<{
 const SECTIONS = SECTION_GROUPS.flatMap((group) => group.items);
 const RULE_PAGE_SIZE = 25;
 const MEMORY_PAGE_SIZE = 10;
+const MEMORY_MAX_LENGTH = 2000;
 const QUESTION_PAGE_SIZE = 10;
 
 function sectionFromHash(): string {
@@ -283,6 +289,51 @@ function TableRegion({ label, children }: { label: string; children: ReactNode }
     <div className="stg-table-region" role="region" aria-label={label} tabIndex={0}>
       {children}
     </div>
+  );
+}
+
+/** A Radix confirmation for destructive settings actions; the action fires only on confirm. */
+function ConfirmButton({
+  label,
+  icon,
+  title,
+  description,
+  confirmLabel,
+  onConfirm,
+}: {
+  label: string;
+  icon: ReactNode;
+  title: string;
+  description: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <AlertDialog.Root open={open} onOpenChange={setOpen}>
+      <button type="button" className="ghost small" onClick={() => setOpen(true)}>
+        {icon}
+        {label}
+      </button>
+      <AlertDialog.Content maxWidth="420px">
+        <AlertDialog.Title>{title}</AlertDialog.Title>
+        <AlertDialog.Description size="2">{description}</AlertDialog.Description>
+        <div className="stg-confirm-actions">
+          <AlertDialog.Cancel>
+            <Button variant="soft" color="gray"><X size={14} aria-hidden="true" />Cancel</Button>
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            className="ghost small stg-danger"
+            onClick={() => {
+              setOpen(false);
+              onConfirm();
+            }}
+          >
+            <Button color="red">{icon}{confirmLabel}</Button>
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Root>
   );
 }
 
@@ -512,14 +563,20 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
   const [ruleQuery, setRuleQuery] = useState("");
   const [rulePage, setRulePage] = useState(0);
   const [busyCategoryId, setBusyCategoryId] = useState<string | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [categoryName, setCategoryName] = useState("");
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  const [ruleCategoryId, setRuleCategoryId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  const activeCategories = tree.categories.filter((category) => category.active);
+  const archivedCategories = tree.categories.filter((category) => !category.active);
   const selectedCategoryId =
-    categoryId && tree.categories.some((category) => category.id === categoryId)
+    categoryId && activeCategories.some((category) => category.id === categoryId)
       ? categoryId
-      : (tree.categories[0]?.id ?? "");
+      : (activeCategories[0]?.id ?? "");
   const rules = [...tree.rules].sort(
     (a, b) => b.hits - a.hits || a.merchant_pattern.localeCompare(b.merchant_pattern),
   );
@@ -541,11 +598,70 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
   async function toggleReducible(category: CategoryTree["categories"][number]) {
     setBusyCategoryId(category.id);
     setError(null);
+    setMessage(null);
     try {
       await api(`/api/categories/${category.id}`, {
         method: "PATCH",
         body: JSON.stringify({ reducible: !category.reducible }),
       });
+      setMessage(
+        category.reducible
+          ? `“${category.name}” is protected from affordability cuts.`
+          : `“${category.name}” may be suggested for cutting.`,
+      );
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyCategoryId(null);
+    }
+  }
+
+  async function saveCategoryName(category: CategoryTree["categories"][number]) {
+    const name = categoryName.trim();
+    if (!name) {
+      setError("A category needs a name.");
+      return;
+    }
+    if (name === category.name) {
+      setEditingCategoryId(null);
+      return;
+    }
+    setBusyCategoryId(category.id);
+    setError(null);
+    setMessage(null);
+    try {
+      await api(`/api/categories/${category.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      });
+      setEditingCategoryId(null);
+      setMessage(`Renamed to “${name}”. Existing rows keep this category.`);
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyCategoryId(null);
+    }
+  }
+
+  async function setCategoryActive(
+    category: CategoryTree["categories"][number],
+    active: boolean,
+  ) {
+    setBusyCategoryId(category.id);
+    setError(null);
+    setMessage(null);
+    try {
+      await api(`/api/categories/${category.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active }),
+      });
+      setMessage(
+        active
+          ? `“${category.name}” restored.`
+          : `“${category.name}” archived. Existing rows and rules keep the label.`,
+      );
       onChanged();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -579,10 +695,40 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
     }
   }
 
-  async function removeRule(ruleId: string) {
+  async function saveRule(rule: CategoryTree["rules"][number]) {
+    if (!ruleCategoryId) return;
+    setSaving(true);
     setError(null);
+    setMessage(null);
     try {
-      await api(`/api/category-rules/${ruleId}`, { method: "DELETE" });
+      await api("/api/category-rules", {
+        method: "POST",
+        body: JSON.stringify({
+          merchant_pattern: rule.merchant_pattern,
+          category_id: ruleCategoryId,
+          source: "user",
+        }),
+      });
+      setEditingRuleId(null);
+      setMessage(
+        rule.source === "llm"
+          ? `“${rule.merchant_pattern}” is now your rule and beats the agent's guess.`
+          : `“${rule.merchant_pattern}” now uses the selected category.`,
+      );
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeRule(rule: CategoryTree["rules"][number]) {
+    setError(null);
+    setMessage(null);
+    try {
+      await api(`/api/category-rules/${rule.id}`, { method: "DELETE" });
+      setMessage(`Rule for “${rule.merchant_pattern}” deleted. Past labels stay unchanged.`);
       onChanged();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -591,33 +737,135 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
 
   return (
     <div className="stg-card">
-      <h4>Reducible categories</h4>
+      <h4>Categories</h4>
       <p className="stg-hint">
-        An affordability tradeoff may suggest cutting a reducible category. Select a category to
-        change whether it is included in those suggestions.
+        A reducible category may be suggested when an affordability tradeoff needs a cut. Renaming
+        or archiving a category keeps its identity on existing rows.
       </p>
-      <div className="stg-chips">
-        {tree.categories.map((category) => (
-          <button
-            key={category.id}
-            type="button"
-            className="stg-chip"
-            aria-pressed={category.reducible}
-            disabled={busyCategoryId === category.id}
-            title="Toggle whether this category is reducible"
-            onClick={() => void toggleReducible(category)}
-          >
-            <Tag size={13} strokeWidth={1.8} aria-hidden="true" />
-            {category.name}
-            {category.reducible && <span className="stg-chip-state">Reducible</span>}
-          </button>
-        ))}
+      <div className="stg-list">
+        {activeCategories.map((category) => {
+          const editing = editingCategoryId === category.id;
+          return (
+            <div className="stg-list-row" key={category.id}>
+              <div className="stg-list-body">
+                {editing ? (
+                  <input
+                    aria-label={`Name for ${category.name}`}
+                    value={categoryName}
+                    maxLength={100}
+                    onChange={(event) => setCategoryName(event.target.value)}
+                  />
+                ) : (
+                  <p className="stg-question">{category.name}</p>
+                )}
+                <p className="stg-list-meta">
+                  {category.reducible
+                    ? "Reducible · an affordability tradeoff may suggest cutting it."
+                    : "Protected · not suggested for affordability cuts."}
+                </p>
+              </div>
+              <div className="stg-list-actions">
+                {editing ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      disabled={busyCategoryId === category.id || !categoryName.trim()}
+                      onClick={() => void saveCategoryName(category)}
+                    >
+                      <Save size={14} strokeWidth={1.8} aria-hidden="true" />
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => setEditingCategoryId(null)}
+                    >
+                      <X size={14} strokeWidth={1.8} aria-hidden="true" />
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      aria-pressed={category.reducible}
+                      disabled={busyCategoryId === category.id}
+                      title="Toggle whether this category is reducible"
+                      onClick={() => void toggleReducible(category)}
+                    >
+                      <Tag size={14} strokeWidth={1.8} aria-hidden="true" />
+                      {category.reducible ? "Reducible" : "Protected"}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => {
+                        setEditingCategoryId(category.id);
+                        setCategoryName(category.name);
+                        setError(null);
+                      }}
+                    >
+                      <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
+                      Rename
+                    </button>
+                    <ConfirmButton
+                      label="Archive"
+                      icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
+                      title={`Archive “${category.name}”?`}
+                      description="It will not be offered for new movements, but existing rows and rules keep the label. You can restore it below."
+                      confirmLabel="Archive category"
+                      onConfirm={() => void setCategoryActive(category, false)}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
+      {archivedCategories.length > 0 && (
+        <>
+          <div className="stg-subhead">
+            <h4>Archived categories</h4>
+            <span className="stg-hint">{archivedCategories.length} archived</span>
+          </div>
+          <p className="stg-hint">
+            Archived categories stay on existing rows and rules. Restore one to offer it again.
+          </p>
+          <div className="stg-list">
+            {archivedCategories.map((category) => (
+              <div className="stg-list-row" key={category.id}>
+                <div className="stg-list-body">
+                  <p className="stg-question">{category.name}</p>
+                </div>
+                <div className="stg-list-actions">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    disabled={busyCategoryId === category.id}
+                    onClick={() => void setCategoryActive(category, true)}
+                  >
+                    <RotateCcw size={14} strokeWidth={1.8} aria-hidden="true" />
+                    Restore
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       <div className="stg-subhead">
-        <h4>Learned rules</h4>
+        <h4>Merchant rules</h4>
         {rules.length > 0 && <span className="stg-hint">{rules.length} rules · most used first</span>}
       </div>
+      <p className="stg-hint">
+        Your rules win over the agent&apos;s guesses. Agent rules are guesses the categorizer saved;
+        changing one makes it your rule. Past labels are not rewritten.
+      </p>
 
       {rules.length > 0 && (
         <div className="stg-filter">
@@ -664,7 +912,28 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
                 {visibleRules.map((rule) => (
                   <tr key={rule.id}>
                     <td>{rule.merchant_pattern}</td>
-                    <td>{rule.category_name}</td>
+                    <td>
+                      {editingRuleId === rule.id ? (
+                        <select
+                          aria-label={`Category for ${rule.merchant_pattern}`}
+                          value={ruleCategoryId}
+                          onChange={(event) => setRuleCategoryId(event.target.value)}
+                        >
+                          {tree.categories
+                            .filter(
+                              (category) => category.active || category.id === rule.category_id,
+                            )
+                            .map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.name}
+                                {category.active ? "" : " (archived)"}
+                              </option>
+                            ))}
+                        </select>
+                      ) : (
+                        rule.category_name
+                      )}
+                    </td>
                     <td>
                       <span className={`badge ${rule.source === "user" ? "muted" : "warn"}`}>
                         {rule.source === "user" ? "You" : "Agent"}
@@ -672,14 +941,52 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
                     </td>
                     <td className="num">{rule.hits}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="ghost small"
-                        onClick={() => void removeRule(rule.id)}
-                      >
-                        <Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
-                        Delete
-                      </button>
+                      <div className="stg-list-actions">
+                        {editingRuleId === rule.id ? (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost small"
+                              disabled={saving || !ruleCategoryId}
+                              onClick={() => void saveRule(rule)}
+                            >
+                              <Save size={14} strokeWidth={1.8} aria-hidden="true" />
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost small"
+                              onClick={() => setEditingRuleId(null)}
+                            >
+                              <X size={14} strokeWidth={1.8} aria-hidden="true" />
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost small"
+                              onClick={() => {
+                                setEditingRuleId(rule.id);
+                                setRuleCategoryId(rule.category_id);
+                                setError(null);
+                              }}
+                            >
+                              <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
+                              Edit
+                            </button>
+                            <ConfirmButton
+                              label="Delete"
+                              icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
+                              title={`Delete the rule for “${rule.merchant_pattern}”?`}
+                              description="Future captures stop using this rule. Labels already on past movements stay unchanged."
+                              confirmLabel="Delete rule"
+                              onConfirm={() => void removeRule(rule)}
+                            />
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -713,7 +1020,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
             required
             onChange={(event) => setCategoryId(event.target.value)}
           >
-            {tree.categories.map((category) => (
+            {activeCategories.map((category) => (
               <option key={category.id} value={category.id}>
                 {category.name}
               </option>
@@ -991,12 +1298,14 @@ function PasskeysSection() {
 }
 
 function ScheduledQuestionsSection() {
-  const questions = useApi<ScheduledQuestionList>("/api/scheduled-questions");
+  const questions = useApi<ScheduledQuestionList>(
+    "/api/scheduled-questions?include_inactive=true",
+  );
   return (
     <SettingsSection
       id="questions"
       title="Scheduled questions"
-      description="Read-only questions the agent runs on a schedule and answers into your inbox."
+      description="Read-only questions the agent runs on a schedule and answers into your inbox. Paused questions keep their history and can be resumed."
     >
       <Loadable
         state={questions}
@@ -1020,11 +1329,18 @@ function ScheduledQuestionsCard({
   const [rule, setRule] = useState("FREQ=WEEKLY;BYDAY=SU");
   const [spend, setSpend] = useState("");
   const [spendError, setSpendError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [editRule, setEditRule] = useState("");
+  const [editSpend, setEditSpend] = useState("");
+  const [editSpendError, setEditSpendError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
+  const activeCount = data.questions.filter((question) => question.active).length;
   const pageCount = Math.max(1, Math.ceil(data.questions.length / QUESTION_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const visibleQuestions = data.questions.slice(
@@ -1063,20 +1379,64 @@ function ScheduledQuestionsCard({
     }
   }
 
-  async function archive(question: ScheduledQuestion) {
-    if (
-      !window.confirm(
-        "Archive this scheduled question? It stops running and is removed from this list.",
-      )
-    ) {
+  function startEdit(question: ScheduledQuestion) {
+    setEditingId(question.id);
+    setEditPrompt(question.prompt);
+    setEditRule(question.rule);
+    setEditSpend(question.spend_limit_usd ?? "");
+    setEditSpendError(null);
+    setError(null);
+    setMessage(null);
+  }
+
+  async function saveEdit(question: ScheduledQuestion) {
+    if (!editPrompt.trim() || !editRule.trim()) return;
+    const invalidSpend = spendLimitError(editSpend);
+    if (invalidSpend) {
+      setEditSpendError(invalidSpend);
       return;
     }
+    setBusyId(question.id);
     setError(null);
+    setMessage(null);
     try {
-      await api(`/api/scheduled-questions/${question.id}`, { method: "DELETE" });
+      await api(`/api/scheduled-questions/${question.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          prompt: editPrompt.trim(),
+          rule: editRule.trim(),
+          ...(editSpend.trim() === "" ? {} : { spend_limit_usd: Number(editSpend) }),
+        }),
+      });
+      setEditingId(null);
+      setMessage("Scheduled question updated.");
       onChanged();
     } catch (caught) {
       setError(errorMessage(caught));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function setActive(question: ScheduledQuestion, active: boolean) {
+    setBusyId(question.id);
+    setError(null);
+    setMessage(null);
+    try {
+      await api(`/api/scheduled-questions/${question.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ active }),
+      });
+      setMessage(
+        active
+          ? "Question resumed. It runs again on its next schedule."
+          : "Question paused. It will not run until you resume it.",
+      );
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -1092,7 +1452,9 @@ function ScheduledQuestionsCard({
       <div className="stg-subhead">
         <h4>Your questions</h4>
         {data.questions.length > 0 && (
-          <span className="stg-hint">{data.questions.length} scheduled</span>
+          <span className="stg-hint">
+            {activeCount} active · {data.questions.length} total
+          </span>
         )}
       </div>
 
@@ -1103,31 +1465,141 @@ function ScheduledQuestionsCard({
       ) : (
         <>
           <div className="stg-list">
-            {visibleQuestions.map((question) => (
-              <div className="stg-list-row" key={question.id}>
-                <div className="stg-list-body">
-                  <p className="stg-question">{question.prompt}</p>
-                  <p className="stg-list-meta">
-                    {question.rule} · next {formatMoment(question.next_run_at)} · last{" "}
-                    {question.last_run_at ? formatMoment(question.last_run_at) : "never run"} ·
-                    limit{" "}
-                    {question.spend_limit_usd != null
-                      ? usd(question.spend_limit_usd)
-                      : `default ${usd(data.default_spend_limit_usd)}`}
-                  </p>
+            {visibleQuestions.map((question) => {
+              const editing = editingId === question.id;
+              return (
+                <div className={`stg-list-row${question.active ? "" : " off"}`} key={question.id}>
+                  <div className="stg-list-body">
+                    {editing ? (
+                      <div className="stg-question-edit">
+                        <label>
+                          Question
+                          <textarea
+                            rows={2}
+                            value={editPrompt}
+                            required
+                            maxLength={2000}
+                            onChange={(event) => setEditPrompt(event.target.value)}
+                          />
+                        </label>
+                        <div className="stg-field-row">
+                          <label>
+                            Repeat rule (RRULE)
+                            <input
+                              value={editRule}
+                              required
+                              maxLength={500}
+                              aria-describedby={`stg-edit-rule-hint-${question.id}`}
+                              onChange={(event) => setEditRule(event.target.value)}
+                            />
+                          </label>
+                          <label>
+                            Spend limit per run (USD)
+                            <input
+                              inputMode="decimal"
+                              value={editSpend}
+                              placeholder={data.default_spend_limit_usd}
+                              aria-invalid={Boolean(editSpendError)}
+                              aria-describedby={`stg-edit-spend-hint-${question.id}`}
+                              onChange={(event) => {
+                                setEditSpend(event.target.value);
+                                if (editSpendError) {
+                                  setEditSpendError(spendLimitError(event.target.value));
+                                }
+                              }}
+                              onBlur={() => setEditSpendError(spendLimitError(editSpend))}
+                            />
+                          </label>
+                        </div>
+                        <p id={`stg-edit-rule-hint-${question.id}`} className="stg-hint">
+                          Times follow your notification time. Blank spend keeps the current limit.
+                        </p>
+                        {editSpendError && (
+                          <p
+                            id={`stg-edit-spend-hint-${question.id}`}
+                            className="error"
+                            role="alert"
+                          >
+                            {editSpendError}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <p className="stg-question">{question.prompt}</p>
+                        <p className="stg-list-meta">
+                          {question.active
+                            ? `Active · next ${formatMoment(question.next_run_at)}`
+                            : "Paused · no next run"}{" "}
+                          · last{" "}
+                          {question.last_run_at
+                            ? formatMoment(question.last_run_at)
+                            : "never run"}{" "}
+                          · limit{" "}
+                          {question.spend_limit_usd != null
+                            ? usd(question.spend_limit_usd)
+                            : `default ${usd(data.default_spend_limit_usd)}`}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <div className="stg-list-actions">
+                    {editing ? (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          disabled={
+                            busyId === question.id || !editPrompt.trim() || !editRule.trim()
+                          }
+                          onClick={() => void saveEdit(question)}
+                        >
+                          <Save size={14} strokeWidth={1.8} aria-hidden="true" />
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() => setEditingId(null)}
+                        >
+                          <X size={14} strokeWidth={1.8} aria-hidden="true" />
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          onClick={() => startEdit(question)}
+                        >
+                          <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          disabled={busyId === question.id}
+                          onClick={() => void setActive(question, !question.active)}
+                        >
+                          {question.active ? (
+                            <>
+                              <Pause size={14} strokeWidth={1.8} aria-hidden="true" />
+                              Pause
+                            </>
+                          ) : (
+                            <>
+                              <Play size={14} strokeWidth={1.8} aria-hidden="true" />
+                              Resume
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="stg-list-actions">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    onClick={() => void archive(question)}
-                  >
-                    <Archive size={14} strokeWidth={1.8} aria-hidden="true" />
-                    Archive
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <Pager
             page={currentPage}
@@ -1228,6 +1700,10 @@ function JobsSection() {
       >
         {(data) => <JobsCard data={data} />}
       </Loadable>
+      <div className="stg-card">
+        <h4>Models and diagnostics</h4>
+        <RuntimeInfo />
+      </div>
     </SettingsSection>
   );
 }
@@ -1547,7 +2023,7 @@ function MemorySection({ preferences }: { preferences: ApiState<PreferenceList> 
     <SettingsSection
       id="memory"
       title="Agent memory"
-      description="Facts and rules the agent saved for later answers. Turning one off keeps it listed and reversible."
+      description="Saved preferences injected into answers on this instance. Turning one off keeps it listed and reversible."
     >
       <Loadable
         state={preferences}
@@ -1565,6 +2041,7 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
   const [source, setSource] = useState<"all" | "agent" | "user">("all");
   const [page, setPage] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const needle = query.trim().toLowerCase();
@@ -1595,18 +2072,34 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
     }
   }
 
-  async function remove(item: Preference) {
-    if (
-      !window.confirm(
-        "Delete this memory for good? Its text is blanked in the audit log and this can't be undone.",
-      )
-    ) {
+  async function saveEdit(item: Preference) {
+    const text = editing && editing.id === item.id ? editing.body.trim() : "";
+    if (!text) {
+      setError("A memory cannot be empty.");
       return;
     }
     setBusyId(item.id);
     setError(null);
     try {
+      await api(`/api/preferences/${item.id}/content`, {
+        method: "PATCH",
+        body: JSON.stringify({ body: text }),
+      });
+      setEditing(null);
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(item: Preference) {
+    setBusyId(item.id);
+    setError(null);
+    try {
       await api(`/api/preferences/${item.id}`, { method: "DELETE" });
+      if (editing?.id === item.id) setEditing(null);
       onChanged();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -1667,13 +2160,70 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
             {visible.map((item) => (
               <div className={item.active ? "stg-list-row" : "stg-list-row off"} key={item.id}>
                 <div className="stg-list-body">
-                  <p className="stg-memory-body">{item.body || "(deleted)"}</p>
+                  {editing?.id === item.id ? (
+                    <>
+                      <input
+                        aria-label="Memory text"
+                        value={editing.body}
+                        maxLength={MEMORY_MAX_LENGTH}
+                        autoFocus
+                        onChange={(event) =>
+                          setEditing({ id: item.id, body: event.target.value })
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            setEditing(null);
+                            setError(null);
+                          }
+                          if (event.key === "Enter") void saveEdit(item);
+                        }}
+                      />
+                      <div className="stg-actions">
+                        <button
+                          type="button"
+                          className="ghost small"
+                          disabled={busyId === item.id}
+                          onClick={() => void saveEdit(item)}
+                        >
+                          <Save size={14} strokeWidth={1.8} aria-hidden="true" />
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost small"
+                          disabled={busyId === item.id}
+                          onClick={() => {
+                            setEditing(null);
+                            setError(null);
+                          }}
+                        >
+                          <X size={14} strokeWidth={1.8} aria-hidden="true" />
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="stg-memory-body">{item.body || "(deleted)"}</p>
+                  )}
                   <p className="stg-list-meta">
+                    Saved preference · This instance ·{" "}
                     {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
                     {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
                   </p>
                 </div>
                 <div className="stg-list-actions">
+                  <button
+                    type="button"
+                    className="ghost small"
+                    disabled={busyId === item.id}
+                    onClick={() => {
+                      setEditing({ id: item.id, body: item.body });
+                      setError(null);
+                    }}
+                  >
+                    <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
+                    Edit
+                  </button>
                   <button
                     type="button"
                     className="ghost small"
@@ -1687,15 +2237,14 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
                     )}
                     {item.active ? "Turn off" : "Turn on"}
                   </button>
-                  <button
-                    type="button"
-                    className="ghost small danger"
-                    disabled={busyId === item.id}
-                    onClick={() => void remove(item)}
-                  >
-                    <Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
-                    Delete for good
-                  </button>
+                  <ConfirmButton
+                    label="Delete for good"
+                    icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
+                    title="Delete this memory for good?"
+                    description="Its text is blanked in the audit log and this cannot be undone."
+                    confirmLabel="Delete for good"
+                    onConfirm={() => void remove(item)}
+                  />
                 </div>
               </div>
             ))}

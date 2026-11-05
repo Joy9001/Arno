@@ -60,7 +60,7 @@ def _payload(row: dict[str, Any], next_run_at: Any = None) -> dict[str, Any]:
         ),
         "default_spend_limit_usd": str(DEFAULT_SPEND_LIMIT_USD),
         "last_run_at": row["last_run_at"].isoformat() if row["last_run_at"] else None,
-        "next_run_at": next_run_at.isoformat() if next_run_at else None,
+        "next_run_at": (next_run_at.isoformat() if next_run_at and row["active"] else None),
         "active": row["active"],
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
     }

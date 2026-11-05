@@ -1,11 +1,28 @@
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
-import { Skeleton } from "@radix-ui/themes";
-import { Copy, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { errorMessage } from "../api";
-import { createEnrollment, deletePasskey, ensureFreshPasskey, listPasskeys, renamePasskey } from "../auth";
+import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
+import { Copy, LogOut, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { api, errorMessage } from "../api";
+import {
+  createEnrollment,
+  deletePasskey,
+  ensureFreshPasskey,
+  listPasskeys,
+  logoutAll,
+  renamePasskey,
+} from "../auth";
 import { formatMoment } from "../format";
 import type { Enrollment, Passkey } from "../types";
+
+type CurrentSession = {
+  user: { id: string; display_name: string };
+  session: {
+    id: string;
+    expires_at: string;
+    reverified_at: string | null;
+    fresh: boolean;
+  };
+};
 
 function remainingLabel(expiresAt: string, now: number): { ms: number; label: string } {
   const ms = Math.max(0, new Date(expiresAt).getTime() - now);
@@ -22,6 +39,11 @@ export function PasskeysCard() {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [current, setCurrent] = useState<CurrentSession | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Passkey | null>(null);
+  const [confirmSignOutAll, setConfirmSignOutAll] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -34,6 +56,13 @@ export function PasskeysCard() {
           setError(errorMessage(caught));
           setPasskeys([]);
         }
+      });
+    api<CurrentSession>("/api/auth/session")
+      .then((session) => {
+        if (active) setCurrent(session);
+      })
+      .catch((caught: unknown) => {
+        if (active) setSessionError(errorMessage(caught));
       });
     return () => {
       active = false;
@@ -98,15 +127,24 @@ export function PasskeysCard() {
   }
 
   async function remove(passkey: Passkey) {
-    if (!window.confirm(`Delete "${passkey.name}"? This device will need another passkey to sign in.`)) {
-      return;
-    }
     try {
       await ensureFreshPasskey();
       await deletePasskey(passkey.id);
       await refresh();
     } catch (caught) {
       setError(errorMessage(caught));
+    }
+  }
+
+  async function signOutAll() {
+    setSigningOut(true);
+    setError(null);
+    try {
+      await logoutAll();
+      window.location.reload();
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setSigningOut(false);
     }
   }
 
@@ -121,6 +159,41 @@ export function PasskeysCard() {
         A passkey is the only way to sign in. Add one for each device you use; the last one
         can&apos;t be deleted.
       </p>
+
+      <div className="stg-session">
+        <div className="stg-subhead">
+          <h4>Current session</h4>
+          {current?.session.fresh && <span className="stg-hint">passkey check fresh</span>}
+        </div>
+        {current ? (
+          <p className="stg-list-meta">
+            Signed in as {current.user.display_name}. This session expires{" "}
+            {formatMoment(current.session.expires_at)}.{" "}
+            {current.session.fresh
+              ? "Sensitive actions won't ask for your passkey again for a few minutes."
+              : "Sensitive actions ask for your passkey."}
+          </p>
+        ) : sessionError ? (
+          <p className="error" role="alert">
+            {sessionError}
+          </p>
+        ) : (
+          <Skeleton>
+            <div style={{ height: 18, width: 260 }} />
+          </Skeleton>
+        )}
+        <div className="stg-actions">
+          <button
+            type="button"
+            className="ghost small"
+            disabled={signingOut}
+            onClick={() => setConfirmSignOutAll(true)}
+          >
+            <LogOut size={14} aria-hidden="true" />
+            {signingOut ? "Signing out…" : "Sign out all devices"}
+          </button>
+        </div>
+      </div>
 
       <div className="button-row">
         <button type="button" className="ghost" disabled={busy} onClick={() => void addDevice()}>
@@ -219,7 +292,7 @@ export function PasskeysCard() {
                       ? "The last passkey can't be deleted"
                       : "Delete this passkey"
                   }
-                  onClick={() => void remove(passkey)}
+                  onClick={() => setPendingDelete(passkey)}
                 >
                   <Trash2 size={14} aria-hidden="true" />
                   Delete
@@ -229,6 +302,53 @@ export function PasskeysCard() {
           );
         })}
       </div>
+
+      <AlertDialog.Root
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <AlertDialog.Content maxWidth="420px">
+          <AlertDialog.Title>Delete “{pendingDelete?.name}”?</AlertDialog.Title>
+          <AlertDialog.Description size="2">
+            That device will need another passkey to sign in. The last passkey can&apos;t be
+            deleted.
+          </AlertDialog.Description>
+          <div className="stg-confirm-actions">
+            <AlertDialog.Cancel>
+              <Button variant="soft" color="gray"><X size={14} aria-hidden="true" />Cancel</Button>
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              className="ghost small stg-danger"
+              onClick={() => {
+                const passkey = pendingDelete;
+                setPendingDelete(null);
+                if (passkey) void remove(passkey);
+              }}
+            >
+              <Button color="red"><Trash2 size={14} aria-hidden="true" />Delete passkey</Button>
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
+
+      <AlertDialog.Root open={confirmSignOutAll} onOpenChange={setConfirmSignOutAll}>
+        <AlertDialog.Content maxWidth="420px">
+          <AlertDialog.Title>Sign out every device?</AlertDialog.Title>
+          <AlertDialog.Description size="2">
+            Every session ends, including this one. You will need a passkey to sign in again.
+          </AlertDialog.Description>
+          <div className="stg-confirm-actions">
+            <AlertDialog.Cancel>
+              <Button variant="soft" color="gray"><X size={14} aria-hidden="true" />Cancel</Button>
+            </AlertDialog.Cancel>
+            <AlertDialog.Action className="ghost small stg-danger" onClick={() => void signOutAll()}>
+              <Button color="red"><LogOut size={14} aria-hidden="true" />Sign out all</Button>
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
     </div>
   );
 }

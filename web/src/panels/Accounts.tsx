@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
-import { formatDate, formatPaise } from "../format";
+import { useEffect, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import { AlertTriangle, FileSearch, X } from "lucide-react";
+import { api, errorMessage } from "../api";
+import { formatDate, formatMoment, formatPaise } from "../format";
 import type { Account, AccountSummary } from "../types";
 import { useApi } from "../useApi";
 import {
@@ -86,7 +88,142 @@ function cardDisagreement(account: Account): string | null {
     .join(" ");
 }
 
+type AccountDetail = Account & {
+  created_at?: string | null;
+  emi_schedule_id?: string | null;
+};
+
+function AccountDetailDialog({ account, onClose }: { account: Account; onClose: () => void }) {
+  const [detail, setDetail] = useState<AccountDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api<AccountDetail>(`/api/accounts/${account.id}`)
+      .then((value) => {
+        if (alive) setDetail(value);
+      })
+      .catch((caught: unknown) => {
+        if (alive) setError(errorMessage(caught));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [account.id]);
+
+  const row: AccountDetail = detail ?? account;
+  const isCard = row.kind === "card";
+  const isLoan = row.kind === "loan";
+  const statement = row.statement_balance_paise;
+
+  return (
+    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
+          <div className="queue-head">
+            <Dialog.Title>{account.name}</Dialog.Title>
+            <Dialog.Close asChild>
+              <button
+                type="button"
+                className="ghost small icon-only"
+                aria-label="Close details"
+                title="Close details"
+              >
+                <X size={15} strokeWidth={1.8} aria-hidden="true" />
+              </button>
+            </Dialog.Close>
+          </div>
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
+          {!detail && !error && <p className="muted fine">Opening the account row…</p>}
+          <dl className="detail-grid">
+            <dt>Type</dt>
+            <dd>{KIND_LABEL[row.kind]}</dd>
+            <dt>Institution</dt>
+            <dd>{row.institution ?? "not recorded"}</dd>
+            {row.last4 && (
+              <>
+                <dt>Number</dt>
+                <dd>ending {row.last4}</dd>
+              </>
+            )}
+            <dt>Status</dt>
+            <dd>
+              {row.active ? "Active" : "Archived"}
+              {row.liquid ? " · liquid" : ""}
+            </dd>
+            <dt>{isLoan ? "Outstanding principal" : "Ledger balance"}</dt>
+            <dd>
+              {isCard
+                ? cardPosition(row.balance_paise)
+                : isLoan
+                  ? formatPaise(row.loan_outstanding_paise ?? Math.max(-row.balance_paise, 0))
+                  : formatPaise(row.balance_paise)}
+            </dd>
+            <dt>Balance updated</dt>
+            <dd>{row.balance_as_of ? formatDate(row.balance_as_of) : "No ledger activity recorded"}</dd>
+            <dt>Statement balance</dt>
+            <dd>
+              {statement === null
+                ? "Not recorded"
+                : isCard
+                  ? cardPosition(statement)
+                  : formatPaise(statement)}
+            </dd>
+            <dt>Statement as of</dt>
+            <dd>
+              {row.statement_balance_as_of
+                ? `${formatDate(row.statement_balance_as_of)}${
+                    row.statement_age_days !== null ? ` · ${row.statement_age_days} days old` : ""
+                  }`
+                : "Not recorded"}
+            </dd>
+            {isCard && (
+              <>
+                <dt>Credit limit</dt>
+                <dd>{formatPaise(row.credit_limit_paise)}</dd>
+                <dt>Available credit</dt>
+                <dd>{formatPaise(row.available_credit_paise ?? null)}</dd>
+                <dt>Statement day</dt>
+                <dd>{row.statement_day ? `Day ${row.statement_day}` : "Not recorded"}</dd>
+                <dt>Next due</dt>
+                <dd>
+                  {row.due_day ? `${nextDueLabel(row.due_day)} · day ${row.due_day}` : "Not recorded"}
+                </dd>
+              </>
+            )}
+            {isLoan && (
+              <>
+                <dt>Interest rate</dt>
+                <dd>{row.rate_bps === null ? "Not recorded" : `${row.rate_bps / 100}% a year`}</dd>
+                <dt>Tenure</dt>
+                <dd>{row.tenure_months ? `${row.tenure_months} months` : "Not recorded"}</dd>
+              </>
+            )}
+            {detail?.created_at && (
+              <>
+                <dt>Opened</dt>
+                <dd>{formatMoment(detail.created_at)}</dd>
+              </>
+            )}
+            <dt>Account ID</dt>
+            <dd>{row.id}</dd>
+          </dl>
+          <div className="button-row">
+            <MoneyAsk prompt={`Tell me about ${account.name}.`} />
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function AccountRow({ account }: { account: Account }) {
+  const [open, setOpen] = useState(false);
   const meta = [account.institution, account.last4 ? `ending ${account.last4}` : null]
     .filter(Boolean)
     .join(" · ");
@@ -148,8 +285,18 @@ function AccountRow({ account }: { account: Account }) {
             )}
           </>
         )}
+        <button
+          type="button"
+          className="inline-link"
+          onClick={() => setOpen(true)}
+          aria-label={`Details for ${account.name}`}
+        >
+          <FileSearch size={13} strokeWidth={1.8} aria-hidden="true" />
+          Details
+        </button>
       </div>
       <MoneyAsk prompt={`Tell me about ${account.name}.`} />
+      {open && <AccountDetailDialog account={account} onClose={() => setOpen(false)} />}
     </article>
   );
 }

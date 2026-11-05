@@ -5,7 +5,16 @@ export type ChatMetadata = {
   flagged_at?: string | null;
 };
 
-export type ChatMessage = UIMessage<ChatMetadata>;
+/** Wire data parts. `card` stays open because the server emits many card kinds. */
+export type ChatDataParts = {
+  card: Record<string, unknown>;
+  "number-flags": { amounts: string[] };
+  "model-badge": { model: string };
+  "reply-model": { model: string; fallback: boolean };
+  ending: { note: string };
+};
+
+export type ChatMessage = UIMessage<ChatMetadata, ChatDataParts>;
 
 export type ThreadSummary = {
   id: string;

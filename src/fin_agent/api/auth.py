@@ -16,6 +16,7 @@ from fin_agent.auth.enrollment import enrollment_link
 from fin_agent.auth.sessions import (
     COOKIE_NAME,
     create_session,
+    is_fresh,
     mark_reverified,
     revoke_all_sessions,
     revoke_session,
@@ -240,7 +241,19 @@ def login_verify(
 
 @router.get("/session")
 def session(session: Session) -> dict[str, Any]:
-    return {"authenticated": True, "user": _user_payload(session)}
+    return {
+        "authenticated": True,
+        "user": _user_payload(session),
+        # Safe summary only: no cookie, token, or hash leaves the server.
+        "session": {
+            "id": session["session_id"],
+            "expires_at": session["expires_at"].isoformat(),
+            "reverified_at": (
+                session["reverified_at"].isoformat() if session["reverified_at"] else None
+            ),
+            "fresh": is_fresh(session),
+        },
+    }
 
 
 @router.post("/reverify/begin")

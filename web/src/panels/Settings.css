@@ -925,3 +925,45 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
     margin-left: 26px;
   }
 }
+
+/* Category/rule editing, session summary, and Radix confirmations ----------------------- */
+
+.stg-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.stg-session {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+}
+
+.stg-question-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.stg-question-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+
+.stg-table-region select {
+  max-width: 190px;
+}
+
+.stg-list-row.off .stg-question {
+  color: var(--ter);
+}
+
+.stg-danger {
+  color: var(--red);
+  border-color: rgba(255, 99, 99, 0.35);
+}
