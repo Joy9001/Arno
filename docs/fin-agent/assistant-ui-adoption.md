@@ -10,13 +10,15 @@ server calls, and finance-specific parts; it does not fork the primitives.
 
 | Area | Library component | App wrapper |
 |---|---|---|
-| Thread and viewport | `ThreadPrimitive.Root`, `Viewport`, `ViewportFooter` | `web/src/components/thread.aui.tsx` |
+| Thread and viewport | `ThreadPrimitive.Root`, `Viewport`, `ViewportFooter`, Radix `ScrollArea` with the shadcn `ScrollBar` | `web/src/components/thread.aui.tsx`, `web/src/components/ui/scroll-area.tsx` |
 | Messages | `MessagePrimitive`, `ActionBarPrimitive`, `BranchPickerPrimitive` | `thread.aui.tsx` |
-| Composer | `ComposerPrimitive.Root`, `Input`, `Send`, `Cancel`, `Dictate`, `StopDictation` | `thread.aui.tsx`, `web/src/chat/Chat.tsx` |
+| Composer | `ComposerPrimitive.Root`, `Input`, `Send`, `Cancel`, `Dictate`, `StopDictation`, `Quote`, `QuoteText`, `QuoteDismiss` | `thread.aui.tsx`, `web/src/chat/Chat.tsx` |
+| Suggestions | `AuiConfig({ suggestions: Suggestions([...]) })`, `ThreadPrimitive.Suggestions`, `SuggestionPrimitive` | `web/src/chat/Chat.tsx`, `web/src/chat/parts.tsx` |
+| Quote | `SelectionToolbarPrimitive`, `MessagePrimitive.Quote`, `useMessageQuote` | `web/src/components/assistant-ui/elements/quote.aui.tsx`, `thread.aui.tsx` |
 | Attachments | `ComposerAttachments`, `UserMessageAttachments` | `web/src/components/attachment.aui.tsx` |
 | History | `ThreadListPrimitive` through `useRemoteThreadListRuntime` | `web/src/components/thread-list.aui.tsx` |
-| Markdown | `MarkdownTextPrimitive` from `@assistant-ui/react-markdown` with `remark-gfm` | `web/src/components/markdown-text.tsx` |
-| Reasoning and tools | `Reasoning`, `ToolFallback`, tool groups | `reasoning.aui.tsx`, `tool-fallback.aui.tsx`, `tool-group.aui.tsx` |
+| Markdown | `StreamdownTextPrimitive` from `@assistant-ui/react-streamdown` with `@streamdown/code` | `web/src/components/markdown-text.tsx` |
+| Reasoning and tools | `ReasoningRoot`, `ReasoningTrigger`, `ReasoningContent`, `ReasoningText`, `ToolFallback` in one grouped technical trace | `reasoning.aui.tsx`, `tool-fallback.aui.tsx` |
 | Data parts | `useAssistantDataUI` registrations for card, chart, statement, photo, model, flags, ending | `web/src/chat/parts.tsx` |
 | Approval | App `ApprovalCard` rendered from the tool call's `approval` state | `web/src/components/approval-card.tsx`, `parts.tsx` |
 | Charts | `recharts` inside the app card | `web/src/chat/cards.tsx` |
@@ -139,21 +141,62 @@ another import. The existing `#home/<thread>/<message>` route is unchanged.
 
 ## Reasoning presentation
 
-The parent review also corrected reasoning/tool presentation without changing the data contract:
-reasoning is ghost/collapsed by default even while streaming, manual expansion persists, and the
-tool trigger reads `1 step` / `N steps` with an icon. This is independent of the statement flow.
+Adjacent reasoning and routine tool calls render as one ghost, collapsed technical trace built from
+the library's reasoning primitives. The trace stays collapsed while streaming and does not open
+itself; the reader's manual expansion persists. Answer text, financial cards, and an unanswered
+approval render outside the trace, so a pending approval is never hidden until the trace is opened.
+Inside an expanded trace, each tool row still opens to its full input and output, including the
+query script.
+
+## Markdown presentation
+
+Assistant text uses one `StreamdownTextPrimitive` renderer with the `@streamdown/code` plugin for
+Shiki highlighting and the built-in copy control. GFM tables, task lists, blockquotes, and headings
+keep the existing chat typography. Markdown links remain plain text, Markdown images are disabled,
+raw HTML is not rendered, and non-web protocols are blocked by the documented `security` config.
+
+## Suggestions
+
+The welcome starters are one static `Suggestions([...])` config on `AuiConfig`, rendered through
+`ThreadPrimitive.Suggestions` and `SuggestionPrimitive`. The three finance prompts and their icons
+are defined once in `web/src/chat/parts.tsx`; clicking a starter fills the composer for review
+rather than sending. No component keeps a second prompt list or click handler.
+
+## Scroll surface
+
+The thread has one Radix ScrollArea viewport wrapping `ThreadPrimitive.Viewport`, with the shadcn
+`ScrollBar` rendered once on `ThreadPrimitive.Root`. The Radix content element is an explicit flex
+column so the viewport grows with long conversations, the initial jump to the latest message still
+works, manual reading is preserved, and the composer stays docked. There is no nested message
+scrollbar and no virtualization.
+
+## Quote flow
+
+`SelectionToolbar` is mounted once inside `ThreadPrimitive.Root`; `ComposerQuotePreview` sits inside
+the composer shell; `MessagePrimitive.Quote` renders the saved quote in the user message. Only
+assistant text parts carry `data-aui-quote-selectable="true"`; message roots and financial cards are
+excluded, so a selection cannot quote tool JSON, scripts, or card internals. One quote is active at
+a time and it is thread-scoped through the composer runtime.
+
+On send, the composer runtime writes the quote to `message.metadata.custom.quote` as
+`{ text, messageId }`. `ChatTransport` forwards only the new user message, so the outgoing
+`POST /api/chat` body carries the same object at `messages[0].metadata.custom.quote`. The frontend
+does not prepend quoted text to the outgoing parts; the backend owns validation, persistence, and
+model-only injection.
 
 ## Dependencies and license generation
 
-New runtime packages are `@assistant-ui/react` 0.15.32, `@assistant-ui/ai-sdk` 0.0.16,
-`@assistant-ui/react-markdown` 0.14.24, and the existing `assistant-stream`, `ai` 7.0.159, and
-`@ai-sdk/react` 4.0.163. The four assistant-ui packages and `assistant-stream` are MIT. The AI SDK
-packages are Apache-2.0.
+The chat UI packages are `@assistant-ui/react` 0.15.32, `@assistant-ui/ai-sdk` 0.0.16,
+`@assistant-ui/react-streamdown` 0.3.21, `streamdown` 2.7.1, and `@streamdown/code` 1.1.1. The
+existing `assistant-stream`, `ai` 7.0.159, and `@ai-sdk/react` 4.0.163 are unchanged.
+`@assistant-ui/react-markdown` and `remark-gfm` are no longer direct dependencies; they remain
+transitive through the streamdown adapter. The assistant-ui packages, `assistant-stream`, and
+`@streamdown/code` are MIT; `streamdown` is Apache-2.0 and Shiki is MIT.
 
 `pnpm --dir web build` runs `node scripts/collect-licenses.mjs` before Vite. The script reads
 `pnpm licenses list --prod --json` and writes `web/public/THIRD_PARTY_NOTICES.txt`; the bundle then
-ships that file. The production graph currently groups into 10 Apache-2.0, 273 MIT, 18 ISC, 4 BSD-3-Clause, 2 MPL-2.0,
-1 BSD-2-Clause, 1 0BSD, 1 AFL-2.1-or-BSD-3-Clause, and 1 mixed MIT/ISC/BSD package.
+ships that file. The parent production build regenerated the notices after adding Streamdown;
+the generated file includes the adapter and code-plugin packages.
 
 ## Approval continuation
 
@@ -180,6 +223,16 @@ production.
 | Focused backend API tests | `pytest tests/test_chat_photo_attachment.py tests/test_chat_statement_attachment.py tests/test_capture.py tests/test_agent_turns.py tests/test_agent_history.py tests/test_import_api.py` | 37 passed on one disposable `preparation_review_<id>_test` database inside a temporary Postgres 18.6 container |
 | Preparation race regression | The new concurrent test with `TurnManager.prepare` stubbed out | Failed on the second request returning 200 instead of 409; passes with the guard |
 | Unified attachment browser probe | `unified-attachments-probe.mjs` | One control, both file families, mixed/image-only sends, reload, retry, errors, no overflow at 1366/390/320 |
+| UI craft browser probe | `ui-craft-probe.mjs` against the fixture | 28/28: suggestions fill only, Streamdown table/code/copy, plain links and no images/raw HTML, quote select/preview/dismiss/send metadata/reload, card internals not quotable, one collapsed trace, approval outside, scroll/manual/jump, one attach control, no overflow at 1366/390/320 |
+
+The parent production build after the Streamdown, scrollbar, suggestion, quote, and runtime
+changes passed, including TypeScript and license generation. The production bundle also passed
+the 28-check UI craft probe, plus the partial-stream/long-code probe, against isolated synthetic
+API data. The parent inspected desktop and phone screenshots. The Quote selection toolbar uses one graphite frame with a quiet hover, a keyboard-only focus
+ring, and a 44px touch target on coarse pointers. Its portal is marked `aui-portal` so app-global
+button styling cannot leak into it. Parent review inspected its desktop and phone states and
+reran all **25/25 toolbar assertions against the rebuilt production bundle**. Full web lint and
+the production build (including TypeScript and license generation) passed after that refinement.
 
 The build prints its existing chunk-size warning for the main JavaScript bundle (over 500 kB). That
 warning predates this migration and does not fail the build.
@@ -243,3 +296,17 @@ images remain disabled.
   the same disposable container; it did not rerun the full suite without the guard.
 - The 320 px and 390 px captures use emulated viewports; real mobile browser chrome and safe-area
   insets were not part of the run.
+- The UI craft probe used the synthetic fixture and its in-memory threads. It did not exercise a
+  real model stream, real quote validation, or the backend's model-only quote injection.
+- Streamdown math and Mermaid plugins are not installed because this task did not request them; the
+  code plugin is the only Streamdown plugin. There is no custom Markdown parser.
+- The custom scrollbar uses Radix's default hover-visible scrollbar; it is not a permanently visible
+  overlay.
+
+The runtime storage and server dictation review is recorded in
+[assistant-ui-runtime-review.md](assistant-ui-runtime-review.md). Parent verification passed
+46 reconnect/Stop/navigation/dictation checks plus two recorder-construction failure checks.
+The quote validation and model-only injection contract is recorded in
+[assistant-ui-quote-contract.md](assistant-ui-quote-contract.md); backend tests use disposable
+Postgres databases. Frontend fixture checks and backend tests are separate evidence, not a live
+model-provider end-to-end run.

@@ -219,8 +219,20 @@ function partsFromChunks(chunks) {
   const parts = [];
   let text = "";
   const tools = new Map();
+  const reasonings = new Map();
   for (const chunk of chunks) {
     if (chunk.type === "text-delta") text += chunk.delta;
+    if (chunk.type === "reasoning-start") {
+      reasonings.set(chunk.id, { type: "reasoning", text: "" });
+    }
+    if (chunk.type === "reasoning-delta") {
+      const part = reasonings.get(chunk.id);
+      if (part) part.text += chunk.delta;
+    }
+    if (chunk.type === "reasoning-end") {
+      const part = reasonings.get(chunk.id);
+      if (part) parts.push(part);
+    }
     if (chunk.type === "tool-input-available") {
       const part = {
         type: `tool-${chunk.toolName}`,
@@ -656,6 +668,100 @@ function chunksForScenario(thread, scenario, text, messageId, approved = true) {
     ];
   }
 
+  if (scenario === "trace" || scenario === "trace-approval") {
+    const pending = scenario === "trace-approval";
+    return [
+      start,
+      { type: "reasoning-start", id: "rsn_trace" },
+      {
+        type: "reasoning-delta",
+        id: "rsn_trace",
+        delta: "Checking the ledger and the pinned November snapshot before answering.",
+      },
+      { type: "reasoning-end", id: "rsn_trace" },
+      {
+        type: "tool-input-available",
+        toolCallId: "call_trace",
+        toolName: "query_ledger",
+        input: {
+          script:
+            "SELECT category, SUM(amount_paise) FROM movements GROUP BY category;",
+        },
+      },
+      {
+        type: "tool-output-available",
+        toolCallId: "call_trace",
+        output: { rows: 31, total_paise: 4218000 },
+      },
+      ...(pending
+        ? [
+            {
+              type: "tool-input-available",
+              toolCallId: "call_trace_transfer",
+              toolName: "transfer_money",
+              input: { to_payee: "Asha", amount_rupees: 12500 },
+            },
+            {
+              type: "tool-approval-request",
+              toolCallId: "call_trace_transfer",
+              approvalId: "approval_trace_transfer",
+              approvalDescriptor: { prompt: "Transfer ₹12,500 to Asha?" },
+            },
+          ]
+        : []),
+      { type: "text-start", id: "txt_trace" },
+      {
+        type: "text-delta",
+        id: "txt_trace",
+        delta:
+          "You spent ₹42,180 across 31 transactions. The biggest change is dining, down ₹1,690.",
+      },
+      { type: "text-end", id: "txt_trace" },
+      { type: "finish", finishReason: pending ? "tool-calls" : "stop" },
+    ];
+  }
+
+  if (scenario === "markdown") {
+    const body = `## Streaming markdown
+
+The table and the fence below arrive in pieces while the answer streams.
+
+| Item | Amount | Note |
+| --- | ---: | --- |
+| Rent | ₹18,000 | fixed |
+| Dining | ₹8,420 | down from last month |
+| Transport | ₹4,260 | auto and cabs |
+
+\`\`\`sql
+SELECT category, SUM(amount_paise) AS total
+FROM movements
+WHERE occurred_on >= '2026-11-01'
+GROUP BY category
+ORDER BY total DESC;
+\`\`\`
+
+\`\`\`sql
+SELECT category, SUM(amount_paise) AS total, 'reconciliation-source: hdfc-credit-card-november-2026-statement-row-0042' AS source_label, COUNT(*) AS movement_count FROM movements WHERE occurred_on >= '2026-11-01' AND occurred_on <= '2026-11-30' GROUP BY category, source_label ORDER BY total DESC;
+\`\`\`
+
+Inline \`amount_paise\` stays readable. A [link](https://example.com) is text only, and ![remote](https://example.com/pixel.png) never loads.
+
+<script>window.__fixtureXss = true</script>
+<img src="https://example.com/pixel.png" alt="remote">`;
+    const deltas = body.match(/[\s\S]{1,28}/g) ?? [body];
+    return [
+      start,
+      { type: "text-start", id: "txt_markdown" },
+      ...deltas.map((delta) => ({
+        type: "text-delta",
+        id: "txt_markdown",
+        delta,
+      })),
+      { type: "text-end", id: "txt_markdown" },
+      { type: "finish", finishReason: "stop" },
+    ];
+  }
+
   if (scenario === "busy" || scenario === "reload") {
     const word = scenario === "busy" ? "Working through your ledger now." : "Replaying the full answer after reload.";
     const deltas = [];
@@ -741,6 +847,7 @@ async function handleChat(req, res) {
           requestMessage?.role === "user" && Array.isArray(requestMessage.parts)
             ? requestMessage.parts
             : [{ type: "text", text: userText }],
+        ...(requestMessage?.metadata ? { metadata: requestMessage.metadata } : {}),
       });
     }
     if (!isPhotoCreated || thread.title === "Photo" || thread.title === "New chat") {
@@ -776,8 +883,26 @@ async function handleChat(req, res) {
     json(res, 500, { title: "Synthetic failure", detail: "The fixture asked the client to retry." });
     return;
   } else {
-    const delays = { busy: 650, reload: 450, approval: 60, auto: 60 };
-    const scenarioKey = ["approval", "auto", "busy", "reload"].includes(scenario) ? scenario : "";
+    const delays = {
+      busy: 650,
+      reload: 450,
+      approval: 60,
+      auto: 60,
+      trace: 80,
+      "trace-approval": 80,
+      markdown: 90,
+    };
+    const scenarioKey = [
+      "approval",
+      "auto",
+      "busy",
+      "reload",
+      "trace",
+      "trace-approval",
+      "markdown",
+    ].includes(scenario)
+      ? scenario
+      : "";
     chunks = chunksForScenario(thread, scenarioKey, responseText, messageId);
     if (statements.length || photos.length) {
       const importCards = statements.map((ref) => {

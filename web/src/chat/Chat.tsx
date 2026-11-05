@@ -10,15 +10,20 @@ import {
 import * as Popover from "@radix-ui/react-popover";
 import {
   AssistantRuntimeProvider,
+  AuiConfig,
   ComposerPrimitive,
   CompositeAttachmentAdapter,
+  Suggestions,
   useAui,
   useAuiState,
   useRemoteThreadListRuntime,
   type AssistantClient,
 } from "@assistant-ui/react";
 import { useChatRuntime } from "@assistant-ui/ai-sdk";
-import { lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
+import {
+  APICallError,
+  lastAssistantMessageIsCompleteWithApprovalResponses,
+} from "ai";
 import { Flag, History, Plus, Square, X } from "lucide-react";
 import { api, errorMessage } from "../api";
 import { Typing } from "../Loading";
@@ -38,8 +43,8 @@ import {
   ChatComposerStatus,
   ChatDataRenderers,
   ChatToolFallback,
-  ChatToolGroup,
   ChatWelcome,
+  FIN_SUGGESTIONS,
 } from "./parts";
 import { ChatSurfaceContext, type ChatSurfaceState } from "./surface";
 import {
@@ -53,12 +58,17 @@ import {
 } from "./runtime";
 import { photoAttachmentAdapter } from "./photo-attachment";
 import { statementAttachmentAdapter } from "./statement-attachment";
+import { StreamCheckpoints, createThreadStreamStorage } from "./streams";
 import type { ThreadList } from "./types";
 
 const attachmentAdapter = new CompositeAttachmentAdapter([
   statementAttachmentAdapter,
   photoAttachmentAdapter,
 ]);
+
+const AUI_CONFIG = AuiConfig({
+  suggestions: Suggestions(FIN_SUGGESTIONS),
+});
 
 const THREAD_STORAGE = "fin-agent-thread";
 
@@ -179,7 +189,6 @@ function StopRunButton() {
 const THREAD_COMPONENTS: ThreadComponents = {
   Welcome: ChatWelcome,
   ToolFallback: ChatToolFallback,
-  ToolGroup: ChatToolGroup,
   ComposerExtra: ComposerAddAttachment,
   ComposerCancel: StopRunButton,
   ComposerStatus: ChatComposerStatus,
@@ -400,20 +409,36 @@ export function Assistant(props: AssistantProps) {
 
 function useFinAgentThreadRuntime({
   voice,
+  checkpoints,
   setCapture,
-  setSurfaceError,
   onCaptureRetry,
   onFinish,
 }: {
   voice: VoiceAttachments;
+  checkpoints: StreamCheckpoints;
   setCapture: (threadId: string, value: ChatSurfaceState["capture"]) => void;
-  setSurfaceError: (threadId: string, message: string | null) => void;
   onCaptureRetry: ReportCapture;
   onFinish: () => void;
 }) {
   const aui = useAui();
+  const threadId = useAuiState((state) => state.threadListItem.id);
   const history = useMemo(() => createHistoryAdapter(aui), [aui]);
-  const transport = useMemo(() => new ChatTransport({ voice }), [voice]);
+  // One storage per thread runtime; its key follows the thread's identity as
+  // the local id is replaced by the server id.
+  const storage = useMemo(
+    () => createThreadStreamStorage(() => aui.threadListItem.getState()),
+    [aui],
+  );
+  const transport = useMemo(
+    () => new ChatTransport({ voice, storage }),
+    [storage, voice],
+  );
+
+  useEffect(() => {
+    if (!threadId) return;
+    checkpoints.set(threadId, storage);
+    return () => checkpoints.release(threadId, storage);
+  }, [checkpoints, storage, threadId]);
 
   const resolveThreadId = useCallback(async () => {
     const item = aui.threadListItem;
@@ -441,14 +466,19 @@ function useFinAgentThreadRuntime({
     adapters: { history, dictation, attachments: attachmentAdapter },
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
     onFinish,
-    onResumeError: () => {
-      const threadId = liveThreadId(aui);
-      if (threadId) {
-        setSurfaceError(
-          threadId,
-          "The running answer could not be reconnected. Reopen this conversation to try again.",
-        );
+    onResumeError: (error) => {
+      if (!threadId) return;
+      // 204/404 means the replay is gone. A non-retryable failure cannot replay
+      // either; clearing both stops a stale Resume from being offered forever.
+      if (
+        APICallError.isInstance(error) &&
+        (error.statusCode === 204 || error.statusCode === 404)
+      ) {
+        storage.clear();
+        return;
       }
+      if (APICallError.isInstance(error) && !error.isRetryable) storage.clear();
+      // The SDK error and thread.canResume drive the single recovery message.
     },
   });
 }
@@ -474,6 +504,7 @@ function AssistantChat({
 }: AssistantChatProps) {
   const queryRef = useRef("");
   const voice = useMemo(() => new VoiceAttachments(), []);
+  const checkpoints = useMemo(() => new StreamCheckpoints(), []);
   const changedRef = useRef<() => void>(() => {});
   const captureRetryRef = useRef<ReportCapture | null>(null);
   const [captures, setCaptures] = useState<
@@ -520,8 +551,8 @@ function AssistantChat({
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useFinAgentThreadRuntime({
       voice,
+      checkpoints,
       setCapture,
-      setSurfaceError,
       onCaptureRetry,
       onFinish: () => changedRef.current(),
     });
@@ -538,11 +569,12 @@ function AssistantChat({
   });
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider runtime={runtime} config={AUI_CONFIG}>
       <ChatDataRenderers />
       <ChatShell
         activeId={activeId}
         voice={voice}
+        checkpoints={checkpoints}
         queryRef={queryRef}
         changedRef={changedRef}
         setCapture={setCapture}
@@ -570,6 +602,7 @@ function AssistantChat({
 type ChatShellProps = {
   activeId: string | undefined;
   voice: VoiceAttachments;
+  checkpoints: StreamCheckpoints;
   queryRef: { current: string };
   changedRef: { current: () => void };
   setCapture: (threadId: string, value: ChatSurfaceState["capture"]) => void;
@@ -591,6 +624,7 @@ type ChatShellProps = {
 function ChatShell({
   activeId,
   voice,
+  checkpoints,
   queryRef,
   changedRef,
   setCapture,
@@ -626,7 +660,6 @@ function ChatShell({
   const focusedToken = useRef<number | null>(null);
   const mounted = useRef(false);
   const focusMounted = useRef(false);
-  const busy = useAuiState((state) => state.thread.isRunning);
   const capture = threadId ? (captures[threadId] ?? null) : null;
   const surfaceError = threadId ? (surfaceErrors[threadId] ?? null) : null;
 
@@ -738,7 +771,7 @@ function ChatShell({
 
   const uploadPhoto = useCallback(
     async (file: File, originId: string) => {
-      if (busy && liveThreadId(aui) === originId) {
+      if (running && liveThreadId(aui) === originId) {
         pendingPhoto.current.set(originId, file);
         return;
       }
@@ -763,7 +796,7 @@ function ChatShell({
         setCapture(originId, { kind: "error", message });
       }
     },
-    [appendCard, aui, busy, setCapture, setSurfaceError],
+    [appendCard, aui, running, setCapture, setSurfaceError],
   );
 
   const uploadPhotoRef = useRef(uploadPhoto);
@@ -772,12 +805,12 @@ function ChatShell({
   }, [uploadPhoto]);
 
   useEffect(() => {
-    if (busy || !threadId) return;
+    if (running || !threadId) return;
     const queued = pendingPhoto.current.get(threadId);
     if (!queued) return;
     pendingPhoto.current.delete(threadId);
     void uploadPhoto(queued, threadId);
-  }, [busy, threadId, uploadPhoto]);
+  }, [running, threadId, uploadPhoto]);
 
   useEffect(() => {
     if (!threadId || sharedFor.current === threadId) return;
@@ -793,7 +826,7 @@ function ChatShell({
 
   const retryCapture = useCallback(
     async (kind: string, attachmentId: string, messageId: string) => {
-      if (busy) return;
+      if (running) return;
       const originId = liveThreadId(aui);
       if (!originId) return;
       setSurfaceError(originId, null);
@@ -845,14 +878,14 @@ function ChatShell({
         setCapture(originId, { kind: "error", message });
       }
     },
-    [appendCard, aui, busy, setCapture, setSurfaceError, voice],
+    [appendCard, aui, running, setCapture, setSurfaceError, voice],
   );
 
   const onStop = useCallback(
     async (originId: string) => {
       setSurfaceError(originId, null);
       try {
-        await stopChatRun(originId);
+        await stopChatRun(originId, checkpoints);
       } catch {
         setSurfaceError(
           originId,
@@ -860,7 +893,7 @@ function ChatShell({
         );
       }
     },
-    [setSurfaceError],
+    [checkpoints, setSurfaceError],
   );
 
   const surface = useMemo<ChatSurfaceState>(

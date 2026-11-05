@@ -11,78 +11,7 @@ import type {
 } from "@assistant-ui/react";
 import type { ChatMessage, ThreadBody, ThreadList } from "./types";
 import { ApiError, api } from "../api";
-
-/**
- * The pending stream id lives under the thread's own key. The server's replay
- * endpoint is keyed by thread id, so a saved id *is* the thread's remote id.
- * Two aliases are written when initialize resolves a different remote id: the
- * local chat id and the remote id. `clear` removes both, so one conversation's
- * run can never resume inside another.
- */
-const STREAM_KEY = "fin-agent-stream:";
-
-function streamKey(threadId: string): string {
-  return `${STREAM_KEY}${threadId}`;
-}
-
-function readStreamId(threadId: string | undefined): string | null {
-  if (!threadId) return null;
-  try {
-    return sessionStorage.getItem(streamKey(threadId));
-  } catch {
-    return null;
-  }
-}
-
-const streamListeners = new Set<() => void>();
-
-function notifyStreamListeners() {
-  for (const listener of streamListeners) {
-    try {
-      listener();
-    } catch {
-      // A listener must not break the stream that is finishing.
-    }
-  }
-}
-
-/** Per-thread session storage for a full-replay reconnect endpoint. */
-export const runStreamStorage: ResumableClientStorage = {
-  getStreamId(threadId) {
-    return readStreamId(threadId);
-  },
-  setStreamId(id, threadId) {
-    if (!threadId) return;
-    try {
-      sessionStorage.setItem(streamKey(threadId), id);
-    } catch {
-      return;
-    }
-    notifyStreamListeners();
-  },
-  clear(threadId) {
-    if (!threadId) return;
-    const value = readStreamId(threadId);
-    try {
-      sessionStorage.removeItem(streamKey(threadId));
-      if (value) {
-        for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
-          const key = sessionStorage.key(index);
-          if (!key?.startsWith(STREAM_KEY)) continue;
-          if (key === streamKey(threadId)) continue;
-          if (sessionStorage.getItem(key) === value) sessionStorage.removeItem(key);
-        }
-      }
-    } catch {
-      // Storage can be unavailable in private mode; the run still works.
-    }
-    notifyStreamListeners();
-  },
-  subscribe(listener) {
-    streamListeners.add(listener);
-    return () => streamListeners.delete(listener);
-  },
-};
+import type { StreamCheckpoints } from "./streams";
 
 /** Voice ids belong to the thread that recorded them, never to the next send. */
 export class VoiceAttachments {
@@ -105,6 +34,7 @@ type TranscribeResult =
 
 export type ChatTransportConfig = {
   voice: VoiceAttachments;
+  storage: ResumableClientStorage;
 };
 
 /** The data refs stay in the UI; the model needs a prompt when the turn is only files. */
@@ -131,19 +61,16 @@ function attachmentPrompt(messages: ChatMessage[]): ChatMessage[] {
  * the server keeps a detached run so reopening the thread can replay it.
  */
 export class ChatTransport extends AssistantChatTransport<ChatMessage> {
-  private chatId: string | undefined;
-
   constructor(private readonly config: ChatTransportConfig) {
     super({
       api: "/api/chat",
       resumable: {
-        storage: runStreamStorage,
+        storage: config.storage,
         resumeApi: (streamId) =>
           `/api/chat/${encodeURIComponent(streamId)}/stream`,
       },
       prepareSendMessagesRequest: ({ id, messages, trigger, messageId }) => {
-        const chatId = this.chatId ?? id;
-        const voiceAttachment = config.voice.take(chatId);
+        const voiceAttachment = config.voice.take(id);
         return {
           body: {
             id,
@@ -161,17 +88,8 @@ export class ChatTransport extends AssistantChatTransport<ChatMessage> {
   override readonly resumeStreamIsReplay = true;
 
   override __internal_clone(): ChatTransport {
+    // The clone serves the same thread runtime, so it keeps the same storage.
     return new ChatTransport(this.config);
-  }
-
-  override sendMessages(
-    options: Parameters<AssistantChatTransport<ChatMessage>["sendMessages"]>[0],
-  ) {
-    this.chatId = options.chatId;
-    // The server replays a running turn from the same URL, so the thread id
-    // doubles as the pending stream id. A finished stream clears it below.
-    runStreamStorage.setStreamId(options.chatId, options.chatId);
-    return super.sendMessages(options);
   }
 }
 
@@ -180,8 +98,12 @@ export class ChatTransport extends AssistantChatTransport<ChatMessage> {
  * The local stream is already cancelled by the library's ComposerPrimitive;
  * this only asks the detached server run to end and reports when it could not.
  */
-export async function stopChatRun(threadId: string): Promise<void> {
-  runStreamStorage.clear(threadId);
+export async function stopChatRun(
+  threadId: string,
+  checkpoints: StreamCheckpoints,
+): Promise<void> {
+  // Stop ends the server run too, so the checkpoint must not offer a resume.
+  checkpoints.clear(threadId);
   await api<{ stopped: boolean; thread_id: string }>(
     `/api/chat/${encodeURIComponent(threadId)}/stop`,
     { method: "POST" },
@@ -238,6 +160,8 @@ type AudioCapture = {
   recorder: MediaRecorder | null;
   stream: MediaStream | null;
   cancelled: boolean;
+  stopRequested: boolean;
+  abort: AbortController;
 };
 
 const activeDictationCancels = new Set<() => void>();
@@ -255,6 +179,22 @@ export function cancelActiveDictation() {
       // One broken session must not keep the others recording.
     }
   }
+}
+
+function stopTracks(stream: MediaStream | null) {
+  stream?.getTracks().forEach((track) => track.stop());
+}
+
+function microphoneError(error: unknown): string {
+  if (!(error instanceof Error)) return "Microphone access was refused.";
+  if (error.name === "NotAllowedError" || error.name === "SecurityError") {
+    return "Microphone access is blocked. Allow the microphone in your browser and try again.";
+  }
+  if (error.name === "NotFoundError" || error.name === "OverconstrainedError") {
+    return "No microphone was found.";
+  }
+  if (error.name === "NotReadableError") return "The microphone is already in use.";
+  return "Microphone access was refused.";
 }
 
 /** The app's existing server transcription, exposed through the dictation primitive. */
@@ -285,23 +225,38 @@ export class ServerDictationAdapter implements DictationAdapter {
     const speechEnd = new Set<(result: { transcript: string; isFinal?: boolean }) => void>();
     const speech = new Set<(result: { transcript: string; isFinal?: boolean }) => void>();
 
-    const capture: AudioCapture & { stopRequested: boolean } = {
+    const capture: AudioCapture = {
       recorder: null,
       stream: null,
       cancelled: false,
       stopRequested: false,
+      abort: new AbortController(),
     };
     const chunks: BlobPart[] = [];
     // The core cleans its listeners when `stop()` settles. Settling only after
     // the transcript lands is what lets the text reach the composer.
     let cancelSession: () => void = () => {};
     let settleStop: () => void = () => {};
+    let settled = false;
     const stopped = new Promise<void>((resolve) => {
       settleStop = () => {
         activeDictationCancels.delete(cancelSession);
         resolve();
       };
     });
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      settleStop();
+    };
+
+    let sessionThreadId: string | null = null;
+
+    const fail = (threadId: string, message: string) => {
+      session.status = { type: "ended", reason: "error" };
+      if (threadId) this.onError(threadId, message);
+      settle();
+    };
 
     const session: ReturnType<DictationAdapter["listen"]> = {
       status: { type: "starting" },
@@ -314,14 +269,14 @@ export class ServerDictationAdapter implements DictationAdapter {
       },
       cancel: () => {
         capture.cancelled = true;
+        capture.abort.abort();
         if (capture.recorder && capture.recorder.state !== "inactive") {
           capture.recorder.stop();
         }
-        capture.stream?.getTracks().forEach((track) => track.stop());
+        stopTracks(capture.stream);
         session.status = { type: "ended", reason: "cancelled" };
-        const threadId = sessionThreadId;
-        if (threadId) this.onStatus(threadId, null);
-        settleStop();
+        if (sessionThreadId) this.onStatus(sessionThreadId, null);
+        settle();
       },
       onSpeechStart: (callback) => {
         speechStart.add(callback);
@@ -340,120 +295,157 @@ export class ServerDictationAdapter implements DictationAdapter {
     cancelSession = () => session.cancel();
     activeDictationCancels.add(cancelSession);
 
-    let sessionThreadId: string | null = null;
-
     void (async () => {
       try {
         sessionThreadId = await this.resolveThreadId();
-        if (capture.cancelled) {
-          settleStop();
-          return;
-        }
       } catch {
-        capture.cancelled = true;
-        session.status = { type: "ended", reason: "error" };
-        this.onError("", "Microphone access was refused.");
-        settleStop();
+        fail("", "Could not prepare this conversation for voice input.");
+        return;
+      }
+      if (capture.cancelled) {
+        settle();
+        return;
+      }
+      const threadId = sessionThreadId;
+
+      // An insecure context or an old browser has no recorder to fall back to;
+      // saying so is more useful than reporting a permission refusal.
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        fail(threadId, "Voice input is not supported in this browser.");
         return;
       }
 
-      const threadId = sessionThreadId;
       try {
         capture.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (error) {
         if (capture.cancelled) {
-          capture.stream.getTracks().forEach((track) => track.stop());
-          settleStop();
+          settle();
           return;
         }
-        const preferred = [
-          "audio/webm;codecs=opus",
-          "audio/webm",
-          "audio/ogg;codecs=opus",
-          "audio/mp4",
-        ].find((type) => MediaRecorder.isTypeSupported(type));
-        capture.recorder = new MediaRecorder(
+        fail(threadId, microphoneError(error));
+        return;
+      }
+      if (capture.cancelled) {
+        stopTracks(capture.stream);
+        settle();
+        return;
+      }
+      // Stop before the microphone was ready ends the session without a
+      // transcript instead of recording a fraction of a second.
+      if (capture.stopRequested) {
+        stopTracks(capture.stream);
+        session.status = { type: "ended", reason: "stopped" };
+        this.onStatus(threadId, null);
+        settle();
+        return;
+      }
+
+      const preferred = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/mp4",
+      ].find((type) => MediaRecorder.isTypeSupported(type));
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(
           capture.stream,
           preferred ? { mimeType: preferred } : undefined,
         );
-        capture.recorder.ondataavailable = (event) => {
-          if (event.data.size) chunks.push(event.data);
-        };
-        capture.recorder.onstart = () => {
-          session.status = { type: "running" };
-          this.onStatus(threadId, {
-            kind: "recording",
-            message: "Recording… tap stop to transcribe.",
-          });
-          for (const callback of speechStart) callback();
-        };
-        capture.recorder.onstop = async () => {
-          capture.stream?.getTracks().forEach((track) => track.stop());
-          // Cancelled before or while the media was arriving: no transcript,
-          // no attachment, no late callback.
-          if (capture.cancelled) {
-            settleStop();
-            return;
-          }
-          const type = capture.recorder?.mimeType || preferred || "audio/webm";
-          const blob = new Blob(chunks, { type });
-          chunks.length = 0;
-          if (!blob.size) {
-            session.status = { type: "ended", reason: "error" };
-            this.onError(threadId, "Nothing was recorded.");
-            settleStop();
-            return;
-          }
-          this.onStatus(threadId, { kind: "transcribing", message: "Transcribing…" });
-          const extension = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "m4a" : "webm";
-          const form = new FormData();
-          form.append("file", blob, `voice.${extension}`);
-          form.append("thread_id", threadId);
-          try {
-            const result = await api<TranscribeResult>("/api/transcribe", {
-              method: "POST",
-              body: form,
-            });
-            // Stop was pressed while the server was transcribing: the result
-            // belongs to no message and must not be attached to the next one.
-            if (capture.cancelled) {
-              settleStop();
-              return;
-            }
-            if (result.status !== "transcribed") {
-              this.onRetryCard(threadId, result.attachment_id, result.card);
-              this.onError(threadId, result.note);
-              for (const callback of speechEnd) callback({ transcript: "" });
-              session.status = { type: "ended", reason: "error" };
-              settleStop();
-              return;
-            }
-            this.voice.set(threadId, result.attachment_id);
-            const answer = { transcript: result.transcript, isFinal: true };
-            for (const callback of speech) callback(answer);
-            for (const callback of speechEnd) callback(answer);
+      } catch {
+        stopTracks(capture.stream);
+        fail(threadId, "Recording could not start.");
+        return;
+      }
+      capture.recorder = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) chunks.push(event.data);
+      };
+      recorder.onstart = () => {
+        session.status = { type: "running" };
+        this.onStatus(threadId, {
+          kind: "recording",
+          message: "Recording… tap stop to transcribe.",
+        });
+        for (const callback of speechStart) callback();
+      };
+      recorder.onerror = () => {
+        if (capture.cancelled) return;
+        stopTracks(capture.stream);
+        fail(threadId, "Recording failed. Try again.");
+      };
+      recorder.onstop = async () => {
+        stopTracks(capture.stream);
+        // Cancelled before or while the media was arriving: no transcript,
+        // no attachment, no late callback.
+        if (capture.cancelled) {
+          settle();
+          return;
+        }
+        const type = recorder.mimeType || preferred || "audio/webm";
+        const blob = new Blob(chunks, { type });
+        chunks.length = 0;
+        if (!blob.size) {
+          // A tap that lands before any audio is a stop, not a failure.
+          if (capture.stopRequested) {
             session.status = { type: "ended", reason: "stopped" };
             this.onStatus(threadId, null);
-            settleStop();
-          } catch (caught) {
-            if (capture.cancelled) {
-              settleStop();
-              return;
-            }
-            this.onError(
-              threadId,
-              caught instanceof Error ? caught.message : "Transcription failed.",
-            );
-            session.status = { type: "ended", reason: "error" };
-            settleStop();
+            settle();
+          } else {
+            fail(threadId, "Nothing was recorded.");
           }
-        };
-        capture.recorder.start();
-        if (capture.stopRequested) capture.recorder.stop();
+          return;
+        }
+        this.onStatus(threadId, { kind: "transcribing", message: "Transcribing…" });
+        const extension = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "m4a" : "webm";
+        const form = new FormData();
+        form.append("file", blob, `voice.${extension}`);
+        form.append("thread_id", threadId);
+        try {
+          const result = await api<TranscribeResult>("/api/transcribe", {
+            method: "POST",
+            body: form,
+            signal: capture.abort.signal,
+          });
+          // Stop was pressed while the server was transcribing: the result
+          // belongs to no message and must not be attached to the next one.
+          if (capture.cancelled) {
+            settle();
+            return;
+          }
+          if (result.status !== "transcribed") {
+            this.onRetryCard(threadId, result.attachment_id, result.card);
+            this.onError(threadId, result.note);
+            for (const callback of speechEnd) callback({ transcript: "" });
+            session.status = { type: "ended", reason: "error" };
+            settle();
+            return;
+          }
+          this.voice.set(threadId, result.attachment_id);
+          const answer = { transcript: result.transcript, isFinal: true };
+          for (const callback of speech) callback(answer);
+          for (const callback of speechEnd) callback(answer);
+          session.status = { type: "ended", reason: "stopped" };
+          this.onStatus(threadId, null);
+          settle();
+        } catch (caught) {
+          if (capture.cancelled) {
+            settle();
+            return;
+          }
+          fail(
+            threadId,
+            caught instanceof Error ? caught.message : "Transcription failed.",
+          );
+        }
+      };
+      try {
+        recorder.start();
+        // Stop may have arrived between the readiness check and this start.
+        if (capture.stopRequested) recorder.stop();
       } catch {
-        capture.cancelled = true;
-        session.status = { type: "ended", reason: "error" };
-        this.onError(threadId, "Microphone access was refused.");
-        settleStop();
+        stopTracks(capture.stream);
+        fail(threadId, "Recording could not start.");
       }
     })();
 

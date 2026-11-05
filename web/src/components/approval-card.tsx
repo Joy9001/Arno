@@ -155,9 +155,10 @@ export function ApprovalCard({
                 disabled={busy}
                 className={cn(
                   ghostButton,
-                  "h-8 px-3.5 text-xs font-medium whitespace-nowrap",
+                  "flex h-8 items-center gap-1.5 px-3.5 text-xs font-medium whitespace-nowrap",
                 )}
               >
+                <XIcon className="size-3.5" aria-hidden="true" />
                 {denyLabel}
               </button>
             )}
@@ -185,9 +186,14 @@ export function ApprovalCard({
                   variant === "destructive"
                     ? "text-background bg-red-600 transition-[background-color,scale] duration-150 hover:bg-red-600/90 active:scale-[0.96] motion-reduce:transition-none dark:bg-red-400 dark:text-red-950 dark:hover:bg-red-400/90"
                     : inkButton,
-                  "flex h-8 items-center rounded-full px-3.5 text-xs font-medium whitespace-nowrap",
+                  "flex h-8 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium whitespace-nowrap",
                 )}
               >
+                {busy ? (
+                  <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <CheckIcon className="size-3.5" aria-hidden="true" />
+                )}
                 {allowOnceLabel}
               </button>
             )}

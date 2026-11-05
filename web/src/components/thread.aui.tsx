@@ -4,6 +4,11 @@ import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/attachment.aui";
+import {
+  ComposerQuotePreview,
+  QuoteBlock,
+  SelectionToolbar,
+} from "@/components/assistant-ui/elements/quote.aui";
 import { File, getFileHref } from "@/components/file";
 import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.aui";
 import { Image } from "@/components/image";
@@ -16,13 +21,9 @@ import {
   ReasoningTrigger,
 } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/tool-group.aui";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
+import { ScrollBar } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
@@ -34,7 +35,6 @@ import {
   ErrorPrimitive,
   groupPartByType,
   MessagePrimitive,
-  SuggestionPrimitive,
   ThreadPrimitive,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
@@ -57,39 +57,18 @@ import {
   ThumbsDownIcon,
   ThumbsUpIcon,
 } from "lucide-react";
+import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
 import {
   createContext,
   useContext,
   useLayoutEffect,
   useRef,
-  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
 } from "react";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
-
-const DefaultToolGroup: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
-  group,
-  children,
-}) => {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <ToolGroupRoot
-      variant="ghost"
-      open={open || group.counts.requiresAction > 0}
-      onOpenChange={setOpen}
-    >
-      <ToolGroupTrigger
-        count={group.indices.length}
-        active={group.status.type === "running"}
-      />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
-  );
-};
 
 const shouldShowComposerResume = (s: AssistantState) =>
   !!s.thread.canResume && s.composer.type === "thread" && s.composer.isEmpty;
@@ -100,25 +79,42 @@ const reasoningDuration = (timing: ThreadGroupPart["timing"]) =>
     : Math.round((timing.completedAt - timing.startedAt) / 1000);
 
 /**
+ * One collapsed trace for adjacent reasoning and routine tool calls. Answer
+ * text, financial cards, and unanswered approvals stay outside this group.
+ */
+const TechnicalTrace: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
+  group,
+  children,
+}) => {
+  const running = group.status.type === "running";
+
+  return (
+    <ReasoningRoot streaming={running}>
+      <ReasoningTrigger
+        active={running}
+        duration={reasoningDuration(group.timing)}
+      />
+      <ReasoningContent aria-busy={running}>
+        <ReasoningText>{children}</ReasoningText>
+      </ReasoningContent>
+    </ReasoningRoot>
+  );
+};
+
+/**
  * Optional component overrides for the thread. `AssistantMessage` and
  * `Welcome` replace whole sections; the remaining slots override how the
- * assistant message renders tool calls and part groups. Tool UIs registered
+ * assistant message renders tool calls and task groups. Tool UIs registered
  * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
  * `ToolFallback`. When `TaskGroup` is set, tool calls that carry a nested
- * conversation and have no registered UI render through it instead of the
- * tool group; without it they render like any other tool call.
- * `ComposerExtra` renders on the start side of the composer's action row.
+ * conversation and have no registered UI render through it; without it they
+ * render like any other tool call. `ComposerExtra` renders on the start side
+ * of the composer's action row.
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
-  ToolGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
-  ReasoningGroup?:
-    | ComponentType<PropsWithChildren<{ group: ThreadGroupPart }>>
-    | undefined;
   TaskGroup?: ComponentType<{ group: ThreadGroupPart }> | undefined;
   ComposerExtra?: ComponentType | undefined;
   ComposerCancel?: ComponentType | undefined;
@@ -143,10 +139,29 @@ const TASK_GROUP_PATH: readonly ThreadGroupKey[] = [
   "group-task",
 ];
 
+const isPendingApproval = (
+  part: Parameters<typeof messageGroupBy>[0],
+): boolean =>
+  part.type === "tool-call" &&
+  part.approval !== undefined &&
+  part.approval.approved === undefined &&
+  part.approval.resolution === undefined &&
+  part.approval.isAutomatic !== true;
+
+// An approval the user has not answered must never sit inside a folded trace.
+const traceAwareGroupBy = (
+  part: Parameters<typeof messageGroupBy>[0],
+  context?: Parameters<typeof messageGroupBy>[1],
+): readonly ThreadGroupKey[] => {
+  if (isPendingApproval(part)) return [];
+  return messageGroupBy(part, context);
+};
+
 const taskAwareGroupBy = (
   part: Parameters<typeof messageGroupBy>[0],
   context?: Parameters<typeof messageGroupBy>[1],
 ): readonly ThreadGroupKey[] => {
+  if (isPendingApproval(part)) return [];
   const path = messageGroupBy(part, context);
   return part.type === "tool-call" &&
     part.messages !== undefined &&
@@ -220,61 +235,78 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
 
   return (
-    <ThreadPrimitive.Root
-      className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
-      style={{
-        ["--thread-max-width" as string]: "44rem",
-        ["--composer-bg" as string]: "#1c1c1e",
-        ["--composer-radius" as string]: "22px",
-        ["--composer-padding" as string]: "8px",
-      }}
-    >
-      <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        data-slot="aui_thread-viewport"
-        className="relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth"
+    <ScrollAreaPrimitive.Root asChild>
+      <ThreadPrimitive.Root
+        className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
+        style={{
+          ["--thread-max-width" as string]: "44rem",
+          ["--composer-bg" as string]: "#1c1c1e",
+          ["--composer-radius" as string]: "22px",
+          ["--composer-padding" as string]: "8px",
+        }}
       >
-        <div
-          className={cn(
-            "mx-auto flex w-full max-w-(--thread-max-width) flex-1 flex-col px-4 pt-4",
-            isEmpty && "justify-center",
-          )}
+        <ScrollAreaPrimitive.Viewport
+          className="aui-thread-viewport"
+          asChild
+          disableImplicitContentElement
         >
-          <AuiIf condition={isNewChatView}>
-            <Welcome />
-          </AuiIf>
-          <AuiIf condition={isHistoryLoadingView}>
-            <ThreadHistorySkeleton />
-          </AuiIf>
-
-          <ThreadLoadEarlier />
-
-          <div
-            data-slot="aui_message-group"
-            className="mb-14 flex flex-col gap-y-6 empty:hidden"
+          <ThreadPrimitive.Viewport
+            turnAnchor="top"
+            data-slot="aui_thread-viewport"
+            className="relative min-h-0 flex-1 scroll-smooth"
           >
-            <ThreadPrimitive.Messages>
-              {() => <ThreadMessage />}
-            </ThreadPrimitive.Messages>
-          </div>
+            <ScrollAreaPrimitive.Content
+              className="aui-thread-scroll-content"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                minHeight: "100%",
+              }}
+            >
+              <div
+                className={cn(
+                  "mx-auto flex w-full max-w-(--thread-max-width) shrink-0 grow flex-col px-4 pt-4",
+                  isEmpty && "justify-center",
+                )}
+              >
+                <AuiIf condition={isNewChatView}>
+                  <Welcome />
+                </AuiIf>
+                <AuiIf condition={isHistoryLoadingView}>
+                  <ThreadHistorySkeleton />
+                </AuiIf>
 
-          <ThreadPrimitive.ViewportFooter
-            className={cn(
-              "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
-              !isEmpty &&
-                "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
-            )}
-          >
-            <ThreadScrollToBottom />
-            <ThreadFollowupSuggestions />
-            <Composer autoFocus={autoFocus} />
-            <AuiIf condition={(s) => isNewChatView(s) && s.composer.isEmpty}>
-              <ThreadSuggestions />
-            </AuiIf>
-          </ThreadPrimitive.ViewportFooter>
-        </div>
-      </ThreadPrimitive.Viewport>
-    </ThreadPrimitive.Root>
+                <ThreadLoadEarlier />
+
+                <div
+                  data-slot="aui_message-group"
+                  className="mb-14 flex flex-col gap-y-6 empty:hidden"
+                >
+                  <ThreadPrimitive.Messages>
+                    {() => <ThreadMessage />}
+                  </ThreadPrimitive.Messages>
+                </div>
+
+                <ThreadPrimitive.ViewportFooter
+                  className={cn(
+                    "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
+                    !isEmpty &&
+                      "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
+                  )}
+                >
+                  <ThreadScrollToBottom />
+                  <ThreadFollowupSuggestions />
+                  <Composer autoFocus={autoFocus} />
+                </ThreadPrimitive.ViewportFooter>
+              </div>
+            </ScrollAreaPrimitive.Content>
+          </ThreadPrimitive.Viewport>
+        </ScrollAreaPrimitive.Viewport>
+        <ScrollBar className="aui-thread-scrollbar" />
+        <SelectionToolbar />
+      </ThreadPrimitive.Root>
+    </ScrollAreaPrimitive.Root>
   );
 };
 
@@ -484,40 +516,6 @@ const ThreadWelcome: FC = () => {
   );
 };
 
-const ThreadSuggestions: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestions flex w-full flex-col">
-      <ThreadPrimitive.Suggestions>
-        {() => <ThreadSuggestionItem />}
-      </ThreadPrimitive.Suggestions>
-    </div>
-  );
-};
-
-const ThreadSuggestionItem: FC = () => {
-  return (
-    <div className="aui-thread-welcome-suggestion-display fade-in slide-in-from-bottom-2 animate-in fill-mode-both duration-200">
-      <SuggestionPrimitive.Trigger send asChild>
-        <button
-          type="button"
-          className="aui-thread-welcome-suggestion group hover:bg-foreground/[0.03] focus-visible:ring-ring/50 flex w-full items-baseline gap-2.5 rounded-md px-2 py-2 text-start text-sm transition-colors outline-none focus-visible:ring-1 motion-reduce:transition-none"
-        >
-          <span
-            aria-hidden
-            className="text-muted-foreground/60 group-hover:text-foreground font-mono text-xs transition-colors motion-reduce:transition-none"
-          >
-            {">"}
-          </span>
-          <span className="min-w-0 flex-1 truncate">
-            <SuggestionPrimitive.Title className="aui-thread-welcome-suggestion-text-1 text-foreground" />{" "}
-            <SuggestionPrimitive.Description className="aui-thread-welcome-suggestion-text-2 text-muted-foreground empty:hidden" />
-          </span>
-        </button>
-      </SuggestionPrimitive.Trigger>
-    </div>
-  );
-};
-
 const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
   const { ComposerStatus } = useContext(ThreadComponentsContext);
 
@@ -526,8 +524,9 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="aui_composer-shell"
-          className="border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          className="aui_composer-shell border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
         >
+          <ComposerQuotePreview />
           <ComposerAttachments />
           <ComposerPrimitive.Input
             placeholder="Message Fin-Agent…"
@@ -670,12 +669,10 @@ const MessageError: FC = () => {
 const AssistantMessage: FC = () => {
   const {
     ToolFallback: ToolFallbackComponent = ToolFallback,
-    ToolGroup,
-    ReasoningGroup,
     TaskGroup: TaskGroupComponent,
     AssistantActions,
   } = useContext(ThreadComponentsContext);
-  const groupBy = TaskGroupComponent ? taskAwareGroupBy : messageGroupBy;
+  const groupBy = TaskGroupComponent ? taskAwareGroupBy : traceAwareGroupBy;
   const serverId = useAuiState(
     (s) => s.message.metadata.custom?.server_id as string | undefined,
   );
@@ -690,6 +687,7 @@ const AssistantMessage: FC = () => {
       tabIndex={serverId ? -1 : undefined}
       data-slot="aui_assistant-message-root"
       data-role="assistant"
+      data-aui-quote-selectable="false"
       className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 scroll-mt-24 pb-7.5 duration-150 outline-none [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
       <div
@@ -700,39 +698,31 @@ const AssistantMessage: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                return <div data-slot="aui_chain-of-thought">{children}</div>;
+                return <TechnicalTrace group={part}>{children}</TechnicalTrace>;
               case "group-task":
                 return TaskGroupComponent ? (
                   <TaskGroupComponent group={part} />
                 ) : null;
               case "group-tool":
-                if (ToolGroup) {
-                  return <ToolGroup group={part}>{children}</ToolGroup>;
-                }
                 return (
-                  <DefaultToolGroup group={part}>{children}</DefaultToolGroup>
+                  <div
+                    data-slot="aui-trace-tools"
+                    className="aui-trace-tools flex flex-col gap-1"
+                  >
+                    {children}
+                  </div>
                 );
-              case "group-reasoning": {
-                if (ReasoningGroup) {
-                  return (
-                    <ReasoningGroup group={part}>{children}</ReasoningGroup>
-                  );
-                }
-                const running = part.status.type === "running";
-                return (
-                  <ReasoningRoot streaming={running}>
-                    <ReasoningTrigger
-                      active={running}
-                      duration={reasoningDuration(part.timing)}
-                    />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                );
-              }
+              case "group-reasoning":
+                return <>{children}</>;
               case "text":
-                return <MarkdownText />;
+                return (
+                  <div
+                    data-slot="aui_assistant-message-text"
+                    data-aui-quote-selectable="true"
+                  >
+                    <MarkdownText />
+                  </div>
+                );
               case "reasoning":
                 return <Reasoning {...part} />;
               case "tool-call":
@@ -857,6 +847,7 @@ const UserMessage: FC = () => {
       id={serverId ? `message-${serverId}` : undefined}
       tabIndex={serverId ? -1 : undefined}
       data-slot="aui_user-message-root"
+      data-aui-quote-selectable="false"
       className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto scroll-mt-24 grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 outline-none [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
       data-role="user"
     >
@@ -864,6 +855,9 @@ const UserMessage: FC = () => {
 
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
+          <MessagePrimitive.Quote>
+            {(quote) => <QuoteBlock {...quote} />}
+          </MessagePrimitive.Quote>
           <MessagePrimitive.Parts
             components={{ File: UserFilePart, Image: UserImagePart }}
           />

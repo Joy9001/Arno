@@ -211,6 +211,7 @@ def record_user_message(
     text: str,
     statements: list[dict[str, str]] | None = None,
     photos: list[dict[str, str]] | None = None,
+    quote: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Store the user's message at the start, so a reload mid-reply keeps it."""
     safe = redact_text(text)
@@ -242,6 +243,12 @@ def record_user_message(
         "role": "user",
         "parts": parts,
     }
+    if quote:
+        content["metadata"] = {
+            "custom": {
+                "quote": {"text": quote["text"], "messageId": quote["messageId"]},
+            }
+        }
     row = conn.execute(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
@@ -301,29 +308,35 @@ def save_records(
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
     ui = ui_messages(turn_messages)
 
-    def user_parts(text: str) -> list[dict[str, Any]]:
-        stored = conn.execute(
-            "SELECT content FROM messages WHERE client_id = %s AND conversation_id = %s",
-            (ui_message_id, thread_id),
-        ).fetchone()
-        content = stored["content"] if stored is not None else {}
-        attachments = [
-            part
-            for part in (content or {}).get("parts", [])
-            if isinstance(part, dict) and part.get("type") in {"data-statement", "data-photo"}
-        ]
+    stored = conn.execute(
+        "SELECT content, body_text FROM messages WHERE client_id = %s AND conversation_id = %s",
+        (ui_message_id, thread_id),
+    ).fetchone()
+    stored_content = (stored["content"] if stored is not None else None) or {}
+    attachments = [
+        part
+        for part in stored_content.get("parts", [])
+        if isinstance(part, dict) and part.get("type") in {"data-statement", "data-photo"}
+    ]
+    stored_metadata = stored_content.get("metadata")
+
+    def apply_user(message: dict[str, Any]) -> None:
+        # The model sees the quote block; the transcript keeps the question the user typed.
+        text = str(stored["body_text"] or "") if stored is not None else _body_text(message)
         safe = redact_text(text)
-        return ([{"type": "text", "text": safe}] if safe else []) + attachments
+        message["parts"] = ([{"type": "text", "text": safe}] if safe else []) + attachments
+        if stored_metadata:
+            message["metadata"] = {**(message.get("metadata") or {}), **stored_metadata}
 
     for message in ui:
         if message.get("role") == "user" and message.get("id") == ui_message_id:
-            message["parts"] = user_parts(_body_text(message))
+            apply_user(message)
             break
     else:
         for message in ui:
             if message.get("role") == "user":
                 message["id"] = ui_message_id
-                message["parts"] = user_parts(_body_text(message))
+                apply_user(message)
                 break
 
     extra = cards_from_messages(turn_messages)

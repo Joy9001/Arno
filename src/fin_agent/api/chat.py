@@ -10,6 +10,7 @@ import json
 import os
 import uuid
 from contextlib import closing
+from dataclasses import replace
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fin_agent.agent import history as history_mod
 from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.quote import QuoteError, quote_from_messages, resolve_quote, with_quote
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
 from fin_agent.api.capture import log_photo
 from fin_agent.api.deps import Database, PreparationDep, Session, current_session
@@ -192,6 +194,7 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
     }
     if thread_id:
         headers["X-Thread-Id"] = thread_id
+        headers["x-resumable-stream-id"] = thread_id
     return StreamingResponse(iterator, media_type="text/event-stream", headers=headers)
 
 
@@ -214,6 +217,10 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
     thread_id = _request_thread_id(body)
     statement_refs = [] if approval_turn else _statement_refs(messages)
     photo_refs = [] if approval_turn else _photo_refs(messages)
+    try:
+        quote = None if approval_turn else quote_from_messages(messages)
+    except QuoteError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not text.strip():
         if statement_refs and photo_refs:
             text = "Import the attached statement and log the attached receipt or payment photo."
@@ -271,6 +278,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 headers={
                     "Cache-Control": "no-cache, no-transform",
                     "X-Thread-Id": str(existing["conversation_id"]),
+                    "x-resumable-stream-id": str(existing["conversation_id"]),
                 },
             )
 
@@ -279,6 +287,12 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
             raise HTTPException(
                 status_code=409, detail="A reply is already running in this thread."
             )
+
+        try:
+            if quote is not None:
+                quote = resolve_quote(conn, thread_id, quote)
+        except QuoteError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         # Validate every ref before any import or capture starts, so a stale file cannot
         # leave a partial turn. The pipeline itself dedupes by file hash, and each photo
@@ -333,6 +347,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 text=text,
                 statements=statements,
                 photos=photos,
+                quote=quote,
             )
             user_row = conn.execute(
                 "SELECT id FROM messages WHERE client_id = %s", (message_id,)
@@ -380,6 +395,9 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         manage_message_history="server",
         allowed_file_url_schemes=frozenset(),
     )
+    if quote is not None:
+        # The quote is context on this turn only; the client's own message stays untouched.
+        adapter = replace(adapter, run_input=with_quote(adapter.run_input, quote))
     try:
         turn = await app.state.turns.start(
             adapter=adapter,

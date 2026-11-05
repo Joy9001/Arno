@@ -1,13 +1,9 @@
-import {
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type PropsWithChildren,
-} from "react";
+import { createElement, useContext, useEffect, useRef, useState } from "react";
 import { APICallError } from "ai";
-import { Calculator, FileText, Flag, ReceiptText, Wallet } from "lucide-react";
+import { Calculator, FileText, Flag, LogIn, ReceiptText, RotateCcw, Wallet } from "lucide-react";
 import {
+  SuggestionPrimitive,
+  ThreadPrimitive,
   useAssistantDataUI,
   useAui,
   useAuiEvent,
@@ -18,15 +14,9 @@ import { useAISDKError } from "@assistant-ui/ai-sdk";
 import { ApprovalCard } from "@/components/approval-card";
 import { ImagePreview, ImageRoot, ImageZoom } from "@/components/image";
 import { Button } from "@/components/ui/button";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/tool-group.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
 import { Card, NumberFlags } from "./cards";
 import { ChatSurfaceContext, chatErrorMessage } from "./surface";
-import type { ThreadGroupPart } from "@/components/thread.aui";
 
 function useMessageId(): string {
   return useAuiState((state) => state.message.id);
@@ -142,40 +132,6 @@ function approvalDetails(args: unknown): { label: string; value: string }[] {
     }));
 }
 
-/** A pending approval must stay visible even when its run is folded. */
-export function ChatToolGroup({
-  group,
-  children,
-}: PropsWithChildren<{ group: ThreadGroupPart }>) {
-  const pendingApproval = useAuiState((state) =>
-    group.indices.some((index) => {
-      const part = state.message.parts[index];
-      return (
-        part?.type === "tool-call" &&
-        part.approval !== undefined &&
-        part.approval.approved === undefined &&
-        part.approval.resolution === undefined &&
-        part.approval.isAutomatic !== true
-      );
-    }),
-  );
-  const [open, setOpen] = useState(false);
-
-  return (
-    <ToolGroupRoot
-      variant="ghost"
-      open={open || pendingApproval}
-      onOpenChange={setOpen}
-    >
-      <ToolGroupTrigger
-        count={group.indices.length}
-        active={group.status.type === "running"}
-      />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
-  );
-}
-
 /**
  * A pending approval uses the kit's ApprovalCard. Everything else, including
  * the settled receipt and the raw input/output, stays on the kit's
@@ -215,7 +171,7 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
           icon={<Flag className="size-4" />}
           title={`Confirm ${prettyToolName(toolName)}`}
           subtitle={approval.prompt ?? "This tool changes your records"}
-          description="This change is recorded with undo. Confirm it to run the tool."
+          description="Review this request before allowing the tool to run."
           details={approvalDetails(args)}
           busy={answering}
           allowOnceLabel={answering ? "Confirming…" : "Confirm"}
@@ -242,19 +198,56 @@ const STARTERS = [
   { Icon: ReceiptText, text: "How much did I spend on food last month?" },
   { Icon: Calculator, text: "Can I afford a ₹40,000 phone in December?" },
   { Icon: Wallet, text: "What is due in the next 30 days?" },
-];
+] as const;
 
-/** The thread's new-chat slot, wired to the runtime's composer. */
+/** The prompts live once here; the runtime config and the welcome both read them. */
+export const FIN_SUGGESTIONS = STARTERS.map(({ text }) => ({
+  title: text,
+  label: "",
+  prompt: text,
+}));
+
+const STARTER_ICONS = new Map<string, (typeof STARTERS)[number]["Icon"]>(
+  STARTERS.map(({ Icon, text }) => [text, Icon]),
+);
+
+type StarterSuggestionState = {
+  title: string;
+  label: string;
+  prompt: string;
+};
+
+const renderStarter = ({ suggestion }: { suggestion: StarterSuggestionState }) => (
+  <StarterSuggestion suggestion={suggestion} />
+);
+
+function StarterSuggestion({
+  suggestion,
+}: {
+  suggestion: StarterSuggestionState;
+}) {
+  const Icon = STARTER_ICONS.get(suggestion.prompt);
+
+  return (
+    <SuggestionPrimitive.Trigger asChild>
+      <button type="button" className="aui-starter">
+        {Icon &&
+          createElement(Icon, {
+            size: 16,
+            strokeWidth: 1.8,
+            "aria-hidden": true,
+          })}
+        <span className="aui-starter-copy">
+          <SuggestionPrimitive.Title className="aui-starter-title" />
+          <SuggestionPrimitive.Description className="aui-starter-description empty:hidden" />
+        </span>
+      </button>
+    </SuggestionPrimitive.Trigger>
+  );
+}
+
+/** The thread's new-chat slot; starter prompts fill the composer for review. */
 export function ChatWelcome() {
-  const aui = useAui();
-
-  const start = (text: string) => {
-    aui.composer.setText(text);
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
-    });
-  };
-
   return (
     <div className="aui-welcome">
       <h3>Ask anything about your money.</h3>
@@ -262,17 +255,7 @@ export function ChatWelcome() {
         Answers use your ledger, plan, and projection. Every figure comes with its sources.
       </p>
       <div className="aui-starters">
-        {STARTERS.map(({ Icon, text }) => (
-          <button
-            key={text}
-            type="button"
-            className="aui-starter"
-            onClick={() => start(text)}
-          >
-            <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
-            <span>{text}</span>
-          </button>
-        ))}
+        <ThreadPrimitive.Suggestions>{renderStarter}</ThreadPrimitive.Suggestions>
       </div>
     </div>
   );
@@ -281,6 +264,7 @@ export function ChatWelcome() {
 /** Error recovery and capture status, directly beneath the composer. */
 export function ChatComposerStatus() {
   const error = useAISDKError();
+  const canResume = useAuiState((state) => state.thread.canResume);
   const aui = useAui();
   const surface = useContext(ChatSurfaceContext);
   const [addError, setAddError] = useState<string | null>(null);
@@ -331,19 +315,26 @@ export function ChatComposerStatus() {
       )}
       {error && (
         <div className="aui-status-line aui-status-error" role="alert">
-          <span>{chatErrorMessage(error)}</span>
-          <Button
-            type="button"
-            variant="link"
-            size="xs"
-            className="aui-status-action h-auto"
-            onClick={() => {
-              if (needsSignIn) window.location.reload();
-              else retry();
-            }}
-          >
-            {needsSignIn ? "Sign in again" : "Retry"}
-          </Button>
+          <span>
+            {canResume && !needsSignIn
+              ? "The running answer could not be reconnected. Resume to try again."
+              : chatErrorMessage(error)}
+          </span>
+          {(!canResume || needsSignIn) && (
+            <Button
+              type="button"
+              variant="link"
+              size="xs"
+              className="aui-status-action h-auto"
+              onClick={() => {
+                if (needsSignIn) window.location.reload();
+                else retry();
+              }}
+            >
+              {needsSignIn ? <LogIn aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}
+              {needsSignIn ? "Sign in again" : "Retry"}
+            </Button>
+          )}
         </div>
       )}
     </div>
