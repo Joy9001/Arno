@@ -390,6 +390,7 @@ export function AccountsPanel() {
   );
   const holdings = data.accounts.filter((account) => account.kind === "asset");
   const liquidAccounts = banking.filter((account) => account.liquid && account.active);
+  const cash = data.cash_quality;
   const assets = holdings.reduce((total, account) => total + account.balance_paise, 0);
   const visibleAccountCount = cards.length + loans.length + banking.length + holdings.length;
 
@@ -416,10 +417,21 @@ export function AccountsPanel() {
             cells={[
               {
                 label: "Cash on hand",
-                value: formatPaise(data.liquid_total_paise),
-                note: liquidAccounts.length
-                  ? `Sum of ${countLabel(liquidAccounts.length, "liquid balance")}`
-                  : "No liquid accounts",
+                value:
+                  cash.status === "known"
+                    ? formatPaise(data.liquid_total_paise)
+                    : cash.status === "no_accounts"
+                      ? "No accounts"
+                      : "Unknown",
+                tone: cash.status === "unknown" ? "warning" : undefined,
+                note:
+                  cash.status === "known"
+                    ? liquidAccounts.length
+                      ? `Sum of ${countLabel(liquidAccounts.length, "liquid balance")}`
+                      : "No liquid accounts"
+                    : cash.status === "no_accounts"
+                      ? "No liquid accounts"
+                      : `${countLabel(cash.unknown_count, "liquid account")} without a known balance`,
               },
               {
                 label: "Card balance",
@@ -442,7 +454,8 @@ export function AccountsPanel() {
           />
           <p className="moneyv-basis">
             Cash on hand adds the ledger balances of your liquid bank, cash, and wallet accounts. It
-            does not deduct card dues or upcoming bills, so it is not money free to spend.
+            shows as unknown when any of them has no recorded balance, and it does not deduct card
+            dues or upcoming bills, so it is not money free to spend.
           </p>
 
           <AccountGroup

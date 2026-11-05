@@ -1,0 +1,253 @@
+# End-to-end session log
+
+Session started on November 5, 2026. The [journey catalog](e2e-user-journeys.md) defines the
+starting states, priorities, expected financial effects, and 360 numbered cases. This log is
+the execution record. A written scenario, existing unit test, or convincing model reply does
+not count as a completed user journey.
+
+## Current state
+
+- The initial greeting investigation and follow-up UI turns are recorded below as observed
+  subchecks. The planning work did not replay those messages.
+- The trace input/output mapping, authenticated user attribution, and conservative schema
+  compaction are present in the working tree. Default Unset/Error status behavior was retained.
+- The implementation delegate reported running the actual UI and inspecting Phoenix. Its
+  supporting checks reported 8 passes for trace-preview/native tracing, 44 passes for the
+  selected agent/write/approval/turn/safety set, and 15 passes on an overlapping final rerun.
+  These are separate runs, not a summed count of unique tests or a replacement for UI evidence.
+- No real statement was imported by the journey-planning work. No financial data was changed.
+- All 360 catalog cases start Not run. The observed greeting subchecks do not mean that all
+  steps and variations of J01 were executed.
+- No commits or PRs were created in this session. Record the actual build and dirty-diff
+  identity before the next execution; a commit SHA alone is insufficient for this working tree.
+
+## Observed greeting evidence
+
+The following rows preserve the implementation delegate's UI execution report. Exact tool
+schema component counts are local estimates, so only provider usage is in this table. Blank
+cache reporting means unknown rather than zero. No financial movements were reported from these turns.
+
+| Observation | UI action | Reported input / output tokens | Reported cache read | Observed trace behavior | Trace |
+|---|---|---|---|---|---|
+| O01 | Original user's Hey in an empty financial instance. | 11,523 / 246 | Not reported | Unset; one model request, no tool calls; root previews and User blank. | [Original Hey](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/c2ad379d9fb0a8244031b871e2d9f076?timeRangeKey=1h&sessionView=traces) |
+| O02 | Thanks in the same conversation, before the preview patch. | 11,773 / 110 | 11,392 | Root previews still blank; one model request, no tools. | [Thanks](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/180692e7954c5fb71bc604363f1afa48?timeRangeKey=1h&sessionView=traces) |
+| O03 | Hey again in the same conversation, after root preview mapping. | 11,888 / 78 | 11,648 | Current input and actual textual reply visible; Unset; no tools. | [Hey again](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/957daa68533e679c24090b5ccd0e24c4?timeRangeKey=1h&sessionView=traces) |
+| O04 | Hey in a new empty conversation after compaction of tool guidance. | 10,680 / 236 | 1,792 | Same model, instructions, and snapshot as original; current previews and authenticated User populated; Unset; no tools. | [Compact Hey](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/8815ec3dd9afb9a38424a5d2f55605a9?timeRangeKey=1h&sessionView=traces) |
+| O05 | What accounts do I have? in O04's conversation. | 10,925 / 136 | 10,624 | Correct empty-account answer; input preview is the new question rather than the snapshot or Hey. | [Accounts question](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/1e8ebaee201ddfbd47d8356e8c7f9239?timeRangeKey=1h&sessionView=traces) |
+| O06 | Hi in another new empty conversation. | 10,680 / Not recorded here | 10,624 | Same authenticated user ID across conversations; Unset. | [Second new conversation](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/2102bd8db6ed3419611ac52175315436?timeRangeKey=1h&sessionView=traces) |
+
+Schema verification from the implementation report: after removing only descriptions/titles,
+the eight generated tool contracts were structurally identical. Local consistent serialization
+estimated 6,500 to 5,760 tool-definition tokens; Phoenix-normalized definitions estimated 6,385
+to 5,688. Earlier figures mixed serialization formats and must not be treated as a cost range.
+The observed fresh-turn input change is not a fully controlled cost or latency experiment.
+
+## Observed setup subcheck (trace c85f6355e9524ca0748295bc3e1973bd)
+
+Read-only inspection on 5 November 2026, 17:25 IST (11:55 UTC). This is one setup turn, not a
+journey pass. J02 and J03 remain Not run.
+
+| Observation | Evidence |
+|---|---|
+| In a new conversation the user asked to set up an SBI savings account and a Slice card for statement import, explicitly saying not to assume balances or a credit limit. | UI transcript and trace input agree; conversation created 17:25:32 IST. |
+| The agent added one bank account only. No card, balance, credit limit, statement day, due day, last4, floor, schedule, or import was created. | Persisted accounts and audit log: one `accounts` insert, actor agent, one undo group; zero imports. |
+| The card add failed validation in the same turn: "A card needs a positive credit limit". The reply reported the failure and asked for the missing card facts. | The second `execute_tool update_setup` span is Error with that exception; root span Unset; no retry. |
+| A Setup saved card appeared for the bank account, and the failed call showed an `output error` chip. No approval was pending. | UI transcript; conversation `outside_text_at` is null. |
+| Trace input and output previews held the current user message and final reply, not the snapshot. The opaque authenticated user id and conversation session were present; root status Unset. | Phoenix root span attributes and trace tree. |
+| The turn made two model requests and two `update_setup` calls, with no retries or fallback. Provider usage was 10,731/363 and 11,344/344 tokens; the second request read 10,624 cached tokens. | Phoenix chat spans; total latency 8.7 s. |
+
+Trace: [c85f6355](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/c85f6355e9524ca0748295bc3e1973bd?timeRangeKey=1h&sessionView=traces).
+Source: read-only delegate inspection of the UI, Phoenix, and Postgres.
+
+Unresolved findings from this subcheck, reported to the parent for classification:
+- P1: The reply calls the statement day and due day skippable, but ledger validation requires both
+  for a card. The card remains unsaved after a later supplied credit limit.
+- P1: Home/Today rendered `Cash on hand ₹0` with a current `as of` date for a bank whose balance is
+  unknown, and the Accounts summary did the same. The account row itself correctly said
+  `₹0 Ledger balance` and `No ledger activity recorded yet`.
+- The reply asks for four details at once although the setup instruction says one or two
+  questions at a time.
+- The reply says to upload the statements and that it will start the import, but the chat
+  composer accepts images only; statement PDFs are uploaded in Activity -> Imports, which starts
+  the review.
+
+### Fix record (implementation, 5 November 2026)
+
+- Card setup: validation now reports every missing or invalid card field in one message, keeps
+  rejected writes atomic, and leaves partial updates working. The model-visible `AccountSetup`
+  schema and `update_setup` description now say that an added card needs a positive credit limit,
+  statement day, and due day; last4 and a bank balance stay optional. Instructions say those
+  dates are not skippable and, when unknown, the card stays pending.
+- Import route: instructions now send statement PDFs to Activity -> Imports, say Chat photo is
+  images only, and keep `import_document` limited to an existing attachment id.
+- Cash honesty: `/api/home` and `/api/accounts` carry typed `cash_quality`. Home/Today and the
+  Accounts summary show `Unknown` with the account names when any active liquid account has no
+  known balance; an explicitly stated zero stays ₹0, and no accounts reads `No accounts`. The
+  legacy numeric `spendable_paise` and `liquid_total_paise` fields are unchanged. The weekly
+  briefing now says `unknown` in the same case.
+- Anchor definition corrected (P1 follow-up): a balance is known only when an explicit opening
+  balance, user-stated balance, or committed statement writes `statement_balance_paise` with a
+  valid `statement_balance_as_of`, including an explicit zero. A ledger expense or income changes
+  a known balance but no longer creates one. The same shared rule now drives account summaries,
+  Home/Today `cash_quality`, `get_financial_context`, the weekly briefing, and projection
+  `balance_ages`. The legacy ledger total remains available, but an unknown liquid account keeps
+  the complete cash headline Unknown; its known subtotal stays scoped.
+- Ledger truth preserved: an unknown account keeps its real recorded net change in the account
+  payload and Ledger. No movements were deleted, reset, or given a fabricated zero opening.
+- Statement precedence: a backdated import no longer replaces a newer stated balance and does not
+  erase an anchor when the statement has no closing balance. Undoing an import restores the prior
+  anchor only while that import is still the effective source; undoing an ordinary expense leaves
+  a surviving anchor intact.
+- Tests: card missing/invalid fields, atomic rejection, partial update, known/unknown/zero/empty
+  cash quality, Home payload states, movement-only unknown accounts in the shared definition,
+  account summary, Home, model context, briefing and projection, explicit zero openings, stated
+  balance after activity, sole-anchor undo, expense undo with a surviving anchor, mixed accounts,
+  verified import commit/undo, and backdated import precedence. Frontend typecheck, lint, and
+  production build pass.
+- Manual remaining: the live card add still needs the user's next real message with the actual
+  limit and both dates; the owner instance was not written to. The import route needs a real
+  Activity -> Imports upload. Home/Today and Accounts were checked read-only with the existing
+  unknown-balance SBI account; the movement-only regression is automated-test verified because
+  demonstrating it live would require writing a fake bank transaction to the owner instance.
+
+J02 is Partial: the first setup turn and the card retry state are observed. J03 remains Not run.
+
+## Run header
+
+Copy this header for each execution block. Keep credentials and private financial values in
+the ignored evidence folder, not in this tracked log.
+
+| Field | Value to record |
+|---|---|
+| Run ID and operator | |
+| Start/end time and ledger date/time zone | |
+| App URL and instance label | |
+| Commit/build and dirty-diff identity | |
+| Model/provider and relevant configuration changes | |
+| Browser/device/viewport; installed PWA or browser tab | |
+| Starting-state checkpoint and restore/recreation method | |
+| Real/synthetic fixture aliases and independent reference version | |
+| Fault/device/operator prerequisites | |
+| Expected model/spend limits and known pricing limitations | |
+
+## Journey progress
+
+Update individual case results below; do not mark a whole journey Pass because its happy path
+worked. A journey is Partial until its required cases and invariants have been accepted or
+explicitly deferred with a reason.
+
+| Journey | Area | Initial state | Status | Case results / finding links |
+|---|---|---|---|---|
+| J01 | Greeting and empty-data honesty | E | Not run | O01-O06 provide starting subcheck evidence only. |
+| J02 | Conversational setup | E → S | Partial | First setup turn and card retry observed in c85f6355. Card guidance, import route, and cash truth fixed in working tree; live card and import retest open. |
+| J03 | Account identity and balances | S / H-copy | Not run | |
+| J04 | Precise daily expense | S | Not run | |
+| J05 | Clarification, defaults, duplicates | S | Not run | |
+| J06 | Corrections, deletion, undo | S | Not run | |
+| J07 | Category-rule scope | S | Not run | |
+| J08 | Received versus expected income | S | Not run | |
+| J09 | Own-account transfers | S | Not run | |
+| J10 | Splits and partial settlements | S | Not run | |
+| J11 | Lending, borrowing, reimbursement | S | Not run | |
+| J12 | Credit-card lifecycle | S | Not run | |
+| J13 | Loans and prepayment | S | Not run | |
+| J14 | Goals and fenced savings | S | Not run | |
+| J15 | Schedules and calendar boundaries | S / F | Not run | |
+| J16 | Protected SBI import | H / H-copy | Not run | Password required; never place it in this log or chat. |
+| J17 | First Slice cycle | H / H-copy | Not run | Independent transaction checks still needed. |
+| J18 | Multicycle backfill | H / H-copy | Not run | |
+| J19 | Capture/statement reconciliation | H-copy | Not run | |
+| J20 | Import reject, commit, undo | H-copy | Not run | |
+| J21 | Import failure/format fixtures | E / H-copy / F | Not run | Fixtures beyond the six real PDFs still needed. |
+| J22 | Analytics, coverage, sources | S / H | Not run | |
+| J23 | Engine-derived affordability | S | Not run | |
+| J24 | Read-only what-ifs | S / H-copy | Not run | |
+| J25 | Memory, history, stale snapshots | S / F | Not run | Known rollover and compaction risks below. |
+| J26 | Photo and UPI screenshot | S / D | Not run | Synthetic/redacted capture fixtures needed. |
+| J27 | Voice capture | S / D | Not run | Actual microphone and STT needed. |
+| J28 | Outside text, approval, secrets | S / H-copy | Not run | Use synthetic attack/secret fixtures only. |
+| J29 | Streaming and reconnect | S / F | Not run | |
+| J30 | Proactive and scheduled questions | S / F / D | Not run | Due-time/device prerequisites needed. |
+| J31 | Consistent views and evidence | S / H | Not run | |
+| J32 | Settings and exports | S | Not run | |
+| J33 | Passkeys and sessions | E / D | Not run | Use disposable credentials for destructive paths. |
+| J34 | Dependency failures and limits | F | Not run | Fault environment not established by planning. |
+| J35 | Mobile, accessible, offline/PWA | S / D | Not run | |
+| J36 | Golden day and monthly close | S / H-copy / H | Not run | Golden expected arithmetic checked during planning; UI run still required. |
+
+## Case record template
+
+Use one record for a failed/high-risk case; group routine passing variations only when their
+case IDs and evidence are still individually identifiable.
+
+~~~text
+Case ID / run ID:
+Status: Not run | Running | Pass | Fail | Blocked | Deferred
+Starting checkpoint and dependency cases:
+Exact UI action sequence / submitted prompt:
+Expected chat, card, and money effects:
+Actual chat/card result:
+Before/after values and independent oracle: [private evidence reference]
+Sources, movement/import/job IDs: [private when sensitive]
+Trace URL, conversation/session, timestamp:
+Model requests, tool calls, usage, cache fields, retry/fallback/ending:
+Observed correlated log/error details: [sanitized]
+Reload/persistence and reversal checks:
+Finding ID / severity / owner:
+Fix build and retest case IDs:
+Cleanup or final checkpoint:
+~~~
+
+An absent trace after an exporter outage is an evidence gap, not proof that no financial write
+occurred. A screenshot of a success card is insufficient if the ledger contradicts it.
+
+## Findings and follow-ups
+
+These are starting investigation items, not claims that the new journeys reproduced them.
+
+| Finding | Cases | State | Next evidence needed |
+|---|---|---|---|
+| F01: time-derived snapshot may remain stale without audited writes | J25.06-J25.07 | Open; source-path inference | Idle thread across a ledger-date boundary, inspect snapshot/reminder and current answer. |
+| F02: refresh may duplicate a pin after compaction changes history position | J25.08 | Open; source-path inference | Actual compaction followed by refresh; inspect exactly one current effective snapshot. |
+| F03: Flag does not currently provide a direct trace navigation path | J31, evidence protocol | Open product gap | Flag a synthetic reply and verify discoverability via conversation/time; decide intended navigation separately. |
+| F04: model unpriced, displayed $0 is misleading as spend evidence | J01.10, J34.09 | Open measurement limitation | Verify provider/model pricing and ceiling behavior independently before claiming real monetary metering. |
+| F05: exporter batching configuration merits review | J34.07 | Open follow-up | Test telemetry outage impact in F; do not infer the app path from a healthy local sample. |
+| F06: deferred-approval preview and multimodal privacy lack dedicated reported regression tests | J26, J28 | Open coverage gap | Exercise actual pending approval/content-disabled multimodal paths and inspect exported attributes. |
+| F07 (P1): card create requirements were undiscoverable, validation failed one field at a time, and the reply called required dates skippable | J02, J12, J17 | Fixed in working tree; live retest open | Add a card with missing or invalid limit/days; confirm one aggregated message, zero account rows on failure, partial update still works, and the reply leaves the card pending instead of inventing values. |
+| F08 (P1): Home/Today and the Accounts summary presented an unknown liquid balance as complete ₹0 cash | J03.07, J16, J28, J31 | Fixed in working tree; read-only UI evidence recorded; live retest open | Recheck Home/Today and Accounts after a fresh turn or reload; cover all-known, known-zero, no-accounts, one-unknown, and partial-known states without writing to the owner instance. |
+| F09 (P1): an expense or income made an account without a stated opening balance look known | J03, J04, J08, J31 | Fixed in working tree; automated regressions pass; live UI retest open | Confirm Home/Today, Accounts, the model snapshot, the briefing, and projection quality still say Unknown for a movement-only account. Live proof needs a disposable synthetic ledger or a real statement import, not a fake entry in the owner instance. |
+
+## Completion and deferrals
+
+Before accepting a gate, list its executed case IDs, financial checks, and trace evidence.
+Any deferral names the unavailable prerequisite, the risk left open, the responsible person,
+and the next action. Do not label the whole agent end-to-end tested after greeting-only checks.
+No journey is silently waived because it needs a phone, a password entry, a longer-running
+thread, a due-time job, or an isolated fault environment.
+
+## Runtime reload verification (5 November 2026)
+
+Read-only pre-check, then an api-only rebuild and recreate. No application code was edited, no
+test suite was rerun, and no database was reset, seeded, or cleaned.
+
+| Field | Value |
+|---|---|
+| Active work before reload | 0 conversations with `run_started_at`, 0 pending/running jobs, 0 imports in `parsing`/`needs_password`/`needs_input`; no deferral needed. |
+| Prior api container / image | `10fa093d11ac`, image `sha256:93dba99b1287ac604e829e22693956cae072411b019ede61f7220aab442a0183`, created 12:48:23 UTC. Recorded before rebuild; the tag now resolves to the new image and the old ID no longer exists locally, so recovery requires rebuilding from prior source rather than pulling that ID. |
+| Rebuild | `docker compose build api` with the existing Compose file; tag `ghcr.io/joy9001/fin-agent:0.1.2`. |
+| Recreate | `docker compose up -d --no-deps api`. `db`, `backup`, and `phoenix` stayed up in their existing containers; volumes untouched. |
+| New api container / image | `894089dd9ec7`, image `sha256:4085d25f7fa61dd34c48f13cf19b231d6a08328c5a58ed24f505e20a02cf0ef1`, started 13:24:40 UTC, restart count 0. |
+| Health | `GET /api/health` returned `{"status":"ok","database":"ok","schema_version":12}`; Compose health `healthy`. |
+| Startup errors | No error, traceback, exception, failed, or critical lines in the api logs since the recreate. |
+| Loaded balance rule | Imported `fin_agent.ledger.common` inside the recreated container and inspected `has_known_balance`: it requires both `statement_balance_paise` and `statement_balance_as_of`. Runtime cases: both present (including explicit zero) True; paise only False; as-of only False; neither False; ledger activity alone False. |
+| Source identity | Container `common.py` SHA-256 `006775ba396c0afb03f55d84666a909e4bf5ea3c475420e6cb4d0eaf8b18aa5c` equals the host working-tree file. `read.py`, `accounts.py`, `importers/commit.py`, and `tools/projection.py` also hash-match the host. |
+
+UI check: `preview_status` reported no existing tab. `preview_open` on `http://127.0.0.1:8000`
+loaded the Fin-Agent page but rendered the passkey sign-in screen ("This instance is behind one
+passkey"). Browser work stopped at that boundary; no authenticated UI was observed and no sign-in
+was attempted.
+
+Outstanding manual UI check: an authenticated owner should sign in and confirm Home/Today and the
+Accounts summary still show `Unknown` for the unknown-balance SBI account (F08), and that a
+movement-only account stays Unknown (F09). This run made no financial writes and sent no chat
+messages.

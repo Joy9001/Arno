@@ -16,7 +16,9 @@ from pydantic_ai.capabilities import (
     AbstractCapability,
     Caching,
     ModelFallback,
+    WrapRunHandler,
 )
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai_harness.code_mode import CodeMode
@@ -26,6 +28,7 @@ from pydantic_ai_harness.compaction import (
     SlidingWindowCompaction,
     SummarizingCompaction,
     TieredCompaction,
+    is_pinned,
 )
 from pydantic_ai_harness.guardrails import InputGuardrail
 from pydantic_ai_harness.guardrails.detectors import personal_data, secret_data
@@ -59,6 +62,67 @@ SUMMARY_PROMPT = (
     "and balances, which can be read again from the ledger. Leave out statement and photo text.\n\n"
     "{messages}"
 )
+
+
+def _content_text(content: Any) -> str:
+    """Join the text items of a prompt, skipping files and other non-text content."""
+    if isinstance(content, str):
+        return content.strip()
+    texts: list[str] = []
+    for item in content:
+        text = item if isinstance(item, str) else getattr(item, "content", None)
+        if isinstance(text, str):
+            texts.append(text)
+    return "\n".join(texts).strip()
+
+
+def _current_user_text(ctx: RunContext[Any]) -> str | None:
+    """The prompt this run is answering, never the pinned snapshot or older turns."""
+    if ctx.prompt is not None:
+        text = _content_text(ctx.prompt)
+        if text:
+            return text
+    # The chat adapter passes the new turn in `message_history` instead of `prompt`.
+    for message in reversed(ctx.messages):
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in reversed(message.parts):
+            if isinstance(part, UserPromptPart) and not is_pinned(part):
+                text = _content_text(part.content)
+                if text:
+                    return text
+    return None
+
+
+class RootSpanIO(AbstractCapability[Any]):
+    """Put the current message and final reply on the native `invoke_agent` span.
+
+    Phoenix's trace list reads `input.value`/`output.value`; Pydantic AI's root span carries the
+    full history and `final_result` but not those two view attributes. This capability writes only
+    those attributes on the existing span, inside the instrumentation's outermost layer.
+    """
+
+    async def wrap_run(self, ctx: RunContext[Any], *, handler: WrapRunHandler) -> Any:
+        from opentelemetry.trace import get_current_span
+
+        span = get_current_span()
+        if span.is_recording():
+            # Identity is attribution, not message content: record it even when content is off.
+            # The API passes the opaque authenticated principal; CLI and scheduled runs use the
+            # one local actor this single-user installation has.
+            span.set_attribute("user.id", getattr(ctx.deps, "user_id", None) or "local-user")
+        if ctx.trace_include_content and span.is_recording():
+            text = _current_user_text(ctx)
+            if text:
+                span.set_attribute("input.value", text)
+                span.set_attribute("input.mime_type", "text/plain")
+        result = await handler()
+        if ctx.trace_include_content and span.is_recording():
+            output = result.output
+            if isinstance(output, str) and output.strip():
+                span.set_attribute("output.value", output)
+                span.set_attribute("output.mime_type", "text/plain")
+        return result
 
 
 class ToolErrorsToModel(AbstractCapability[AgentDeps]):
@@ -189,6 +253,7 @@ def build_capabilities(
 
     summary_model: Model = FallbackModel(primary, backup) if backup is not None else primary
     capabilities: list[AbstractCapability[Any]] = [
+        RootSpanIO(),
         redaction_guardrail(),
         CodeMode(tools={"code_mode": True}),
         Caching(),
@@ -247,6 +312,7 @@ __all__ = [
     "RUN_MODEL_SETTINGS",
     "SHARED_DAILY_BUDGET",
     "SUMMARY_PROMPT",
+    "RootSpanIO",
     "ToolErrorsToModel",
     "WRITE_TOOLS",
     "build_capabilities",

@@ -64,10 +64,9 @@ def briefing_numbers(conn: psycopg.Connection, *, as_of: date | None = None) -> 
     previous_paise = _sum_paise(last_week.get("total"))
 
     summary = accounts_mod.account_summary(conn)
-    liquid_accounts = [
-        account for account in summary["accounts"] if account["liquid"] and account["active"]
-    ]
-    liquid_paise = int(summary["liquid_total_paise"]) if liquid_accounts else None
+    liquid_paise = (
+        int(summary["liquid_total_paise"]) if summary["cash_quality"]["status"] == "known" else None
+    )
     card_owed_paise = int(summary["card_owed_paise"])
 
     upcoming_rows = schedules_mod.upcoming(conn, days=7, start=day)["events"]

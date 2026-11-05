@@ -86,6 +86,20 @@ def balance_as_of(conn: psycopg.Connection, ledger_account_id: str) -> date | No
     return row["as_of"] if row else None
 
 
+def has_known_balance(account: dict[str, Any]) -> bool:
+    """A balance is known only when an explicit stated or statement balance anchors it.
+
+    The anchor is stored as ``statement_balance_paise`` plus its ``statement_balance_as_of``:
+    an opening balance, a user-stated balance, or a committed statement all write both, including
+    an explicit zero. A ledger movement changes a known balance but never establishes one, so an
+    account whose first entry is spend or income remains unknown.
+    """
+    return (
+        account["statement_balance_paise"] is not None
+        and account["statement_balance_as_of"] is not None
+    )
+
+
 def account_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, Any]:
     balance = ledger_balance(conn, row["ledger_account_id"])
     as_of = balance_as_of(conn, row["ledger_account_id"])

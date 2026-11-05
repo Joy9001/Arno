@@ -24,6 +24,7 @@ from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger import payees as payees_mod
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger import settings as settings_mod
+from fin_agent.ledger.common import has_known_balance
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools.mark import mark
 from fin_agent.tools.periods import resolve_period
@@ -123,8 +124,8 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
     accounts: list[dict[str, Any]] = []
     warnings: list[str] = []
     for row in account_rows:
-        as_of = row["balance_as_of"] or row["statement_balance_as_of"]
-        known = as_of is not None or row["statement_balance_paise"] is not None
+        known = has_known_balance(row)
+        as_of = (row["balance_as_of"] or row["statement_balance_as_of"]) if known else None
         balance = money(row["balance_paise"]) if known else None
         coverage_row = _account_coverage(conn, row["id"], day - timedelta(days=366), day)
         age = row["statement_age_days"]
@@ -142,6 +143,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
                 "name": row["name"],
                 "kind": row["kind"],
                 "liquid": row["liquid"],
+                "known": known,
                 "balance": balance,
                 "as_of": as_of or None,
                 "statement_age_days": age,
@@ -158,14 +160,11 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
             }
         )
 
-    liquid_known = [
-        row
-        for row in account_rows
-        if row["liquid"] and (row["balance_as_of"] or row["statement_balance_as_of"])
-    ]
+    liquid_rows = [row for row in account_rows if row["liquid"]]
+    liquid_known = [row for row in liquid_rows if has_known_balance(row)]
     liquid_total = (
         money(sum(int(row["balance_paise"]) for row in liquid_known))
-        if len(liquid_known) == len([row for row in account_rows if row["liquid"]])
+        if len(liquid_known) == len(liquid_rows)
         else None
     )
 
@@ -290,11 +289,8 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         setup_gaps.append("no floor set")
     if not baseline_count:
         setup_gaps.append("no estimated baselines")
-    if any(
-        row["balance_as_of"] is None and row["statement_balance_paise"] is None
-        for row in account_rows
-    ):
-        setup_gaps.append("an account has no balance")
+    if any(not has_known_balance(row) for row in account_rows):
+        setup_gaps.append("an account has no stated balance")
 
     return {
         "today": day.isoformat(),

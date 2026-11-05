@@ -26,6 +26,21 @@ those native attributes to OpenInference on ingestion.
 
 - Content follows Pydantic AI's default instrumentation: prompts, replies, tool arguments, and
   tool results are recorded. There is no Fin-Agent content switch.
+- The native `invoke_agent` span also carries `input.value` and `output.value` (both
+  `text/plain`) for Phoenix's trace list. They hold only the current user message and the final
+  assistant reply, never the pinned financial snapshot or the full history; a failed, cancelled,
+  or approval-pending run has no output. This is two attributes on the existing span, not a
+  second trace or a wrapper root. The full history and `final_result` remain on the same span.
+  The capability is `RootSpanIO` in `fin_agent.agent.capabilities`; it follows the run's
+  `include_content` setting.
+- The same span carries `user.id`, outside the content switch: it is attribution, not message
+  text. Chat runs use the opaque `users.id` of the signed-in passkey principal, so every
+  conversation by that user gets the same value. CLI and scheduled runs have no session and use
+  the fixed local-actor label `local-user`. It is never derived from a token, email, account
+  name, financial row, conversation ID, or hostname.
+- Status is Pydantic AI's native status. A successful run stays `UNSET`; a failed or cancelled
+  run is `ERROR`. Fin-Agent adds no status writer, so it cannot turn an SDK-recorded error into
+  success. The trace list shows the same `UNSET`/`ERROR` values Phoenix receives.
 - Tokens and estimated cost appear when Pydantic AI can price the model. No price is invented;
   an unpriced model has no cost. The Postgres spend ledger remains the budget authority.
 - HTTP requests, database statements, jobs, imports, notifications, and business functions have
@@ -123,7 +138,8 @@ link is printed to that local stdout and should be read from the trusted console
    already exports with the local admin secret. Set `PHOENIX_API_KEY` only to use a real Phoenix
    API key, then recreate the API after changing its environment.
 3. Send one chat message. Open the newest trace. The root is Pydantic AI's `invoke_agent` span,
-   with model-request and `execute_tool` children.
+   with model-request and `execute_tool` children. Its input and output columns show the message
+   you sent and the reply, so the trace list is readable before opening the span.
 4. If no trace arrives, check `docker compose logs api` for an exporter error, confirm
    `PHOENIX_COLLECTOR_ENDPOINT` is reachable from the API container, confirm
    `OTEL_SDK_DISABLED` is not `true`, and confirm the bearer credential if Phoenix returns 401.

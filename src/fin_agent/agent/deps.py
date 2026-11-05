@@ -10,6 +10,9 @@ class AgentDeps:
     conversation_id: str
     message_id: str | None = None
     run_id: str | None = None
+    # The authenticated principal for trace attribution. Opaque, stable, never derived from
+    # financial data; absent on CLI and scheduled runs, which use the local-actor label.
+    user_id: str | None = None
     # Server-set: the thread has read outside text, so lasting writes ask first.
     flagged: bool = False
     # The current user message, so a new name it contains isn't marked as outside text.

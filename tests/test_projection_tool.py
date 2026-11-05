@@ -88,6 +88,26 @@ def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_ledger)
     assert card["source_ids"]["accounts"]
 
 
+def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger):
+    from fin_agent.ledger.accounts import create_account
+    from fin_agent.ledger.movements import record_expense
+
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+
+    result = projection_tools.project(ledger, as_of=ledger_today(), runs=20)
+
+    age = next(row for row in result["data_quality"]["balance_ages"] if row["id"] == account["id"])
+    assert age["known"] is False
+    assert age["as_of"] is None
+    assert age["balance_paise"] == -25_000
+    assert any("SBI Savings has no stated balance" in gap for gap in result["data_quality"]["gaps"])
+    assert any("recorded net change" in gap for gap in result["data_quality"]["gaps"])
+    assert "no liquid account has a known balance" in result["data_quality"]["setup_gaps"]
+    source = next(item for item in result["sources"] if item["id"] == account["id"])
+    assert source["detail"] == "liquid · balance unknown"
+
+
 def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger):
     result = projection_tools.project(
         demo_ledger,

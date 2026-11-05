@@ -413,10 +413,13 @@ async def record_movement(
     movement: Movement,
     not_duplicate: bool = False,
 ) -> ToolReturn:
-    """Log money that moved: expense, income, transfer (card bill, SIP, saving to a goal), split,
-    loan EMI, refund, or settling money owed. Say what happened; code works out the transfers.
-    Ask first if the amount is missing or a split isn't clear. Pass category only if the user named
-    one; otherwise pass category_guess. Amounts are rupees in `amount_rupees`, never paise.
+    """Log money that moved: expense, income, transfer between your own accounts (card bill, SIP,
+    saving to a goal), split (whole bill and your share; each person and their share), loan EMI
+    (total paid), refund, or settlement (direction says who paid whom). Say what happened; code
+    works out the transfers. Ask first if the amount is missing or a split isn't clear. `date` is
+    ISO, omit for today, never a future date. `account` is optional; code uses the payee's usual
+    account, or the busiest/default one. Pass `category` only if the user named one; otherwise
+    pass `category_guess`. Amounts are rupees in `amount_rupees`, never paise.
     Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
     "category": "Food & Dining"}."""
     payload_movement = movement.model_dump(exclude_none=True, mode="python")
@@ -476,10 +479,16 @@ async def update_setup(
     action: Literal["add", "update", "archive"],
     data: SetupData,
 ) -> ToolReturn:
-    """Change the user's setup: accounts, stated balances, schedules (income, EMIs, rent,
-    subscriptions), goals, categories, payees, settings such as the floor, scheduled questions, and
-    estimated baselines. Not for logging money that moved. Amounts are rupees in `*_rupees`
-    fields, e.g. {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
+    """Change setup: accounts, balances, schedules, goals, categories, payees, settings (the floor),
+    scheduled questions, and baselines. Not for money that moved. Amounts are rupees in
+    `*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits;
+    the floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated
+    balance; a baseline is typical daily spend.
+    For action "add" on a card, a positive credit limit, a statement day, and a due day are
+    required. If the user does not know one, leave the card pending instead of guessing. A bank
+    needs only a name, and its balance and last4 are optional. An update changes only the fields
+    you pass.
+    Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
     payload_data = data.model_dump(exclude_none=True, mode="python")
     summary = payload_data.get("name") or payload_data.get("account") or payload_data
     _gate(ctx, f"{action} {entity}: {summary}")

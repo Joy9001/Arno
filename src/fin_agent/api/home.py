@@ -27,9 +27,11 @@ def get_home(
         projection = projection_tools.project(conn, horizon_days=horizon_days)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    summary = accounts.account_summary(conn)
     return {
         "as_of": projection["as_of"],
-        "spendable_paise": accounts.account_summary(conn)["liquid_total_paise"],
+        "spendable_paise": summary["liquid_total_paise"],
+        "cash_quality": summary["cash_quality"],
         "projection": projection,
         "unread_count": count_unread(conn),
         "needs_you": unread_first(conn, limit=4),

@@ -22,7 +22,7 @@ from fin_agent.importers.pipeline import (
 )
 from fin_agent.importers.readers import Doc
 from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.ledger.accounts import create_account
+from fin_agent.ledger.accounts import account_summary, create_account, set_statement_balance
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import ledger_balance, system_account
 from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
@@ -118,6 +118,70 @@ async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
     assert account_row["statement_balance_paise"] == 24567890
     assert str(account_row["statement_balance_as_of"]) == "2026-03-31"
+
+
+async def test_a_verified_import_anchors_an_unknown_account_and_undo_removes_it(ledger):
+    account = create_account(
+        ledger, kind="bank", name="SBI savings", institution="SBI", last4="6789"
+    )
+    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
+    _save_layout(ledger, account)
+    attachment_id = _attachment(ledger, sbi_csv())
+    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+
+    await _run_import(row["id"])
+
+    detail = import_payload(ledger, row["id"])
+    assert detail["check"] == "VERIFIED"
+    commit_import(ledger, row["id"], categorize=False)
+    assert account_summary(ledger)["cash_quality"]["status"] == "known"
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    assert account_row["statement_balance_paise"] == 34402890
+    assert str(account_row["statement_balance_as_of"]) == "2026-04-30"
+
+    undo_import(ledger, row["id"])
+
+    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    assert account_row["statement_balance_paise"] is None
+    assert account_row["statement_balance_as_of"] is None
+
+
+async def test_a_backdated_import_keeps_a_newer_statement_balance(ledger):
+    account = _account(ledger)
+    set_statement_balance(ledger, account["id"], balance_paise=30_000_000, as_of=date(2026, 5, 31))
+    _save_layout(ledger, account)
+    attachment_id = _attachment(ledger, sbi_csv())
+    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+
+    await _run_import(row["id"])
+
+    detail = import_payload(ledger, row["id"])
+    assert detail["check"] == "VERIFIED"
+    commit_import(ledger, row["id"], categorize=False)
+
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    assert account_row["statement_balance_paise"] == 30_000_000
+    assert str(account_row["statement_balance_as_of"]) == "2026-05-31"
+    review = ledger.execute("SELECT review FROM imports WHERE id = %s", (row["id"],)).fetchone()[
+        "review"
+    ]
+    assert review["statement_updated"] is False
+
+    undo_import(ledger, row["id"])
+
+    account_row = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    assert account_row["statement_balance_paise"] == 30_000_000
+    assert str(account_row["statement_balance_as_of"]) == "2026-05-31"
+    assert account_summary(ledger)["cash_quality"]["status"] == "known"
 
 
 async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger):

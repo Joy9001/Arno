@@ -10,6 +10,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.toolset import update_setup
+from fin_agent.agent.write_models import AccountSetup
 
 
 def _deps(conn, thread_id: str, message_id: str) -> AgentDeps:
@@ -63,6 +65,22 @@ def _one_tool_script(tool_name: str, args: dict, answer: str = "Done."):
 
 def _expense_script(args: dict, answer: str = "Logged."):
     return _one_tool_script("record_movement", args, answer)
+
+
+def test_card_create_requirements_are_in_the_model_visible_contract():
+    schema = AccountSetup.model_json_schema()
+    properties = schema["properties"]
+
+    assert "card" in schema["description"]
+    for field in ("credit_limit_rupees", "statement_day", "due_day"):
+        assert "required on add" in properties[field]["description"].lower()
+    assert "optional" in properties["last4"]["description"].lower()
+    assert "omit it if unknown" in properties["opening_balance_rupees"]["description"].lower()
+
+    tool_guidance = update_setup.__doc__ or ""
+    assert "required" in tool_guidance
+    assert "leave the card pending" in tool_guidance
+    assert "update changes only the fields" in tool_guidance
 
 
 def test_expense_uses_amount_rupees_and_payee(demo_ledger):

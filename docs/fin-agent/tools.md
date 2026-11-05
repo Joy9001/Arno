@@ -56,9 +56,9 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
 {
   "today": "2026-10-31",
   "settings": {"currency": "INR", "floor": Money, "default_horizon_days": 90},
-  "accounts": [{"name", "kind", "liquid", "balance": Money, "as_of",
+  "accounts": [{"name", "kind", "liquid", "known": bool, "balance": Money, "as_of",
                 "statement_age_days", "covered": {"from", "to"}, "gaps": [...]}],
-  "liquid_total": Money,
+  "liquid_total": Money,  # null when any active liquid account is not known
   "upcoming": [{"date", "name", "kind", "amount": Money}],
   "goals": [{"name", "target": Money, "saved": Money, "deadline", "priority"}],
   "owed": [{"person", "amount": Money, "expected_date"}],  # positive: they owe you
@@ -70,16 +70,26 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
 
 UI: source IDs for citations.
 
+A balance is known only when an explicit opening balance, a user-stated balance, or a committed
+statement anchors it. Those sources all persist `statement_balance_paise` with a valid
+`statement_balance_as_of`, including an explicit zero. A ledger movement changes a known balance;
+it never establishes one. An account whose first entry is an expense or income therefore keeps
+`known: false`, `balance: null`, and `as_of: null`, while its real net change remains visible in
+the account payload and Ledger. `liquid_total` is null when any active liquid account is unknown;
+it is not a complete current cash claim.
+
 **Logic**
 
 ```
 settings   = read settings
 accounts   = active accounts joined to v_balances as of today
-for each account: coverage from imports, statement age
+for each account: known = statement_balance_paise and statement_balance_as_of are present
+                  balance = ledger balance only when known
+                  coverage from imports, statement age
 upcoming   = expand schedule rules over 30 days, adjust for holidays, add card due dates
 goals      = goals plus the balance of each goal account
 owed       = v_owed
-setup_gaps = no income schedule? no floor? an account with no balance?
+setup_gaps = no income schedule? no floor? an account with no stated balance?
 warnings   = stale balances + coverage gaps
 mark() only the names whose row still has outside_text = true
 ```
@@ -212,6 +222,10 @@ class Hypothetical:
 
 The daily curve, the full source list, and the verdict card travel as UI metadata; the model sees
 the compact payload above. `optimistic` is the unconfirmed-income case and never feeds a verdict.
+`data_quality.balance_ages[].known` uses the same anchor rule as the account summary. An unknown
+liquid account keeps `known: false` and no balance date; the gap says the projection starts from
+its recorded net change, not a verified bank balance. That provisional input is never presented as
+known cash.
 
 UI: daily curve (median and P10-P90), source IDs, projection card.
 
@@ -387,10 +401,13 @@ no ledger write, no audit
 
 **Tier:** always instant, with an undo card.
 
-**Description:** "Log money that moved: expense, income, transfer (card bill, SIP, saving to a goal),
-split, loan EMI, refund, or settling money owed. Say what happened; code works out the transfers.
-Ask first if the amount is missing or a split isn't clear. Pass category only if the user named one;
-otherwise pass category_guess."
+**Description:** "Log money that moved: expense, income, transfer between your own accounts (card
+bill, SIP, saving to a goal), split (whole bill and your share; each person and their share), loan
+EMI (total paid), refund, or settlement (direction says who paid whom). Say what happened; code
+works out the transfers. Ask first if the amount is missing or a split isn't clear. `date` is ISO,
+omit for today, never a future date. `account` is optional; code uses the payee's usual account, or
+the busiest/default one. Pass `category` only if the user named one; otherwise pass
+`category_guess`. Amounts are rupees in `amount_rupees`, never paise."
 
 **Input**
 
@@ -398,7 +415,7 @@ otherwise pass category_guess."
 record_movement(movement: Expense | Income | Transfer | Split | LoanPayment | Refund | Settlement,
                 not_duplicate: bool = False)
 
-# All kinds also take: date=None, note=None, attachment_id=None
+# All kinds also take: date=None, note=None, description=None, upi_id=None
 Expense:     amount_rupees, payee, account=None, category=None, category_guess=None
 Income:      amount_rupees, payee, account=None
 Transfer:    amount_rupees, from_account, to_account
@@ -406,7 +423,8 @@ Split:       total_rupees, my_share_rupees, people=[{name, amount_rupees, expect
              payee, account=None, category=None, category_guess=None
 LoanPayment: amount_rupees, loan, account=None
 Refund:      amount_rupees, payee, account=None, category=None
-Settlement:  amount_rupees, person, direction=Literal["they_paid", "i_paid"], account=None
+Settlement:  amount_rupees, person, direction=Literal["they_paid", "i_paid"], account=None,
+             expected_date=None
 ```
 
 **Output**
@@ -506,15 +524,21 @@ queue the risk check if amount, account, date, or delete changed
 
 **Tier:** lasting. Instant in a clean conversation, confirm card in a flagged one.
 
-**Description:** "Change the user's setup: accounts, stated balances, schedules (income, EMIs, rent,
-subscriptions), goals, categories, payees, settings such as the floor, and scheduled questions. Not
-for logging money that moved."
+**Description:** "Change setup: accounts, balances, schedules, goals, categories, payees, settings
+(the floor), scheduled questions, and baselines. Not for money that moved. Amounts are rupees in
+`*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits; the
+floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated balance; a
+baseline is typical daily spend.
+For action "add" on a card, a positive credit limit, a statement day, and a due day are required.
+If the user does not know one, leave the card pending instead of guessing. A bank needs only a
+name, and its balance and last4 are optional. An update changes only the fields you pass.
+Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."
 
 **Input**
 
 ```python
 update_setup(entity: Literal["account", "balance", "schedule", "goal", "category",
-                             "payee", "settings", "scheduled_question"],
+                             "payee", "settings", "scheduled_question", "baseline"],
              action: Literal["add", "update", "archive"],
              data: ...)  # a typed model for each entity, for example:
 

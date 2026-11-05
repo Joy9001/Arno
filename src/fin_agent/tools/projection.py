@@ -30,6 +30,7 @@ from fin_agent.engine.projection import (
     project as run_projection,
 )
 from fin_agent.ledger import schedules as schedules_mod
+from fin_agent.ledger.common import has_known_balance
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools.mark import mark
 
@@ -47,20 +48,6 @@ def _balance_at(conn: psycopg.Connection, ledger_account_id: str, as_of: date) -
         (ledger_account_id, as_of),
     ).fetchone()
     return int(row["balance_paise"]) if row else 0
-
-
-def _last_activity(conn: psycopg.Connection, ledger_account_id: str, as_of: date) -> date | None:
-    row = conn.execute(
-        """
-        SELECT max(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date)) AS as_of
-        FROM pgledger_transfers t
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE (t.from_account_id = %s OR t.to_account_id = %s)
-          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= %s
-        """,
-        (ledger_account_id, ledger_account_id, as_of),
-    ).fetchone()
-    return row["as_of"] if row and row["as_of"] else None
 
 
 def _settings(conn: psycopg.Connection) -> dict[str, Any]:
@@ -93,17 +80,22 @@ def _card_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, An
     for row in rows:
         balance = _balance_at(conn, row["ledger_account_id"], as_of)
         outstanding = max(-balance, 0)
+        stated = row["statement_balance_as_of"]
+        known = has_known_balance(row) and stated is not None and stated <= as_of
         cards.append(
             {
                 **dict(row),
                 "outstanding_paise": outstanding,
                 "available_credit_paise": max((row["credit_limit_paise"] or 0) - outstanding, 0),
-                "as_of": row["statement_balance_as_of"]
-                or _last_activity(conn, row["ledger_account_id"], as_of),
+                "as_of": stated if known else None,
+                "known": known,
             }
         )
-        if row["statement_balance_as_of"] is None:
-            gaps.append(f"{row['name']} has no statement date; its outstanding is from the ledger")
+        if not known:
+            gaps.append(
+                f"{row['name']} has no statement balance as of {as_of.isoformat()}; "
+                "its outstanding is from the ledger"
+            )
     return cards, gaps
 
 
@@ -121,10 +113,9 @@ def _liquid_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, 
     gaps: list[str] = []
     for row in rows:
         balance = _balance_at(conn, row["ledger_account_id"], as_of)
-        activity = _last_activity(conn, row["ledger_account_id"], as_of)
         stated = row["statement_balance_as_of"]
-        as_of_date = stated if stated is not None and stated <= as_of else activity
-        known = stated is not None or activity is not None
+        known = has_known_balance(row) and stated is not None and stated <= as_of
+        as_of_date = stated if known else None
         age = (as_of - as_of_date).days if as_of_date is not None else None
         accounts.append(
             {
@@ -137,7 +128,8 @@ def _liquid_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, 
         )
         if not known:
             gaps.append(
-                f"{row['name']} has no known balance as of {as_of.isoformat()}; it counts as zero"
+                f"{row['name']} has no stated balance as of {as_of.isoformat()}; the projection "
+                "uses its recorded net change, not a verified bank balance"
             )
         elif age is not None and age > 30:
             gaps.append(f"{row['name']} balance is {age} days old as of {as_of.isoformat()}")
@@ -537,7 +529,7 @@ def load_inputs(
             "as_of": row["as_of"].isoformat() if row["as_of"] else None,
             "age_days": (as_of - row["as_of"]).days if row["as_of"] else None,
             "balance_paise": -int(row["outstanding_paise"]),
-            "known": row["as_of"] is not None,
+            "known": row["known"],
         }
         for row in card_rows
     ]
@@ -586,9 +578,7 @@ def load_inputs(
         )
     for row in baseline_rows:
         days = int(row["real_days"])
-        origin = (
-            "from your history" if row["source"] == "computed" else "from your setup estimate"
-        )
+        origin = "from your history" if row["source"] == "computed" else "from your setup estimate"
         detail = f"{money(int(row['amount_per_day_paise']))['text']}/day {origin}"
         if days:
             detail += f" · {days} real day" + ("" if days == 1 else "s")

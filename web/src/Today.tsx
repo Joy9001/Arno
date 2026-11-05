@@ -5,11 +5,12 @@ import { formatDate } from "./format";
 import { Busy } from "./Loading";
 import { ProjectionChart, type ProjectionPayload } from "./projection";
 import { OBLIGATION_WARNING } from "./projectionData";
-import type { Movement, NotificationItem } from "./types";
+import type { CashQuality, Movement, NotificationItem } from "./types";
 
 export type HomePayload = {
   as_of: string;
   spendable_paise: number;
+  cash_quality: CashQuality;
   projection: ProjectionPayload;
   unread_count: number;
   needs_you: NotificationItem[];
@@ -37,6 +38,10 @@ export function TodaySummary({
   busy?: boolean;
 }) {
   const projection = data.projection;
+  const cash = data.cash_quality;
+  const cashNames = cash.unknown_accounts.slice(0, 2).join(", ");
+  const cashMore =
+    cash.unknown_accounts.length > 2 ? ` and ${cash.unknown_accounts.length - 2} more` : "";
   const low =
     projection.median_low.amount?.text ??
     (projection.median_low.paise !== undefined
@@ -52,9 +57,19 @@ export function TodaySummary({
     <section className="today" aria-label="Today's money">
       <div className="today-cash">
         <div className="today-label">Cash on hand</div>
-        <div className="today-amount">{formatRupees(data.spendable_paise)}</div>
+        {cash.status === "known" ? (
+          <div className="today-amount">{formatRupees(data.spendable_paise)}</div>
+        ) : (
+          <div className="today-amount today-amount-unknown">
+            {cash.status === "no_accounts" ? "No accounts" : "Unknown"}
+          </div>
+        )}
         <p className="today-scope">
-          Liquid account balances · as of {formatDate(data.as_of)}
+          {cash.status === "known"
+            ? `Liquid account balances · as of ${formatDate(data.as_of)}`
+            : cash.status === "no_accounts"
+              ? "Add a bank, cash, or wallet account to see cash on hand."
+              : `No known balance for ${cashNames}${cashMore}. Add a statement balance or import a statement.`}
         </p>
       </div>
 

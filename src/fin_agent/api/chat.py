@@ -20,7 +20,7 @@ from fin_agent.agent import history as history_mod
 from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
-from fin_agent.api.deps import Database, current_session
+from fin_agent.api.deps import Database, Session, current_session
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
@@ -89,7 +89,7 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
 
 
 @router.post("/chat")
-async def post_chat(request: Request) -> Response:
+async def post_chat(request: Request, session: Session) -> Response:
     app = request.app
     body = await request.json()
     if not isinstance(body, dict):
@@ -200,6 +200,7 @@ async def post_chat(request: Request) -> Response:
     deps = AgentDeps(
         conversation_id=thread_id,
         message_id=user_server_id,
+        user_id=str(session["user_id"]),
         flagged=flagged,
         user_texts=(text,),
         capture_kind="voice" if capture_ref else "chat",

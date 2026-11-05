@@ -5,11 +5,13 @@ from datetime import date
 import pytest
 
 from fin_agent.ledger.accounts import (
+    account_summary,
     archive_account,
     create_account,
     get_account,
     list_accounts,
     set_statement_balance,
+    update_account,
 )
 from fin_agent.ledger.audit import undo_group
 from fin_agent.ledger.errors import InvalidLedgerError
@@ -101,6 +103,192 @@ def test_card_fields_are_required_and_only_for_a_card(ledger):
         create_account(ledger, kind="card", name="Broken card", statement_day=5, due_day=25)
     with pytest.raises(InvalidLedgerError, match="belong only to a card"):
         create_account(ledger, kind="bank", name="Odd", credit_limit_paise=1000)
+
+
+def test_card_missing_fields_are_reported_together_and_write_nothing(ledger):
+    with pytest.raises(InvalidLedgerError) as caught:
+        create_account(ledger, kind="card", name="Slice")
+
+    message = caught.value.message
+    assert "credit limit" in message
+    assert "statement day" in message
+    assert "due day" in message
+    assert list_accounts(ledger) == []
+    assert (
+        ledger.execute("SELECT count(*) AS n FROM accounts WHERE name = 'Slice'").fetchone()["n"]
+        == 0
+    )
+
+
+def test_card_invalid_ranges_are_reported_together(ledger):
+    with pytest.raises(InvalidLedgerError) as caught:
+        create_account(
+            ledger,
+            kind="card",
+            name="Slice",
+            credit_limit_paise=0,
+            statement_day=40,
+            due_day=0,
+        )
+
+    message = caught.value.message
+    assert "zero or negative" in message
+    assert "not 40" in message
+    assert "not 0" in message
+    assert list_accounts(ledger) == []
+
+
+def test_card_partial_update_changes_only_the_given_field(ledger):
+    card = create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        credit_limit_paise=10_000_000,
+        statement_day=5,
+        due_day=25,
+    )
+
+    updated = update_account(ledger, card["id"], due_day=28)
+
+    assert updated["due_day"] == 28
+    assert updated["statement_day"] == 5
+    assert updated["credit_limit_paise"] == 10_000_000
+
+    with pytest.raises(InvalidLedgerError, match="due day"):
+        update_account(ledger, card["id"], due_day=32)
+    assert get_account(ledger, card["id"])["due_day"] == 28
+
+
+def test_liquid_total_quality_separates_unknown_zero_and_empty(ledger):
+    assert account_summary(ledger)["cash_quality"]["status"] == "no_accounts"
+
+    unknown = create_account(ledger, kind="bank", name="SBI Savings")
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality == {
+        "status": "unknown",
+        "known_paise": 0,
+        "known_count": 0,
+        "unknown_count": 1,
+        "unknown_accounts": ["SBI Savings"],
+    }
+
+    set_statement_balance(ledger, unknown["id"], balance_paise=0)
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "known"
+    assert quality["known_paise"] == 0
+    assert quality["known_count"] == 1
+    assert quality["unknown_count"] == 0
+
+    create_account(ledger, kind="bank", name="HDFC Savings", opening_balance_paise=2_500_000)
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "known"
+    assert quality["known_paise"] == 2_500_000
+    assert quality["known_count"] == 2
+    assert quality["unknown_accounts"] == []
+
+
+@pytest.mark.parametrize("kind", ["expense", "income"])
+def test_a_movement_alone_does_not_make_an_unknown_balance_known(ledger, kind):
+    from fin_agent.ledger import movements
+
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    getattr(movements, f"record_{kind}")(
+        ledger,
+        account_id=account["id"],
+        amount_paise=25_000,
+        description="Only recorded activity",
+    )
+
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "unknown"
+    assert quality["known_paise"] == 0
+    assert quality["known_count"] == 0
+    assert quality["unknown_count"] == 1
+    assert quality["unknown_accounts"] == ["SBI Savings"]
+
+    refreshed = get_account(ledger, account["id"])
+    assert refreshed["statement_balance_paise"] is None
+    assert refreshed["statement_balance_as_of"] is None
+    assert refreshed["balance_paise"] == (-25_000 if kind == "expense" else 25_000)
+
+
+def test_an_explicit_zero_opening_is_known_and_stays_zero(ledger):
+    create_account(ledger, kind="bank", name="Zero bank", opening_balance_paise=0)
+
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality == {
+        "status": "known",
+        "known_paise": 0,
+        "known_count": 1,
+        "unknown_count": 0,
+        "unknown_accounts": [],
+    }
+
+
+def test_a_stated_balance_after_activity_becomes_known(ledger):
+    from fin_agent.ledger.movements import record_expense
+
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
+
+    set_statement_balance(ledger, account["id"], balance_paise=5_000_000, as_of=date(2026, 11, 1))
+
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "known"
+    assert quality["known_paise"] == 5_000_000
+    assert quality["known_count"] == 1
+
+
+def test_undoing_the_only_stated_balance_returns_to_unknown(ledger):
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    result = set_statement_balance(ledger, account["id"], balance_paise=1_000_000)
+    assert account_summary(ledger)["cash_quality"]["status"] == "known"
+
+    undo_group(ledger, result["undo_id"])
+
+    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
+    refreshed = get_account(ledger, account["id"])
+    assert refreshed["statement_balance_paise"] is None
+    assert refreshed["statement_balance_as_of"] is None
+
+
+def test_undoing_an_expense_keeps_a_surviving_anchor(ledger):
+    from fin_agent.ledger.movements import record_expense
+
+    account = create_account(
+        ledger,
+        kind="bank",
+        name="SBI Savings",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 11, 1),
+    )
+    recorded = record_expense(
+        ledger, account_id=account["id"], amount_paise=25_000, description="Lunch"
+    )
+
+    undo_group(ledger, recorded["undo_id"])
+
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "known"
+    assert quality["known_paise"] == 10_000_000
+    refreshed = get_account(ledger, account["id"])
+    assert refreshed["statement_balance_as_of"] == "2026-11-01"
+
+
+def test_mixed_known_and_unknown_activity_reports_an_incomplete_total(ledger):
+    from fin_agent.ledger.movements import record_expense
+
+    create_account(ledger, kind="bank", name="Zero bank", opening_balance_paise=0)
+    unknown = create_account(ledger, kind="bank", name="SBI Savings")
+    record_expense(ledger, account_id=unknown["id"], amount_paise=25_000, description="Lunch")
+
+    quality = account_summary(ledger)["cash_quality"]
+    assert quality["status"] == "unknown"
+    assert quality["known_paise"] == 0
+    assert quality["known_count"] == 1
+    assert quality["unknown_count"] == 1
+    assert quality["unknown_accounts"] == ["SBI Savings"]
 
 
 def test_statement_balance_adjustment_is_visible_and_never_spending(ledger):

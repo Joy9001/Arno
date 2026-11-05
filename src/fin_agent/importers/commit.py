@@ -344,18 +344,27 @@ def commit_import(
             group_ids.append(adjustment_group)
         conn.commit()
 
+    # A backdated statement must not replace a newer stated balance or erase one when the
+    # statement prints no closing balance.
+    existing_as_of = account["statement_balance_as_of"]
+    statement_updated = (
+        closing is not None
+        and period_end is not None
+        and (existing_as_of is None or period_end >= existing_as_of)
+    )
     _finish_open_transaction(conn)
     with conn.transaction():
-        conn.execute(
-            """
-            UPDATE accounts
-            SET statement_balance_paise = %s,
-                statement_balance_as_of = %s,
-                updated_at = now()
-            WHERE id = %s
-            """,
-            (closing, period_end, account["id"]),
-        )
+        if statement_updated:
+            conn.execute(
+                """
+                UPDATE accounts
+                SET statement_balance_paise = %s,
+                    statement_balance_as_of = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (closing, period_end, account["id"]),
+            )
         layout = None
         fingerprint = row["fingerprint"]
         parser = row["parser"]
@@ -377,6 +386,7 @@ def commit_import(
             ),
         }
         review["adjustment_paise"] = adjustment_difference
+        review["statement_updated"] = statement_updated
         conn.execute(
             """
             UPDATE imports
@@ -455,9 +465,34 @@ def undo_import(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
             raise
     review = dict(row["review"] or {})
     before = review.get("account_before") or {}
+    statement_updated = review.get("statement_updated", True)
     _finish_open_transaction(conn)
     with conn.transaction():
-        if before:
+        current = conn.execute(
+            """
+            SELECT statement_balance_paise, statement_balance_as_of
+            FROM accounts WHERE id = %s
+            """,
+            (row["account_id"],),
+        ).fetchone()
+        current_as_of = current["statement_balance_as_of"] if current else None
+        # Restore only while this import is still the effective balance source. A newer
+        # statement, or a manual balance on the same date, must survive the undo.
+        is_effective = (
+            current is not None
+            and (
+                row["period_end"] is None
+                or current_as_of is None
+                or current_as_of <= row["period_end"]
+            )
+            and (
+                row["period_end"] is None
+                or current_as_of != row["period_end"]
+                or row["closing_balance_paise"] is None
+                or current["statement_balance_paise"] == row["closing_balance_paise"]
+            )
+        )
+        if before and statement_updated and is_effective:
             conn.execute(
                 """
                 UPDATE accounts

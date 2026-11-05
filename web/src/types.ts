@@ -21,11 +21,20 @@ export type Account = {
   loan_outstanding_paise?: number;
 };
 
+export type CashQuality = {
+  status: "known" | "unknown" | "no_accounts";
+  known_paise: number;
+  known_count: number;
+  unknown_count: number;
+  unknown_accounts: string[];
+};
+
 export type AccountSummary = {
   accounts: Account[];
   liquid_total_paise: number;
   card_owed_paise: number;
   loan_outstanding_paise: number;
+  cash_quality: CashQuality;
   as_of: string;
 };
 

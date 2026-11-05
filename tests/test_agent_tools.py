@@ -68,6 +68,33 @@ def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
     assert "Empty bank has no stated balance" in context["warnings"]
 
 
+def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
+    from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
+    from fin_agent.ledger.common import today as ledger_today
+    from fin_agent.ledger.movements import record_expense
+
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+
+    context = read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == account["id"])
+    assert row["known"] is False
+    assert row["balance"] is None
+    assert row["as_of"] is None
+    assert context["liquid_total"] is None
+    assert "SBI Savings has no stated balance" in context["warnings"]
+    assert "an account has no stated balance" in context["setup_gaps"]
+    # The ledger net change is still auditable even though it is not a known bank balance.
+    assert get_account(ledger, account["id"])["balance_paise"] == -25_000
+
+    set_statement_balance(ledger, account["id"], balance_paise=10_000, as_of=ledger_today())
+    context = read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == account["id"])
+    assert row["known"] is True
+    assert row["balance"] == {"paise": 10_000, "text": "₹100"}
+    assert context["liquid_total"] == {"paise": 10_000, "text": "₹100"}
+
+
 def test_unknown_balance_is_null_not_zero():
     from fin_agent.engine.money import money
 

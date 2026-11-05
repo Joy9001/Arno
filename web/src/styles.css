@@ -3451,6 +3451,11 @@ button.icon-only {
   font-variant-numeric: tabular-nums;
 }
 
+.today-amount-unknown {
+  font-size: 26px;
+  color: var(--sub);
+}
+
 .today-scope {
   margin: 0;
   color: var(--ter);

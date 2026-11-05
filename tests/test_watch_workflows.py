@@ -52,6 +52,30 @@ def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
     assert sent["data"]["numbers"]["goals"][0]["deadline"] == "2027-03-01"
 
 
+def test_briefing_does_not_report_an_unknown_liquid_balance_as_zero(ledger):
+    from fin_agent.ledger.accounts import create_account
+
+    create_account(ledger, kind="bank", name="SBI Savings")
+
+    payload = compose_briefing(ledger, as_of=date(2026, 11, 1))
+
+    assert payload["numbers"]["liquid"]["paise"] is None
+    assert "Liquid balance: unknown" in payload["template"]
+
+
+def test_briefing_keeps_a_movement_only_account_unknown(ledger):
+    from fin_agent.ledger.accounts import create_account
+    from fin_agent.ledger.movements import record_expense
+
+    account = create_account(ledger, kind="bank", name="SBI Savings")
+    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+
+    payload = compose_briefing(ledger, as_of=date(2026, 11, 1))
+
+    assert payload["numbers"]["liquid"]["paise"] is None
+    assert "Liquid balance: unknown" in payload["template"]
+
+
 def test_briefing_uses_one_model_call_and_falls_back_to_the_template(db):
     good = asyncio.run(
         send_weekly_briefing(

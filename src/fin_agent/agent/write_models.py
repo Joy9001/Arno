@@ -19,94 +19,76 @@ class WriteModel(BaseModel):
 
 
 class _MovementBase(WriteModel):
-    date: Date | None = Field(
-        default=None,
-        description="The day the money moved, ISO date. Omit for today. Never a future date.",
-    )
-    note: str | None = Field(default=None, description="A short note for the ledger.")
-    description: str | None = Field(
-        default=None, description="A short human summary, if the user gave one."
-    )
-    upi_id: str | None = Field(default=None, description="The payee's UPI ID, if known.")
+    date: Date | None = None
+    note: str | None = None
+    description: str | None = None
+    upi_id: str | None = None
 
 
 class Expense(_MovementBase):
-    kind: Literal["expense"] = Field(description="An expense.")
-    amount_rupees: Decimal = Field(
-        description="Positive rupees as the user said them, e.g. 450 or 450.50. Not paise."
-    )
-    payee: str = Field(description="Merchant or person name, e.g. Swiggy or Auto bhaiya.")
-    account: str | None = Field(
-        default=None,
-        description="Account name; omit for this payee's usual account, or the busiest one.",
-    )
-    category: str | None = Field(
-        default=None, description="Exact category only when the user named one."
-    )
-    category_guess: str | None = Field(
-        default=None, description="A best-guess category when the user did not name one."
-    )
+    kind: Literal["expense"]
+    amount_rupees: Decimal
+    payee: str
+    account: str | None = None
+    category: str | None = Field(default=None, description="Only if the user named one.")
+    category_guess: str | None = Field(default=None, description="Best guess otherwise.")
 
 
 class Income(_MovementBase):
-    kind: Literal["income"] = Field(description="Money received.")
-    amount_rupees: Decimal = Field(description="Positive rupees, e.g. 120000.")
-    payee: str | None = Field(default=None, description="Who paid, e.g. Acme Corp.")
-    account: str | None = Field(default=None, description="Account name; omit for the default.")
+    kind: Literal["income"]
+    amount_rupees: Decimal
+    payee: str | None = None
+    account: str | None = None
 
 
 class Transfer(_MovementBase):
-    kind: Literal["transfer"] = Field(description="A move between the user's own accounts.")
-    amount_rupees: Decimal = Field(description="Positive rupees.")
-    from_account: str = Field(description="Source account name.")
-    to_account: str = Field(description="Destination account name, e.g. Slice card.")
+    kind: Literal["transfer"]
+    amount_rupees: Decimal
+    from_account: str
+    to_account: str
 
 
 class SplitPerson(WriteModel):
-    name: str = Field(description="Person's name.")
-    amount_rupees: Decimal = Field(description="That person's share in rupees.")
-    expected_date: Date | None = Field(
-        default=None, description="When they are expected to pay, if known."
-    )
+    name: str
+    amount_rupees: Decimal
+    expected_date: Date | None = Field(default=None, description="When they will pay, if known.")
 
 
 class Split(_MovementBase):
-    kind: Literal["split"] = Field(description="One expense split with other people.")
-    total_rupees: Decimal = Field(description="The whole bill in rupees.")
-    my_share_rupees: Decimal = Field(description="The user's own share in rupees.")
-    people: list[SplitPerson] = Field(
-        min_length=1, description="Each other person and their share."
-    )
-    payee: str | None = Field(default=None, description="Where the money was spent.")
-    account: str | None = Field(default=None, description="Account name; omit for the default.")
-    category: str | None = Field(default=None, description="Exact category if named.")
-    category_guess: str | None = Field(default=None, description="Best-guess category.")
+    kind: Literal["split"]
+    total_rupees: Decimal
+    my_share_rupees: Decimal
+    people: list[SplitPerson] = Field(min_length=1)
+    payee: str | None = None
+    account: str | None = None
+    category: str | None = Field(default=None, description="Only if the user named one.")
+    category_guess: str | None = Field(default=None, description="Best guess otherwise.")
 
 
 class LoanPayment(_MovementBase):
-    kind: Literal["loan"] = Field(description="A loan EMI or payment.")
-    amount_rupees: Decimal = Field(description="Total EMI paid in rupees.")
-    loan: str = Field(description="Loan account name, e.g. Home loan.")
-    account: str | None = Field(default=None, description="Paying account; omit for the default.")
+    kind: Literal["loan"]
+    amount_rupees: Decimal
+    loan: str
+    account: str | None = None
 
 
 class Refund(_MovementBase):
-    kind: Literal["refund"] = Field(description="A refund back to the user.")
-    amount_rupees: Decimal = Field(description="Positive rupees.")
-    payee: str = Field(description="Who refunded.")
-    account: str | None = Field(default=None, description="Account receiving the refund.")
-    category: str | None = Field(default=None, description="Category the purchase was in.")
+    kind: Literal["refund"]
+    amount_rupees: Decimal
+    payee: str
+    account: str | None = None
+    category: str | None = None
 
 
 class Settlement(_MovementBase):
-    kind: Literal["settlement"] = Field(description="Settling money owed with a person.")
-    amount_rupees: Decimal = Field(description="Positive rupees.")
-    person: str = Field(description="The person's name.")
+    kind: Literal["settlement"]
+    amount_rupees: Decimal
+    person: str
     direction: Literal["they_paid", "i_paid"] = Field(
         default="they_paid", description="Who paid whom."
     )
-    account: str | None = Field(default=None, description="The user's account.")
-    expected_date: Date | None = Field(default=None, description="Expected date, if any.")
+    account: str | None = None
+    expected_date: Date | None = None
 
 
 Movement = Annotated[
@@ -129,30 +111,49 @@ class MovementChanges(WriteModel):
 
 
 class AccountSetup(WriteModel):
-    name: str | None = Field(default=None, description="Account name.")
-    new_name: str | None = Field(default=None, description="Rename to this.")
-    kind: Literal["bank", "card", "cash", "wallet", "loan", "asset"] | None = None
+    """An account add or a partial update.
+
+    On add, `name` is required. A card also needs `credit_limit_rupees`, `statement_day`, and
+    `due_day`. On update, pass only the fields that change.
+    """
+
+    name: str | None = Field(
+        default=None, description="Required to add; on update, the existing account's name."
+    )
+    new_name: str | None = None
+    kind: Literal["bank", "card", "cash", "wallet", "loan", "asset"] | None = Field(
+        default=None, description="Required to add; defaults to bank."
+    )
     institution: str | None = None
-    last4: str | None = Field(default=None, description="Last four digits only.")
-    opening_balance_rupees: Decimal | None = None
+    last4: str | None = Field(default=None, description="Optional; last four digits only.")
+    opening_balance_rupees: Decimal | None = Field(
+        default=None, description="Only a balance the user states; omit it if unknown."
+    )
     as_of: Date | None = None
     liquid: bool | None = None
-    credit_limit_rupees: Decimal | None = None
-    statement_day: int | None = None
-    due_day: int | None = None
-    rate_percent: Decimal | None = Field(default=None, description="Annual rate, e.g. 8.5.")
+    credit_limit_rupees: Decimal | None = Field(
+        default=None,
+        description="Card only, required on add: the positive limit in rupees. Never guess it.",
+    )
+    statement_day: int | None = Field(
+        default=None, description="Card only, required on add: statement day, 1-31."
+    )
+    due_day: int | None = Field(
+        default=None, description="Card only, required on add: due day, 1-31."
+    )
+    rate_percent: Decimal | None = None
     tenure_months: int | None = None
     active: bool | None = None
 
 
 class BalanceSetup(WriteModel):
-    account: str = Field(description="Account name.")
-    balance_rupees: Decimal = Field(description="The stated balance in rupees.")
-    as_of: Date | None = Field(default=None, description="When the balance was true.")
+    account: str
+    balance_rupees: Decimal
+    as_of: Date | None = None
 
 
 class ScheduleSetup(WriteModel):
-    name: str | None = Field(default=None, description="Schedule name, e.g. Rent.")
+    name: str | None = None
     new_name: str | None = None
     kind: (
         Literal[
@@ -207,7 +208,7 @@ class PayeeSetup(WriteModel):
 
 
 class SettingsSetup(WriteModel):
-    floor_rupees: Decimal | None = Field(default=None, description="The floor in rupees.")
+    floor_rupees: Decimal | None = Field(default=None, description="Minimum balance to keep.")
     base_currency: str | None = None
     time_zone: str | None = None
     default_horizon_days: int | None = None
@@ -225,8 +226,8 @@ class ScheduledQuestionSetup(WriteModel):
 
 
 class BaselineSetup(WriteModel):
-    category: str = Field(description="Category name.")
-    amount_per_day_rupees: Decimal = Field(description="Typical spend per day in rupees.")
+    category: str
+    amount_per_day_rupees: Decimal
 
 
 SetupData = Annotated[

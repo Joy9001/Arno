@@ -22,6 +22,7 @@ from fin_agent.ledger.common import (
     account_payload,
     balance_as_of,
     get_account_row,
+    has_known_balance,
     ledger_balance,
     list_account_rows,
     require_active_account,
@@ -60,12 +61,27 @@ def _validate_account_fields(
     if liquid and kind not in LIQUID_KINDS:
         raise InvalidLedgerError("Only bank, cash, and wallet accounts can be liquid")
     if kind == "card":
-        if credit_limit_paise is None or credit_limit_paise <= 0:
-            raise InvalidLedgerError("A card needs a positive credit limit")
-        if statement_day is None or not 1 <= statement_day <= 31:
-            raise InvalidLedgerError("A card needs a statement day between 1 and 31")
-        if due_day is None or not 1 <= due_day <= 31:
-            raise InvalidLedgerError("A card needs a due day between 1 and 31")
+        # Report every missing field at once; one-at-a-time failures made the model retry
+        # without learning that the next field was also required.
+        problems: list[str] = []
+        if credit_limit_paise is None:
+            problems.append("a positive credit limit")
+        elif credit_limit_paise <= 0:
+            problems.append("a positive credit limit (it cannot be zero or negative)")
+        if statement_day is None:
+            problems.append("a statement day between 1 and 31")
+        elif not 1 <= statement_day <= 31:
+            problems.append(f"a statement day between 1 and 31, not {statement_day}")
+        if due_day is None:
+            problems.append("a due day between 1 and 31")
+        elif not 1 <= due_day <= 31:
+            problems.append(f"a due day between 1 and 31, not {due_day}")
+        if len(problems) == 1:
+            raise InvalidLedgerError(f"A card needs {problems[0]}")
+        if problems:
+            raise InvalidLedgerError(
+                "A card needs " + ", ".join(problems[:-1]) + " and " + problems[-1]
+            )
     elif any(value is not None for value in (credit_limit_paise, statement_day, due_day)):
         raise InvalidLedgerError("Credit limit and card days belong only to a card")
     if kind == "loan":
@@ -422,6 +438,26 @@ def set_statement_balance(
     }
 
 
+def cash_quality(accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Whether the liquid total is complete, with the accounts that make it incomplete."""
+    liquid = [account for account in accounts if account["liquid"] and account["active"]]
+    unknown = [account for account in liquid if not has_known_balance(account)]
+    known = [account for account in liquid if has_known_balance(account)]
+    if not liquid:
+        status = "no_accounts"
+    elif unknown:
+        status = "unknown"
+    else:
+        status = "known"
+    return {
+        "status": status,
+        "known_paise": sum(int(account["balance_paise"]) for account in known),
+        "known_count": len(known),
+        "unknown_count": len(unknown),
+        "unknown_accounts": [account["name"] for account in unknown],
+    }
+
+
 def account_summary(conn: psycopg.Connection) -> dict[str, Any]:
     accounts = list_accounts(conn)
     liquid_total = sum(
@@ -442,6 +478,7 @@ def account_summary(conn: psycopg.Connection) -> dict[str, Any]:
         "liquid_total_paise": liquid_total,
         "card_owed_paise": card_owed,
         "loan_outstanding_paise": loan_outstanding,
+        "cash_quality": cash_quality(accounts),
         "as_of": today().isoformat(),
     }
 
@@ -485,6 +522,7 @@ __all__ = [
     "LoanTermsError",
     "archive_account",
     "balance_as_of",
+    "cash_quality",
     "create_account",
     "ensure_system_accounts",
     "get_account",
