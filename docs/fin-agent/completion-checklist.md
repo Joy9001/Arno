@@ -155,7 +155,7 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
       covers milestone 4, which was never exercised.
 - [ ] Install the PWA on Android and receive a real web push (`web/src/sw.ts:4`,
       `notifications.py:204`).
-- [ ] Walk through the Inbox and Settings screens in a real browser (`web/src/panels/Inbox.tsx:1`).
+- [ ] Walk through Home's notifications dialog and Settings in a real browser (`web/src/pages/Home.tsx:1`).
 - [ ] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
       timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`).
 - [ ] Configure `STT_*` (`speaches` or Qwen3-ASR), then record real Hinglish voice notes.

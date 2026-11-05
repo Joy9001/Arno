@@ -1,0 +1,927 @@
+/* Settings workspace. Scoped to the settings panel; shared tokens live in styles.css. */
+
+.stg-panel {
+  container-type: inline-size;
+  container-name: stg-panel;
+}
+
+.stg-head {
+  margin-bottom: 20px;
+}
+
+.stg-head h2 {
+  font-size: 24px;
+  letter-spacing: -0.03em;
+}
+
+.stg-head p {
+  max-width: 64ch;
+}
+
+.stg-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.stg-nav {
+  position: sticky;
+  top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-right: 18px;
+  border-right: 1px solid var(--line-soft);
+}
+
+.stg-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stg-nav-label {
+  margin: 0 0 4px 9px;
+  color: var(--ter);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.stg-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 34px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.stg-nav-link svg {
+  flex: none;
+  color: var(--ter);
+}
+
+.stg-nav-link:hover {
+  background: rgba(118, 118, 128, 0.14);
+  color: var(--text);
+}
+
+.stg-nav-link[aria-current] {
+  background: rgba(118, 118, 128, 0.22);
+  color: var(--text);
+}
+
+.stg-nav-link[aria-current] svg {
+  color: var(--blue-text);
+}
+
+.stg-mobile-nav {
+  display: none;
+}
+
+.stg-content {
+  min-width: 0;
+  max-width: 860px;
+}
+
+.stg-section {
+  outline: none;
+}
+
+.stg-section-head {
+  margin: 0 0 14px;
+}
+
+.stg-section-head h3 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  letter-spacing: -0.025em;
+}
+
+.stg-section-head p {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--sub);
+  font-size: 14px;
+}
+
+.stg-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.stg-card > h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.stg-card form {
+  margin-top: 12px;
+}
+
+.stg-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.stg-card > form > label:first-child {
+  margin-top: 0;
+}
+
+.stg-field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.stg-field-row label {
+  margin-top: 0;
+}
+
+.stg-form {
+  max-width: 420px;
+}
+
+.stg-form input {
+  max-width: 320px;
+}
+
+.stg-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stg-inline label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+
+.stg-inline input,
+.stg-inline select {
+  width: auto;
+  min-width: 170px;
+}
+
+.stg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.stg-actions button,
+.stg-export-row button,
+.stg-list-actions button,
+.stg-pager button,
+.stg-error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+}
+
+.stg-actions button[type="submit"] {
+  margin-top: 0;
+}
+
+.stg-hint {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--ter);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.stg-hint code {
+  font-size: 0.92em;
+}
+
+.stg-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stg-meta dt {
+  color: var(--ter);
+  font-size: 12px;
+}
+
+.stg-meta dd {
+  margin: 2px 0 0;
+  color: var(--sub);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stg-error-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 14px 0 0;
+  color: var(--red);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.stg-error-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.stg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+
+button.stg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.stg-chip:hover {
+  background: rgba(118, 118, 128, 0.14);
+}
+
+button.stg-chip[aria-pressed="true"] {
+  border-color: rgba(72, 209, 124, 0.35);
+  background: rgba(72, 209, 124, 0.08);
+  color: var(--green);
+}
+
+.stg-chip-state {
+  color: var(--ter);
+  font-size: 11px;
+}
+
+button.stg-chip[aria-pressed="true"] .stg-chip-state {
+  color: #9fdcb0;
+}
+
+.stg-subhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 24px 0 10px;
+}
+
+.stg-subhead h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.stg-subhead .stg-hint {
+  margin: 0;
+  text-align: right;
+}
+
+.stg-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.stg-filter label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+}
+
+.stg-filter input,
+.stg-filter select {
+  width: auto;
+  min-width: 180px;
+}
+
+.stg-filter input[type="search"] {
+  width: min(100%, 300px);
+}
+
+.stg-empty {
+  padding: 16px 0;
+  color: var(--sub);
+  font-size: 14px;
+}
+
+.stg-empty p {
+  margin: 0;
+}
+
+.stg-scroll-hint {
+  display: none;
+  margin: 0 0 6px;
+  color: var(--ter);
+  font-size: 12px;
+}
+
+.stg-table-region {
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  -webkit-overflow-scrolling: touch;
+}
+
+.stg-table-region:focus-visible {
+  outline: 2px solid var(--blue-text);
+  outline-offset: 2px;
+}
+
+.stg-table-region table {
+  min-width: 620px;
+}
+
+.stg-table-region td:last-child,
+.stg-table-region th:last-child {
+  text-align: right;
+}
+
+.stg-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.stg-pager-count {
+  color: var(--ter);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stg-pager-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stg-page-number {
+  min-width: 92px;
+  color: var(--ter);
+  font-size: 12px;
+  text-align: center;
+}
+
+.stg-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.stg-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0;
+}
+
+.stg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--sub);
+  font-size: 12.5px;
+}
+
+.stg-status svg {
+  flex: none;
+  color: var(--ter);
+}
+
+.stg-status.bad {
+  color: var(--orange);
+}
+
+.stg-status.bad svg {
+  color: var(--orange);
+}
+
+.stg-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 107, 97, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 107, 97, 0.06);
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-error > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--red);
+}
+
+.stg-error p {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.stg-error button {
+  margin-left: auto;
+  flex: none;
+}
+
+.stg-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  border: 1px solid rgba(72, 209, 124, 0.22);
+  border-radius: 12px;
+  background: rgba(72, 209, 124, 0.08);
+  color: #c9ead3;
+  font-size: 13px;
+}
+
+.stg-notice > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--green);
+}
+
+.stg-notice p {
+  margin: 0;
+}
+
+.stg-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.stg-refreshing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  color: var(--ter);
+  font-size: 12px;
+}
+
+.stg-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.stg-skeleton-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 0;
+}
+
+.stg-sk-title {
+  width: 34%;
+  min-width: 120px;
+  height: 16px;
+}
+
+.stg-sk-line {
+  width: 100%;
+  height: 12px;
+}
+
+.stg-sk-line-short {
+  width: 52%;
+  min-width: 120px;
+}
+
+.stg-sk-value {
+  width: 84px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+.stg-sk-field {
+  width: min(100%, 320px);
+  height: 38px;
+  border-radius: 10px;
+}
+
+.stg-sk-button {
+  width: 132px;
+  height: 36px;
+  margin-top: 4px;
+  border-radius: 10px;
+}
+
+.stg-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stg-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.stg-list-body {
+  min-width: 0;
+}
+
+.stg-question,
+.stg-memory-body {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.stg-list-row.off .stg-memory-body {
+  color: var(--ter);
+}
+
+.stg-list-meta {
+  margin: 4px 0 0;
+  color: var(--ter);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.stg-list-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.stg-question-form {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stg-card form.stg-question-form {
+  margin-top: 18px;
+}
+
+.stg-question-form textarea {
+  min-height: 62px;
+  resize: vertical;
+}
+
+.stg-export-list {
+  margin-top: 0;
+}
+
+.stg-export-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.stg-export-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.stg-export-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(118, 118, 128, 0.16);
+  color: var(--text);
+}
+
+.stg-export-copy h4 {
+  margin: 0 0 2px;
+  font-size: 14px;
+}
+
+.stg-export-copy p {
+  margin: 0;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-export-copy code {
+  display: inline-block;
+  margin-top: 5px;
+  color: var(--ter);
+  font-size: 11.5px;
+}
+
+.stg-export-row button {
+  flex: none;
+}
+
+.stg-export-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  color: var(--ter);
+  font-size: 13px;
+}
+
+.stg-export-note svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--blue-text);
+}
+
+.stg-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 14px 0 0;
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.stg-status-grid dt {
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.stg-status-grid dd {
+  margin: 3px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.stg-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 14px;
+  padding: 11px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-callout svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--blue-text);
+}
+
+.stg-callout p {
+  margin: 0;
+}
+
+/* PasskeysCard owns its own card; the section chrome supplies the outer one. */
+.stg-passkeys .settings-block {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.stg-passkeys .settings-block > h3 {
+  display: none;
+}
+
+@container stg-panel (max-width: 700px) {
+  .stg-layout {
+    display: block;
+  }
+
+  .stg-nav {
+    display: none;
+  }
+
+  .stg-mobile-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 16px;
+  }
+
+  .stg-mobile-nav label {
+    margin: 0;
+    color: var(--sub);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .stg-mobile-nav select {
+    width: 100%;
+    min-height: 42px;
+    font-size: 15px;
+  }
+
+  .stg-head h2 {
+    font-size: 22px;
+  }
+}
+
+/* Older browsers without container queries still get the phone selector. */
+@supports not (container-type: inline-size) {
+  @media (max-width: 700px) {
+    .stg-layout {
+      display: block;
+    }
+
+    .stg-nav {
+      display: none;
+    }
+
+    .stg-mobile-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+
+    .stg-mobile-nav label {
+      margin: 0;
+      color: var(--sub);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .stg-mobile-nav select {
+      width: 100%;
+      min-height: 42px;
+      font-size: 15px;
+    }
+  }
+}
+
+@container stg-panel (max-width: 560px) {
+  .stg-card {
+    padding: 16px;
+  }
+
+  .stg-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .stg-form,
+  .stg-form input {
+    max-width: none;
+  }
+
+  .stg-inline {
+    display: block;
+  }
+
+  .stg-inline label {
+    margin-top: 12px;
+  }
+
+  .stg-inline label:first-child {
+    margin-top: 0;
+  }
+
+  .stg-inline input,
+  .stg-inline select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .stg-inline button {
+    width: 100%;
+    justify-content: center;
+    min-height: 40px;
+    margin-top: 12px;
+  }
+
+  .stg-actions button,
+  .stg-export-row button {
+    min-height: 40px;
+  }
+
+  .stg-export-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .stg-export-row button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .stg-list-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .stg-list-actions {
+    justify-content: flex-start;
+  }
+
+  .stg-filter input,
+  .stg-filter select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .stg-filter label {
+    flex: 1 1 160px;
+  }
+
+  .stg-scroll-hint {
+    display: block;
+  }
+
+  .stg-table-region table {
+    min-width: 560px;
+  }
+
+  .stg-pager {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .stg-pager-buttons {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .stg-pager-buttons button {
+    min-height: 40px;
+  }
+
+  .stg-page-number {
+    min-width: 0;
+  }
+
+  .stg-error {
+    flex-wrap: wrap;
+  }
+
+  .stg-error button {
+    margin-left: 26px;
+  }
+}

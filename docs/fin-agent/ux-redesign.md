@@ -1,6 +1,6 @@
 # Web app UX redesign
 
-Status: shipped. The ten-tab shell is gone; four areas plus a global assistant are live.
+Status: historical record of the previous iteration. The current [web interface design](web-interface-design.md) supersedes the screen descriptions and verification claims below.
 
 ## Outcome
 

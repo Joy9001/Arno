@@ -1,8 +1,8 @@
 import { startRegistration } from "@simplewebauthn/browser";
 import { useState, type FormEvent } from "react";
-import { MessageSquare } from "lucide-react";
 import { errorMessage } from "./api";
 import { Busy } from "./Loading";
+import { Mark } from "./Mark";
 import {
   beginEnrollment,
   verifyEnrollment,
@@ -62,9 +62,7 @@ export function Setup({ authState }: { authState: AuthState }) {
       <main className="centered">
         <section className="card">
           <div className="auth-brand">
-            <span className="brand-mark" aria-hidden="true">
-              <MessageSquare size={14} strokeWidth={2.3} />
-            </span>
+            <Mark size={28} />
             Fin-Agent
           </div>
           <h1>Open this page at the passkey origin</h1>
@@ -87,9 +85,7 @@ export function Setup({ authState }: { authState: AuthState }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <MessageSquare size={14} strokeWidth={2.3} />
-          </span>
+          <Mark size={28} />
           Fin-Agent
         </div>
         <h1>{addDevice ? "Add this device" : "Set up Fin-Agent"}</h1>

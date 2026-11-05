@@ -1,136 +1,195 @@
-import { MessageCircle } from "lucide-react";
-import { askAgent } from "../ask";
+import { useState } from "react";
 import { formatDate, formatPaise } from "../format";
-import { Loading } from "../Loading";
 import type { Person } from "../types";
 import { useApi } from "../useApi";
+import {
+  MoneyAsk,
+  MoneyEmpty,
+  MoneyError,
+  MoneyPageHeader,
+  MoneyPageSkeleton,
+  MoneyPager,
+  MoneyRefreshing,
+  MoneySection,
+  MoneySummary,
+} from "./MoneyBits";
+import { countLabel, pageSlice, safePage } from "./moneyView";
+
 type People = { people: Person[]; as_of: string };
+const PAGE_SIZE = 20;
+const PEOPLE_DESCRIPTION =
+  "Every person and organisation has a ledger account. A positive balance means they owe you; a negative one means you owe them.";
+
+const DIRECTION_LABEL: Record<Person["direction"], string> = {
+  owes_you: "They owe you",
+  you_owe: "You owe them",
+  settled: "Settled up",
+};
+
+function personKind(kind: string): string {
+  if (kind === "person") return "Person";
+  if (kind === "organization") return "Organisation";
+  return kind;
+}
 
 function PersonRow({ person }: { person: Person }) {
+  const detail = [
+    personKind(person.kind),
+    person.upi_id,
+    person.next_expected_date ? `expected ${formatDate(person.next_expected_date)}` : null,
+    person.account_active === false ? "ledger account archived" : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <article className="person-row">
-      <div>
+    <article className="moneyv-row">
+      <div className="moneyv-row-main">
         <strong>{person.display_name}</strong>
-        <span className="fine">
-          {person.kind}
-          {person.upi_id ? ` · ${person.upi_id}` : ""}
-          {person.next_expected_date ? ` · expected ${formatDate(person.next_expected_date)}` : ""}
-        </span>
+        <span className="moneyv-meta">{detail}</span>
       </div>
-      <span className={person.balance_paise < 0 ? "person-amount negative" : "person-amount"}>
-        {formatPaise(Math.abs(person.balance_paise))}
-      </span>
-      <button
-        type="button"
-        className="ask-link"
-        onClick={() => askAgent(`Tell me about ${person.display_name}.`)}
-      >
-        <MessageCircle size={13} aria-hidden="true" />
-        Ask
-      </button>
+      <div className="moneyv-figures">
+        <strong>{formatPaise(Math.abs(person.balance_paise))}</strong>
+        <span className="moneyv-meta">{DIRECTION_LABEL[person.direction]}</span>
+      </div>
+      <MoneyAsk prompt={`Tell me about ${person.display_name} and what we owe each other.`} />
     </article>
+  );
+}
+
+function PeopleGroup({
+  title,
+  people,
+  page,
+  onPage,
+}: {
+  title: string;
+  people: Person[];
+  page: number;
+  onPage: (page: number) => void;
+}) {
+  if (people.length === 0) return null;
+  const currentPage = safePage(page, people.length, PAGE_SIZE);
+  return (
+    <MoneySection title={title} note={countLabel(people.length, "person", "people")}>
+      <div className="moneyv-list">
+        {pageSlice(people, currentPage, PAGE_SIZE).map((person) => (
+          <PersonRow key={person.payee_id} person={person} />
+        ))}
+      </div>
+      <MoneyPager
+        page={currentPage}
+        pageSize={PAGE_SIZE}
+        total={people.length}
+        noun="people"
+        onPage={onPage}
+      />
+    </MoneySection>
   );
 }
 
 export function PeoplePanel() {
   const { data, error, loading, reload } = useApi<People>("/api/people");
-  const people = data?.people ?? [];
-  const owed = people
-    .filter((person) => person.balance_paise > 0)
-    .reduce((total, person) => total + person.balance_paise, 0);
-  const owe = people
-    .filter((person) => person.balance_paise < 0)
-    .reduce((total, person) => total + Math.abs(person.balance_paise), 0);
+  const [owedPage, setOwedPage] = useState(0);
+  const [owePage, setOwePage] = useState(0);
+  const [settledPage, setSettledPage] = useState(0);
+
+  if (loading && !data) {
+    return (
+      <MoneyPageSkeleton
+        title="People"
+        description={PEOPLE_DESCRIPTION}
+        summary={3}
+        rows={5}
+      />
+    );
+  }
+
+  const header = (
+    <MoneyPageHeader
+      title="People"
+      description={PEOPLE_DESCRIPTION}
+      aside={
+        data ? (
+          <>
+            As of {formatDate(data.as_of)}
+            {loading && <MoneyRefreshing />}
+          </>
+        ) : undefined
+      }
+    />
+  );
+
+  if (!data) {
+    return (
+      <section className="panel">
+        {header}
+        <MoneyError
+          title="Couldn’t load people"
+          message={error ?? "The people request did not return data."}
+          onRetry={reload}
+        />
+      </section>
+    );
+  }
+
+  const people = data.people;
   const theyOwe = people.filter((person) => person.direction === "owes_you");
   const youOwe = people.filter((person) => person.direction === "you_owe");
   const settled = people.filter((person) => person.direction === "settled");
+  const owed = theyOwe.reduce((total, person) => total + Math.abs(person.balance_paise), 0);
+  const owe = youOwe.reduce((total, person) => total + Math.abs(person.balance_paise), 0);
 
   return (
     <section className="panel">
-      <header className="panel-head">
-        <div>
-          <h2>Who owes what</h2>
-          <p className="muted">
-            Every person and organisation has a ledger account. A positive balance means they owe
-            you; a negative one means you owe them.
-          </p>
-        </div>
-        {data && <p className="fine">as of {data.as_of}</p>}
-      </header>
+      {header}
+      {error && <MoneyError title="Couldn’t refresh people" message={error} onRetry={reload} />}
 
       {people.length > 0 && (
-        <div className="summary-strip">
-          <div className="summary-cell">
-            <span>Owed to you</span>
-            <strong>{formatPaise(owed)}</strong>
-          </div>
-          <div className="summary-cell">
-            <span>You owe</span>
-            <strong>{formatPaise(owe)}</strong>
-          </div>
-          <div className="summary-cell">
-            <span>Net</span>
-            <strong className={owed - owe < 0 ? "negative" : "positive"}>
-              {formatPaise(owed - owe)}
-            </strong>
-          </div>
-        </div>
+        <MoneySummary
+          label="Balances with people and organisations"
+          cells={[
+            {
+              label: "Owed to you",
+              value: formatPaise(owed),
+              note: countLabel(theyOwe.length, "person", "people"),
+              tone: owed > 0 ? "positive" : undefined,
+            },
+            {
+              label: "You owe",
+              value: formatPaise(owe),
+              note: countLabel(youOwe.length, "person", "people"),
+              tone: owe > 0 ? "negative" : undefined,
+            },
+            {
+              label: "Net",
+              value: formatPaise(owed - owe),
+              note: `${countLabel(settled.length, "settled item")} · across ${countLabel(
+                people.length,
+                "person",
+                "people",
+              )}`,
+              tone: owed - owe < 0 ? "negative" : undefined,
+            },
+          ]}
+        />
       )}
 
-      {loading && !data && <Loading label="Loading people…" />}
-      {error && (
-        <div className="panel-error">
-          <p className="error">{error}</p>
-          <button type="button" className="ghost small" onClick={reload}>
-            Retry
-          </button>
-        </div>
-      )}
-      {data && people.length === 0 && (
-        <div className="empty-state">
-          <p>No people or organisations yet.</p>
-          <button type="button" className="ask-link" onClick={() => askAgent("Add a person: ")}>
-            <MessageCircle size={13} aria-hidden="true" />
-            Ask to add one
-          </button>
-        </div>
-      )}
-
-      {theyOwe.length > 0 && (
+      {people.length === 0 ? (
+        <MoneyEmpty prompt="Add a person: " action="Ask to add one">
+          No people or organisations yet.
+        </MoneyEmpty>
+      ) : (
         <>
-          <div className="section-head">
-            <h3>They owe you</h3>
-          </div>
-          <div className="people-list">
-            {theyOwe.map((person) => (
-              <PersonRow key={person.payee_id} person={person} />
-            ))}
-          </div>
+          <PeopleGroup title="They owe you" people={theyOwe} page={owedPage} onPage={setOwedPage} />
+          <PeopleGroup title="You owe them" people={youOwe} page={owePage} onPage={setOwePage} />
+          <PeopleGroup
+            title="Settled"
+            people={settled}
+            page={settledPage}
+            onPage={setSettledPage}
+          />
         </>
-      )}
-
-      {youOwe.length > 0 && (
-        <>
-          <div className="section-head">
-            <h3>You owe them</h3>
-          </div>
-          <div className="people-list">
-            {youOwe.map((person) => (
-              <PersonRow key={person.payee_id} person={person} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {settled.length > 0 && (
-        <details className="settled">
-          <summary>Settled ({settled.length})</summary>
-          <div className="people-list">
-            {settled.map((person) => (
-              <PersonRow key={person.payee_id} person={person} />
-            ))}
-          </div>
-        </details>
       )}
     </section>
   );

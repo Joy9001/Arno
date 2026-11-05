@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
+import { FileSearch } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -10,8 +12,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, errorMessage } from "./api";
 import { formatPaise } from "./format";
+import { Mark } from "./Mark";
+import { dataQualityNotes, lowAmount, OBLIGATION_WARNING, paymentMethodLabel } from "./projectionData";
+import { SourceDetail } from "./SourceDetail";
 
 export type Money = { paise: number; text: string };
 
@@ -123,12 +127,6 @@ function dateLabel(value: string | null | undefined): string {
   });
 }
 
-function lowAmount(payload: ProjectionPayload): number | null {
-  if (payload.median_low.amount?.paise !== undefined) return payload.median_low.amount.paise;
-  if (payload.median_low.paise !== undefined) return payload.median_low.paise;
-  return null;
-}
-
 export function ProjectionChart({
   payload,
   height = 260,
@@ -148,8 +146,25 @@ export function ProjectionChart({
   const floor = payload.floor?.paise ?? payload.floor_paise ?? null;
   const floorSet = payload.floor_set ?? (floor !== null && floor > 0);
   const showFloor = floorSet && floor !== null;
+  const reducedMotion = useReducedMotion();
+  const firstPoint = rows[0];
+  const lastPoint = rows[rows.length - 1];
+  const chartDescription = lastPoint
+    ? `${payload.horizon_days}-day balance projection. Median ${formatPaise(
+        firstPoint.median,
+      )} on ${dateLabel(payload.as_of)} to ${formatPaise(lastPoint.median)} on ${dateLabel(
+        lastPoint.date,
+      )}.`
+    : `${payload.horizon_days}-day balance projection with no curve points.`;
+  const chartLabel = payload.obligations_met === false
+    ? `${chartDescription} ${OBLIGATION_WARNING}`
+    : chartDescription;
   return (
-    <div className="chart-box projection-chart">
+    <div
+      className="chart-box projection-chart"
+      role="img"
+      aria-label={chartLabel}
+    >
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
           <CartesianGrid stroke="#2a2a2c" vertical={false} />
@@ -179,7 +194,9 @@ export function ProjectionChart({
             fill="#0b6cf0"
             fillOpacity={0.16}
             name="P10–P90"
-            isAnimationActive={false}
+            isAnimationActive={!reducedMotion}
+            animationDuration={550}
+            animationEasing="ease-out"
           />
           <Line
             type="monotone"
@@ -188,7 +205,9 @@ export function ProjectionChart({
             strokeWidth={2}
             dot={false}
             name="Median"
-            isAnimationActive={false}
+            isAnimationActive={!reducedMotion}
+            animationDuration={550}
+            animationEasing="ease-out"
           />
           {showFloor && (
             <ReferenceLine
@@ -206,7 +225,7 @@ export function ProjectionChart({
 
 const VERDICT_LABEL: Record<string, { text: string; className: string }> = {
   yes: { text: "Yes", className: "badge good" },
-  "yes-but": { text: "Yes, with a change", className: "badge warn" },
+  "yes-but": { text: "Yes, with some caution", className: "badge warn" },
   no: { text: "No", className: "badge danger" },
 };
 
@@ -259,21 +278,7 @@ function Goals({ goals }: { goals: ProjectionGoal[] }) {
 }
 
 function DataQuality({ payload }: { payload: ProjectionPayload }) {
-  const quality = payload.data_quality;
-  const notes = [
-    ...(quality.gaps ?? []),
-    ...(quality.setup_gaps ?? []).map((gap) => `setup: ${gap}`),
-    ...(quality.simulation?.categories_flat?.length
-      ? [
-          `flat estimates for ${quality.simulation.categories_flat.join(", ")} (too few real spending days)`,
-        ]
-      : []),
-    ...(quality.simulation?.categories_sampled?.length
-      ? [
-          `resampled from real days for ${quality.simulation.categories_sampled.join(", ")}`,
-        ]
-      : []),
-  ];
+  const notes = dataQualityNotes(payload);
   if (!notes.length) return null;
   return (
     <details className="projection-block">
@@ -286,111 +291,6 @@ function DataQuality({ payload }: { payload: ProjectionPayload }) {
         ))}
       </ul>
     </details>
-  );
-}
-
-function citationEndpoint(source: ProjectionSource): string | null {
-  if (source.kind === "account" || source.kind === "card") return `/api/accounts/${source.id}`;
-  if (source.kind === "schedule") return `/api/schedules/${source.id}`;
-  if (source.kind === "goal") return `/api/goals/${source.id}`;
-  if (source.kind === "payee") return "/api/payees";
-  return null;
-}
-
-function SourceFacts({ value }: { value: unknown }) {
-  if (!value || typeof value !== "object") return <p className="fine">{String(value)}</p>;
-  const row = value as Record<string, unknown>;
-  const keys = [
-    "id",
-    "kind",
-    "name",
-    "institution",
-    "last4",
-    "balance_paise",
-    "amount_paise",
-    "date",
-    "as_of",
-    "status",
-    "description",
-    "rate_bps",
-    "tenure_months",
-  ];
-  return (
-    <>
-      <dl className="citation-facts">
-        {keys.map((key) => {
-          const raw = row[key];
-          if (raw === undefined || raw === null) return null;
-          const text = key.endsWith("_paise") && typeof raw === "number"
-            ? formatPaise(raw)
-            : key === "rate_bps" && typeof raw === "number"
-              ? `${raw / 100}%`
-              : String(raw);
-          const label = key.endsWith("_paise")
-            ? key.slice(0, -"_paise".length).replaceAll("_", " ")
-            : key === "rate_bps"
-              ? "rate"
-              : key.replaceAll("_", " ");
-          return (
-            <div key={key}>
-              <dt>{label}</dt>
-              <dd>{text}</dd>
-            </div>
-          );
-        })}
-      </dl>
-      <details className="citation-raw">
-        <summary>Raw row</summary>
-        <pre className="citation-json">{JSON.stringify(value, null, 2)}</pre>
-      </details>
-    </>
-  );
-}
-
-function CitationDetail({
-  source,
-  onClose,
-}: {
-  source: ProjectionSource;
-  onClose: () => void;
-}) {
-  const endpoint = citationEndpoint(source);
-  const [detail, setDetail] = useState<unknown>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(Boolean(endpoint));
-
-  useEffect(() => {
-    if (!endpoint) return;
-    api<unknown>(endpoint)
-      .then((value) => {
-        if (source.kind === "payee") {
-          const rows = Array.isArray(value)
-            ? (value as { id?: string }[])
-            : ((value as { items?: { id?: string }[] }).items ?? []);
-          setDetail(rows.find((row) => row.id === source.id) ?? value);
-        } else {
-          setDetail(value);
-        }
-      })
-      .catch((caught: unknown) => setError(errorMessage(caught)))
-      .finally(() => setLoading(false));
-  }, [endpoint, source]);
-
-  return (
-    <div className="citation-detail">
-      <div className="citation-detail-head">
-        <strong>
-          {source.kind} · {source.name}
-        </strong>
-        <button type="button" className="ghost small" onClick={onClose}>
-          Close
-        </button>
-      </div>
-      <p className="fine">{source.detail}</p>
-      {loading && <p className="muted">Opening the underlying row…</p>}
-      {error && <p className="error">{error}</p>}
-      {detail !== null && <SourceFacts value={detail} />}
-    </div>
   );
 }
 
@@ -415,7 +315,7 @@ function Citations({ payload }: { payload: ProjectionPayload }) {
         ))}
       </div>
       {selected && (
-        <CitationDetail
+        <SourceDetail
           key={`${selected.kind}-${selected.id}`}
           source={selected}
           onClose={() => setSelected(null)}
@@ -483,37 +383,101 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
   );
 }
 
-export function ProjectionCard({ data }: { data: Record<string, unknown> }) {
+export function ProjectionCard({
+  data,
+  onEvidence,
+}: {
+  data: Record<string, unknown>;
+  onEvidence?: (payload: ProjectionPayload) => void;
+}) {
   const payload = data as unknown as ProjectionPayload;
-  const runs = payload.data_quality?.simulation?.runs;
-  const sources = payload.sources?.length ?? 0;
+  const median = lowAmount(payload);
+  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
+  const floorText =
+    payload.floor?.text ??
+    (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
+  const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
+  const purchase = payload.hypothetical as
+    | { amount_paise?: number; date?: string; method?: string; emi_months?: number }
+    | undefined;
   const [open, setOpen] = useState(false);
+  const reducedMotion = useReducedMotion();
+
   return (
-    <figure className="chat-card projection-card">
-      <figcaption>
-        <strong>{data.title ? String(data.title) : "Projection"}</strong>
-        <span className="fine">
-          {payload.horizon_days} days · {sources} sources
-          {runs ? ` · ${runs.toLocaleString("en-IN")} runs` : ""}
+    <motion.figure
+      className="chat-card receipt"
+      initial={reducedMotion ? false : { opacity: 0, y: 8, scale: 0.995 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+    >
+      <div className="receipt-top">
+        <div className="receipt-title">
+          <Mark size={20} />
+          <strong>{verdict?.text ?? (data.title ? String(data.title) : "Projection")}</strong>
+        </div>
+        <span className={`badge ${!floorSet ? "muted" : payload.floor_probability >= payload.floor_threshold ? "good" : "danger"}`}>
+          {floorSet ? `${percent(payload.floor_probability)} above floor` : "No floor set"}
         </span>
-      </figcaption>
-      <ProjectionSummary payload={payload} />
-      <details
-        className="receipt-more"
-        open={open}
-        onToggle={(event) => setOpen(event.currentTarget.open)}
-      >
-        <summary>Open the curve, tradeoffs, and sources</summary>
-        {open && (
-          <>
-            <ProjectionChart payload={payload} />
-            {payload.tradeoffs?.length ? <Tradeoffs tradeoffs={payload.tradeoffs} /> : null}
-            {payload.goals?.length ? <Goals goals={payload.goals} /> : null}
-            <DataQuality payload={payload} />
-            <Citations payload={payload} />
-          </>
+      </div>
+
+      {payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>}
+      {purchase?.amount_paise !== undefined && (
+        <p className="receipt-note">
+          Purchase of {formatPaise(purchase.amount_paise)}
+          {purchase.date ? ` on ${dateLabel(purchase.date)}` : ""}
+          {purchase.method ? ` · ${paymentMethodLabel(purchase.method)}` : ""}
+          {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}.
+        </p>
+      )}
+
+      <dl className="receipt-metrics">
+        <div>
+          <dt>Chance above floor</dt>
+          <dd>{floorSet ? percent(payload.floor_probability) : "—"}</dd>
+          <span>{percent(payload.floor_threshold)} threshold</span>
+        </div>
+        <div>
+          <dt>Lowest median balance</dt>
+          <dd>{median === null ? "—" : formatPaise(median)}</dd>
+          <span>{dateLabel(payload.median_low.date)}</span>
+        </div>
+      </dl>
+
+      <div className="receipt-foot">
+        <span className="fine">
+          {payload.horizon_days}-day projection
+          {floorSet && floorText ? ` · floor ${floorText}` : ""}
+        </span>
+        {onEvidence && (
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => onEvidence(payload)}
+          >
+            <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
+            Sources and assumptions
+          </button>
         )}
-      </details>
-    </figure>
+      </div>
+
+      {!onEvidence && (
+        <details
+          className="receipt-more"
+          open={open}
+          onToggle={(event) => setOpen(event.currentTarget.open)}
+        >
+          <summary>Open the curve, tradeoffs, and sources</summary>
+          {open && (
+            <>
+              <ProjectionChart payload={payload} />
+              {payload.tradeoffs?.length ? <Tradeoffs tradeoffs={payload.tradeoffs} /> : null}
+              {payload.goals?.length ? <Goals goals={payload.goals} /> : null}
+              <DataQuality payload={payload} />
+              <Citations payload={payload} />
+            </>
+          )}
+        </details>
+      )}
+    </motion.figure>
   );
 }

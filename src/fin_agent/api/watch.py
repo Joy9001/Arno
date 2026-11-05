@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fin_agent import scheduled_questions as questions_mod
 from fin_agent.agent import history as history_mod
 from fin_agent.api.deps import Database, current_session
+from fin_agent.api.notification_query import list_page as list_notification_page
 from fin_agent.jobs.schedules import (
     ensure_builtin_schedules,
     job_status,
@@ -19,7 +20,6 @@ from fin_agent.jobs.schedules import (
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.notifications import (
-    list_notifications,
     mark_all_read,
     mark_read,
     public_push_key,
@@ -72,8 +72,12 @@ class QuestionUpdate(ApiModel):
 def get_notifications(
     conn: Database,
     limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = None,
 ) -> dict[str, Any]:
-    return list_notifications(conn, limit=limit)
+    try:
+        return list_notification_page(conn, limit=limit, cursor=cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/notifications/read-all")

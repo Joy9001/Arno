@@ -1,9 +1,10 @@
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
+import { Skeleton } from "@radix-ui/themes";
+import { Copy, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { errorMessage } from "../api";
 import { createEnrollment, deletePasskey, ensureFreshPasskey, listPasskeys, renamePasskey } from "../auth";
 import { formatMoment } from "../format";
-import { Loading } from "../Loading";
 import type { Enrollment, Passkey } from "../types";
 
 function remainingLabel(expiresAt: string, now: number): { ms: number; label: string } {
@@ -123,14 +124,20 @@ export function PasskeysCard() {
 
       <div className="button-row">
         <button type="button" className="ghost" disabled={busy} onClick={() => void addDevice()}>
+          <Plus size={16} aria-hidden="true" />
           {busy ? "Creating link…" : "Add a device"}
         </button>
       </div>
 
       {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
+        <div role="alert">
+          <p className="error">{error}</p>
+          {passkeys?.length === 0 && (
+            <button type="button" className="ghost small" onClick={() => void refresh()}>
+              <RefreshCw size={14} aria-hidden="true" /> Retry loading passkeys
+            </button>
+          )}
+        </div>
       )}
 
       {enrollment && countdown.ms > 0 && (
@@ -154,6 +161,7 @@ export function PasskeysCard() {
             <code className="enrollment-link">{enrollment.link}</code>
             <div className="button-row">
               <button type="button" className="ghost small" onClick={() => void copyLink()}>
+                <Copy size={14} aria-hidden="true" />
                 {copied ? "Copied" : "Copy link"}
               </button>
             </div>
@@ -168,7 +176,12 @@ export function PasskeysCard() {
       )}
 
       <div className="passkey-list">
-        {passkeys === null && <Loading label="Loading passkeys…" />}
+        {passkeys === null && (
+          <div role="status" aria-label="Loading passkeys" aria-busy="true">
+            <Skeleton><div style={{ height: 48, marginBottom: 8 }} /></Skeleton>
+            <Skeleton><div style={{ height: 48 }} /></Skeleton>
+          </div>
+        )}
         {passkeys?.map((passkey) => {
           const draft = drafts[passkey.id] ?? passkey.name;
           return (
@@ -194,6 +207,7 @@ export function PasskeysCard() {
                   disabled={draft.trim() === passkey.name || draft.trim() === ""}
                   onClick={() => void saveName(passkey)}
                 >
+                  <Pencil size={14} aria-hidden="true" />
                   Rename
                 </button>
                 <button
@@ -207,6 +221,7 @@ export function PasskeysCard() {
                   }
                   onClick={() => void remove(passkey)}
                 >
+                  <Trash2 size={14} aria-hidden="true" />
                   Delete
                 </button>
               </div>

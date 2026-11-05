@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 
+import pytest
+
 from fin_agent.engine.affordability import (
     Hypothetical,
     _cut_category_tradeoff,
@@ -222,6 +224,81 @@ def test_a_future_purchase_date_extends_the_horizon_to_cover_it():
         runs=20,
     )
     assert result["horizon_days"] >= 152
+
+
+def _card(*, limit: int = 1_000_000, outstanding: int = 0) -> CardAccount:
+    return CardAccount(
+        id="card",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=outstanding,
+        credit_limit_paise=limit,
+    )
+
+
+def test_an_emi_without_a_tenure_defaults_to_three_months_and_says_so():
+    result = afford(
+        _inputs(start=1_000_000, cards=(_card(),)),
+        Hypothetical(amount_paise=120_000, date=date(2026, 1, 1), method="emi"),
+        runs=20,
+    )
+    assert result["hypothetical"]["emi_months"] == 3
+    assert len(result["hypothetical"]["installments"]) == 3
+
+
+def test_an_emi_reports_the_users_chosen_tenure():
+    result = afford(
+        _inputs(start=1_000_000, cards=(_card(),)),
+        Hypothetical(
+            amount_paise=120_000,
+            date=date(2026, 1, 1),
+            method="emi",
+            emi_months=6,
+        ),
+        runs=20,
+    )
+    assert result["hypothetical"]["emi_months"] == 6
+    assert len(result["hypothetical"]["installments"]) == 6
+
+
+def test_an_infeasible_emi_still_reports_its_effective_tenure():
+    result = afford(
+        _inputs(start=1_000_000, cards=(_card(limit=50_000),)),
+        Hypothetical(amount_paise=120_000, date=date(2026, 1, 1), method="emi"),
+        runs=10,
+    )
+    assert result["hypothetical"]["feasible"] is False
+    assert result["hypothetical"]["emi_months"] == 3
+
+
+def test_an_emi_tenure_outside_two_to_forty_eight_months_is_rejected():
+    for months in (0, 1, 49):
+        with pytest.raises(ValueError, match="EMI tenure"):
+            afford(
+                _inputs(start=1_000_000, cards=(_card(),)),
+                Hypothetical(
+                    amount_paise=120_000,
+                    date=date(2026, 1, 1),
+                    method="emi",
+                    emi_months=months,
+                ),
+                runs=10,
+            )
+
+
+def test_a_non_emi_purchase_ignores_an_irrelevant_tenure():
+    result = afford(
+        _inputs(start=1_000_000),
+        Hypothetical(
+            amount_paise=100_000,
+            date=date(2026, 1, 1),
+            method="account",
+            emi_months=6,
+        ),
+        runs=10,
+    )
+    assert result["hypothetical"]["emi_months"] is None
 
 
 def test_every_verdict_is_one_of_the_three_and_yes_clears_the_threshold():

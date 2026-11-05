@@ -1,0 +1,815 @@
+/* Activity panels (Ledger and Imports). Scoped to .act-*; base tokens live in styles.css. */
+
+.act-ledger button,
+.act-imports button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Ledger filters ------------------------------------------------------------------------- */
+
+.act-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.act-field {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--sub);
+}
+
+.act-field input,
+.act-field select {
+  width: auto;
+  min-width: 132px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.act-field input[type="date"] {
+  min-width: 142px;
+}
+
+.act-search {
+  flex: 1 1 210px;
+  min-width: 190px;
+}
+
+.act-search input {
+  width: 100%;
+  min-width: 0;
+}
+
+.act-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 3px;
+  font-size: 12.5px;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.act-check input {
+  width: auto;
+  margin: 0;
+}
+
+.act-toolbar-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.act-field-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.act-field-error .inline-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--blue-text);
+  font-size: inherit;
+}
+
+/* Ledger list ---------------------------------------------------------------------------- */
+
+.act-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0 0 10px;
+  color: var(--ter);
+  font-size: 12px;
+}
+
+.act-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--blue-text);
+}
+
+.act-list {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.act-list-head,
+.act-move {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 128px 136px 70px;
+  gap: 14px;
+  padding: 11px 16px;
+}
+
+.act-list-head {
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--sub);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.act-list-head span:nth-child(4) {
+  text-align: right;
+}
+
+.act-move {
+  align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.act-move:last-child {
+  border-bottom: 0;
+}
+
+.act-move:hover {
+  background: rgba(118, 118, 128, 0.07);
+}
+
+.act-move-date {
+  padding-top: 1px;
+  color: var(--ter);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.act-move-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.act-move-main strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-move-cat {
+  overflow: hidden;
+  color: var(--sub);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-move-amount {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.act-move-amount strong {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.act-move-amount .badge {
+  margin: 0;
+  font-size: 10px;
+}
+
+.act-move-open {
+  justify-self: end;
+}
+
+.act-move-open button {
+  min-height: 32px;
+}
+
+.act-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.act-pager-info {
+  color: var(--ter);
+  font-size: 12px;
+}
+
+.act-pager-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.act-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 22px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  color: var(--sub);
+}
+
+.act-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.act-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 107, 97, 0.32);
+  border-radius: 12px;
+  background: rgba(255, 107, 97, 0.07);
+}
+
+.act-error > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.act-error > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.act-error strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.act-error p {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+/* Ledger skeleton ------------------------------------------------------------------------ */
+
+.act-skel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.act-skel-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 128px 136px 70px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.act-skel-row:last-child {
+  border-bottom: 0;
+}
+
+.act-skel-line {
+  height: 11px;
+}
+
+.act-skel-line.tiny {
+  width: 45%;
+  height: 9px;
+  margin-top: 5px;
+}
+
+.act-skel-line.short {
+  width: 70%;
+}
+
+.act-skel-line.amount {
+  width: 80%;
+  justify-self: end;
+}
+
+.act-skel-line.button {
+  width: 58px;
+  height: 26px;
+  justify-self: end;
+}
+
+.act-skel-stack {
+  min-width: 0;
+}
+
+/* Ledger details dialog ------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: no-preference) {
+  .act-dialog {
+    animation: act-dialog-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+@keyframes act-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -49%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+/* Imports -------------------------------------------------------------------------------- */
+
+.act-imports .imports-layout {
+  grid-template-columns: minmax(240px, 310px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.act-imports .subcard.imports-detail {
+  min-width: 0;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.act-upload-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.act-upload-fields label {
+  margin: 0;
+  font-size: 11.5px;
+}
+
+.act-upload-fields input[type="file"] {
+  width: auto;
+  max-width: 100%;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.act-upload-fields select {
+  min-width: 180px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.act-history {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.act-history-skel {
+  display: block;
+  height: 58px;
+  border-radius: 12px;
+}
+
+.act-imports .row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.act-imports .plain-list li {
+  flex-wrap: wrap;
+}
+
+.act-imports .plain-list li span:nth-child(2) {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.act-imports .plain-list li strong {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.act-line-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.act-import-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-weight: 400;
+}
+
+.act-import-item:hover {
+  background: rgba(118, 118, 128, 0.12);
+}
+
+.act-import-item[aria-current="true"] {
+  border-color: var(--blue);
+  background: rgba(11, 108, 240, 0.1);
+}
+
+.act-import-item:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.act-import-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.act-import-main strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-import-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 10px;
+  color: var(--ter);
+  font-size: 11.5px;
+}
+
+.act-import-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.act-import-side .badge {
+  margin: 0;
+}
+
+.act-history-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.act-history-foot .fine {
+  margin: 0;
+}
+
+.act-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.act-detail-placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0 12px;
+}
+
+.act-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.act-poll {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--sub);
+  font-size: 12.5px;
+}
+
+.act-poll .act-busy {
+  color: var(--blue-text);
+}
+
+.act-summary-note {
+  margin: 8px 0 0;
+}
+
+.act-lines-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-top: 20px;
+}
+
+.act-lines-head h3 {
+  margin: 0;
+}
+
+.act-lines-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.act-lines-controls label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--sub);
+}
+
+.act-lines-controls select {
+  width: auto;
+  min-width: 150px;
+  padding: 6px 28px 6px 9px;
+  font-size: 12.5px;
+  background-position:
+    right 12px top 15px,
+    right 7px top 15px;
+}
+
+.act-line-scroll table {
+  min-width: 760px;
+}
+
+.act-line-scroll:focus-visible {
+  outline-offset: -2px;
+}
+
+.act-line-narration {
+  max-width: 340px;
+  overflow-wrap: anywhere;
+}
+
+.act-pager.compact {
+  margin-top: 10px;
+}
+
+.act-top-gap {
+  margin-top: 10px;
+}
+
+.act-decisions {
+  margin-top: 18px;
+}
+
+.act-decisions > .section-head {
+  margin-bottom: 4px;
+}
+
+.act-decision-note {
+  margin: 0 0 8px;
+}
+
+/* Narrow layouts ------------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .act-imports .imports-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .act-imports .subcard.imports-detail {
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .act-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .act-toolbar-actions button {
+    flex: 1 1 auto;
+  }
+
+  .act-list-head,
+  .act-move,
+  .act-skel-row {
+    grid-template-columns: 80px minmax(0, 1fr) 118px 124px 64px;
+    gap: 10px;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .act-toolbar {
+    gap: 10px;
+  }
+}
+
+@media (max-width: 620px) {
+  .act-toolbar {
+    padding: 12px;
+  }
+
+  .act-field {
+    flex: 1 1 135px;
+  }
+
+  .act-field select,
+  .act-field input[type="date"] {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .act-search {
+    flex-basis: 100%;
+  }
+
+  .act-check {
+    flex-basis: 100%;
+  }
+
+  .act-list-head {
+    display: none;
+  }
+
+  .act-move {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "date amount"
+      "main main"
+      "cat cat"
+      "open open";
+    align-items: start;
+    gap: 4px 12px;
+    padding: 13px 14px;
+  }
+
+  .act-skel-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "date amount"
+      "main main";
+    gap: 4px 12px;
+    padding: 13px 14px;
+  }
+
+  .act-skel-row > :nth-child(1) {
+    grid-area: date;
+  }
+
+  .act-skel-row > :nth-child(2) {
+    grid-area: main;
+  }
+
+  .act-skel-row > :nth-child(4) {
+    grid-area: amount;
+  }
+
+  .act-skel-row > :nth-child(3),
+  .act-skel-row > :nth-child(5) {
+    display: none;
+  }
+
+  .act-move-date {
+    grid-area: date;
+    font-size: 11px;
+  }
+
+  .act-move-main {
+    grid-area: main;
+  }
+
+  .act-move-cat {
+    grid-area: cat;
+  }
+
+  .act-move-amount {
+    grid-area: amount;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .act-move-open {
+    grid-area: open;
+    justify-self: start;
+    margin-top: 2px;
+  }
+
+  .act-move-open button {
+    min-height: 38px;
+  }
+
+  .act-pager {
+    align-items: flex-start;
+  }
+
+  .act-pager-buttons {
+    width: 100%;
+  }
+
+  .act-pager-buttons button {
+    flex: 1;
+    min-height: 40px;
+  }
+
+  .act-upload-fields label,
+  .act-upload-fields button {
+    flex: 1 1 100%;
+  }
+
+  .act-upload-fields input[type="file"],
+  .act-upload-fields select {
+    width: 100%;
+  }
+
+  .act-detail-head {
+    flex-direction: column;
+  }
+
+  .act-detail-actions,
+  .act-detail-actions button {
+    width: 100%;
+  }
+
+  .act-detail-actions button {
+    min-height: 40px;
+  }
+
+  .act-import-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .act-import-side {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .act-lines-controls {
+    width: 100%;
+  }
+
+  .act-lines-controls label {
+    flex: 1;
+  }
+
+  .act-lines-controls select {
+    width: 100%;
+  }
+
+  .act-history-foot button {
+    min-height: 40px;
+  }
+}

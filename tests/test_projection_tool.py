@@ -180,6 +180,31 @@ def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger):
     assert "tradeoffs" in payload
 
 
+def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_client, demo_ledger):
+    response = authed_client.get(
+        "/api/projection",
+        params={
+            "amount_paise": 120_000_000,
+            "date": "2026-11-01",
+            "method": "emi",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["hypothetical"]["emi_months"] == 3
+
+    chosen = authed_client.get(
+        "/api/projection",
+        params={
+            "amount_paise": 120_000_000,
+            "date": "2026-11-01",
+            "method": "emi",
+            "emi_months": 6,
+        },
+    )
+    assert chosen.status_code == 200, chosen.text
+    assert chosen.json()["hypothetical"]["emi_months"] == 6
+
+
 def test_get_api_projection_rejects_an_amount_without_a_date(authed_client):
     response = authed_client.get("/api/projection", params={"amount_paise": 1000})
     assert response.status_code == 422

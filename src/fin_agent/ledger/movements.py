@@ -139,6 +139,22 @@ def _reversal_state(conn: psycopg.Connection, movement_ids: list[str]) -> dict[s
     return result
 
 
+def _effectively_reversed_ids(conn: psycopg.Connection) -> list[str]:
+    """Movements hidden from activity because a reversal still cancels them.
+
+    An undo-of-undo restores the original, so parity of the reversal chain decides. Only
+    reversal links are read, never the whole movements table.
+    """
+    roots = [
+        str(row["id"])
+        for row in conn.execute(
+            "SELECT DISTINCT reverses_id AS id FROM movements WHERE reverses_id IS NOT NULL"
+        ).fetchall()
+    ]
+    states = _reversal_state(conn, roots)
+    return [root for root in roots if states[root]["reversed"]]
+
+
 def movement_payload(
     conn: psycopg.Connection,
     movement: dict[str, Any],
@@ -1077,11 +1093,19 @@ def list_movements(
         clauses.append(
             f"EXISTS (SELECT 1 FROM transfer_labels tl WHERE {' AND '.join(label_clauses)})"
         )
+    if not include_reversed:
+        # In SQL, not after LIMIT, so a page is never short and total_count agrees.
+        clauses.append("m.kind <> 'reversal'")
+        hidden = _effectively_reversed_ids(conn)
+        if hidden:
+            clauses.append("NOT (m.id = ANY(%s))")
+            params.append(hidden)
+
+    cursor_key: tuple[date, str] | None = None
     if cursor:
         try:
             cursor_date, cursor_id = cursor.split("|", 1)
-            clauses.append("(m.date, m.id) < (%s, %s)")
-            params.extend([date.fromisoformat(cursor_date), cursor_id])
+            cursor_key = (date.fromisoformat(cursor_date), cursor_id)
         except (ValueError, TypeError) as exc:
             raise InvalidLedgerError("Invalid cursor") from exc
 
@@ -1093,24 +1117,26 @@ def list_movements(
         ).fetchone()["n"]
     )
 
+    page_where = where
+    page_params = params
+    if cursor_key is not None:
+        page_where = f"WHERE {' AND '.join([*clauses, '(m.date, m.id) < (%s, %s)'])}"
+        page_params = [*params, *cursor_key]
     rows = list(
         conn.execute(
             f"""
-            SELECT m.* FROM movements m {where}
+            SELECT m.* FROM movements m {page_where}
             ORDER BY m.date DESC, m.id DESC
             LIMIT %s
             """,  # noqa: S608
-            (*params, limit * 3 + 1),
+            (*page_params, limit + 1),
         ).fetchall()
     )
-    if not include_reversed:
-        rows = [row for row in rows if row["kind"] != "reversal"]
-    states = _reversal_state(conn, [str(row["id"]) for row in rows])
-    if not include_reversed:
-        rows = [row for row in rows if not states[str(row["id"])]["reversed"]]
+    has_more = len(rows) > limit
     rows = rows[:limit]
+    states = _reversal_state(conn, [str(row["id"]) for row in rows])
     next_cursor = None
-    if rows:
+    if has_more and rows:
         last = rows[-1]
         next_cursor = f"{last['date'].isoformat()}|{last['id']}"
     return {

@@ -16,7 +16,7 @@ import {
 } from "recharts";
 import { api, errorMessage } from "../api";
 import { formatRupees } from "./format";
-import { ProjectionCard } from "../projection";
+import { ProjectionCard, type ProjectionPayload } from "../projection";
 
 const COLORS = ["#0b6cf0", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff"];
 
@@ -149,13 +149,15 @@ function UndoButton({ undoId }: { undoId?: string | null }) {
 export function Card({
   data,
   onRetryCapture,
+  onEvidence,
 }: {
   data: Record<string, unknown>;
   onRetryCapture?: (kind: string, attachmentId: string) => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const card = String(data.card ?? "card");
   if (card === "chart") return <ChartCard data={data} />;
-  if (card === "projection") return <ProjectionCard data={data} />;
+  if (card === "projection") return <ProjectionCard data={data} onEvidence={onEvidence} />;
 
   if (card === "capture") {
     const attachmentId = String(data.attachment_id ?? "");

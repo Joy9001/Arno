@@ -146,8 +146,10 @@ The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix 
 |---|---|
 | `@ai-sdk/react`, `ai` | Apache-2.0 |
 | `@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs` | MIT |
+| `@radix-ui/themes` | MIT |
 | `@simplewebauthn/browser` | MIT |
 | `lucide-react` | ISC |
+| `motion` | MIT |
 | `qrcode.react` | ISC |
 | `react`, `react-dom` | MIT |
 | `react-spinners` | MIT |

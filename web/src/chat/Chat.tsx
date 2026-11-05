@@ -1,12 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
+import {
+  ArrowUp,
+  Calculator,
+  Camera,
+  History,
+  Mic,
+  Plus,
+  ReceiptText,
+  RotateCcw,
+  Search,
+  Square,
+  Wallet,
+  X,
+} from "lucide-react";
 import { DefaultChatTransport, isToolUIPart, getToolName, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
 import { useChat } from "@ai-sdk/react";
 import { Streamdown } from "streamdown";
 import { api, errorMessage } from "../api";
-import { Busy, Loading, Typing } from "../Loading";
+import { Busy, Typing } from "../Loading";
+import type { ProjectionPayload } from "../projection";
 import { takeSharedImage } from "../share";
+import { ConversationSkeleton } from "../Skeleton";
 import { Card, NumberFlags } from "./cards";
 import type { ChatMessage, ThreadBody, ThreadList, ThreadSummary } from "./types";
 
@@ -26,6 +42,12 @@ const LINKED = {
   ),
   img: () => null,
 };
+
+const STARTERS = [
+  { Icon: ReceiptText, text: "How much did I spend on food last month?" },
+  { Icon: Calculator, text: "Can I afford a ₹40,000 phone in December?" },
+  { Icon: Wallet, text: "What is due in the next 30 days?" },
+];
 
 function newThreadId(): string {
   return `cnv_${crypto.randomUUID()}`;
@@ -66,14 +88,19 @@ function ThreadSidebar({
   return (
     <aside className="chat-sidebar">
       <button type="button" className="new-chat" onClick={onNew}>
-        + New chat
+        <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
+        New chat
       </button>
-      <input
-        className="thread-search"
-        value={query}
-        placeholder="Search past messages"
-        onChange={(event) => onQuery(event.target.value)}
-      />
+      <label className="search-field">
+        <Search size={14} strokeWidth={1.8} aria-hidden="true" />
+        <input
+          className="thread-search"
+          value={query}
+          placeholder="Search past messages"
+          aria-label="Search past messages"
+          onChange={(event) => onQuery(event.target.value)}
+        />
+      </label>
       <div className="thread-list">
         {threads.map((thread) => (
           <button
@@ -105,9 +132,11 @@ function ThreadSidebar({
 function Part({
   part,
   onRetryCapture,
+  onEvidence,
 }: {
   part: ChatMessage["parts"][number];
   onRetryCapture?: (kind: string, attachmentId: string) => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   if (part.type === "text") {
     return (
@@ -120,7 +149,11 @@ function Part({
     const data = (part as { data?: unknown }).data;
     if (part.type === "data-card" && data && typeof data === "object") {
       return (
-        <Card data={data as Record<string, unknown>} onRetryCapture={onRetryCapture} />
+        <Card
+          data={data as Record<string, unknown>}
+          onRetryCapture={onRetryCapture}
+          onEvidence={onEvidence}
+        />
       );
     }
     if (part.type === "data-number-flags") {
@@ -164,12 +197,14 @@ function Message({
   onApprove,
   onFlag,
   onRetryCapture,
+  onEvidence,
 }: {
   message: ChatMessage;
   busy: boolean;
   onApprove: (approvalId: string, approved: boolean) => void;
   onFlag: (message: ChatMessage) => void;
   onRetryCapture: (kind: string, attachmentId: string, messageId: string) => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const [flagged, setFlagged] = useState(Boolean(message.metadata?.flagged_at));
   const role = message.role;
@@ -242,6 +277,7 @@ function Message({
           <Part
             key={index}
             part={part}
+            onEvidence={onEvidence}
             onRetryCapture={(kind, attachmentId) =>
               onRetryCapture(kind, attachmentId, message.id)
             }
@@ -259,6 +295,7 @@ function Conversation({
   seed = null,
   focusSignal,
   onSeedConsumed,
+  onEvidence,
 }: {
   threadId: string;
   initialMessages: ChatMessage[];
@@ -266,6 +303,7 @@ function Conversation({
   seed?: { id: number; text: string } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const voiceRef = useRef<string | null>(null);
   const transport = useMemo(
@@ -315,6 +353,13 @@ function Conversation({
   const [input, setInput] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const focusMounted = useRef(false);
+
+  useLayoutEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
+  }, [input]);
 
   useEffect(() => {
     if (seed?.text) {
@@ -587,6 +632,7 @@ function Conversation({
             Replying…
           </h2>
           <button type="button" className="ghost" onClick={() => void stopTurn()}>
+            <Square size={13} strokeWidth={1.8} aria-hidden="true" />
             Stop
           </button>
         </header>
@@ -597,9 +643,24 @@ function Conversation({
           <div className="empty-chat">
             <h3>Ask anything about your money.</h3>
             <p className="muted">
-              "How much did I spend on food last month?" · "Can I afford a ₹40,000 phone in
-              December?" · "Paid 450 on Swiggy."
+              Answers use your ledger, plan, and projection. Every figure comes with its sources.
             </p>
+            <div className="starter-list">
+              {STARTERS.map(({ Icon, text }) => (
+                <button
+                  key={text}
+                  type="button"
+                  className="starter"
+                  onClick={() => {
+                    setInput(text);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
+                  <span>{text}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         {visibleMessages.map((message) => (
@@ -611,6 +672,7 @@ function Conversation({
               addToolApprovalResponse({ id: approvalId, approved })
             }
             onFlag={(item) => void flag(item)}
+            onEvidence={onEvidence}
             onRetryCapture={(kind, attachmentId, messageId) =>
               void retryCapture(kind, attachmentId, messageId)
             }
@@ -621,6 +683,7 @@ function Conversation({
           <div className="chat-card">
             <p className="error">{errorMessage(error)}</p>
             <button type="button" className="ghost small" onClick={() => void regenerate()}>
+              <RotateCcw size={13} strokeWidth={1.8} aria-hidden="true" />
               Retry
             </button>
           </div>
@@ -630,73 +693,89 @@ function Conversation({
 
       <form className="composer" onSubmit={(event) => void submit(event)}>
         <div className="composer-main">
-          <textarea
-            ref={inputRef}
-            value={input}
-            rows={2}
-            placeholder="Message Fin-Agent…"
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit(event);
-              }
-            }}
-          />
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => fileInput.current?.click()}
-              disabled={busy || uploading}
-            >
-              {uploading ? (
-                <>
-                  <Busy />
-                  Reading…
-                </>
-              ) : (
-                "Photo"
-              )}
-            </button>
-            <input
-              ref={fileInput}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                if (file) void uploadPhoto(file);
+          <div className="composer-row">
+            <textarea
+              ref={inputRef}
+              value={input}
+              rows={1}
+              aria-label="Message Fin-Agent"
+              placeholder="Message Fin-Agent…"
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  void submit(event);
+                }
               }}
             />
-            {canRecord && (
+            <div className="composer-actions">
               <button
                 type="button"
-                className={recording ? "ghost record live" : "ghost record"}
-                disabled={busy || transcribing}
-                onPointerDown={onPointerDown}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                onLostPointerCapture={() => {
-                  if (holdingRef.current) stopRecording();
-                }}
+                className="ghost"
+                onClick={() => fileInput.current?.click()}
+                disabled={busy || uploading}
               >
-                {recording ? (
-                  "Listening… release"
-                ) : transcribing ? (
+                {uploading ? (
                   <>
                     <Busy />
-                    Transcribing…
+                    Reading…
                   </>
                 ) : (
-                  "Hold to talk"
+                  <>
+                    <Camera size={15} strokeWidth={1.8} aria-hidden="true" />
+                    Photo
+                  </>
                 )}
               </button>
-            )}
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void uploadPhoto(file);
+                }}
+              />
+              {canRecord && (
+                <button
+                  type="button"
+                  className={recording ? "ghost record live" : "ghost record"}
+                  disabled={busy || transcribing}
+                  onPointerDown={onPointerDown}
+                  onPointerUp={onPointerUp}
+                  onPointerCancel={onPointerUp}
+                  onLostPointerCapture={() => {
+                    if (holdingRef.current) stopRecording();
+                  }}
+                >
+                  {recording ? (
+                    <>
+                      <Mic size={15} strokeWidth={1.8} aria-hidden="true" />
+                      Listening… release
+                    </>
+                  ) : transcribing ? (
+                    <>
+                      <Busy />
+                      Transcribing…
+                    </>
+                  ) : (
+                    <>
+                      <Mic size={15} strokeWidth={1.8} aria-hidden="true" />
+                      Hold to talk
+                    </>
+                  )}
+                </button>
+              )}
+              <button className="composer-send" type="submit" disabled={busy || !input.trim()}>
+                <ArrowUp size={16} strokeWidth={2} aria-hidden="true" />
+                Send
+              </button>
+            </div>
           </div>
           {(recording || transcribing || uploading || captureError) && (
-            <p className={captureError ? "error fine" : "fine"}>
+            <p className={captureError ? "error fine" : "fine"} role={captureError ? "alert" : "status"}>
               {captureError ??
                 (recording
                   ? "Recording… release to send."
@@ -706,9 +785,6 @@ function Conversation({
             </p>
           )}
         </div>
-        <button type="submit" disabled={busy || !input.trim()}>
-          Send
-        </button>
       </form>
     </section>
   );
@@ -722,6 +798,7 @@ export function Assistant({
   onSeedConsumed,
   onClose,
   onActivity,
+  onEvidence,
 }: {
   focusThreadId?: string | null;
   onFocusHandled?: () => void;
@@ -730,6 +807,7 @@ export function Assistant({
   onSeedConsumed?: () => void;
   onClose?: () => void;
   onActivity?: () => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string>(() => {
@@ -866,10 +944,13 @@ export function Assistant({
     return (
       <section className="assistant">
         <header className="assistant-head">
-          <h2>Assistant</h2>
+          <div>
+            <h2>Conversation</h2>
+            <p className="fine">Fin-Agent</p>
+          </div>
         </header>
         <div className="chat-loading">
-          <Loading label="Loading conversations…" />
+          <ConversationSkeleton />
         </div>
       </section>
     );
@@ -888,6 +969,7 @@ export function Assistant({
           <Popover.Root open={historyOpen} onOpenChange={setHistoryOpen}>
             <Popover.Trigger asChild>
               <button type="button" className="ghost small">
+                <History size={14} strokeWidth={1.8} aria-hidden="true" />
                 History
               </button>
             </Popover.Trigger>
@@ -916,11 +998,18 @@ export function Assistant({
             </Popover.Portal>
           </Popover.Root>
           <button type="button" className="ghost small" onClick={startNew}>
+            <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
             New
           </button>
           {onClose && (
-            <button type="button" className="ghost small" onClick={onClose}>
-              Close
+            <button
+              type="button"
+              className="ghost small icon-only"
+              onClick={onClose}
+              aria-label="Close assistant"
+              title="Close assistant"
+            >
+              <X size={15} strokeWidth={1.8} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -939,10 +1028,11 @@ export function Assistant({
           seed={seed}
           focusSignal={focusSignal}
           onSeedConsumed={onSeedConsumed}
+          onEvidence={onEvidence}
         />
       ) : (
         <div className="chat-loading">
-          <Loading label="Loading conversation…" />
+          <ConversationSkeleton />
         </div>
       )}
     </section>

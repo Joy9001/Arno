@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any
 
+from fin_agent.engine.money import money
 from fin_agent.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -72,7 +73,7 @@ def _hypothetical_inputs(
         "amount_paise": amount,
         "date": hypothetical.date.isoformat(),
         "method": hypothetical.method,
-        "emi_months": hypothetical.emi_months,
+        "emi_months": hypothetical.emi_months if hypothetical.method == "emi" else None,
         "account": hypothetical.account,
     }
 
@@ -86,14 +87,21 @@ def _hypothetical_inputs(
         )
         return replace(inputs, events=inputs.events + (event,)), meta, None
 
+    months = hypothetical.emi_months if hypothetical.emi_months is not None else 3
+    if hypothetical.method == "emi":
+        if not 2 <= months <= 48:
+            return inputs, meta, "an EMI tenure is 2 to 48 months"
+        meta["emi_months"] = months
+
     card = _pick_card(inputs, hypothetical.account)
     if card is None:
         return inputs, meta, "no card with available credit was found"
     if amount > card.available_credit_paise:
+        available = money(card.available_credit_paise)["text"]
         return (
             inputs,
             meta | {"available_credit_paise": card.available_credit_paise},
-            f"{card.name} has only {card.available_credit_paise} paise of available credit",
+            f"{card.name} has only {available} of available credit",
         )
     meta["card_id"] = card.id
     meta["card_name"] = card.name
@@ -111,15 +119,6 @@ def _hypothetical_inputs(
         )
         return replace(inputs, events=inputs.events + (event,)), meta, None
 
-    months = hypothetical.emi_months or 3
-    if months < 2:
-        return inputs, meta, "an EMI needs at least 2 months"
-    if amount > card.available_credit_paise:
-        return (
-            inputs,
-            meta,
-            f"{card.name} has only {card.available_credit_paise} paise of available credit",
-        )
     base = amount // months
     remainder = amount - base * months
     installments: list[dict[str, Any]] = []
@@ -217,7 +216,7 @@ def _card_tradeoff(
         candidate = replace(
             hypothetical,
             method=method,
-            emi_months=hypothetical.emi_months or 3 if method == "emi" else hypothetical.emi_months,
+            emi_months=(hypothetical.emi_months or 3) if method == "emi" else None,
         )
         modified, meta, reason = _hypothetical_inputs(inputs, candidate)
         if reason is not None:
@@ -234,7 +233,7 @@ def _card_tradeoff(
             count = len(meta.get("installments") or [])
             detail = (
                 f"Split it into {count} card instalments of about "
-                f"{meta['amount_paise'] // count} paise each, starting {meta['date']}."
+                f"{money(meta['amount_paise'] // count)['text']} each, starting {meta['date']}."
             )
         return {
             "kind": "pay_by_card",
@@ -375,6 +374,10 @@ def afford(
         raise ValueError("the amount must be positive")
     if hypothetical.method not in METHODS:
         raise ValueError("method is account, card, or emi")
+    if hypothetical.method == "emi":
+        tenure = hypothetical.emi_months if hypothetical.emi_months is not None else 3
+        if not 2 <= tenure <= 48:
+            raise ValueError("an EMI tenure is 2 to 48 months")
     if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
     needed = max(0, (hypothetical.date - inputs.as_of).days + 1)

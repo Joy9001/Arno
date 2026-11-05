@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from fin_agent.notifications import create_notification, mark_read
+
 
 def test_home_composes_one_payload(authed_client):
     account = authed_client.post(
@@ -36,6 +38,18 @@ def test_home_composes_one_payload(authed_client):
     assert body["unread_count"] == 0
     assert body["needs_you"] == []
     assert body["recent"][0]["description"] == "Lunch"
+
+
+def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db):
+    unread = create_notification(db, kind="reminder", title="Older unread reminder")
+    read = create_notification(db, kind="reminder", title="Newer read reminder")
+    db.commit()
+    mark_read(db, read["id"])
+    db.commit()
+
+    body = authed_client.get("/api/home?horizon_days=90").json()
+
+    assert body["needs_you"][0]["id"] == unread["id"]
 
 
 def test_home_rejects_an_out_of_range_horizon(authed_client):

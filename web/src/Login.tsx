@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { MessageSquare } from "lucide-react";
 import { errorMessage } from "./api";
 import { loginWithPasskey } from "./auth";
 import { Busy } from "./Loading";
+import { Mark } from "./Mark";
 
 export function Login({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -26,9 +26,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <span className="brand-mark" aria-hidden="true">
-            <MessageSquare size={14} strokeWidth={2.3} />
-          </span>
+          <Mark size={28} />
           Fin-Agent
         </div>
         <h1>Sign in</h1>

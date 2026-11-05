@@ -1,12 +1,25 @@
 import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { MessageCircle, X } from "lucide-react";
+import { Skeleton } from "@radix-ui/themes";
+import {
+  AlertCircle,
+  ChevronLeft,
+  ChevronRight,
+  FileSearch,
+  MessageCircle,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { askAgent } from "../ask";
 import { api, errorMessage } from "../api";
 import { formatDate, formatPaise } from "../format";
-import { Busy, Loading } from "../Loading";
+import { Busy } from "../Loading";
 import { movementLabel, movementNote, humanizeKind } from "../movement";
-import type { Movement, MovementList } from "../types";
+import type { AccountSummary, Movement, MovementList } from "../types";
+import { useApi } from "../useApi";
+import "./Activity.css";
+
+const PAGE_SIZE = 25;
 
 const KINDS = [
   "expense",
@@ -21,23 +34,57 @@ const KINDS = [
 
 type Filters = {
   kind: string;
-  includeReversed: boolean;
+  accountId: string;
   start: string;
   end: string;
+  includeReversed: boolean;
 };
 
-const EMPTY: Filters = { kind: "", includeReversed: false, start: "", end: "" };
+const EMPTY: Filters = {
+  kind: "",
+  accountId: "",
+  start: "",
+  end: "",
+  includeReversed: false,
+};
 
-function buildParams(filters: Filters, cursor?: string | null): string {
+type Request = {
+  filters: Filters;
+  cursors: Array<string | null>;
+  index: number;
+  version: number;
+};
+
+type Loaded = {
+  items: Movement[];
+  nextCursor: string | null;
+  index: number;
+};
+
+function buildParams(filters: Filters, cursor: string | null): string {
   const params = new URLSearchParams({
-    limit: "50",
+    limit: String(PAGE_SIZE),
     include_reversed: String(filters.includeReversed),
   });
   if (filters.kind) params.set("kind", filters.kind);
+  if (filters.accountId) params.set("account_id", filters.accountId);
   if (filters.start) params.set("start", filters.start);
   if (filters.end) params.set("end", filters.end);
   if (cursor) params.set("cursor", cursor);
   return params.toString();
+}
+
+function matchesSearch(movement: Movement, query: string): boolean {
+  const haystack = [
+    movementLabel(movement),
+    movement.description,
+    movement.category_name ?? "",
+    movement.payee_name ?? "",
+    humanizeKind(movement.kind),
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(query);
 }
 
 function MovementRow({
@@ -47,28 +94,34 @@ function MovementRow({
   movement: Movement;
   onOpen: (movement: Movement) => void;
 }) {
+  const category =
+    movement.kind === "transfer" ? "Transfer" : (movement.category_name ?? "—");
   return (
-    <article className="movement">
-      <div className="movement-date">{formatDate(movement.date)}</div>
-      <div className="movement-body">
-        <h3 title={movement.description}>{movementLabel(movement)}</h3>
-        <p className="fine">
-          {movementNote(movement)}
-          {movement.reversed ? " · reversed" : ""}
-        </p>
+    <article className="act-move">
+      <div className="act-move-date">{formatDate(movement.date)}</div>
+      <div className="act-move-main">
+        <strong title={movement.description}>{movementLabel(movement)}</strong>
+        <span className="fine">
+          {movement.kind === "transfer" ? movementNote(movement) : humanizeKind(movement.kind)}
+        </span>
       </div>
-      <div className="movement-amount">
+      <div className="act-move-cat" title={category}>
+        {category}
+      </div>
+      <div className="act-move-amount">
         <strong>{formatPaise(movement.amount_paise)}</strong>
         <span className={`badge ${movement.reversed ? "danger" : "muted"}`}>
-          {movement.reversed
-            ? "Reversed"
-            : movement.kind.charAt(0).toUpperCase() + movement.kind.slice(1)}
+          {movement.reversed ? "Reversed" : humanizeKind(movement.kind)}
         </span>
+      </div>
+      <div className="act-move-open">
         <button
           type="button"
-          className="ghost small movement-open"
+          className="ghost small"
           onClick={() => onOpen(movement)}
+          aria-label={`Details for ${movementLabel(movement)}`}
         >
+          <FileSearch size={14} aria-hidden="true" />
           Details
         </button>
       </div>
@@ -76,74 +129,128 @@ function MovementRow({
   );
 }
 
+function LedgerSkeleton() {
+  return (
+    <div className="act-skel" aria-busy="true" aria-label="Loading movements">
+      {[0, 1, 2, 3, 4, 5].map((row) => (
+        <div className="act-skel-row" key={row}>
+          <Skeleton className="sk act-skel-line short" />
+          <div className="act-skel-stack">
+            <Skeleton className="sk act-skel-line" />
+            <Skeleton className="sk act-skel-line tiny" />
+          </div>
+          <Skeleton className="sk act-skel-line short" />
+          <Skeleton className="sk act-skel-line amount" />
+          <Skeleton className="sk act-skel-line button" />
+        </div>
+      ))}
+      <span className="sr-only">Loading movements…</span>
+    </div>
+  );
+}
+
 export function LedgerPanel() {
   const [draft, setDraft] = useState<Filters>(EMPTY);
-  const [applied, setApplied] = useState<Filters>(EMPTY);
-  const [items, setItems] = useState<Movement[]>([]);
-  const [total, setTotal] = useState(0);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [request, setRequest] = useState<Request>({
+    filters: EMPTY,
+    cursors: [null],
+    index: 0,
+    version: 0,
+  });
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [version, setVersion] = useState(0);
+  const [search, setSearch] = useState("");
   const [openMovement, setOpenMovement] = useState<Movement | null>(null);
+  const accounts = useApi<AccountSummary>("/api/accounts");
+
+  const cursor = request.cursors[request.index] ?? null;
+  const requestKey = `${JSON.stringify(request.filters)}|${cursor}|${request.version}`;
+  const loading = settledKey !== requestKey;
+  const rangeError =
+    draft.start && draft.end && draft.start > draft.end
+      ? "The start date is after the end date."
+      : null;
 
   useEffect(() => {
     let alive = true;
-    api<MovementList>(`/api/movements?${buildParams(applied)}`)
+    api<MovementList>(`/api/movements?${buildParams(request.filters, cursor)}`)
       .then((result) => {
         if (!alive) return;
-        setItems(result.items);
-        setTotal(result.total_count);
-        setNextCursor(result.next_cursor);
+        setLoaded({
+          items: result.items,
+          nextCursor: result.next_cursor,
+          index: request.index,
+        });
         setError(null);
       })
       .catch((caught: unknown) => {
         if (alive) setError(errorMessage(caught));
       })
       .finally(() => {
-        if (alive) setLoading(false);
+        if (alive) setSettledKey(requestKey);
       });
     return () => {
       alive = false;
     };
-  }, [applied, version]);
+  }, [request, cursor, requestKey]);
 
-  async function loadMore() {
-    if (!nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    setError(null);
-    try {
-      const result = await api<MovementList>(
-        `/api/movements?${buildParams(applied, nextCursor)}`,
-      );
-      setItems((current) => [...current, ...result.items]);
-      setTotal(result.total_count);
-      setNextCursor(result.next_cursor);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setLoadingMore(false);
-    }
+  function reload(filters: Filters) {
+    setRequest((current) => ({
+      filters,
+      cursors: [null],
+      index: 0,
+      version: current.version + 1,
+    }));
   }
 
+  function retry() {
+    setRequest((current) => ({ ...current, version: current.version + 1 }));
+  }
+
+  function nextPage() {
+    if (!loaded?.nextCursor || loading) return;
+    const nextCursor = loaded.nextCursor;
+    setRequest((current) => ({
+      ...current,
+      cursors: [...current.cursors.slice(0, loaded.index + 1), nextCursor],
+      index: loaded.index + 1,
+      version: current.version + 1,
+    }));
+  }
+
+  function previousPage() {
+    if (!loaded || loaded.index === 0 || loading) return;
+    setRequest((current) => ({
+      ...current,
+      index: loaded.index - 1,
+      version: current.version + 1,
+    }));
+  }
+
+  const query = search.trim().toLowerCase();
+  const visible = loaded
+    ? query
+      ? loaded.items.filter((movement) => matchesSearch(movement, query))
+      : loaded.items
+    : [];
+
   return (
-    <section className="panel">
+    <section className="panel act-ledger">
       <header className="panel-head">
         <div>
-          <h2>Every movement</h2>
+          <h2>Movements</h2>
           <p className="muted">
-            One row for each real money movement, with the transfers that balanced it. Corrections
-            are reversals; nothing is edited in place.
+            Every real money movement, newest first. Corrections are reversals; nothing is edited
+            in place. Open a row for its evidence and the transfers that balanced it.
           </p>
         </div>
         <button
           type="button"
           className="ghost"
-          onClick={() => {
-            setLoading(true);
-            setVersion((value) => value + 1);
-          }}
+          onClick={retry}
+          disabled={loading}
+          aria-busy={loading}
         >
           {loading ? (
             <>
@@ -151,20 +258,47 @@ export function LedgerPanel() {
               Refreshing…
             </>
           ) : (
-            "Refresh"
+            <>
+              <RefreshCw size={14} strokeWidth={1.8} aria-hidden="true" />
+              Refresh
+            </>
           )}
         </button>
       </header>
 
       <form
-        className="filters"
+        className="act-toolbar"
+        aria-label="Ledger filters"
         onSubmit={(event) => {
           event.preventDefault();
-          setLoading(true);
-          setApplied(draft);
+          if (rangeError) return;
+          reload({ ...draft });
         }}
       >
-        <label>
+        <label className="act-field act-search">
+          Search this page
+          <input
+            type="search"
+            value={search}
+            placeholder="Payee, note, or category"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        <label className="act-field">
+          Account
+          <select
+            value={draft.accountId}
+            onChange={(event) => setDraft({ ...draft, accountId: event.target.value })}
+          >
+            <option value="">All accounts</option>
+            {(accounts.data?.accounts ?? []).map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="act-field">
           Kind
           <select
             value={draft.kind}
@@ -178,7 +312,7 @@ export function LedgerPanel() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="act-field">
           From
           <input
             type="date"
@@ -186,7 +320,7 @@ export function LedgerPanel() {
             onChange={(event) => setDraft({ ...draft, start: event.target.value })}
           />
         </label>
-        <label>
+        <label className="act-field">
           To
           <input
             type="date"
@@ -194,7 +328,7 @@ export function LedgerPanel() {
             onChange={(event) => setDraft({ ...draft, end: event.target.value })}
           />
         </label>
-        <label className="checkbox">
+        <label className="act-check">
           <input
             type="checkbox"
             checked={draft.includeReversed}
@@ -204,79 +338,160 @@ export function LedgerPanel() {
           />
           Show reversed
         </label>
-        <button type="submit">Apply</button>
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => {
-            setLoading(true);
-            setDraft(EMPTY);
-            setApplied(EMPTY);
-          }}
-        >
-          Clear
-        </button>
-      </form>
-
-      <div className="list-meta">
-        <span className="fine">{total} movements</span>
-      </div>
-
-      {loading && items.length === 0 && <Loading label="Loading the ledger…" />}
-      {error && (
-        <div className="panel-error">
-          <p className="error">{error}</p>
+        <div className="act-toolbar-actions">
+          <button type="submit" disabled={loading || Boolean(rangeError)}>
+            Apply filters
+          </button>
           <button
             type="button"
-            className="ghost small"
+            className="ghost"
             onClick={() => {
-              setLoading(true);
-              setVersion((value) => value + 1);
+              setDraft(EMPTY);
+              setSearch("");
+              reload(EMPTY);
             }}
           >
+            Clear
+          </button>
+        </div>
+        {rangeError && (
+          <p className="act-field-error" role="alert">
+            {rangeError}
+          </p>
+        )}
+        {accounts.error && (
+          <p className="act-field-error" role="alert">
+            Accounts didn’t load, so only the other filters apply.{" "}
+            <button type="button" className="inline-link" onClick={accounts.reload}>
+              Try again
+            </button>
+          </p>
+        )}
+      </form>
+
+      <div className="act-status" aria-live="polite">
+        <span>Page {loaded ? loaded.index + 1 : 1} · newest first · {PAGE_SIZE} per page</span>
+        {query && loaded && (
+          <span>
+            {visible.length} of {loaded.items.length} on this page match
+          </span>
+        )}
+        {loading && (
+          <span className="act-busy">
+            <Busy />
+            Updating…
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div className="act-error" role="alert">
+          <AlertCircle size={18} strokeWidth={1.8} aria-hidden="true" />
+          <div>
+            <strong>The ledger couldn’t load.</strong>
+            <p className="fine">{error}</p>
+          </div>
+          <button type="button" className="ghost small" onClick={retry}>
             Retry
           </button>
         </div>
       )}
-      {!loading && !error && items.length === 0 && <p className="muted">No movements match.</p>}
 
-      <div className="movement-list">
-        {items.length > 0 && (
-          <div className="movement-header" aria-hidden="true">
-            <span>Date</span>
-            <span>Movement</span>
-            <span>Amount</span>
-          </div>
-        )}
-        {items.map((movement) => (
-          <MovementRow key={movement.id} movement={movement} onOpen={setOpenMovement} />
-        ))}
-      </div>
+      {!loaded && loading && <LedgerSkeleton />}
 
-      {nextCursor && (
-        <div className="load-more">
-          <button type="button" className="ghost" onClick={() => void loadMore()}>
-            {loadingMore ? (
-              <>
-                <Busy />
-                Loading…
-              </>
-            ) : (
-              "Load more"
-            )}
+      {loaded && loaded.items.length === 0 && (
+        <div className="act-empty">
+          <p>
+            {loaded.index > 0
+              ? "No movements on this page."
+              : "No movements match these filters."}
+          </p>
+          {loaded.index > 0 ? (
+            <button type="button" className="ghost small" onClick={previousPage}>
+              <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />
+              Previous page
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => {
+                setDraft(EMPTY);
+                setSearch("");
+                reload(EMPTY);
+              }}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {loaded && loaded.items.length > 0 && visible.length === 0 && (
+        <div className="act-empty">
+          <p>No rows on this page match “{search.trim()}”.</p>
+          <button type="button" className="ghost small" onClick={() => setSearch("")}>
+            Clear search
           </button>
         </div>
+      )}
+
+      {visible.length > 0 && (
+        <div className="act-list">
+          <div className="act-list-head" aria-hidden="true">
+            <span>Date</span>
+            <span>Movement</span>
+            <span>Category</span>
+            <span>Amount</span>
+            <span />
+          </div>
+          {visible.map((movement) => (
+            <MovementRow key={movement.id} movement={movement} onOpen={setOpenMovement} />
+          ))}
+        </div>
+      )}
+
+      {loaded && loaded.items.length > 0 && (
+        <nav className="act-pager" aria-label="Ledger pages">
+          <span className="act-pager-info">
+            Page {loaded.index + 1}
+            {loaded.nextCursor ? "" : " · end of the list"}
+          </span>
+          <div className="act-pager-buttons">
+            <button
+              type="button"
+              className="ghost small"
+              disabled={loaded.index === 0 || loading}
+              onClick={previousPage}
+            >
+              <ChevronLeft size={14} strokeWidth={1.9} aria-hidden="true" />
+              Previous
+            </button>
+            <button
+              type="button"
+              className="ghost small"
+              disabled={!loaded.nextCursor || loading}
+              onClick={nextPage}
+            >
+              Next
+              <ChevronRight size={14} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          </div>
+        </nav>
       )}
 
       {openMovement && (
         <Dialog.Root open onOpenChange={(open) => !open && setOpenMovement(null)}>
           <Dialog.Portal>
             <Dialog.Overlay className="dialog-overlay" />
-            <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
+            <Dialog.Content
+              className="movement-dialog act-dialog"
+              aria-describedby={undefined}
+            >
               <div className="queue-head">
                 <Dialog.Title>{movementLabel(openMovement)}</Dialog.Title>
                 <Dialog.Close asChild>
-                  <button type="button" className="ghost small" aria-label="Close">
+                  <button type="button" className="ghost small icon-only" aria-label="Close details" title="Close details">
                     <X size={15} strokeWidth={1.8} aria-hidden="true" />
                   </button>
                 </Dialog.Close>
@@ -308,16 +523,20 @@ export function LedgerPanel() {
                 </dd>
               </dl>
               <h3 className="section-title">Transfers</h3>
-              <ul className="transfers">
-                {openMovement.transfers.map((transfer) => (
-                  <li key={transfer.transfer_id}>
-                    <span>
-                      {transfer.from_name} → {transfer.to_name}
-                    </span>
-                    <span>{formatPaise(transfer.amount_paise)}</span>
-                  </li>
-                ))}
-              </ul>
+              {openMovement.transfers.length > 0 ? (
+                <ul className="transfers">
+                  {openMovement.transfers.map((transfer) => (
+                    <li key={transfer.transfer_id}>
+                      <span>
+                        {transfer.from_name} → {transfer.to_name}
+                      </span>
+                      <span>{formatPaise(transfer.amount_paise)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="fine">No transfer legs; this row does not move money between accounts.</p>
+              )}
               <div className="button-row">
                 <button
                   type="button"

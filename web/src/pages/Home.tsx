@@ -1,14 +1,31 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowDownLeft, MessageCircle, Plus, Upload, X } from "lucide-react";
+import { IconButton } from "@radix-ui/themes";
+import {
+  AlertCircle,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  ListChecks,
+  MessageCircle,
+  Plus,
+  Receipt,
+  Upload,
+  X,
+} from "lucide-react";
 import { api, errorMessage } from "../api";
 import { formatDate, formatMoment, formatPaise } from "../format";
 import { Busy, Loading } from "../Loading";
 import { movementLabel, movementNote } from "../movement";
-import type { ActivityTab } from "./Activity";
+import type { ProjectionPayload } from "../projection";
 import { TodaySummary, TodaySummarySkeleton, type HomePayload } from "../Today";
+import type { ActivityTab } from "./Activity";
 import type { NotificationChat, NotificationItem, NotificationList } from "../types";
 import { useApi } from "../useApi";
+
 const KIND_LABELS: Record<string, string> = {
   weekly_briefing: "Briefing",
   reminder: "Reminder",
@@ -26,6 +43,37 @@ const QUICK_ACTIONS = [
   { label: "Import a statement", text: null, Icon: Upload },
   { label: "Check a purchase", text: "Can I afford ", Icon: MessageCircle },
 ];
+
+function todayLabel(): string {
+  return new Date().toLocaleDateString("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
+function StateCard({
+  title,
+  children,
+  onRetry,
+}: {
+  title: string;
+  children: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="state-card" role="alert">
+      <AlertCircle size={18} strokeWidth={1.8} aria-hidden="true" />
+      <div>
+        <strong>{title}</strong>
+        <p className="fine">{children}</p>
+        <button type="button" className="ghost small" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    </div>
+  );
+}
 
 type NeedActions = {
   onOpen: (item: NotificationItem) => void;
@@ -47,9 +95,6 @@ function NeedRow({
     <article
       className={item.read_at ? "inbox-item" : "inbox-item unread"}
       aria-busy={working}
-      onClick={() => {
-        if (!working) onOpen(item);
-      }}
     >
       <div className="inbox-head">
         <span className={`badge kind-${item.kind}`}>
@@ -64,20 +109,18 @@ function NeedRow({
           type="button"
           className="ghost small"
           disabled={working}
-          onClick={(event) => {
-            event.stopPropagation();
-            onOpen(item);
-          }}
+          onClick={() => onOpen(item)}
         >
           {busy === item.id ? (
             <>
               <Busy />
               Opening…
             </>
-          ) : item.kind === "new_subscription" ? (
-            "Decide"
           ) : (
-            "Open"
+            <>
+              <ArrowUpRight size={13} strokeWidth={1.8} aria-hidden="true" />
+              {item.kind === "new_subscription" ? "Decide" : "Open"}
+            </>
           )}
         </button>
         {!item.read_at && (
@@ -85,10 +128,7 @@ function NeedRow({
             type="button"
             className="ghost small"
             disabled={working}
-            onClick={(event) => {
-              event.stopPropagation();
-              onDismiss(item);
-            }}
+            onClick={() => onDismiss(item)}
           >
             {dismissing === item.id ? (
               <>
@@ -96,7 +136,10 @@ function NeedRow({
                 Marking…
               </>
             ) : (
-              "Mark read"
+              <>
+                <Check size={13} strokeWidth={1.9} aria-hidden="true" />
+                Mark read
+              </>
             )}
           </button>
         )}
@@ -111,34 +154,63 @@ function AllNotifications({
   onOpen,
   onDismiss,
 }: NeedActions) {
-  const inbox = useApi<NotificationList>("/api/notifications?limit=100");
-  if (inbox.loading) return <Loading label="Loading the queue…" />;
+  const [page, setPage] = useState(0);
+  const [cursors, setCursors] = useState<Array<string | null>>([null]);
+  const cursor = cursors[page];
+  const inbox = useApi<NotificationList & { next_cursor: string | null }>(
+    `/api/notifications?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+  );
+  if (inbox.loading) return <Loading label="Loading notifications…" />;
   if (inbox.error) {
     return (
       <div className="panel-error">
         <p className="error">{inbox.error}</p>
         <button type="button" className="ghost small" onClick={inbox.reload}>
-          Retry
+          Try again
         </button>
       </div>
     );
   }
-  if (!inbox.data?.notifications.length) {
-    return <p className="compact-empty">Nothing needs you right now.</p>;
-  }
+  const notifications = inbox.data?.notifications ?? [];
+  const next = inbox.data?.next_cursor;
   return (
-    <div className="inbox-list">
-      {inbox.data.notifications.map((item) => (
-        <NeedRow
-          key={item.id}
-          item={item}
-          busy={busy}
-          dismissing={dismissing}
-          onOpen={onOpen}
-          onDismiss={onDismiss}
-        />
-      ))}
-    </div>
+    <>
+      {notifications.length ? (
+        <div className="inbox-list bounded">
+          {notifications.map((item) => (
+            <NeedRow
+              key={item.id}
+              item={item}
+              busy={busy}
+              dismissing={dismissing}
+              onOpen={onOpen}
+              onDismiss={onDismiss}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="compact-empty">No notifications on this page.</p>
+      )}
+      {(page > 0 || next) && (
+        <div className="button-row">
+          <button type="button" className="ghost small" disabled={page === 0} onClick={() => setPage(page - 1)}>
+            <ChevronLeft size={14} aria-hidden="true" /> Previous
+          </button>
+          <button
+            type="button"
+            className="ghost small"
+            disabled={!next}
+            onClick={() => {
+              if (!next) return;
+              setCursors((all) => [...all.slice(0, page + 1), next]);
+              setPage(page + 1);
+            }}
+          >
+            Next <ChevronRight size={14} aria-hidden="true" />
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -148,6 +220,9 @@ export function HomeRail({
   onOpenActivity,
   onInboxChanged,
   onOpenProjection,
+  onOpenEvidence,
+  onOpenSettings,
+  onClose,
   version = 0,
 }: {
   onOpenChat: (threadId: string) => void;
@@ -155,6 +230,9 @@ export function HomeRail({
   onOpenActivity: (tab: ActivityTab) => void;
   onInboxChanged: () => void;
   onOpenProjection: () => void;
+  onOpenEvidence: (payload: ProjectionPayload) => void;
+  onOpenSettings: () => void;
+  onClose?: () => void;
   version?: number;
 }) {
   const [horizon, setHorizon] = useState(90);
@@ -198,30 +276,53 @@ export function HomeRail({
     }
   }
 
-  const needs = (home.data?.needs_you ?? []).filter((item) => !item.read_at);
+  const unread = (home.data?.needs_you ?? []).filter((item) => !item.read_at);
 
   return (
-    <div className="home-stack">
-      {home.error ? (
-        <div className="today today-state">
-          <p>Home couldn't load its numbers.</p>
-          <button type="button" className="ghost small" onClick={home.reload}>
-            Retry
-          </button>
+    <div className="today-panel">
+      <header className="rail-head">
+        <div>
+          <h2>Today</h2>
+          <p className="fine">{todayLabel()}</p>
         </div>
+        <div className="rail-head-actions">
+          {home.data && home.data.unread_count > 0 && (
+            <span className="rail-count">{home.data.unread_count} unread</span>
+          )}
+          {onClose && (
+            <IconButton
+              type="button"
+              variant="soft"
+              color="gray"
+              aria-label="Close Today"
+              title="Close Today"
+              onClick={onClose}
+            >
+              <X size={16} aria-hidden="true" />
+            </IconButton>
+          )}
+        </div>
+      </header>
+
+      {home.error && !home.data ? (
+        <StateCard title="Today couldn't load" onRetry={home.reload}>
+          The numbers are unavailable right now. Nothing was changed.
+        </StateCard>
       ) : home.data ? (
         <TodaySummary
           data={home.data}
           horizon={horizon}
           onHorizon={setHorizon}
           onOpenProjection={onOpenProjection}
+          onOpenEvidence={onOpenEvidence}
+          onOpenSettings={onOpenSettings}
           busy={home.loading}
         />
       ) : (
         <TodaySummarySkeleton />
       )}
 
-      <div className="quick">
+      <div className="quick" aria-label="Quick actions">
         {QUICK_ACTIONS.map(({ label, text, Icon }) => (
           <button
             key={label}
@@ -234,33 +335,42 @@ export function HomeRail({
         ))}
       </div>
 
-      {openError && <p className="error">{openError}</p>}
+      {home.error && home.data && (
+        <p className="error inline-error" role="alert">
+          {home.error}
+        </p>
+      )}
+      {openError && (
+        <p className="error inline-error" role="alert">
+          {openError}
+        </p>
+      )}
 
       {home.data && (
         <>
-          <section className="home-block">
+          <section className="home-block" aria-labelledby="needs-you-heading">
             <div className="block-head">
-              <h2>Needs you</h2>
+              <h2 id="needs-you-heading">Updates</h2>
               <div className="block-actions">
                 <span className="fine">
                   {home.data.unread_count > 0
                     ? `${home.data.unread_count} unread`
-                    : "Nothing unread"}
+                    : "All read"}
                 </span>
                 <button type="button" className="ghost small" onClick={() => setQueueOpen(true)}>
                   View all
+                  <ChevronRight size={13} strokeWidth={1.9} aria-hidden="true" />
                 </button>
               </div>
             </div>
-            {needs.length === 0 ? (
-              <p className="compact-empty">
-                {home.data.unread_count > 0
-                  ? "Newer items are read. Open View all for older unread items."
-                  : "Nothing needs you right now."}
+            {unread.length === 0 ? (
+              <p className="compact-empty quiet">
+                <CheckCircle2 size={16} strokeWidth={1.8} aria-hidden="true" />
+                No unread updates.
               </p>
             ) : (
               <div className="inbox-list">
-                {needs.slice(0, 2).map((item) => (
+                {unread.slice(0, 2).map((item) => (
                   <NeedRow
                     key={item.id}
                     item={item}
@@ -271,23 +381,37 @@ export function HomeRail({
                     onDismiss={(need) => void dismissNeed(need)}
                   />
                 ))}
+                {home.data.unread_count > 2 && (
+                  <button
+                    type="button"
+                    className="ghost small more-row"
+                    onClick={() => setQueueOpen(true)}
+                  >
+                    <ListChecks size={14} strokeWidth={1.8} aria-hidden="true" />
+                    {home.data.unread_count - 2} more unread
+                  </button>
+                )}
               </div>
             )}
           </section>
 
-          <section className="home-block">
+          <section className="home-block" aria-labelledby="recent-heading">
             <div className="block-head">
-              <h2>Recent activity</h2>
+              <h2 id="recent-heading">Recent activity</h2>
               <button
                 type="button"
                 className="ghost small"
                 onClick={() => onOpenActivity("ledger")}
               >
                 View ledger
+                <ChevronRight size={13} strokeWidth={1.9} aria-hidden="true" />
               </button>
             </div>
             {home.data.recent.length === 0 ? (
-              <p className="compact-empty">Nothing recorded yet.</p>
+              <p className="compact-empty quiet">
+                <Receipt size={16} strokeWidth={1.8} aria-hidden="true" />
+                Nothing recorded yet.
+              </p>
             ) : (
               <div className="recent-list">
                 {home.data.recent.slice(0, 3).map((movement) => (
@@ -320,9 +444,19 @@ export function HomeRail({
             <Dialog.Overlay className="dialog-overlay" />
             <Dialog.Content className="queue-dialog" aria-describedby={undefined}>
               <div className="queue-head">
-                <Dialog.Title>All notifications</Dialog.Title>
+                <div>
+                  <Dialog.Title>All notifications</Dialog.Title>
+                  <p className="fine">
+                    {home.data ? `${home.data.unread_count} unread` : "Your inbox"} · newest first
+                  </p>
+                </div>
                 <Dialog.Close asChild>
-                  <button type="button" className="ghost small" aria-label="Close">
+                  <button
+                    type="button"
+                    className="ghost small icon-only"
+                    aria-label="Close notifications"
+                    title="Close notifications"
+                  >
                     <X size={15} strokeWidth={1.8} aria-hidden="true" />
                   </button>
                 </Dialog.Close>

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from fin_agent.api import import_history
 from fin_agent.api.deps import Database, FreshSession, current_session
 from fin_agent.ledger import (
     accounts,
@@ -590,3 +591,17 @@ def get_export_pg_dump(conn: Database, fresh: FreshSession) -> Response:
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="fin-agent-{stamp}.sql"'},
     )
+
+
+@router.get("/import-history")
+def get_import_history(
+    conn: Database,
+    limit: int = Query(default=import_history.DEFAULT_LIMIT, ge=1, le=import_history.MAX_LIMIT),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Paginated import history.
+
+    This is deliberately additive: `GET /api/imports` keeps its existing shape and 200-row cap
+    for every current client. The Imports screen uses this keyset route to reach older data.
+    """
+    return import_history.list_import_history(conn, limit=limit, cursor=cursor)
