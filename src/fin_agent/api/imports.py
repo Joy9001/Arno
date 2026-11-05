@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,6 +26,7 @@ from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
 router = APIRouter(prefix="/api", tags=["imports"])
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+CHAT_STATEMENT_KINDS = frozenset({"pdf", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml"})
 
 
 class ApiModel(BaseModel):
@@ -58,32 +59,57 @@ class ResolveLine(ApiModel):
 async def upload_attachment(
     conn: Database,
     file: Annotated[UploadFile, File()],
+    purpose: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
+    from fin_agent.api.capture import image_media_type
+
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
-            detail="That file is over the 25 MB import limit.",
+            detail="That file is over the 25 MB limit.",
         )
     if not data:
         raise HTTPException(status_code=422, detail="The file is empty.")
-    try:
-        kind = sniff(data)
-    except DocError as exc:
-        raise HTTPException(status_code=422, detail=f"Unreadable file: {exc.code}") from exc
+    selected = (purpose or "statement").strip().lower()
+    if selected == "photo":
+        media_type = image_media_type(data)
+        if media_type is None:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="Use a PNG, JPEG, WebP, or GIF image.",
+            )
+        kind = "photo"
+        stored_kind = "photo"
+        content_type = media_type
+    elif selected == "statement":
+        try:
+            kind = sniff(data)
+        except DocError as exc:
+            raise HTTPException(status_code=422, detail=f"Unreadable file: {exc.code}") from exc
+        if purpose is not None and kind not in CHAT_STATEMENT_KINDS:
+            raise HTTPException(
+                status_code=422,
+                detail="Choose a PDF, CSV, or spreadsheet statement (XLSX, XLSB, ODS, XLS).",
+            )
+        stored_kind = "statement"
+        content_type = file.content_type or "application/octet-stream"
+    else:
+        raise HTTPException(status_code=422, detail="Unknown upload purpose.")
     digest = hashlib.sha256(data).hexdigest()
     attachment_id = new_id(conn, "att")
     row = conn.execute(
         """
         INSERT INTO attachments
             (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, 'statement', %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         RETURNING id, kind, filename, content_type, size_bytes, sha256, created_at
         """,
         (
             attachment_id,
-            (file.filename or "statement")[:255],
-            file.content_type or "application/octet-stream",
+            stored_kind,
+            (file.filename or selected)[:255],
+            content_type,
             len(data),
             digest,
             data,

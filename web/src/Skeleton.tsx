@@ -19,14 +19,3 @@ export function ConversationSkeleton() {
     </div>
   );
 }
-
-/** The history list's first load, sized like the thread buttons it replaces. */
-export function ThreadListSkeleton() {
-  return (
-    <div className="skeleton-threads" aria-busy="true" aria-label="Loading conversations">
-      {[0, 1, 2].map((row) => (
-        <Skeleton key={row} className="sk sk-thread" />
-      ))}
-    </div>
-  );
-}

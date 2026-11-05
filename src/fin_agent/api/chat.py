@@ -20,7 +20,8 @@ from fin_agent.agent import history as history_mod
 from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
-from fin_agent.api.deps import Database, Session, current_session
+from fin_agent.api.capture import log_photo
+from fin_agent.api.deps import Database, PreparationDep, Session, current_session
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
@@ -77,6 +78,112 @@ def _request_thread_id(body: dict[str, Any]) -> str | None:
     return str(value) if value else None
 
 
+def _statement_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """App-owned statement refs from the last user turn, never file URLs."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        refs: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for part in message.get("parts") or []:
+            if not isinstance(part, dict) or part.get("type") != "data-statement":
+                continue
+            data = part.get("data")
+            if not isinstance(data, dict):
+                continue
+            attachment_id = data.get("attachment_id")
+            filename = data.get("filename")
+            if not isinstance(attachment_id, str) or not attachment_id:
+                continue
+            if len(attachment_id) > 100 or attachment_id in seen:
+                continue
+            seen.add(attachment_id)
+            refs.append(
+                {
+                    "attachment_id": attachment_id,
+                    "filename": str(filename or "statement")[:255],
+                }
+            )
+        return refs
+    return []
+
+
+def _validated_statements(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not refs:
+        return []
+    ids = [ref["attachment_id"] for ref in refs]
+    rows = conn.execute(
+        """
+        SELECT id, filename FROM attachments
+        WHERE id = ANY(%s) AND kind = 'statement' AND data IS NOT NULL
+        """,
+        (ids,),
+    ).fetchall()
+    found = {str(row["id"]): str(row["filename"] or "statement") for row in rows}
+    missing = [attachment_id for attachment_id in ids if attachment_id not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="A statement attachment is no longer available. Attach the file again.",
+        )
+    return [
+        {"attachment_id": attachment_id, "filename": found[attachment_id]} for attachment_id in ids
+    ]
+
+
+def _photo_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """App-owned receipt photo refs from the last user turn, never file URLs."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+        refs: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for part in message.get("parts") or []:
+            if not isinstance(part, dict) or part.get("type") != "data-photo":
+                continue
+            data = part.get("data")
+            if not isinstance(data, dict):
+                continue
+            attachment_id = data.get("attachment_id")
+            filename = data.get("filename")
+            if not isinstance(attachment_id, str) or not attachment_id:
+                continue
+            if len(attachment_id) > 100 or attachment_id in seen:
+                continue
+            seen.add(attachment_id)
+            refs.append(
+                {
+                    "attachment_id": attachment_id,
+                    "filename": str(filename or "photo")[:255],
+                }
+            )
+        return refs
+    return []
+
+
+def _validated_photos(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+    if not refs:
+        return []
+    ids = [ref["attachment_id"] for ref in refs]
+    rows = conn.execute(
+        """
+        SELECT id, filename FROM attachments
+        WHERE id = ANY(%s) AND kind = 'photo' AND data IS NOT NULL AND purged_at IS NULL
+        """,
+        (ids,),
+    ).fetchall()
+    found = {str(row["id"]): str(row["filename"] or "photo") for row in rows}
+    missing = [attachment_id for attachment_id in ids if attachment_id not in found]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="A photo attachment is no longer available. Attach the file again.",
+        )
+    return [
+        {"attachment_id": attachment_id, "filename": found[attachment_id]} for attachment_id in ids
+    ]
+
+
 def _stream_response(iterator: Any, *, thread_id: str | None = None) -> StreamingResponse:
     headers = {
         "Cache-Control": "no-cache, no-transform",
@@ -89,7 +196,9 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
 
 
 @router.post("/chat")
-async def post_chat(request: Request, session: Session) -> Response:
+async def post_chat(request: Request, session: Session, preparation: PreparationDep) -> Response:
+    # `preparation` is a function-scoped dependency: it holds the thread's preparation guard
+    # until this function returns and releases it before the stream is consumed.
     app = request.app
     body = await request.json()
     if not isinstance(body, dict):
@@ -103,6 +212,15 @@ async def post_chat(request: Request, session: Session) -> Response:
         last = (str(body.get("messageId") or uuid.uuid4()), "")
     message_id, text = last
     thread_id = _request_thread_id(body)
+    statement_refs = [] if approval_turn else _statement_refs(messages)
+    photo_refs = [] if approval_turn else _photo_refs(messages)
+    if not text.strip():
+        if statement_refs and photo_refs:
+            text = "Import the attached statement and log the attached receipt or payment photo."
+        elif statement_refs:
+            text = "Import the attached statement."
+        elif photo_refs:
+            text = "Log the attached receipt or payment photo."
 
     with closing(connect()) as conn:
         thread = None
@@ -156,6 +274,44 @@ async def post_chat(request: Request, session: Session) -> Response:
                 },
             )
 
+        active_turn = app.state.turns.get(thread_id)
+        if active_turn is not None and not active_turn.done.is_set():
+            raise HTTPException(
+                status_code=409, detail="A reply is already running in this thread."
+            )
+
+        # Validate every ref before any import or capture starts, so a stale file cannot
+        # leave a partial turn. The pipeline itself dedupes by file hash, and each photo
+        # capture keeps its own idempotency key, so a resend cannot write twice.
+        statements = _validated_statements(conn, statement_refs)
+        photos = _validated_photos(conn, photo_refs)
+        initial_cards: list[dict[str, Any]] = []
+        statement_imports: list[tuple[str, str]] = []
+        for statement in statements:
+            try:
+                receipt = write_tools.import_document(
+                    conn,
+                    attachment_id=statement["attachment_id"],
+                    message_id=None,
+                )
+            except write_tools.ToolInputError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            initial_cards.append(receipt["card"])
+            statement_imports.append((str(receipt["import_id"]), str(receipt["status"])))
+
+        for photo in photos:
+            row = conn.execute(
+                "SELECT * FROM attachments WHERE id = %s AND kind = 'photo'",
+                (photo["attachment_id"],),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="A photo attachment is no longer available. Attach the file again.",
+                )
+            result = await log_photo(conn, thread, dict(row), record_history=False)
+            initial_cards.append(result["card"])
+
         history, outside = history_mod.ensure_history(conn, thread)
         ttl = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))
         history, outside_swap = history_mod.refresh_snapshot(
@@ -171,7 +327,12 @@ async def post_chat(request: Request, session: Session) -> Response:
             text = str(user_row["body_text"] or "") if user_row else ""
         else:
             history_mod.record_user_message(
-                conn, thread_id=thread_id, client_id=message_id, text=text
+                conn,
+                thread_id=thread_id,
+                client_id=message_id,
+                text=text,
+                statements=statements,
+                photos=photos,
             )
             user_row = conn.execute(
                 "SELECT id FROM messages WHERE client_id = %s", (message_id,)
@@ -181,6 +342,7 @@ async def post_chat(request: Request, session: Session) -> Response:
         run_id = f"run_{uuid.uuid4().hex}"
         history_mod.mark_run_started(conn, thread_id, run_id)
         capture_ref = None
+        capture_kind = "chat"
         voice_attachment_id = body.get("voice_attachment_id")
         if isinstance(voice_attachment_id, str) and voice_attachment_id:
             voice_row = conn.execute(
@@ -192,6 +354,10 @@ async def post_chat(request: Request, session: Session) -> Response:
             ).fetchone()
             if voice_row is not None:
                 capture_ref = str(voice_row["id"])
+                capture_kind = "voice"
+        if capture_ref is None and photos:
+            capture_ref = photos[0]["attachment_id"]
+            capture_kind = "photo"
         conn.commit()
         flagged = thread.get("outside_text_at") is not None or outside or outside_swap
 
@@ -203,8 +369,9 @@ async def post_chat(request: Request, session: Session) -> Response:
         user_id=str(session["user_id"]),
         flagged=flagged,
         user_texts=(text,),
-        capture_kind="voice" if capture_ref else "chat",
+        capture_kind=capture_kind,
         capture_ref=capture_ref,
+        statement_imports=tuple(statement_imports),
     )
     adapter = await VercelAIAdapter.from_request(
         request,
@@ -222,6 +389,7 @@ async def post_chat(request: Request, session: Session) -> Response:
             deps=deps,
             title=title,
             run_id=run_id,
+            initial_cards=initial_cards,
         )
     except TurnBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

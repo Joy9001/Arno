@@ -75,6 +75,7 @@ function readHash(): {
   activity: ActivityTab;
   thread: string | null;
   message: string | null;
+  importId: string | null;
 } {
   const [rawPage, rawTab, rawMessage] = window.location.hash.slice(1).split("/");
   const page = NAV.some((item) => item.id === rawPage) ? (rawPage as PageId) : "home";
@@ -87,7 +88,14 @@ function readHash(): {
   const thread = page === "home" && rawTab && THREAD_ID.test(rawTab) ? rawTab : null;
   const message =
     thread && rawMessage && THREAD_ID.test(rawMessage) ? rawMessage : null;
-  return { page, money, activity, thread, message };
+  const importId =
+    page === "activity" &&
+    activity === "imports" &&
+    rawMessage &&
+    THREAD_ID.test(rawMessage)
+      ? rawMessage
+      : null;
+  return { page, money, activity, thread, message, importId };
 }
 
 function openThreadDetail(detail: OpenThreadDetail): {
@@ -118,6 +126,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [unread, setUnread] = useState(0);
   const [focusThreadId, setFocusThreadId] = useState<string | null>(null);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
+  const [focusImportId, setFocusImportId] = useState<string | null>(initial.importId);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [seed, setSeed] = useState<{ id: number; text: string } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
@@ -129,6 +138,9 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const go = useCallback((next: PageId, sub?: string) => {
     setEvidence(null);
     setPage(next);
+    if (!(next === "activity" && sub?.startsWith("imports/"))) {
+      setFocusImportId(null);
+    }
     const hash = sub ? `${next}/${sub}` : next;
     if (window.location.hash !== `#${hash}`) {
       window.history.pushState(null, "", `#${hash}`);
@@ -136,11 +148,12 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   }, []);
 
   useEffect(() => {
-    const onPop = () => {
+    const onLocation = () => {
       const next = readHash();
       setPage(next.page);
       setMoneyTab(next.money);
       setActivityTab(next.activity);
+      setFocusImportId(next.importId);
       setEvidence(null);
       if (next.thread) {
         void threadExists(next.thread).then((exists) => {
@@ -152,8 +165,12 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
         setFocusMessageId(null);
       }
     };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    window.addEventListener("popstate", onLocation);
+    window.addEventListener("hashchange", onLocation);
+    return () => {
+      window.removeEventListener("popstate", onLocation);
+      window.removeEventListener("hashchange", onLocation);
+    };
   }, []);
 
   // A deep link such as #home/cnv_… opens that conversation, but only when the thread really
@@ -460,9 +477,15 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           {page === "activity" && (
             <ActivityPage
               tab={activityTab}
+              importId={focusImportId}
               onTab={(tab) => {
                 setActivityTab(tab);
+                setFocusImportId(null);
                 go("activity", tab);
+              }}
+              onImportId={(importId) => {
+                setFocusImportId(importId);
+                go("activity", `imports/${importId}`);
               }}
             />
           )}

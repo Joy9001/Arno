@@ -1,10 +1,12 @@
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 // The API serves the built app in production, so dev-only proxying keeps one origin.
 export default defineConfig({
   plugins: [
+    tailwindcss(),
     react(),
     VitePWA({
       strategies: "injectManifest",
@@ -14,6 +16,8 @@ export default defineConfig({
       injectRegister: "auto",
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff2}"],
+        // The chat runtime bundle is larger than the old 2 MiB precache default.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
         name: "Fin-Agent",

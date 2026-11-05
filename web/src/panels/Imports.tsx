@@ -505,7 +505,13 @@ function HistorySkeleton() {
   );
 }
 
-export function ImportsPanel() {
+export function ImportsPanel({
+  importId,
+  onImportId,
+}: {
+  importId?: string | null;
+  onImportId?: (importId: string) => void;
+}) {
   const [historyCursors, setHistoryCursors] = useState<(string | null)[]>([null]);
   const [history, setHistory] = useState<ImportHistoryState | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -558,9 +564,12 @@ export function ImportsPanel() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const [deepLinkRetry, setDeepLinkRetry] = useState(0);
   const detailRef = useRef<HTMLElement | null>(null);
   // A poll that started before a write must not overwrite the write's newer payload.
   const writeSeq = useRef(0);
+  const loadedImport = useRef<string | null>(null);
 
   const selectedLines = selected?.lines ?? [];
   const pendingTransferCount = selectedLines.filter(
@@ -598,6 +607,7 @@ export function ImportsPanel() {
 
   async function openImport(importId: string) {
     writeSeq.current += 1;
+    const seq = writeSeq.current;
     setOpening(importId);
     setError(null);
     setPollError(null);
@@ -605,20 +615,64 @@ export function ImportsPanel() {
     setAccountChoice("");
     setOpeningRupees("");
     try {
-      setSelected(await api<ImportRecord>(`/api/imports/${importId}`));
+      const next = await api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`);
+      if (seq !== writeSeq.current) return;
+      setSelected(next);
+      loadedImport.current = importId;
+      setDeepLinkError(null);
       scrollToDetail(detailRef.current);
+      onImportId?.(importId);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (seq === writeSeq.current) setError(errorMessage(caught));
     } finally {
-      setOpening(null);
+      if (seq === writeSeq.current) setOpening(null);
     }
   }
+
+  // A deep link bypasses the history page entirely: it fetches the exact import, and a
+  // missing or failed id clears the detail rather than silently selecting another one.
+  useEffect(() => {
+    if (!importId || loadedImport.current === importId) return;
+    let active = true;
+    const seq = writeSeq.current + 1;
+    writeSeq.current = seq;
+    setOpening(importId);
+    setError(null);
+    setPollError(null);
+    setDeepLinkError(null);
+    setPassword("");
+    setAccountChoice("");
+    setOpeningRupees("");
+    loadedImport.current = null;
+    setSelected(null);
+    api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`)
+      .then((next) => {
+        if (!active || seq !== writeSeq.current) return;
+        loadedImport.current = importId;
+        setSelected(next);
+        scrollToDetail(detailRef.current);
+      })
+      .catch((caught: unknown) => {
+        if (!active || seq !== writeSeq.current) return;
+        loadedImport.current = null;
+        setSelected(null);
+        setDeepLinkError(errorMessage(caught));
+        scrollToDetail(detailRef.current);
+      })
+      .finally(() => {
+        if (active && seq === writeSeq.current) setOpening(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [importId, deepLinkRetry]);
 
   async function upload() {
     if (!file) return;
     writeSeq.current += 1;
     setStarting(true);
     setError(null);
+    setDeepLinkError(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -634,6 +688,9 @@ export function ImportsPanel() {
         }),
       });
       setSelected(started);
+      loadedImport.current = started.import_id;
+      setDeepLinkError(null);
+      onImportId?.(started.import_id);
       setFile(null);
       setPassword("");
       setAccountChoice("");
@@ -904,6 +961,27 @@ export function ImportsPanel() {
         </section>
 
         <section className="subcard imports-detail" ref={detailRef} aria-busy={busy !== null}>
+          {deepLinkError && !selected && (
+            <div className="act-error" role="alert">
+              <AlertCircle size={18} strokeWidth={1.8} aria-hidden="true" />
+              <div>
+                <strong>That import could not be opened.</strong>
+                <p className="fine">{deepLinkError}</p>
+                <p className="fine">
+                  It may have been removed, or the link may be incomplete. No other import was
+                  selected.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => setDeepLinkRetry((value) => value + 1)}
+              >
+                <RefreshCw size={14} aria-hidden="true" />
+                Retry
+              </button>
+            </div>
+          )}
           {!selected && opening && (
             <div className="act-detail-placeholder" aria-busy="true" aria-label="Loading import">
               <Skeleton className="sk sk-heading" />
@@ -912,7 +990,7 @@ export function ImportsPanel() {
               <span className="sr-only">Loading the import…</span>
             </div>
           )}
-          {!selected && !opening && (
+          {!selected && !opening && !deepLinkError && (
             <p className="empty-state">
               Choose an import to review it, or upload a new statement above.
             </p>

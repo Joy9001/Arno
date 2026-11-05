@@ -1207,9 +1207,10 @@ def import_document(
             "import",
             title="Import started",
             import_id=payload["import_id"],
+            filename=(payload["attachment"] or {}).get("filename"),
             status=payload["status"],
             reason=payload["reason"],
-            review_url=f"/imports/{payload['import_id']}",
+            review_url=f"#activity/imports/{payload['import_id']}",
         ),
     }
 

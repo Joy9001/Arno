@@ -11,10 +11,14 @@ const TABS: Array<{ id: ActivityTab; label: string }> = [
 
 export function ActivityPage({
   tab,
+  importId,
   onTab,
+  onImportId,
 }: {
   tab: ActivityTab;
+  importId?: string | null;
   onTab: (tab: ActivityTab) => void;
+  onImportId?: (importId: string) => void;
 }) {
   return (
     <Tabs.Root
@@ -33,7 +37,7 @@ export function ActivityPage({
         <LedgerPanel />
       </Tabs.Content>
       <Tabs.Content value="imports" className="workspace-body">
-        <ImportsPanel />
+        <ImportsPanel importId={importId} onImportId={onImportId} />
       </Tabs.Content>
     </Tabs.Root>
   );

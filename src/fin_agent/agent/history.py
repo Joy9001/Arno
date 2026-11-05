@@ -209,13 +209,38 @@ def record_user_message(
     thread_id: str,
     client_id: str,
     text: str,
+    statements: list[dict[str, str]] | None = None,
+    photos: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Store the user's message at the start, so a reload mid-reply keeps it."""
     safe = redact_text(text)
+    parts: list[dict[str, Any]] = []
+    if safe:
+        parts.append({"type": "text", "text": safe})
+    for statement in statements or []:
+        parts.append(
+            {
+                "type": "data-statement",
+                "data": {
+                    "attachment_id": statement["attachment_id"],
+                    "filename": statement["filename"],
+                },
+            }
+        )
+    for photo in photos or []:
+        parts.append(
+            {
+                "type": "data-photo",
+                "data": {
+                    "attachment_id": photo["attachment_id"],
+                    "filename": photo["filename"],
+                },
+            }
+        )
     content = {
         "id": client_id,
         "role": "user",
-        "parts": [{"type": "text", "text": safe}],
+        "parts": parts,
     }
     row = conn.execute(
         """
@@ -268,21 +293,37 @@ def save_records(
     save_note: str | None = None,
     title: str | None = None,
     all_messages: list[Any] | None = None,
+    extra_cards: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write both records in one transaction and clear the running marker."""
     from fin_agent.agent.cards import attach_to_last_assistant, ui_messages, with_data
 
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
     ui = ui_messages(turn_messages)
+
+    def user_parts(text: str) -> list[dict[str, Any]]:
+        stored = conn.execute(
+            "SELECT content FROM messages WHERE client_id = %s AND conversation_id = %s",
+            (ui_message_id, thread_id),
+        ).fetchone()
+        content = stored["content"] if stored is not None else {}
+        attachments = [
+            part
+            for part in (content or {}).get("parts", [])
+            if isinstance(part, dict) and part.get("type") in {"data-statement", "data-photo"}
+        ]
+        safe = redact_text(text)
+        return ([{"type": "text", "text": safe}] if safe else []) + attachments
+
     for message in ui:
         if message.get("role") == "user" and message.get("id") == ui_message_id:
-            message["parts"] = [{"type": "text", "text": redact_text(_body_text(message))}]
+            message["parts"] = user_parts(_body_text(message))
             break
     else:
         for message in ui:
             if message.get("role") == "user":
                 message["id"] = ui_message_id
-                message["parts"] = [{"type": "text", "text": redact_text(_body_text(message))}]
+                message["parts"] = user_parts(_body_text(message))
                 break
 
     extra = cards_from_messages(turn_messages)
@@ -290,7 +331,7 @@ def save_records(
     last_assistant = next(
         (message for message in reversed(ui) if message.get("role") == "assistant"), None
     )
-    if last_assistant is None and (save_note or ending in {"failed", "cancelled"}):
+    if last_assistant is None and (save_note or extra_cards or ending in {"failed", "cancelled"}):
         last_assistant = {
             "id": new_id(conn, "msg"),
             "role": "assistant",
@@ -298,6 +339,30 @@ def save_records(
         }
         ui.append(last_assistant)
     if last_assistant is not None:
+        if extra_cards:
+            existing = {
+                json.dumps(part.get("data"), sort_keys=True, default=str)
+                for part in last_assistant.get("parts", [])
+                if isinstance(part, dict) and part.get("type") == "data-card"
+            }
+            existing_imports = {
+                str(part.get("data", {}).get("import_id"))
+                for part in last_assistant.get("parts", [])
+                if isinstance(part, dict)
+                and part.get("type") == "data-card"
+                and isinstance(part.get("data"), dict)
+                and part.get("data", {}).get("card") == "import"
+            }
+            for card in extra_cards:
+                key = json.dumps(card, sort_keys=True, default=str)
+                import_id = str(card.get("import_id")) if card.get("card") == "import" else ""
+                if key in existing or (import_id and import_id in existing_imports):
+                    continue
+                with_data(last_assistant, "data-card", card)
+                existing.add(key)
+                if import_id:
+                    existing_imports.add(import_id)
+
         if number_flags:
             with_data(last_assistant, "data-number-flags", {"amounts": number_flags})
         if model_badge:

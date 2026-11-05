@@ -1,5 +1,18 @@
-import { useState } from "react";
-import { Code2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  ArrowUpRight,
+  CheckCircle2,
+  Code2,
+  FileText,
+  KeyRound,
+  Loader2,
+  RotateCcw,
+  Undo2,
+  XCircle,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import type { ImportRecord } from "../types";
 import {
   Bar,
   BarChart,
@@ -145,9 +158,10 @@ function UndoButton({ undoId }: { undoId?: string | null }) {
   if (state === "done") return <span className="fine">Undone.</span>;
   return (
     <div>
-      <button
+      <Button
         type="button"
-        className="ghost small"
+        variant="outline"
+        size="sm"
         disabled={state === "busy"}
         onClick={async () => {
           setState("busy");
@@ -160,9 +174,147 @@ function UndoButton({ undoId }: { undoId?: string | null }) {
           }
         }}
       >
+        <Undo2 size={14} aria-hidden="true" />
         {state === "busy" ? "Undoing…" : "Undo"}
-      </button>
+      </Button>
       {error && <span className="error fine"> {error}</span>}
+    </div>
+  );
+}
+
+const IMPORT_POLL = new Set(["parsing", "needs_password", "needs_input"]);
+
+const IMPORT_STATUS: Record<string, string> = {
+  parsing: "Parsing statement…",
+  needs_password: "Password required",
+  needs_input: "One more detail needed",
+  review: "Ready for review",
+  not_a_statement: "Not a statement",
+  failed: "Import failed",
+  committed: "Committed",
+  rejected: "Rejected",
+};
+
+function importAction(
+  status: string,
+  importId: string,
+): { label: string; icon: typeof ArrowUpRight } | null {
+  if (!importId) return null;
+  if (status === "needs_password") return { label: "Enter password", icon: KeyRound };
+  if (status === "needs_input") return { label: "Resolve details", icon: ArrowUpRight };
+  if (status === "review") return { label: "Open review", icon: ArrowUpRight };
+  if (["failed", "not_a_statement", "committed", "rejected"].includes(status)) {
+    return { label: "Open import", icon: ArrowUpRight };
+  }
+  return null;
+}
+
+function ImportCard({ data }: { data: Record<string, unknown> }) {
+  const importId = String(data.import_id ?? "");
+  const [detail, setDetail] = useState<ImportRecord | null>(null);
+  const [pollError, setPollError] = useState<string | null>(null);
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    if (!importId) return;
+    let active = true;
+    let timer: number | undefined;
+    const load = async () => {
+      try {
+        const next = await api<ImportRecord>(
+          `/api/imports/${encodeURIComponent(importId)}`,
+        );
+        if (!active) return;
+        setDetail(next);
+        setPollError(null);
+        if (IMPORT_POLL.has(next.status)) {
+          timer = window.setTimeout(() => void load(), 2500);
+        }
+      } catch (caught) {
+        if (!active) return;
+        setPollError(errorMessage(caught));
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [importId, retry]);
+
+  const status = detail?.status ?? String(data.status ?? "parsing");
+  const reason = detail?.reason ?? (data.reason ? String(data.reason) : null);
+  const visibleReason = status === "needs_password" ? null : reason;
+  const filename =
+    detail?.attachment?.filename ??
+    (data.filename ? String(data.filename) : null) ??
+    "Statement";
+  const account = detail?.account?.name;
+  const action = importAction(status, importId);
+  const ActionIcon = action?.icon;
+  const undone = status === "rejected" && Boolean(detail?.undone_at);
+  const label = undone ? "Undone" : (IMPORT_STATUS[status] ?? status.replaceAll("_", " "));
+  const settled = ["committed", "review"].includes(status) || undone;
+  const failed = ["failed", "not_a_statement"].includes(status);
+
+  return (
+    <div className="chat-card aui-import-card">
+      <div className="chat-card-head">
+        <strong>Statement import</strong>
+        <span
+          className={cn(
+            "aui-import-status",
+            settled && "aui-import-status-settled",
+            failed && "aui-import-status-failed",
+          )}
+        >
+          {status === "parsing" && (
+            <Loader2 size={13} strokeWidth={2} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+          )}
+          {status === "review" || status === "committed" ? (
+            <CheckCircle2 size={13} strokeWidth={2} aria-hidden="true" />
+          ) : failed ? (
+            <XCircle size={13} strokeWidth={2} aria-hidden="true" />
+          ) : null}
+          <span aria-live="polite">{label}</span>
+        </span>
+      </div>
+      <p className="aui-import-file">
+        <FileText size={14} strokeWidth={1.8} aria-hidden="true" />
+        <span>{filename}</span>
+        {account ? <span className="fine"> · {account}</span> : null}
+      </p>
+      {visibleReason ? <p className="aui-import-reason">{visibleReason}</p> : null}
+      {status === "needs_password" ? (
+        <p className="fine">
+          Enter the password only on the import screen. It never goes in chat or to the model.
+        </p>
+      ) : null}
+      {pollError ? (
+        <div className="aui-import-error" role="alert">
+          <span>{pollError}</span>
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="h-auto"
+            onClick={() => setRetry((value) => value + 1)}
+          >
+            <RotateCcw size={13} aria-hidden="true" />
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {action && ActionIcon ? (
+        <div className="aui-import-actions">
+          <Button variant="outline" size="sm" asChild>
+            <a href={`#activity/imports/${encodeURIComponent(importId)}`}>
+              <ActionIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+              {action.label}
+            </a>
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -229,13 +381,15 @@ export function Card({
             <strong>{String(data.title ?? "Capture failed")}</strong>
           </div>
           <p>{String(data.note ?? "The file is saved. Retry it.")}</p>
-          <button
+          <Button
             type="button"
-            className="ghost small"
+            variant="outline"
+            size="sm"
             onClick={() => onRetryCapture?.(kind, attachmentId)}
           >
+            <RotateCcw size={14} aria-hidden="true" />
             Retry
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -262,20 +416,7 @@ export function Card({
     );
   }
 
-  if (card === "import") {
-    return (
-      <div className="chat-card">
-        <div className="chat-card-head">
-          <strong>Import {String(data.status ?? "started")}</strong>
-        </div>
-        {data.reason ? <p>{String(data.reason)}</p> : null}
-        <p className="fine">
-          Open the Imports tab to review, edit, or commit. A password, if needed, goes there and
-          never in chat.
-        </p>
-      </div>
-    );
-  }
+  if (card === "import") return <ImportCard data={data} />;
 
   if (card === "preference") {
     return (

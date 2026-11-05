@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import uuid
+import weakref
 from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,6 +34,35 @@ class TurnBusy(RuntimeError):
     """One running turn per thread."""
 
 
+class PreparationBusy(RuntimeError):
+    """Another request is still preparing a turn on this thread."""
+
+
+class Preparation:
+    """The per-thread guard for the window before a turn is registered.
+
+    `TurnManager.start` marks a thread busy only at the end of preparation, so without this guard
+    a second request could also import, capture, or start a turn while the first is still waiting
+    on a slow import or a vision call.
+    """
+
+    __slots__ = ("_lock", "__weakref__")
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        if self._lock.locked():
+            raise PreparationBusy(
+                "Another message is still being prepared in this thread. Wait a moment and retry."
+            )
+        await self._lock.acquire()
+
+    def release(self) -> None:
+        if self._lock.locked():
+            self._lock.release()
+
+
 @dataclass
 class ChatTurn:
     thread_id: str
@@ -51,6 +81,7 @@ class ChatTurn:
     model_name: str | None = None
     used_fallback: bool = False
     number_flags: list[str] = field(default_factory=list)
+    initial_cards: list[dict[str, Any]] = field(default_factory=list)
     note: str | None = None
     ending: str | None = None
 
@@ -145,9 +176,23 @@ class TurnManager:
         self.drain_seconds = drain_seconds
         self.turns: dict[str, ChatTurn] = {}
         self._guard = asyncio.Lock()
+        # Weak so a finished request's guard is collected; a missing thread id is request-local.
+        self._preparing: weakref.WeakValueDictionary[str, Preparation] = (
+            weakref.WeakValueDictionary()
+        )
 
     def get(self, thread_id: str) -> ChatTurn | None:
         return self.turns.get(thread_id)
+
+    def prepare(self, thread_id: str | None) -> Preparation:
+        """The per-thread preparation guard, held from request validation until turn start."""
+        if not thread_id:
+            return Preparation()
+        guard = self._preparing.get(thread_id)
+        if guard is None:
+            guard = Preparation()
+            self._preparing[thread_id] = guard
+        return guard
 
     async def start(
         self,
@@ -159,6 +204,7 @@ class TurnManager:
         deps: AgentDeps,
         title: str | None = None,
         run_id: str | None = None,
+        initial_cards: list[dict[str, Any]] | None = None,
     ) -> ChatTurn:
         from pydantic_ai import CancellationToken
 
@@ -175,6 +221,7 @@ class TurnManager:
                 history=history,
                 deps=deps,
                 title=title,
+                initial_cards=initial_cards or [],
                 token=CancellationToken(),
             )
             self.turns[thread_id] = turn
@@ -237,6 +284,7 @@ class TurnManager:
                     save_note=note,
                     title=turn.title,
                     all_messages=all_messages,
+                    extra_cards=turn.initial_cards,
                 )
                 if failed_attempts:
                     conn.execute(
@@ -380,9 +428,19 @@ class TurnManager:
         turn: ChatTurn,
     ) -> Any:
         """Encode the adapter's stream, adding the cards nested inside a `run_code` return."""
+        imports_sent = False
+        started_imports = {
+            str(card.get("import_id")) for card in turn.initial_cards if card.get("import_id")
+        }
         async for chunk in adapter.encode_stream(stream):
             if chunk.startswith("data: ") and '"type":"finish"' in chunk:
                 for card in cards_from_messages(captured_ref[0]):
+                    data = card.data if isinstance(card.data, dict) else {}
+                    if (
+                        data.get("card") == "import"
+                        and str(data.get("import_id")) in started_imports
+                    ):
+                        continue
                     yield _event_chunk(data_part(card))
                 if turn.number_flags:
                     yield _event_chunk(
@@ -410,6 +468,12 @@ class TurnManager:
                 if turn.ending == "complete" and turn.note:
                     yield _event_chunk({"type": "data-ending", "data": {"note": turn.note}})
             yield chunk
+            # Start the SDK message before adding its import cards. Each upstream
+            # event must pass through once, with the finish event still last.
+            if not imports_sent:
+                imports_sent = True
+                for card in turn.initial_cards:
+                    yield _event_chunk({"type": "data-card", "data": card})
 
     async def drain(self) -> None:
         """A deploy waits for running turns; then the token stops the rest and saves them."""
@@ -435,4 +499,11 @@ class TurnManager:
                     turn.task.cancel()
 
 
-__all__ = ["ChatTurn", "TurnBusy", "TurnManager", "encode_saved_turn"]
+__all__ = [
+    "ChatTurn",
+    "Preparation",
+    "PreparationBusy",
+    "TurnBusy",
+    "TurnManager",
+    "encode_saved_turn",
+]

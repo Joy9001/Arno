@@ -28,7 +28,7 @@ from fastapi import (
 from psycopg.types.json import Jsonb
 
 from fin_agent.agent import history as history_mod
-from fin_agent.api.deps import Database, current_session
+from fin_agent.api.deps import Database, PreparationDep, current_session
 from fin_agent.capture.photo import extract_payment_photo
 from fin_agent.capture.transcribe import (
     TranscriptionError,
@@ -53,7 +53,7 @@ router = APIRouter(
 MAX_CAPTURE_BYTES = 25 * 1024 * 1024
 
 
-def _image_media_type(data: bytes) -> str | None:
+def image_media_type(data: bytes) -> str | None:
     """Only still images a vision endpoint accepts. The header comes from the bytes."""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png"
@@ -171,6 +171,7 @@ def _failure(
     attachment_id: str,
     kind: str,
     note: str,
+    persist: bool = True,
 ) -> dict[str, Any]:
     card = {
         "card": "capture-retry",
@@ -180,7 +181,7 @@ def _failure(
         "url": f"/api/attachments/{attachment_id}",
         "note": note,
     }
-    if thread is not None:
+    if persist and thread is not None:
         _save_card(
             conn,
             thread_id=str(thread["id"]),
@@ -267,10 +268,12 @@ def _photo_history_text(
     )
 
 
-async def _log_photo(
+async def log_photo(
     conn,
     thread: dict[str, Any],
     row: dict[str, Any],
+    *,
+    record_history: bool = True,
 ) -> dict[str, Any]:
     if thread.get("run_started_at") is not None:
         return _failure(
@@ -279,6 +282,7 @@ async def _log_photo(
             attachment_id=str(row["id"]),
             kind="photo",
             note="A reply is still running. Retry the photo when it finishes.",
+            persist=record_history,
         )
 
     try:
@@ -294,6 +298,7 @@ async def _log_photo(
             attachment_id=str(row["id"]),
             kind="photo",
             note="The photo couldn't be read. Retry it.",
+            persist=record_history,
         )
 
     merchant = (extracted.merchant or "").strip()
@@ -305,6 +310,7 @@ async def _log_photo(
             attachment_id=str(row["id"]),
             kind="photo",
             note="That image didn't show a clear payee and amount.",
+            persist=record_history,
         )
 
     when = extracted.date or ledger_today()
@@ -328,6 +334,7 @@ async def _log_photo(
             attachment_id=str(row["id"]),
             kind="photo",
             note=str(exc),
+            persist=record_history,
         )
 
     result = movements_mod.record_expense(
@@ -346,6 +353,8 @@ async def _log_photo(
         actor="user",
     )
 
+    # This updates model context only, not the UI messages table. The agent must
+    # see the extracted facts and know the movement has already been logged.
     history_mod.append_outside_entry(
         conn,
         thread,
@@ -373,13 +382,14 @@ async def _log_photo(
         "undo_id": result["undo_id"],
         "summary": f"{money(amount_paise)['text']} to {merchant}",
     }
-    _save_card(
-        conn,
-        thread_id=str(thread["id"]),
-        client_id=f"cap_{row['id']}",
-        card=card,
-        body_text=str(card["summary"]),
-    )
+    if record_history:
+        _save_card(
+            conn,
+            thread_id=str(thread["id"]),
+            client_id=f"cap_{row['id']}",
+            card=card,
+            body_text=str(card["summary"]),
+        )
     conn.commit()
     return {
         "status": "logged",
@@ -450,9 +460,10 @@ async def post_photo(
     conn: Database,
     thread_id: str,
     file: Annotated[UploadFile, File()],
+    preparation: PreparationDep,
 ) -> dict[str, Any]:
     data = await file.read(MAX_CAPTURE_BYTES + 1)
-    media_type = _image_media_type(data)
+    media_type = image_media_type(data)
     if media_type is None:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
@@ -467,7 +478,7 @@ async def post_photo(
         content_type=media_type,
     )
     conn.commit()
-    return await _log_photo(conn, thread, row)
+    return await log_photo(conn, thread, row)
 
 
 @router.post("/chat/{thread_id}/photo/{attachment_id}")
@@ -475,6 +486,7 @@ async def retry_photo(
     conn: Database,
     thread_id: str,
     attachment_id: str,
+    preparation: PreparationDep,
 ) -> dict[str, Any]:
     row = conn.execute(
         "SELECT * FROM attachments WHERE id = %s AND kind = 'photo'",
@@ -486,7 +498,7 @@ async def retry_photo(
             detail="No such photo.",
         )
     thread = _ensure_thread(conn, thread_id, "Photo")
-    return await _log_photo(conn, thread, dict(row))
+    return await log_photo(conn, thread, dict(row))
 
 
 @router.get("/attachments/{attachment_id}")
@@ -516,4 +528,4 @@ def get_attachment(conn: Database, attachment_id: str) -> Response:
     )
 
 
-__all__ = ["MAX_CAPTURE_BYTES", "router"]
+__all__ = ["MAX_CAPTURE_BYTES", "image_media_type", "log_photo", "router"]

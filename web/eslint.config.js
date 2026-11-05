@@ -5,7 +5,9 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist"] },
+  // shadcn/assistant-ui registry source ships its own conventions; keep lint
+  // focused on the app code that composes it.
+  { ignores: ["dist", "src/components/**"] },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [

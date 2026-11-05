@@ -1,815 +1,321 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
-  ArrowUp,
-  Calculator,
-  Camera,
-  History,
-  LogIn,
-  Mic,
-  Plus,
-  ReceiptText,
-  RotateCcw,
-  Search,
-  Square,
-  Wallet,
-  X,
-} from "lucide-react";
-import { APICallError, DefaultChatTransport, isToolUIPart, lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
-import { useChat } from "@ai-sdk/react";
-import { Streamdown } from "streamdown";
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  CompositeAttachmentAdapter,
+  useAui,
+  useAuiState,
+  useRemoteThreadListRuntime,
+  type AssistantClient,
+} from "@assistant-ui/react";
+import { useChatRuntime } from "@assistant-ui/ai-sdk";
+import { lastAssistantMessageIsCompleteWithApprovalResponses } from "ai";
+import { Flag, History, Plus, Square, X } from "lucide-react";
 import { api, errorMessage } from "../api";
-import { Busy, Typing } from "../Loading";
+import { Typing } from "../Loading";
 import type { ProjectionPayload } from "../projection";
 import { takeSharedImage } from "../share";
 import { ConversationSkeleton } from "../Skeleton";
-import { Card, NumberFlags } from "./cards";
-import { ToolPart } from "./ToolPart";
-import type { ChatMessage, ThreadBody, ThreadList, ThreadSummary } from "./types";
+import { Button } from "@/components/ui/button";
+import { ComposerAddAttachment } from "@/components/attachment.aui";
+import { Thread, type ThreadComponents } from "@/components/thread.aui";
+import {
+  ThreadListItems,
+  ThreadListNew,
+  ThreadListRoot,
+  ThreadListSearch,
+} from "@/components/thread-list.aui";
+import {
+  ChatComposerStatus,
+  ChatDataRenderers,
+  ChatToolFallback,
+  ChatToolGroup,
+  ChatWelcome,
+} from "./parts";
+import { ChatSurfaceContext, type ChatSurfaceState } from "./surface";
+import {
+  ChatTransport,
+  ServerDictationAdapter,
+  VoiceAttachments,
+  cancelActiveDictation,
+  createHistoryAdapter,
+  createThreadListAdapter,
+  stopChatRun,
+} from "./runtime";
+import { photoAttachmentAdapter } from "./photo-attachment";
+import { statementAttachmentAdapter } from "./statement-attachment";
+import type { ThreadList } from "./types";
+
+const attachmentAdapter = new CompositeAttachmentAdapter([
+  statementAttachmentAdapter,
+  photoAttachmentAdapter,
+]);
+
+const THREAD_STORAGE = "fin-agent-thread";
 
 type CaptureCard = Record<string, unknown>;
+type ReportCapture = (
+  threadId: string,
+  attachmentId: string,
+  card: CaptureCard,
+) => void;
+
+function liveThreadId(aui: AssistantClient): string | null {
+  // `threadListItem` can still point at the thread whose request started an
+  // async action; the active thread selection is the one appends land in.
+  const active = aui.threads.getState().mainThreadId;
+  if (active) return active;
+  const state = aui.threadListItem.getState();
+  return state.remoteId ?? state.id ?? null;
+}
 
 type CaptureResult =
   | { status: "logged"; attachment_id: string; card: CaptureCard }
   | { status: "failed"; attachment_id: string; note: string; card: CaptureCard };
 
+/** A retry replaced its own standalone card; a chat turn keeps its text and tools. */
+function standaloneCaptureFailure(aui: AssistantClient, messageId: string): boolean {
+  const message = aui.thread.getState().messages.find((item) => item.id === messageId);
+  if (!message || message.content.length !== 1) return false;
+  const [part] = message.content;
+  return (
+    part.type === "data" &&
+    part.name === "card" &&
+    (part.data as CaptureCard | undefined)?.card === "capture-retry"
+  );
+}
+
 type TranscribeResult =
   | { status: "transcribed"; attachment_id: string; transcript: string }
   | { status: "failed"; attachment_id: string; note: string; card: CaptureCard };
 
-const LINKED = {
-  a: ({ children }: { children?: ReactNode }) => (
-    <span className="plain-link">{children}</span>
-  ),
-  img: () => null,
+function FlagAction() {
+  const serverId = useAuiState(
+    (state) => state.message.metadata.custom?.server_id as string | undefined,
+  );
+  const alreadyFlagged = useAuiState(
+    (state) => Boolean(state.message.metadata.custom?.flagged_at),
+  );
+  const [state, setState] = useState<"idle" | "busy" | "done" | "error">(
+    alreadyFlagged ? "done" : "idle",
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  if (!serverId) return null;
+
+  return (
+    <div className="aui-flag">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="aui-flag-button h-auto"
+        disabled={state === "busy" || state === "done"}
+        aria-pressed={state === "done"}
+        onClick={async () => {
+          setState("busy");
+          setError(null);
+          try {
+            await api(`/api/messages/${encodeURIComponent(serverId)}/flag`, {
+              method: "POST",
+            });
+            setState("done");
+          } catch (caught) {
+            setError(errorMessage(caught));
+            setState("error");
+          }
+        }}
+      >
+        <Flag
+          size={13}
+          strokeWidth={1.8}
+          fill={state === "done" ? "currentColor" : "none"}
+          aria-hidden="true"
+        />
+        {state === "done" ? "Flagged" : "Flag"}
+      </Button>
+      {error && (
+        <span role="alert" className="aui-flag-error">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** The library owns the cancel state; this only mirrors the user's Stop to the server. */
+function StopRunButton() {
+  const aui = useAui();
+  const surface = useContext(ChatSurfaceContext);
+
+  return (
+    <ComposerPrimitive.Cancel asChild>
+      <Button
+        type="button"
+        variant="default"
+        size="icon"
+        className="aui-composer-cancel size-7 rounded-full"
+        aria-label="Stop generating"
+        onClick={() => {
+          const threadId = liveThreadId(aui);
+          if (threadId) void surface.onStop?.(threadId);
+        }}
+      >
+        <Square size={14} strokeWidth={2} fill="currentColor" aria-hidden="true" />
+      </Button>
+    </ComposerPrimitive.Cancel>
+  );
+}
+
+const THREAD_COMPONENTS: ThreadComponents = {
+  Welcome: ChatWelcome,
+  ToolFallback: ChatToolFallback,
+  ToolGroup: ChatToolGroup,
+  ComposerExtra: ComposerAddAttachment,
+  ComposerCancel: StopRunButton,
+  ComposerStatus: ChatComposerStatus,
+  AssistantActions: FlagAction,
 };
 
-const STARTERS = [
-  { Icon: ReceiptText, text: "How much did I spend on food last month?" },
-  { Icon: Calculator, text: "Can I afford a ₹40,000 phone in December?" },
-  { Icon: Wallet, text: "What is due in the next 30 days?" },
-];
-
-function newThreadId(): string {
-  return `cnv_${crypto.randomUUID()}`;
-}
-
-/** One short sentence for the user; provider payloads stay out of the transcript. */
-function chatErrorMessage(error: Error): string {
-  if (APICallError.isInstance(error)) {
-    if (error.statusCode === 401) {
-      return "Your session expired. Reload the page and sign in again.";
-    }
-    if (error.isRetryable) {
-      return "Fin-Agent could not be reached or is temporarily unavailable. Try again.";
-    }
-  }
-  return "Fin-Agent could not finish that answer. Your earlier messages are still here. Try again.";
-}
-
-function groupMessages(messages: ChatMessage[]): ChatMessage[] {
-  const grouped: ChatMessage[] = [];
-  for (const message of messages) {
-    const previous = grouped[grouped.length - 1];
-    if (previous && previous.role === "assistant" && message.role === "assistant") {
-      grouped[grouped.length - 1] = {
-        ...previous,
-        parts: [...previous.parts, ...message.parts],
-        metadata: message.metadata ?? previous.metadata,
-      };
-    } else {
-      grouped.push(message);
-    }
-  }
-  return grouped;
-}
-
-function ThreadSidebar({
-  threads,
-  activeId,
-  query,
-  onQuery,
-  onSelect,
+/** A small, fixed rail header: title, history, new, and close. */
+function ChatHeader({
+  title,
+  running,
+  historyControl,
   onNew,
+  onClose,
 }: {
-  threads: ThreadSummary[];
-  activeId: string;
-  query: string;
-  onQuery: (value: string) => void;
-  onSelect: (id: string) => void;
+  title: string;
+  running: boolean;
+  historyControl: ReactNode;
   onNew: () => void;
+  onClose?: () => void;
 }) {
   return (
-    <aside className="chat-sidebar">
-      <button type="button" className="new-chat" onClick={onNew}>
-        <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
-        New chat
-      </button>
-      <label className="search-field">
-        <Search size={14} strokeWidth={1.8} aria-hidden="true" />
-        <input
-          className="thread-search"
-          value={query}
-          placeholder="Search past messages"
-          aria-label="Search past messages"
-          onChange={(event) => onQuery(event.target.value)}
-        />
-      </label>
-      <div className="thread-list">
-        {threads.map((thread) => (
-          <button
-            key={thread.id}
-            type="button"
-            className={thread.id === activeId ? "thread active" : "thread"}
-            onClick={() => onSelect(thread.id)}
-          >
-            <span className="thread-title">{thread.title}</span>
-            <span className="fine">
-              {thread.running ? (
-                <>
-                  <Typing />
-                  replying…
-                </>
-              ) : (
-                `${thread.message_count} ${thread.message_count === 1 ? "message" : "messages"}`
-              )}
-            </span>
-            {thread.snippet && <span className="thread-snippet">{thread.snippet}</span>}
-          </button>
-        ))}
-        {threads.length === 0 && <p className="muted fine">No conversations yet.</p>}
+    <header className="assistant-head aui-head">
+      <div>
+        <h2>{title}</h2>
+        <p className={running ? "aui-replying" : "fine"}>
+          {running && <Typing />}
+          {running ? "Replying…" : "Fin-Agent"}
+        </p>
       </div>
+      <div className="assistant-actions">
+        {historyControl}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="ghost small"
+          onClick={onNew}
+        >
+          <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
+          New
+        </Button>
+        {onClose && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="ghost small icon-only"
+            onClick={onClose}
+            aria-label="Close assistant"
+            title="Close assistant"
+          >
+            <X size={15} strokeWidth={1.8} aria-hidden="true" />
+          </Button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function ChatHistory({
+  query,
+  onQuery,
+  error,
+}: {
+  query: string;
+  onQuery: (value: string) => void;
+  error: string | null;
+}) {
+  return (
+    <aside className="aui-history">
+      <ThreadListRoot>
+        <ThreadListNew>
+          <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
+          <span>New chat</span>
+        </ThreadListNew>
+        <ThreadListSearch
+          value={query}
+          onValueChange={onQuery}
+          placeholder="Search past messages"
+        />
+        {error && (
+          <p role="alert" className="aui-history-error">
+            {error}
+          </p>
+        )}
+        <div className="aui-history-list">
+          <AuiEmptyHistory query={query} />
+          <ThreadListItems searchQuery="" />
+        </div>
+      </ThreadListRoot>
     </aside>
   );
 }
 
-function Part({
-  part,
-  onRetryCapture,
-  onEvidence,
-  hideLegacyBadge,
-}: {
-  part: ChatMessage["parts"][number];
-  onRetryCapture?: (kind: string, attachmentId: string) => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
-  hideLegacyBadge?: boolean;
-}) {
-  if (part.type === "text") {
-    return (
-      <Streamdown components={LINKED} mode="static" className="markdown">
-        {part.text}
-      </Streamdown>
-    );
-  }
-  if (part.type === "data-card") {
-    return (
-      <Card
-        data={part.data}
-        onRetryCapture={onRetryCapture}
-        onEvidence={onEvidence}
-      />
-    );
-  }
-  if (part.type === "data-number-flags") {
-    return <NumberFlags amounts={part.data.amounts} />;
-  }
-  if (part.type === "data-model-badge") {
-    // New saves carry data-reply-model with the model that really answered; the old badge is
-    // only kept for transcripts saved before that part existed.
-    if (hideLegacyBadge) return null;
-    return <p className="note">Answered by the backup model ({part.data.model}).</p>;
-  }
-  if (part.type === "data-reply-model") {
-    return (
-      <p className="fine">
-        Model: {part.data.model}
-        {part.data.fallback ? " (fallback)" : ""}
-      </p>
-    );
-  }
-  if (part.type === "data-ending") {
-    return part.data.note ? <p className="note">{part.data.note}</p> : null;
-  }
-  return null;
-}
-
-function Message({
-  message,
-  busy,
-  onApprove,
-  onFlag,
-  onRetryCapture,
-  onEvidence,
-}: {
-  message: ChatMessage;
-  busy: boolean;
-  onApprove: (approvalId: string, approved: boolean) => void;
-  onFlag: (message: ChatMessage) => void;
-  onRetryCapture: (kind: string, attachmentId: string, messageId: string) => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
-}) {
-  const [flagged, setFlagged] = useState(Boolean(message.metadata?.flagged_at));
-  const role = message.role;
-  const serverId = message.metadata?.server_id;
-  const hasReplyModel = message.parts.some((part) => part.type === "data-reply-model");
-  // "assistant" is the panel's layout class; a bubble wearing it became a flex item and
-  // overflowed its own height. Use a role class the panel never matches.
+function AuiEmptyHistory({ query }: { query: string }) {
+  const loading = useAuiState((state) => state.threads.isLoading);
+  const empty = useAuiState((state) => state.threads.threadIds.length === 0);
+  if (loading || !empty) return null;
   return (
-    <article
-      id={serverId ? `message-${serverId}` : undefined}
-      tabIndex={serverId ? -1 : undefined}
-      className={`bubble ${role === "assistant" ? "agent" : role}`}
-    >
-      <div className="bubble-head">
-        <span className="eyebrow">{role === "user" ? "You" : "Fin-Agent"}</span>
-        {role === "assistant" && (
-          <button
-            type="button"
-            className="ghost small"
-            disabled={flagged}
-            onClick={() => {
-              onFlag(message);
-              setFlagged(true);
-            }}
-          >
-            {flagged ? "Flagged" : "Flag"}
-          </button>
-        )}
-      </div>
-
-      {message.parts.map((part, index) => {
-        if (isToolUIPart(part)) {
-          return (
-            <ToolPart
-              key={index}
-              part={part}
-              busy={busy}
-              onApprove={onApprove}
-            />
-          );
-        }
-        return (
-          <Part
-            key={index}
-            part={part}
-            onEvidence={onEvidence}
-            hideLegacyBadge={hasReplyModel}
-            onRetryCapture={(kind, attachmentId) =>
-              onRetryCapture(kind, attachmentId, message.id)
-            }
-          />
-        );
-      })}
-    </article>
+    <p className="aui-history-empty">
+      {query.trim() ? "No conversations found." : "No conversations yet."}
+    </p>
   );
 }
 
-function Conversation({
+function ThreadSwitchError({
   threadId,
-  initialMessages,
-  onThreadChanged,
-  seed = null,
-  focusSignal,
-  onSeedConsumed,
-  onEvidence,
-  focusMessage = null,
+  detail,
+  onRetry,
+  onNew,
 }: {
   threadId: string;
-  initialMessages: ChatMessage[];
-  onThreadChanged: () => void;
-  seed?: { id: number; text: string } | null;
-  focusSignal?: number;
-  onSeedConsumed?: () => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
-  focusMessage?: { id: string; token: number } | null;
+  detail: string;
+  onRetry: () => void;
+  onNew: () => void;
 }) {
-  const voiceRef = useRef<string | null>(null);
-  const transport = useMemo(
-    () =>
-      new DefaultChatTransport<ChatMessage>({
-        api: "/api/chat",
-        prepareSendMessagesRequest: ({ id, messages, trigger, messageId }) => {
-          const voiceAttachment = voiceRef.current;
-          voiceRef.current = null;
-          return {
-            body: {
-              id,
-              trigger,
-              messageId,
-              voice_attachment_id: voiceAttachment ?? undefined,
-              // The server holds the thread's history; it only needs this turn's message.
-              messages: messages.slice(-1),
-            },
-          };
-        },
-        prepareReconnectToStreamRequest: ({ id }) => ({
-          api: `/api/chat/${id}/stream`,
-        }),
-        resumeStreamIsReplay: true,
-      }),
-    []
-  );
-
-  const {
-    messages,
-    sendMessage,
-    setMessages,
-    status,
-    stop,
-    error,
-    addToolApprovalResponse,
-  } = useChat<ChatMessage>({
-    id: threadId,
-    messages: initialMessages,
-    transport,
-    resume: true,
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
-    onFinish: onThreadChanged,
-  });
-
-  const [input, setInput] = useState("");
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const focusMounted = useRef(false);
-
-  useLayoutEffect(() => {
-    const textarea = inputRef.current;
-    if (!textarea) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
-  }, [input]);
-
-  useEffect(() => {
-    if (seed?.text) {
-      // A quick action outside React hands the composer its text; there is no render to fold it
-      // into because the seed arrives after the mount.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setInput(seed.text);
-      onSeedConsumed?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seed?.id]);
-
-  useEffect(() => {
-    if (!focusMounted.current) {
-      focusMounted.current = true;
-      return;
-    }
-    inputRef.current?.focus();
-  }, [focusSignal]);
-  const bottom = useRef<HTMLDivElement>(null);
-  // A source link opens an article, not the end of the thread; the first paint keeps its place,
-  // and later streamed turns scroll as before.
-  const pendingFocus = useRef<string | null>(focusMessage?.id ?? null);
-  const firstScroll = useRef(true);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const holdingRef = useRef(false);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const pendingPhoto = useRef<File | null>(null);
-  const [recording, setRecording] = useState(false);
-  const canRecord =
-    typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
-  const [uploading, setUploading] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const [captureError, setCaptureError] = useState<string | null>(null);
-  const busy = status === "submitted" || status === "streaming";
-  const needsSignIn = APICallError.isInstance(error) && error.statusCode === 401;
-  const visibleMessages = useMemo(() => groupMessages(messages), [messages]);
-
-  useEffect(() => {
-    return () => {
-      const recorder = recorderRef.current;
-      if (recorder && recorder.state !== "inactive") recorder.stop();
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-    };
-  }, []);
-
-  useEffect(() => {
-    if (firstScroll.current) {
-      firstScroll.current = false;
-      if (pendingFocus.current) return;
-    }
-    bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, status]);
-
-  useEffect(() => {
-    const id = pendingFocus.current;
-    if (!id) return;
-    const article = document.getElementById(`message-${id}`);
-    pendingFocus.current = null;
-    if (!article) return;
-    article.scrollIntoView({ block: "center" });
-    article.focus({ preventScroll: true });
-  }, [focusMessage?.token]);
-
-  function appendCard(card: Record<string, unknown>, id: string) {
-    setMessages((current) => [
-      ...current,
-      {
-        id,
-        role: "assistant",
-        parts: [{ type: "data-card", id, data: card }],
-      },
-    ]);
-  }
-
-  function removeMessage(id: string) {
-    setMessages((current) => current.filter((message) => message.id !== id));
-  }
-
-  async function uploadPhoto(file: File) {
-    if (busy) {
-      pendingPhoto.current = file;
-      return;
-    }
-    setCaptureError(null);
-    setUploading(true);
-    const form = new FormData();
-    form.append("file", file, file.name || "photo.png");
-    try {
-      const result = await api<CaptureResult>(`/api/chat/${threadId}/photo`, {
-        method: "POST",
-        body: form,
-      });
-      if (result.status === "logged") {
-        appendCard(result.card, `photo_${result.attachment_id}`);
-        onThreadChanged();
-      } else {
-        appendCard(result.card, `capture_retry_${result.attachment_id}`);
-      }
-    } catch (caught) {
-      setCaptureError(errorMessage(caught));
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!busy && pendingPhoto.current) {
-      const file = pendingPhoto.current;
-      pendingPhoto.current = null;
-      void uploadPhoto(file);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy]);
-
-  async function transcribe(blob: Blob, mimeType: string) {
-    setCaptureError(null);
-    setTranscribing(true);
-    const form = new FormData();
-    const extension = mimeType.includes("ogg")
-      ? "ogg"
-      : mimeType.includes("mp4")
-        ? "m4a"
-        : "webm";
-    form.append("file", blob, `voice.${extension}`);
-    form.append("thread_id", threadId);
-    try {
-      const result = await api<TranscribeResult>("/api/transcribe", {
-        method: "POST",
-        body: form,
-      });
-      if (result.status === "transcribed") {
-        voiceRef.current = result.attachment_id;
-        try {
-          await sendMessage({ text: result.transcript });
-        } catch (caught) {
-          voiceRef.current = null;
-          setInput(result.transcript);
-          setCaptureError(errorMessage(caught));
-        }
-      } else {
-        appendCard(result.card, `capture_retry_${result.attachment_id}`);
-      }
-    } catch (caught) {
-      setCaptureError(errorMessage(caught));
-    } finally {
-      setTranscribing(false);
-    }
-  }
-
-  async function retryCapture(kind: string, attachmentId: string, messageId: string) {
-    setCaptureError(null);
-    try {
-      if (kind === "photo") {
-        const result = await api<CaptureResult>(
-          `/api/chat/${encodeURIComponent(threadId)}/photo/${encodeURIComponent(attachmentId)}`,
-          { method: "POST" },
-        );
-        if (result.status === "logged") {
-          removeMessage(messageId);
-          appendCard(result.card, `photo_${attachmentId}`);
-          onThreadChanged();
-        } else {
-          setCaptureError(result.note);
-        }
-        return;
-      }
-      const result = await api<TranscribeResult>(
-        `/api/transcribe/${encodeURIComponent(attachmentId)}?thread_id=${encodeURIComponent(threadId)}`,
-        { method: "POST" },
-      );
-      if (result.status === "transcribed") {
-        removeMessage(messageId);
-        voiceRef.current = attachmentId;
-        await sendMessage({ text: result.transcript });
-      } else {
-        setCaptureError(result.note);
-      }
-    } catch (caught) {
-      setCaptureError(errorMessage(caught));
-    }
-  }
-
-  async function startRecording() {
-    if (busy || transcribing || recording) return;
-    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setCaptureError("This browser cannot record audio.");
-      return;
-    }
-    setCaptureError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const preferred = [
-        "audio/webm;codecs=opus",
-        "audio/webm",
-        "audio/ogg;codecs=opus",
-        "audio/mp4",
-      ].find((type) => MediaRecorder.isTypeSupported(type));
-      const recorder = new MediaRecorder(
-        stream,
-        preferred ? { mimeType: preferred } : undefined,
-      );
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-        recorderRef.current = null;
-        setRecording(false);
-        const type = recorder.mimeType || preferred || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type });
-        chunksRef.current = [];
-        if (blob.size) void transcribe(blob, type);
-      };
-      recorderRef.current = recorder;
-      recorder.start();
-      setRecording(true);
-      if (!holdingRef.current) stopRecording();
-    } catch {
-      setCaptureError("Microphone access was refused.");
-    }
-  }
-
-  function stopRecording() {
-    holdingRef.current = false;
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") recorder.stop();
-  }
-
-  useEffect(() => {
-    let alive = true;
-    void takeSharedImage().then((file) => {
-      if (alive && file) void uploadPhoto(file);
-    });
-    return () => {
-      alive = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threadId]);
-
-  function onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    holdingRef.current = true;
-    void startRecording();
-  }
-
-  function onPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    stopRecording();
-  }
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    const text = input.trim();
-    if (!text || busy) return;
-    setInput("");
-    await sendMessage({ text });
-  }
-
-  async function stopTurn() {
-    try {
-      await fetch(`/api/chat/${threadId}/stop`, {
-        method: "POST",
-        credentials: "same-origin",
-      });
-    } finally {
-      await stop();
-    }
-  }
-
-  async function flag(message: ChatMessage) {
-    const serverId = message.metadata?.server_id;
-    if (!serverId) return;
-    await api(`/api/messages/${serverId}/flag`, { method: "POST" });
-  }
-
   return (
-    <section className="conversation compact">
-      {busy && (
-        <header className="conversation-head">
-          <h2 className="replying">
-            <Typing />
-            Replying…
-          </h2>
-          <button type="button" className="ghost" onClick={() => void stopTurn()}>
-            <Square size={13} strokeWidth={1.8} aria-hidden="true" />
-            Stop
-          </button>
-        </header>
-      )}
-
-      <div className="messages" aria-live="polite">
-        {messages.length === 0 && (
-          <div className="empty-chat">
-            <h3>Ask anything about your money.</h3>
-            <p className="muted">
-              Answers use your ledger, plan, and projection. Every figure comes with its sources.
-            </p>
-            <div className="starter-list">
-              {STARTERS.map(({ Icon, text }) => (
-                <button
-                  key={text}
-                  type="button"
-                  className="starter"
-                  onClick={() => {
-                    setInput(text);
-                    inputRef.current?.focus();
-                  }}
-                >
-                  <Icon size={16} strokeWidth={1.8} aria-hidden="true" />
-                  <span>{text}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {visibleMessages.map((message) => (
-          <Message
-            key={message.id}
-            message={message}
-            busy={busy}
-            onApprove={(approvalId, approved) =>
-              addToolApprovalResponse({ id: approvalId, approved })
-            }
-            onFlag={(item) => void flag(item)}
-            onEvidence={onEvidence}
-            onRetryCapture={(kind, attachmentId, messageId) =>
-              void retryCapture(kind, attachmentId, messageId)
-            }
-          />
-        ))}
-        {status === "submitted" && <p className="muted fine">Thinking…</p>}
-        {error && (
-          <div className="chat-card">
-            <p className="error">{chatErrorMessage(error)}</p>
-            <button
-              type="button"
-              className="ghost small"
-              disabled={busy}
-              onClick={() => {
-                if (needsSignIn) window.location.reload();
-                else void sendMessage({ text: "Try again" });
-              }}
-            >
-              {needsSignIn ? (
-                <LogIn size={13} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <RotateCcw size={13} strokeWidth={1.8} aria-hidden="true" />
-              )}
-              {needsSignIn ? "Sign in again" : "Retry"}
-            </button>
-          </div>
-        )}
-        <div ref={bottom} />
+    <div className="aui-switch-error" role="alert">
+      <p className="aui-switch-error-title">
+        This conversation could not be opened. It may have been deleted or is unavailable.
+      </p>
+      <p className="aui-switch-error-detail">{detail}</p>
+      <div className="aui-switch-actions">
+        <Button type="button" variant="ghost" size="sm" className="ghost small" onClick={onRetry}>
+          Try again
+        </Button>
+        <Button type="button" variant="ghost" size="sm" className="ghost small" onClick={onNew}>
+          Start a new chat
+        </Button>
       </div>
-
-      <form className="composer" onSubmit={(event) => void submit(event)}>
-        <div className="composer-main">
-          <div className="composer-row">
-            <textarea
-              ref={inputRef}
-              value={input}
-              rows={1}
-              aria-label="Message Fin-Agent"
-              placeholder="Message Fin-Agent…"
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  void submit(event);
-                }
-              }}
-            />
-            <div className="composer-actions">
-              <button
-                type="button"
-                className="ghost"
-                onClick={() => fileInput.current?.click()}
-                disabled={busy || uploading}
-              >
-                {uploading ? (
-                  <>
-                    <Busy />
-                    Reading…
-                  </>
-                ) : (
-                  <>
-                    <Camera size={15} strokeWidth={1.8} aria-hidden="true" />
-                    Photo
-                  </>
-                )}
-              </button>
-              <input
-                ref={fileInput}
-                type="file"
-                accept="image/*"
-                hidden
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (file) void uploadPhoto(file);
-                }}
-              />
-              {canRecord && (
-                <button
-                  type="button"
-                  className={recording ? "ghost record live" : "ghost record"}
-                  disabled={busy || transcribing}
-                  onPointerDown={onPointerDown}
-                  onPointerUp={onPointerUp}
-                  onPointerCancel={onPointerUp}
-                  onLostPointerCapture={() => {
-                    if (holdingRef.current) stopRecording();
-                  }}
-                >
-                  {recording ? (
-                    <>
-                      <Mic size={15} strokeWidth={1.8} aria-hidden="true" />
-                      Listening… release
-                    </>
-                  ) : transcribing ? (
-                    <>
-                      <Busy />
-                      Transcribing…
-                    </>
-                  ) : (
-                    <>
-                      <Mic size={15} strokeWidth={1.8} aria-hidden="true" />
-                      Hold to talk
-                    </>
-                  )}
-                </button>
-              )}
-              <button className="composer-send" type="submit" disabled={busy || !input.trim()}>
-                <ArrowUp size={16} strokeWidth={2} aria-hidden="true" />
-                Send
-              </button>
-            </div>
-          </div>
-          {(recording || transcribing || uploading || captureError) && (
-            <p className={captureError ? "error fine" : "fine"} role={captureError ? "alert" : "status"}>
-              {captureError ??
-                (recording
-                  ? "Recording… release to send."
-                  : transcribing
-                    ? "Transcribing…"
-                    : "Reading the photo…")}
-            </p>
-          )}
-        </div>
-      </form>
-    </section>
+      <span className="aui-sr-only">{threadId}</span>
+    </div>
   );
 }
 
-export function Assistant({
-  focusThreadId,
-  focusMessageId,
-  onFocusHandled,
-  seed,
-  focusSignal,
-  onSeedConsumed,
-  onClose,
-  onActivity,
-  onEvidence,
-}: {
+type AssistantProps = {
   focusThreadId?: string | null;
   focusMessageId?: string | null;
   onFocusHandled?: () => void;
@@ -819,181 +325,61 @@ export function Assistant({
   onClose?: () => void;
   onActivity?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
-}) {
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [activeId, setActiveId] = useState<string>(() => {
-    const saved = sessionStorage.getItem("fin-agent-thread");
-    return saved || newThreadId();
-  });
-  const [initial, setInitial] = useState<ChatMessage[]>([]);
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  // A validated source thread can be older than the first /threads page; load it directly.
-  const [directId, setDirectId] = useState<string | null>(null);
-  const [directTitle, setDirectTitle] = useState<string | null>(null);
+};
+
+export function Assistant(props: AssistantProps) {
+  const [activeId, setActiveId] = useState<string | undefined>(
+    () => props.focusThreadId ?? sessionStorage.getItem(THREAD_STORAGE) ?? undefined,
+  );
+  const [boot, setBoot] = useState(() => Boolean(props.focusThreadId));
+  const [bootError, setBootError] = useState<string | null>(null);
   const [focusMessage, setFocusMessage] = useState<{ id: string; token: number } | null>(null);
-  const [focusError, setFocusError] = useState<string | null>(null);
-  const [focusAttempt, setFocusAttempt] = useState(0);
   const focusToken = useRef(0);
-  const mounted = useRef(false);
+  const bootStarted = useRef(false);
+  const focusSeen = useRef(false);
+
+  const { focusThreadId, focusMessageId, onFocusHandled } = props;
 
   useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
-    if (!focusThreadId) return;
-    const nextFocus = focusMessageId
-      ? { id: focusMessageId, token: ++focusToken.current }
-      : null;
-    if (focusThreadId === activeId && loadedFor === activeId) {
-      if (nextFocus) setFocusMessage(nextFocus);
-      onFocusHandled?.();
-      return;
-    }
-    // Shell has already asked the server whether this thread exists, so do not fall back to the
-    // newest thread when it is missing from the loaded history page.
-    setError(null);
-    setFocusError(null);
-    setDirectTitle(null);
-    setInitial([]);
-    setLoadedFor(null);
-    setDirectId(focusThreadId);
-    setActiveId(focusThreadId);
-    if (nextFocus) setFocusMessage(nextFocus);
-    setFocusAttempt((value) => value + 1);
-    onFocusHandled?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusThreadId]);
-
-  function startNew() {
-    const id = newThreadId();
-    setInitial([]);
-    setLoadedFor(id);
-    setActiveId(id);
-    setDirectId(null);
-    setDirectTitle(null);
-    setFocusMessage(null);
-    setFocusError(null);
-    setHistoryOpen(false);
-  }
-
-  function selectThread(id: string) {
-    setInitial([]);
-    setLoadedFor(null);
-    setActiveId(id);
-    setDirectId(null);
-    setDirectTitle(null);
-    setFocusMessage(null);
-    setFocusError(null);
-    setHistoryOpen(false);
-  }
-
-  function retryFocus() {
-    setFocusError(null);
-    setFocusAttempt((value) => value + 1);
-  }
-
-  async function loadThreads(search = query) {
-    const result = await api<ThreadList>(
-      `/api/threads${search ? `?q=${encodeURIComponent(search)}` : ""}`
-    );
-    setThreads(result.threads);
-    return result.threads;
-  }
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const list = await loadThreads("");
-        if (!alive) return;
-        const saved = sessionStorage.getItem("fin-agent-thread");
-        const wanted =
-          focusThreadId ??
-          (list.some((thread) => thread.id === saved) ? saved : list[0]?.id);
-        if (wanted) {
-          setActiveId(wanted);
-        } else {
-          setLoadedFor(activeId);
-        }
-        if (focusThreadId) {
-          setDirectId(focusThreadId);
-          if (focusMessageId) {
-            setFocusMessage({ id: focusMessageId, token: ++focusToken.current });
-          }
-          onFocusHandled?.();
-        }
-      } catch (caught) {
-        if (alive) setError(errorMessage(caught));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+    if (bootStarted.current || focusThreadId) return;
+    bootStarted.current = true;
+    const saved = sessionStorage.getItem(THREAD_STORAGE);
+    api<ThreadList>("/api/threads")
+      .then((list) => {
+        const wanted = list.threads.some((thread) => thread.id === saved)
+          ? saved ?? list.threads[0]?.id
+          : list.threads[0]?.id;
+        if (focusSeen.current) return;
+        if (wanted) setActiveId(wanted);
+        setBoot(true);
+      })
+      .catch((caught: unknown) => {
+        if (focusSeen.current) return;
+        setBootError(errorMessage(caught));
+        if (saved) setActiveId(saved);
+        setBoot(true);
+      });
+    // Focus is checked once at mount; later deep links arrive through the prop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (activeId) sessionStorage.setItem("fin-agent-thread", activeId);
-  }, [activeId]);
-
-  useEffect(() => {
-    let alive = true;
-    if (!threads.some((thread) => thread.id === activeId) && activeId !== directId) {
-      return () => {
-        alive = false;
-      };
-    }
-    api<ThreadBody>(`/api/threads/${activeId}/messages`)
-      .then((body) => {
-        if (alive) {
-          setInitial(body.messages);
-          setLoadedFor(activeId);
-          setFocusError(null);
-          if (activeId === directId) setDirectTitle(body.thread.title);
-        }
-      })
-      .catch((caught: unknown) => {
-        if (!alive) return;
-        if (activeId === directId) setFocusError(errorMessage(caught));
-        else setError(errorMessage(caught));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [activeId, threads, directId, focusAttempt]);
-
-  async function refresh() {
-    try {
-      await loadThreads(query);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      void loadThreads(query).catch((caught: unknown) => setError(errorMessage(caught)));
-    }, 250);
-    return () => window.clearTimeout(handle);
+    if (!focusThreadId) return;
+    focusSeen.current = true;
+    setActiveId(focusThreadId);
+    setBoot(true);
+    setFocusMessage(
+      focusMessageId ? { id: focusMessageId, token: ++focusToken.current } : null,
+    );
+    onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [focusThreadId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  if (loading) {
+  if (!boot) {
     return (
-      <section className="assistant">
-        <header className="assistant-head">
-          <div>
-            <h2>Conversation</h2>
-            <p className="fine">Fin-Agent</p>
-          </div>
-        </header>
+      <section className="assistant aui-chat dark">
         <div className="chat-loading">
           <ConversationSkeleton />
         </div>
@@ -1001,99 +387,553 @@ export function Assistant({
     );
   }
 
-  const title =
-    threads.find((thread) => thread.id === activeId)?.title ??
-    directTitle ??
-    (focusError ? "Conversation unavailable" : "New conversation");
+  return (
+    <AssistantChat
+      {...props}
+      activeId={activeId}
+      onActiveId={setActiveId}
+      focusMessage={focusMessage}
+      bootError={bootError}
+    />
+  );
+}
+
+function useFinAgentThreadRuntime({
+  voice,
+  setCapture,
+  setSurfaceError,
+  onCaptureRetry,
+  onFinish,
+}: {
+  voice: VoiceAttachments;
+  setCapture: (threadId: string, value: ChatSurfaceState["capture"]) => void;
+  setSurfaceError: (threadId: string, message: string | null) => void;
+  onCaptureRetry: ReportCapture;
+  onFinish: () => void;
+}) {
+  const aui = useAui();
+  const history = useMemo(() => createHistoryAdapter(aui), [aui]);
+  const transport = useMemo(() => new ChatTransport({ voice }), [voice]);
+
+  const resolveThreadId = useCallback(async () => {
+    const item = aui.threadListItem;
+    const current = item.getState();
+    if (current.remoteId) return current.remoteId;
+    const initialized = await item.initialize();
+    return initialized.remoteId;
+  }, [aui]);
+
+  const dictation = useMemo(
+    () =>
+      new ServerDictationAdapter(
+        resolveThreadId,
+        voice,
+        setCapture,
+        (threadId, message) => setCapture(threadId, { kind: "error", message }),
+        onCaptureRetry,
+      ),
+    [onCaptureRetry, resolveThreadId, setCapture, voice],
+  );
+
+  return useChatRuntime({
+    transport,
+    canResume: true,
+    adapters: { history, dictation, attachments: attachmentAdapter },
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
+    onFinish,
+    onResumeError: () => {
+      const threadId = liveThreadId(aui);
+      if (threadId) {
+        setSurfaceError(
+          threadId,
+          "The running answer could not be reconnected. Reopen this conversation to try again.",
+        );
+      }
+    },
+  });
+}
+
+type AssistantChatProps = AssistantProps & {
+  activeId: string | undefined;
+  onActiveId: (id: string | undefined) => void;
+  focusMessage: { id: string; token: number } | null;
+  bootError: string | null;
+};
+
+function AssistantChat({
+  activeId,
+  onActiveId,
+  focusMessage,
+  bootError,
+  seed,
+  focusSignal,
+  onSeedConsumed,
+  onClose,
+  onActivity,
+  onEvidence,
+}: AssistantChatProps) {
+  const queryRef = useRef("");
+  const voice = useMemo(() => new VoiceAttachments(), []);
+  const changedRef = useRef<() => void>(() => {});
+  const captureRetryRef = useRef<ReportCapture | null>(null);
+  const [captures, setCaptures] = useState<
+    Record<string, ChatSurfaceState["capture"] | undefined>
+  >({});
+  const [surfaceErrors, setSurfaceErrors] = useState<
+    Record<string, string | undefined>
+  >({});
+  const setCapture = useCallback(
+    (threadId: string, value: ChatSurfaceState["capture"]) => {
+      setCaptures((previous) => {
+        if (previous[threadId] === value) return previous;
+        const next = { ...previous };
+        if (value === null) delete next[threadId];
+        else next[threadId] = value;
+        return next;
+      });
+    },
+    [],
+  );
+  const setSurfaceError = useCallback(
+    (threadId: string, message: string | null) => {
+      setSurfaceErrors((previous) => {
+        if (previous[threadId] === (message ?? undefined)) return previous;
+        const next = { ...previous };
+        if (message === null) delete next[threadId];
+        else next[threadId] = message;
+        return next;
+      });
+    },
+    [],
+  );
+  const onCaptureRetry = useCallback<ReportCapture>(
+    (threadId, attachmentId, card) => {
+      captureRetryRef.current?.(threadId, attachmentId, card);
+    },
+    [],
+  );
+
+  // The adapter reads its mutable search text when called, never during render.
+  // eslint-disable-next-line react-hooks/refs
+  const adapter = useMemo(() => createThreadListAdapter(queryRef), []);
+  const runtimeHook = () =>
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useFinAgentThreadRuntime({
+      voice,
+      setCapture,
+      setSurfaceError,
+      onCaptureRetry,
+      onFinish: () => changedRef.current(),
+    });
+
+  const runtime = useRemoteThreadListRuntime({
+    runtimeHook,
+    adapter,
+    threadId: activeId,
+    onThreadIdChange: (threadId) => {
+      onActiveId(threadId);
+      if (threadId) sessionStorage.setItem(THREAD_STORAGE, threadId);
+      else sessionStorage.removeItem(THREAD_STORAGE);
+    },
+  });
 
   return (
-    <section className="assistant">
-      <header className="assistant-head">
-        <div>
-          <h2>{title}</h2>
-          <p className="fine">Fin-Agent</p>
-        </div>
-        <div className="assistant-actions">
-          <Popover.Root open={historyOpen} onOpenChange={setHistoryOpen}>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ChatDataRenderers />
+      <ChatShell
+        activeId={activeId}
+        voice={voice}
+        queryRef={queryRef}
+        changedRef={changedRef}
+        setCapture={setCapture}
+        setSurfaceError={setSurfaceError}
+        captureRetryRef={captureRetryRef}
+        captures={captures}
+        surfaceErrors={surfaceErrors}
+        focusMessage={focusMessage}
+        bootError={bootError}
+        seed={seed}
+        focusSignal={focusSignal}
+        onSeedConsumed={onSeedConsumed}
+        onClose={onClose}
+        onActivity={onActivity}
+        onEvidence={onEvidence}
+        onNew={() => {
+          onActiveId(undefined);
+          sessionStorage.removeItem(THREAD_STORAGE);
+        }}
+      />
+    </AssistantRuntimeProvider>
+  );
+}
+
+type ChatShellProps = {
+  activeId: string | undefined;
+  voice: VoiceAttachments;
+  queryRef: { current: string };
+  changedRef: { current: () => void };
+  setCapture: (threadId: string, value: ChatSurfaceState["capture"]) => void;
+  setSurfaceError: (threadId: string, message: string | null) => void;
+  captureRetryRef: { current: ReportCapture | null };
+  captures: Record<string, ChatSurfaceState["capture"] | undefined>;
+  surfaceErrors: Record<string, string | undefined>;
+  focusMessage: { id: string; token: number } | null;
+  bootError: string | null;
+  seed?: { id: number; text: string } | null;
+  focusSignal?: number;
+  onSeedConsumed?: () => void;
+  onClose?: () => void;
+  onActivity?: () => void;
+  onEvidence?: (payload: ProjectionPayload) => void;
+  onNew: () => void;
+};
+
+function ChatShell({
+  activeId,
+  voice,
+  queryRef,
+  changedRef,
+  setCapture,
+  setSurfaceError,
+  captureRetryRef,
+  captures,
+  surfaceErrors,
+  focusMessage,
+  bootError,
+  seed,
+  focusSignal,
+  onSeedConsumed,
+  onClose,
+  onActivity,
+  onEvidence,
+  onNew,
+}: ChatShellProps) {
+  const aui = useAui();
+  const running = useAuiState((state) => state.thread.isRunning);
+  const title = useAuiState((state) => state.threadListItem.title);
+  const threadId = useAuiState(
+    (state) => state.threadListItem.remoteId ?? state.threadListItem.id,
+  );
+  const switchError = useAuiState((state) => state.threads.switchError);
+  const messageCount = useAuiState((state) => state.thread.messages.length);
+  const historyLoading = useAuiState((state) => state.thread.isLoading);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [listError, setListError] = useState<string | null>(null);
+  const pendingPhoto = useRef(new Map<string, File>());
+  const staleThreads = useRef(new Set<string>());
+  const sharedFor = useRef<string | null>(null);
+  const focusedToken = useRef<number | null>(null);
+  const mounted = useRef(false);
+  const focusMounted = useRef(false);
+  const busy = useAuiState((state) => state.thread.isRunning);
+  const capture = threadId ? (captures[threadId] ?? null) : null;
+  const surfaceError = threadId ? (surfaceErrors[threadId] ?? null) : null;
+
+  useEffect(() => {
+    changedRef.current = () => {
+      void aui.threads.reload().catch(() => {
+        // The list refresh is best effort; the turn already landed.
+      });
+      onActivity?.();
+    };
+  }, [aui, changedRef, onActivity]);
+
+  useEffect(() => {
+    // Leaving a thread or the assistant must not leave a microphone open. A
+    // card the server wrote while the user was elsewhere is picked up when
+    // that thread is opened again, through the library's own history reload.
+    const unsubscribe = aui.on("threads.selectionChanged", ({ threadId }) => {
+      cancelActiveDictation();
+      if (!staleThreads.current.delete(threadId)) return;
+      void aui.threads.reloadMainThread().catch(() => {
+        // Opening the thread again will load it; the list is already fresh.
+      });
+    });
+    return () => {
+      unsubscribe();
+      cancelActiveDictation();
+    };
+  }, [aui]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHistoryOpen(false);
+  }, [activeId]);
+
+  useEffect(() => {
+    queryRef.current = query;
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void aui.threads
+        .reload()
+        .then(() => setListError(null))
+        .catch((caught: unknown) => {
+          setListError(errorMessage(caught));
+        });
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [aui, queryRef, query]);
+
+  useEffect(() => {
+    if (!focusMessage || historyLoading || focusedToken.current === focusMessage.token) return;
+    const target = document.getElementById(`message-${focusMessage.id}`);
+    if (!target) return;
+    focusedToken.current = focusMessage.token;
+    target.scrollIntoView({ block: "center" });
+    target.focus({ preventScroll: true });
+  }, [focusMessage, historyLoading, messageCount, threadId]);
+
+  useEffect(() => {
+    if (!seed?.text) return;
+    aui.composer.setText(seed.text);
+    onSeedConsumed?.();
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.id]);
+
+  useEffect(() => {
+    if (!focusMounted.current) {
+      focusMounted.current = true;
+      return;
+    }
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
+    });
+  }, [focusSignal]);
+
+  /**
+   * A card may arrive after the user switched threads. It belongs to the
+   * thread that made the request, so only its own runtime may show it; the
+   * server copy is what the other thread's next history load reads.
+   */
+  const appendCard = useCallback(
+    (originId: string, card: CaptureCard, id: string) => {
+      if (liveThreadId(aui) === originId) {
+        aui.thread.append({
+          role: "assistant",
+          content: [{ type: "data", id, name: "card", data: card }],
+        });
+      } else {
+        staleThreads.current.add(originId);
+      }
+      void aui.threads.reload().catch(() => {});
+      onActivity?.();
+    },
+    [aui, onActivity],
+  );
+
+  useEffect(() => {
+    captureRetryRef.current = (originId, attachmentId, card) =>
+      appendCard(originId, card, `capture_retry_${attachmentId}`);
+    return () => {
+      captureRetryRef.current = null;
+    };
+  }, [appendCard, captureRetryRef]);
+
+  const uploadPhoto = useCallback(
+    async (file: File, originId: string) => {
+      if (busy && liveThreadId(aui) === originId) {
+        pendingPhoto.current.set(originId, file);
+        return;
+      }
+      setSurfaceError(originId, null);
+      setCapture(originId, { kind: "uploading", message: "Reading the photo…" });
+      const form = new FormData();
+      form.append("file", file, file.name || "photo.png");
+      try {
+        const result = await api<CaptureResult>(
+          `/api/chat/${encodeURIComponent(originId)}/photo`,
+          { method: "POST", body: form },
+        );
+        if (result.status === "logged") {
+          appendCard(originId, result.card, `photo_${result.attachment_id}`);
+        } else {
+          appendCard(originId, result.card, `capture_retry_${result.attachment_id}`);
+        }
+        setCapture(originId, null);
+      } catch (caught) {
+        const message = errorMessage(caught);
+        setSurfaceError(originId, message);
+        setCapture(originId, { kind: "error", message });
+      }
+    },
+    [appendCard, aui, busy, setCapture, setSurfaceError],
+  );
+
+  const uploadPhotoRef = useRef(uploadPhoto);
+  useEffect(() => {
+    uploadPhotoRef.current = uploadPhoto;
+  }, [uploadPhoto]);
+
+  useEffect(() => {
+    if (busy || !threadId) return;
+    const queued = pendingPhoto.current.get(threadId);
+    if (!queued) return;
+    pendingPhoto.current.delete(threadId);
+    void uploadPhoto(queued, threadId);
+  }, [busy, threadId, uploadPhoto]);
+
+  useEffect(() => {
+    if (!threadId || sharedFor.current === threadId) return;
+    sharedFor.current = threadId;
+    let alive = true;
+    void takeSharedImage().then((file) => {
+      if (alive && file) void uploadPhotoRef.current(file, threadId);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [threadId]);
+
+  const retryCapture = useCallback(
+    async (kind: string, attachmentId: string, messageId: string) => {
+      if (busy) return;
+      const originId = liveThreadId(aui);
+      if (!originId) return;
+      setSurfaceError(originId, null);
+      try {
+        if (kind === "photo") {
+          const result = await api<CaptureResult>(
+            `/api/chat/${encodeURIComponent(originId)}/photo/${encodeURIComponent(attachmentId)}`,
+            { method: "POST" },
+          );
+          if (liveThreadId(aui) !== originId) {
+            staleThreads.current.add(originId);
+            void aui.threads.reload().catch(() => {});
+            return;
+          }
+          if (result.status === "logged") {
+            if (standaloneCaptureFailure(aui, messageId)) {
+              aui.thread.deleteMessage(messageId);
+            }
+            appendCard(originId, result.card, `photo_${attachmentId}`);
+          } else {
+            setSurfaceError(originId, result.note);
+            setCapture(originId, { kind: "error", message: result.note });
+          }
+          return;
+        }
+        const result = await api<TranscribeResult>(
+          `/api/transcribe/${encodeURIComponent(attachmentId)}?thread_id=${encodeURIComponent(originId)}`,
+          { method: "POST" },
+        );
+        if (liveThreadId(aui) !== originId) {
+          void aui.threads.reload().catch(() => {});
+          return;
+        }
+        if (result.status === "transcribed") {
+          aui.thread.deleteMessage(messageId);
+          voice.set(originId, attachmentId);
+          aui.thread.append({
+            role: "user",
+            content: [{ type: "text", text: result.transcript }],
+            startRun: true,
+          });
+        } else {
+          setSurfaceError(originId, result.note);
+          setCapture(originId, { kind: "error", message: result.note });
+        }
+      } catch (caught) {
+        const message = errorMessage(caught);
+        setSurfaceError(originId, message);
+        setCapture(originId, { kind: "error", message });
+      }
+    },
+    [appendCard, aui, busy, setCapture, setSurfaceError, voice],
+  );
+
+  const onStop = useCallback(
+    async (originId: string) => {
+      setSurfaceError(originId, null);
+      try {
+        await stopChatRun(originId);
+      } catch {
+        setSurfaceError(
+          originId,
+          "Stopped here. Fin-Agent could not confirm the server stopped, so it may keep finishing this answer.",
+        );
+      }
+    },
+    [setSurfaceError],
+  );
+
+  const surface = useMemo<ChatSurfaceState>(
+    () => ({
+      capture: surfaceError ? { kind: "error", message: surfaceError } : capture,
+      onRetryCapture: (kind, attachmentId, messageId) =>
+        void retryCapture(kind, attachmentId, messageId),
+      onEvidence: onEvidence,
+      onStop: (originId) => void onStop(originId),
+    }),
+    [capture, onEvidence, onStop, retryCapture, surfaceError],
+  );
+
+  const switchDetail = switchError ? errorMessage(switchError.error) : "";
+
+  return (
+    <section className="assistant aui-chat dark">
+      <Popover.Root open={historyOpen} onOpenChange={setHistoryOpen}>
+        <ChatHeader
+          title={title ?? (activeId ? "Conversation" : "New conversation")}
+          running={running}
+          historyControl={
             <Popover.Trigger asChild>
-              <button type="button" className="ghost small">
+              <Button type="button" variant="ghost" size="sm" className="ghost small">
                 <History size={14} strokeWidth={1.8} aria-hidden="true" />
                 History
-              </button>
+              </Button>
             </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                className="thread-pop"
-                side="bottom"
-                align="end"
-                sideOffset={8}
-                collisionPadding={8}
-              >
-                <ThreadSidebar
-                  threads={threads}
-                  activeId={activeId}
-                  query={query}
-                  onQuery={setQuery}
-                  onSelect={selectThread}
-                  onNew={startNew}
-                />
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-          <button type="button" className="ghost small" onClick={startNew}>
-            <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
-            New
-          </button>
-          {onClose && (
-            <button
-              type="button"
-              className="ghost small icon-only"
-              onClick={onClose}
-              aria-label="Close assistant"
-              title="Close assistant"
-            >
-              <X size={15} strokeWidth={1.8} aria-hidden="true" />
-            </button>
+          }
+          onNew={() => {
+            setHistoryOpen(false);
+            aui.threads.switchToNewThread();
+            onNew();
+          }}
+          onClose={onClose}
+        />
+        <Popover.Portal>
+          <Popover.Content
+            className="thread-pop aui-portal dark"
+            side="bottom"
+            align="end"
+            sideOffset={8}
+            collisionPadding={8}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+          >
+            <ChatHistory query={query} onQuery={setQuery} error={listError} />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+
+      {bootError && (
+        <p className="error aui-boot-error" role="alert">
+          {bootError}
+        </p>
+      )}
+
+      <ChatSurfaceContext.Provider value={surface}>
+        <div className="aui-thread-shell">
+          {switchError ? (
+            <ThreadSwitchError
+              threadId={switchError.threadId}
+              detail={switchDetail}
+              onRetry={() => aui.threads.switchToThread(switchError.threadId)}
+              onNew={() => {
+                aui.threads.switchToNewThread();
+                onNew();
+              }}
+            />
+          ) : (
+            <Thread components={THREAD_COMPONENTS} autoFocus={false} />
           )}
         </div>
-      </header>
-
-      {error && <p className="error chat-error">{error}</p>}
-      {focusError ? (
-        <div className="chat-card" role="alert">
-          <p className="error">
-            This conversation could not be opened. It may have been deleted or is unavailable.
-          </p>
-          <p className="fine">{focusError}</p>
-          <div className="button-row">
-            <button type="button" className="ghost small" onClick={retryFocus}>
-              Try again
-            </button>
-            <button type="button" className="ghost small" onClick={startNew}>
-              Start a new chat
-            </button>
-          </div>
-        </div>
-      ) : loadedFor === activeId ? (
-        <Conversation
-          key={activeId}
-          threadId={activeId}
-          initialMessages={initial}
-          onThreadChanged={() => {
-            void refresh();
-            onActivity?.();
-          }}
-          seed={seed}
-          focusSignal={focusSignal}
-          onSeedConsumed={onSeedConsumed}
-          onEvidence={onEvidence}
-          focusMessage={focusMessage}
-        />
-      ) : (
-        <div className="chat-loading">
-          <ConversationSkeleton />
-        </div>
-      )}
+      </ChatSurfaceContext.Provider>
     </section>
   );
 }

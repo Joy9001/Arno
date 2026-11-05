@@ -12,6 +12,15 @@ export type ChatDataParts = {
   "model-badge": { model: string };
   "reply-model": { model: string; fallback: boolean };
   ending: { note: string };
+  statement: {
+    attachment_id: string;
+    filename: string;
+    detected_kind?: string;
+  };
+  photo: {
+    attachment_id: string;
+    filename: string;
+  };
 };
 
 export type ChatMessage = UIMessage<ChatMetadata, ChatDataParts>;

@@ -21,6 +21,9 @@ class AgentDeps:
     # may name a voice attachment, but the server fixes the kind.
     capture_kind: str = "chat"
     capture_ref: str | None = None
+    # Server-started statement imports: (import_id, status). The model sees that the
+    # server already ran the one import path, so it must not call import_document again.
+    statement_imports: tuple[tuple[str, str], ...] = ()
     # Charts and cards a tool produced inside this turn, for the post-run extractor.
     cards: list[dict[str, object]] = field(default_factory=list)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.

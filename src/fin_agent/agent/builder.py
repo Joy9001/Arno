@@ -50,8 +50,16 @@ def _categories() -> list[str]:
 
 
 def _instructions(ctx: Any, *, read_only: bool = False) -> str:
-    del ctx
     text = render_instructions(_categories())
+    imports = getattr(getattr(ctx, "deps", None), "statement_imports", ())
+    if imports:
+        text += """
+
+Statement import already started
+- The server has already started the import for this turn's statement attachment. Do not call
+  import_document for it again. Tell the user the import card shows the live status, and that a
+  password, if needed, is entered only on the exact import screen. You cannot commit it.
+"""
     return text + READ_ONLY_SUFFIX if read_only else text
 
 
