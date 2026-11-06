@@ -145,6 +145,10 @@ The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix 
 | Package | License |
 |---|---|
 | `@ai-sdk/react`, `ai` | Apache-2.0 |
+| `@assistant-ui/ai-sdk`, `@assistant-ui/react`, `@assistant-ui/react-streamdown`, `assistant-stream` | MIT |
+| `@streamdown/code`, `class-variance-authority` | Apache-2.0 |
+| `@tailwindcss/vite`, `tailwindcss`, `tailwind-merge`, `tw-animate-css`, `tw-shimmer` | MIT |
+| `clsx`, `zustand` | MIT |
 | `@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs` | MIT |
 | `@radix-ui/themes` | MIT |
 | `@simplewebauthn/browser` | MIT |
