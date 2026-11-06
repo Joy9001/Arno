@@ -172,6 +172,11 @@ pnpm --dir web dev
 pnpm --dir web build      # what the API serves from web/dist
 ```
 
+Git hooks ([pre-commit](https://pre-commit.com)) run the CI checks before they can fail there. Install
+once with `uv tool install pre-commit && pre-commit install`. Commits run ruff, the `uv.lock` check
+and web lint; pushes add the license audit, web build and pytest (skipped unless `DATABASE_URL` ends
+in `_test`) and reject a `v*` tag that doesn't match the `pyproject.toml` version.
+
 Checks:
 
 ```bash

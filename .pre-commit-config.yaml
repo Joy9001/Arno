@@ -1,7 +1,77 @@
+# Mirrors .github/workflows/ci.yml and release.yml so failures show up before the push.
+# Install once:  uv tool install pre-commit && pre-commit install
+# Local hooks run the locked tool versions (uv run / pnpm), so they can't drift from CI.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.5
+  - repo: local
     hooks:
-      - id: ruff
-        args: [--fix]
+      # --- every commit: fast ---
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types: [python]
       - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types: [python]
+      - id: uv-lock
+        name: uv lock is in sync
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: web-lint
+        name: web eslint + tsc
+        entry: pnpm --dir web run --silent lint
+        language: system
+        files: ^web/
+        pass_filenames: false
+
+      # --- every push: what CI would catch ---
+      - id: web-typecheck
+        name: web typecheck
+        entry: pnpm --dir web run --silent typecheck
+        language: system
+        files: ^web/
+        pass_filenames: false
+        stages: [pre-push]
+      - id: license-audit
+        name: license audit
+        entry: uv run python scripts/license_audit.py
+        language: system
+        files: ^(pyproject\.toml|uv\.lock|THIRD_PARTY_NOTICES\.md|web/package\.json|web/pnpm-lock\.yaml)$
+        pass_filenames: false
+        stages: [pre-push]
+      - id: web-build
+        name: web build
+        entry: pnpm --dir web build
+        language: system
+        files: ^web/
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pytest
+        name: pytest (needs a *_test DATABASE_URL)
+        # ponytail: pytest needs a scratch Postgres, so it is skipped loudly without one.
+        entry: >-
+          sh -c 'case "$DATABASE_URL" in *_test) uv run pytest -q ;;
+          *) echo "skipped: set DATABASE_URL to a *_test database to run pytest" ;; esac'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]
+      - id: release-tag
+        name: tag matches pyproject version (release.yml)
+        entry: >-
+          python -c "import os,sys,tomllib;
+          v=tomllib.load(open('pyproject.toml','rb'))['project']['version'];
+          r=os.environ.get('PRE_COMMIT_REMOTE_BRANCH','');
+          bad=r.startswith('refs/tags/v') and r!='refs/tags/v'+v;
+          bad and print(r+' does not match pyproject version '+v);
+          sys.exit(bad)"
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
