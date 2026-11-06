@@ -98,9 +98,7 @@ def _chart_return(tool_call_id: str, timestamp: datetime) -> ToolReturnPart:
 
 def test_run_code_args_stored_as_a_json_string_keep_the_script_source():
     code = 'result = await show_chart(type="bar", title="Spend", as_of="2026-11-01", series=[])\n'
-    call = ToolCallPart(
-        "run_code", json.dumps({"code": code}), tool_call_id="call_json_string"
-    )
+    call = ToolCallPart("run_code", json.dumps({"code": code}), tool_call_id="call_json_string")
 
     cards = cards_for_transcript(
         [
