@@ -361,7 +361,7 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
         {payload.first_floor_crossing
           ? ` · median crosses ${floorSet ? "the floor" : "₹0"} on ${dateLabel(payload.first_floor_crossing)}`
           : ` · the median never crosses ${floorSet ? "the floor" : "₹0"}`}
-        {payload.optimistic
+        {floorSet && payload.optimistic
           ? ` · with unconfirmed income: ${percent(payload.optimistic.floor_probability)} above floor (optimistic only)`
           : ""}
       </p>

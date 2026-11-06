@@ -292,6 +292,25 @@ and one disclosure: **Open the curve, tradeoffs, and sources**. Sources are butt
 shows a readable fact list (id, kind, name, amount, date) with the raw row behind a second
 disclosure. No figure in a receipt is allowed to be uncited.
 
+### Structured Answers
+
+An answer composes backend result references into summaries, semantic tables, charts, and existing
+projection receipts. Answers read as a compact financial report on the true-black ground, not as a
+stack of cards: sections are unboxed, and a single hairline separates distinct sections. One result
+has one title, one primary value where a summary leads, and one quiet Sources disclosure; a table
+or summary is the primary view, never both repeating the same heading. Tables show ten rows
+initially and expand to the saved limit, with subdued column heads, row rules, and tabular numerals.
+Contain horizontal table scroll inside the answer on phones. Unknown values stay explicit,
+incomplete coverage is visible in amber beside the values, and source assumptions and filters remain
+inspectable. A missing floor suppresses its probability in both a summary and a receipt.
+
+Routine reads in one assistant message, including legacy read-only SQL cards, collect into one
+closed **Supporting data** disclosure with a read count. A valid composed answer hides only the
+result views it already shows; unrelated or malformed fallback data stays available in that same
+disclosure. Capture, import, undo, movement, approval, chart, and projection cards never enter it.
+Invalid historical widgets show a local recovery message while the conversation and composer remain
+usable.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -307,6 +326,7 @@ disclosure. No figure in a receipt is allowed to be uncited.
 - **Do** headline a row with the human payee; keep the bank narration as statement text.
 - **Do** say "No floor set" and link to Settings instead of reporting a probability against ₹0.
 - **Do** show a card's stated balance beside the ledger balance, and say when they disagree.
+- **Do** keep routine reads in one closed Supporting data disclosure and put one title and one Sources disclosure on each result.
 - **Do** cap long statement tables at 50 rows with a Show all control.
 - **Do** offer only horizons the engine honors; the projection's floor is 90 days.
 - **Do** use the platform's system font; never ship a display face for the interface.

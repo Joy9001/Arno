@@ -30,6 +30,7 @@ const counters = {
 let nextAttachment = 1;
 let nextImport = 1;
 let nextMessage = 1;
+let contractAnswer = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -50,6 +51,7 @@ function resetState() {
   nextAttachment = 1;
   nextImport = 1;
   nextMessage = 1;
+  contractAnswer = null;
 }
 
 function newThread(id, title = "New chat") {
@@ -518,6 +520,146 @@ const SHOWCASE_CHART = {
   ],
 };
 
+const COMPOSED_RESULT = {
+  result_id: "res_fixture_1",
+  kind: "spending",
+  title: "Spending by category, 1–31 October 2026",
+  views: ["Summary", "Table", "Chart"],
+  summary: {
+    facts: [
+      { label: "Total", value: { type: "money", paise: 3679000, text: "₹36,790" } },
+      { label: "Period", value: { type: "text", text: "2026-10-01 to 2026-10-31" } },
+      { label: "Groups", value: { type: "number", value: 4 } },
+    ],
+  },
+  table: {
+    caption: "Spending by category, 1–31 October 2026",
+    columns: [
+      { key: "group", label: "Category", type: "text" },
+      { key: "amount", label: "Amount", type: "money" },
+      { key: "count", label: "Entries", type: "number" },
+    ],
+    rows: [
+      [
+        { type: "text", text: "Rent" },
+        { type: "money", paise: 1800000, text: "₹18,000" },
+        { type: "number", value: 1 },
+      ],
+      [
+        { type: "text", text: "Food" },
+        { type: "money", paise: 842000, text: "₹8,420" },
+        { type: "number", value: 12 },
+      ],
+      [
+        { type: "text", text: "Transport" },
+        { type: "money", paise: 426000, text: "₹4,260" },
+        { type: "number", value: 8 },
+      ],
+      [
+        { type: "text", text: "Shopping" },
+        { type: "money", paise: 611000, text: "₹6,110" },
+        { type: "number", value: 5 },
+      ],
+    ],
+    shown_rows: 4,
+    total_rows: 4,
+    truncated: false,
+    note: null,
+  },
+  chart: {
+    type: "bar",
+    title: "Spending by category",
+    unit: "paise",
+    as_of: "2026-10-31",
+    computed_at: new Date().toISOString(),
+    script: "SELECT category, SUM(amount_paise) FROM movements GROUP BY category;",
+    series: [
+      {
+        name: "October",
+        points: [
+          { x: "Rent", y: 1800000 },
+          { x: "Food", y: 842000 },
+          { x: "Transport", y: 426000 },
+          { x: "Shopping", y: 611000 },
+        ],
+      },
+    ],
+  },
+  notes: [],
+  coverage: { complete: true, gaps: [] },
+  as_of: "2026-10-31",
+  empty: false,
+};
+
+const COMPOSED_ANSWER_CARD = {
+  card: "answer",
+  version: 1,
+  display: {
+    _type: "Stack",
+    children: [
+      { _type: "Summary", result_id: "res_fixture_1" },
+      { _type: "Table", result_id: "res_fixture_1" },
+      { _type: "Chart", result_id: "res_fixture_1" },
+    ],
+  },
+  results: [COMPOSED_RESULT],
+};
+
+const COMPOSED_FALLBACK_CARD = {
+  card: "result",
+  result_id: "res_fixture_1",
+  snapshot: COMPOSED_RESULT,
+};
+
+const MALFORMED_ANSWER_CARD = {
+  card: "answer",
+  version: 1,
+  display: { _type: "Summary" },
+  results: [],
+};
+
+const EMPTY_RESULT = {
+  result_id: "res_fixture_empty",
+  kind: "spending",
+  title: "Spending by category, 1–31 July 2026",
+  views: ["Summary", "Table"],
+  summary: {
+    facts: [
+      { label: "Total", value: { type: "unknown" } },
+      { label: "Period", value: { type: "text", text: "2026-07-01 to 2026-07-31" } },
+    ],
+  },
+  table: {
+    caption: "Spending by category, 1–31 July 2026",
+    columns: [
+      { key: "group", label: "Category", type: "text" },
+      { key: "amount", label: "Amount", type: "money" },
+    ],
+    rows: [],
+    shown_rows: 0,
+    total_rows: 0,
+    truncated: false,
+    note: null,
+  },
+  notes: ["No statement covers 2026-07."],
+  coverage: { complete: false, gaps: ["2026-07"] },
+  as_of: "2026-07-31",
+  empty: true,
+};
+
+const EMPTY_ANSWER_CARD = {
+  card: "answer",
+  version: 1,
+  display: {
+    _type: "Stack",
+    children: [
+      { _type: "Summary", result_id: "res_fixture_empty" },
+      { _type: "Table", result_id: "res_fixture_empty" },
+    ],
+  },
+  results: [EMPTY_RESULT],
+};
+
 function seedShowcase() {
   const now = Date.now();
   const history = [
@@ -762,6 +904,62 @@ Inline \`amount_paise\` stays readable. A [link](https://example.com) is text on
     ];
   }
 
+  if (scenario === "contract" && contractAnswer) {
+    return [
+      start,
+      ...(contractAnswer.fallback ? [{type: "data-card", id: "contract_fallback", data: contractAnswer.fallback}] : []),
+      {type: "data-card", id: "contract_answer", data: contractAnswer.answer},
+      {type: "finish", finishReason: "stop"},
+    ];
+  }
+
+  if (scenario === "composed") {
+    return [
+      start,
+      { type: "text-start", id: "txt_composed" },
+      {
+        type: "text-delta",
+        id: "txt_composed",
+        delta:
+          "October spending was ₹36,790 across four categories. The table and chart below come from the same saved result.",
+      },
+      { type: "text-end", id: "txt_composed" },
+      { type: "data-card", id: "fallback_composed", data: COMPOSED_FALLBACK_CARD },
+      { type: "data-card", id: "answer_composed", data: COMPOSED_ANSWER_CARD },
+      { type: "finish", finishReason: "stop" },
+    ];
+  }
+
+  if (scenario === "malformed-answer") {
+    return [
+      start,
+      { type: "text-start", id: "txt_malformed" },
+      {
+        type: "text-delta",
+        id: "txt_malformed",
+        delta: "This answer card is deliberately malformed so the fallback can be checked.",
+      },
+      { type: "text-end", id: "txt_malformed" },
+      { type: "data-card", id: "answer_malformed", data: MALFORMED_ANSWER_CARD },
+      { type: "finish", finishReason: "stop" },
+    ];
+  }
+
+  if (scenario === "empty-answer") {
+    return [
+      start,
+      { type: "text-start", id: "txt_empty" },
+      {
+        type: "text-delta",
+        id: "txt_empty",
+        delta: "July has no statement, so the total is unknown rather than zero.",
+      },
+      { type: "text-end", id: "txt_empty" },
+      { type: "data-card", id: "answer_empty", data: EMPTY_ANSWER_CARD },
+      { type: "finish", finishReason: "stop" },
+    ];
+  }
+
   if (scenario === "busy" || scenario === "reload") {
     const word = scenario === "busy" ? "Working through your ledger now." : "Replaying the full answer after reload.";
     const deltas = [];
@@ -891,6 +1089,9 @@ async function handleChat(req, res) {
       trace: 80,
       "trace-approval": 80,
       markdown: 90,
+      composed: 30,
+      "malformed-answer": 30,
+      "empty-answer": 30,
     };
     const scenarioKey = [
       "approval",
@@ -900,9 +1101,17 @@ async function handleChat(req, res) {
       "trace",
       "trace-approval",
       "markdown",
+      "composed",
+      "malformed-answer",
+      "empty-answer",
     ].includes(scenario)
       ? scenario
-      : "";
+      : {
+          "show a composed answer": "composed",
+          "show a contract answer": "contract",
+          "show a malformed answer": "malformed-answer",
+          "show an empty answer": "empty-answer",
+        }[scenario] ?? "";
     chunks = chunksForScenario(thread, scenarioKey, responseText, messageId);
     if (statements.length || photos.length) {
       const importCards = statements.map((ref) => {
@@ -1049,6 +1258,12 @@ const server = createServer(async (req, res) => {
   if (path === "/__fixture/reset" && req.method === "POST") {
     resetState();
     json(res, 200, { ok: true });
+    return;
+  }
+  // Test-only: exercise Python-produced cards through the real chat stream and saved history.
+  if (path === "/__fixture/answer" && req.method === "POST") {
+    contractAnswer = await readJson(req);
+    json(res, 200, {ok: true});
     return;
   }
   if (path === "/__fixture/seed" && req.method === "POST") {

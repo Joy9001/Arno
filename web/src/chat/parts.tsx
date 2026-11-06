@@ -1,4 +1,11 @@
-import { createElement, useContext, useEffect, useRef, useState } from "react";
+import {
+  createElement,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { APICallError } from "ai";
 import { Calculator, FileText, Flag, LogIn, ReceiptText, RotateCcw, Wallet } from "lucide-react";
 import {
@@ -16,16 +23,58 @@ import { ImagePreview, ImageRoot, ImageZoom } from "@/components/image";
 import { Button } from "@/components/ui/button";
 import { ToolFallback } from "@/components/tool-fallback.aui";
 import { Card, NumberFlags } from "./cards";
+import { SupportingData } from "./answer-ui";
+import {
+  buildSupportingPlan,
+  coveredByNativeCard,
+  isRoutineRead,
+  messageCoverage,
+} from "./supporting-data";
 import { ChatSurfaceContext, chatErrorMessage } from "./surface";
 
 function useMessageId(): string {
   return useAuiState((state) => state.message.id);
 }
 
+function usePartIndex(): number | null {
+  const part = useAui().part as unknown as {
+    query?: { type: string; index?: number };
+  };
+  const query = part.query;
+  return query?.type === "index" && typeof query.index === "number"
+    ? query.index
+    : null;
+}
+
 function CardData({ data }: { data: Record<string, unknown> }) {
   const messageId = useMessageId();
   const surface = useContext(ChatSurfaceContext);
-  return (
+  const parts = useAuiState((state) => state.message.parts);
+  const coverage = useMemo(() => messageCoverage(parts), [parts]);
+  const plan = useMemo(
+    () => buildSupportingPlan(parts, coverage),
+    [parts, coverage],
+  );
+  const index = usePartIndex();
+  const resultId = typeof data.result_id === "string" ? data.result_id : null;
+  const card = String(data.card ?? "card");
+
+  if (isRoutineRead(data)) {
+    // A valid composed answer owns the disclosure and shows it below itself.
+    if (plan && plan.answerOwnerIndex !== null) return null;
+    const ownerPart = plan ? parts[plan.ownerIndex] : undefined;
+    const owner =
+      index === null
+        ? ownerPart?.type === "data" && ownerPart.data === data
+        : index === plan?.ownerIndex;
+    if (!plan || !owner) return null;
+    return <SupportingData items={plan.items} onEvidence={surface.onEvidence} />;
+  }
+  if (resultId && card !== "answer" && coveredByNativeCard(card, resultId, coverage)) {
+    return null;
+  }
+
+  const cardNode = (
     <Card
       data={data}
       onRetryCapture={(kind, attachmentId) =>
@@ -34,6 +83,22 @@ function CardData({ data }: { data: Record<string, unknown> }) {
       onEvidence={surface.onEvidence}
     />
   );
+  if (card === "answer" && plan) {
+    const answerOwnerPart = parts[plan.answerOwnerIndex ?? -1];
+    const owner =
+      index === null
+        ? answerOwnerPart?.type === "data" && answerOwnerPart.data === data
+        : index === plan.answerOwnerIndex;
+    if (owner) {
+      return (
+        <>
+          {cardNode}
+          <SupportingData items={plan.items} onEvidence={surface.onEvidence} />
+        </>
+      );
+    }
+  }
+  return cardNode;
 }
 
 function ReplyModelData({ data }: { data: { model: string; fallback: boolean } }) {

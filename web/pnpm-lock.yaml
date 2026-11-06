@@ -14,6 +14,9 @@ importers:
       '@assistant-ui/ai-sdk':
         specifier: 0.0.16
         version: 0.0.16(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(react@19.3.1)(zod@4.6.7)
+      '@assistant-ui/generative-ui':
+        specifier: 0.0.8
+        version: 0.0.8(@assistant-ui/react@0.15.32(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(immer@11.2.9)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1)))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(react@19.3.1)(zod@4.6.7)
       '@assistant-ui/react':
         specifier: 0.15.32
         version: 0.15.32(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(immer@11.2.9)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
@@ -92,6 +95,9 @@ importers:
       tw-shimmer:
         specifier: ^0.4.14
         version: 0.4.14(tailwindcss@4.3.4)
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
       zustand:
         specifier: ^5.0.16
         version: 5.0.16(@types/react@19.3.0)(immer@11.2.9)(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
@@ -198,6 +204,32 @@ packages:
       '@types/react':
         optional: true
       react:
+        optional: true
+
+  '@assistant-ui/generative-ui@0.0.8':
+    resolution: {integrity: sha512-8GVfd8MlQxW/lhzfsz/LLiYoG/CsBiaiNmsZwsJcy4rKYMZN4ESBYQyjJMCOi9MmLGGJQHs7ZZ2Y9zeaLnJAvA==}
+    peerDependencies:
+      '@assistant-ui/react': ^0.15.0
+      '@types/react': '*'
+      generative-frame: ^0.0.9
+      react: ^18 || ^19
+      react-native: '*'
+      vue: ^3.5.0
+      zod: ^4.0.0
+    peerDependenciesMeta:
+      '@assistant-ui/react':
+        optional: true
+      '@types/react':
+        optional: true
+      generative-frame:
+        optional: true
+      react:
+        optional: true
+      react-native:
+        optional: true
+      vue:
+        optional: true
+      zod:
         optional: true
 
   '@assistant-ui/react-markdown@0.14.24':
@@ -4301,6 +4333,20 @@ snapshots:
       - '@opentelemetry/api'
       - '@opentelemetry/exporter-trace-otlp-http'
       - '@opentelemetry/sdk-trace-base'
+      - ai
+      - ioredis
+      - redis
+
+  '@assistant-ui/generative-ui@0.0.8(@assistant-ui/react@0.15.32(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(immer@11.2.9)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1)))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(react@19.3.1)(zod@4.6.7)':
+    dependencies:
+      '@types/json-schema': 7.0.15
+      assistant-stream: 0.3.55(ai@7.0.159(zod@4.6.7))
+    optionalDependencies:
+      '@assistant-ui/react': 0.15.32(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(immer@11.2.9)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(use-sync-external-store@1.7.0(react@19.3.1))
+      '@types/react': 19.3.0
+      react: 19.3.1
+      zod: 4.6.7
+    transitivePeerDependencies:
       - ai
       - ioredis
       - redis

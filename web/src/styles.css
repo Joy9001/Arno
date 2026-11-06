@@ -3928,3 +3928,331 @@ button.icon-only {
     background: var(--surface-2);
   }
 }
+
+/* Composed answers ----------------------------------------------------------------------- */
+
+/* The chat is the page: answers are report sections on the ground, not cards. */
+.answer-card {
+  padding: 0;
+}
+
+.answer-block {
+  margin: 16px 0 2px;
+}
+
+.answer-result {
+  min-width: 0;
+}
+
+.answer-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.answer-stack > * + * {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.answer-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+@media (min-width: 621px) {
+  .answer-comparison > * + * {
+    padding-left: 20px;
+    border-left: 1px solid var(--line-soft);
+  }
+}
+
+.answer-result-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+.answer-context {
+  margin: 3px 0 0;
+  color: var(--ter);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.answer-summary {
+  min-width: 0;
+}
+
+.answer-primary {
+  margin: 12px 0 0;
+}
+
+.answer-primary dt {
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.answer-primary dd {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.answer-facts {
+  margin: 12px 0 0;
+}
+
+.answer-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.answer-facts dt {
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.answer-facts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.answer-summary-note,
+.answer-table-note {
+  margin: 8px 0 0;
+  color: var(--sub);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.aui-chat .aui-md-table-wrapper.answer-md-table {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  max-height: none;
+}
+
+.aui-chat .aui-md-table thead {
+  background: transparent;
+}
+
+.answer-table-wrap {
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.answer-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.answer-table-wrap th,
+.answer-table-wrap td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.answer-table-wrap th {
+  padding-bottom: 7px;
+  color: var(--ter);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.answer-table-wrap th.numeric,
+.answer-table-wrap td.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.answer-table-wrap td {
+  color: var(--text);
+}
+
+.answer-table-wrap tr:last-child td {
+  border-bottom: none;
+}
+
+.answer-show-all {
+  height: auto;
+  margin-top: 8px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.answer-show-all:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.answer-empty {
+  margin: 10px 0 0;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.answer-coverage {
+  margin: 10px 0 0;
+  color: var(--orange);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.answer-sources,
+.answer-sql {
+  margin-top: 12px;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.answer-sources > summary,
+.answer-source-evidence > summary,
+.answer-sql > summary,
+.supporting-data > summary {
+  cursor: pointer;
+  color: var(--sub);
+}
+
+.answer-sources > summary::marker,
+.answer-source-evidence > summary::marker,
+.answer-sql > summary::marker,
+.supporting-data > summary::marker {
+  color: var(--ter);
+}
+
+.answer-sources > summary:hover,
+.answer-source-evidence > summary:hover,
+.answer-sql > summary:hover,
+.supporting-data > summary:hover {
+  color: var(--text);
+}
+
+.answer-sources ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.answer-sources li {
+  margin: 3px 0;
+}
+
+.answer-source-evidence {
+  margin-top: 6px;
+}
+
+.answer-source-ids {
+  overflow-wrap: anywhere;
+}
+
+.answer-unknown {
+  color: var(--ter);
+}
+
+.answer-unavailable {
+  margin: 8px 0;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.supporting-data {
+  margin: 16px 0 2px;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.supporting-data > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  line-height: 1.4;
+}
+
+.supporting-count {
+  color: var(--ter);
+  font-variant-numeric: tabular-nums;
+}
+
+.supporting-chevron {
+  align-self: center;
+  flex-shrink: 0;
+  color: var(--ter);
+}
+
+.supporting-data[open] > summary .supporting-chevron {
+  transform: rotate(90deg);
+}
+
+.supporting-body {
+  margin-top: 10px;
+}
+
+.supporting-body > * + * {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.aui-tool-summary {
+  margin: 0;
+  color: var(--sub);
+  font-size: 12px;
+}
+
+.answer-card .chart-card,
+.answer-card .receipt {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+@media (max-width: 620px) {
+  .answer-comparison {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .answer-primary dd {
+    font-size: 20px;
+  }
+
+  .answer-result-title {
+    font-size: 14px;
+  }
+}

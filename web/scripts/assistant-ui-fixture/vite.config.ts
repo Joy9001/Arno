@@ -13,6 +13,6 @@ export default {
   },
   server: {
     port: 5174,
-    proxy: { "/api": "http://127.0.0.1:8001" },
+    proxy: { "/api": `http://127.0.0.1:${process.env.FIXTURE_PORT ?? 8001}` },
   },
 };

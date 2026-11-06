@@ -41,13 +41,78 @@ def _moment(value: Any) -> str | None:
 def _chart_source(chunk: DataChunk, script: str | None, computed_at: Any) -> DataChunk:
     """Attach the real script and calculation time to a chart card, never invented data."""
     data = chunk.data
-    if not isinstance(data, dict) or data.get("card") != "chart":
+    if not isinstance(data, dict):
+        return chunk
+    if data.get("card") == "answer":
+        return _answer_sources(chunk, data, script, computed_at)
+    if data.get("card") != "chart":
         return chunk
     source = {"computed_at": _moment(computed_at)}
     if script:
         source["script"] = script
     enriched = {**data, **{key: value for key, value in source.items() if value is not None}}
     return chunk.model_copy(update={"data": enriched})
+
+
+def _answer_sources(
+    chunk: DataChunk, data: dict[str, Any], script: str | None, computed_at: Any
+) -> DataChunk:
+    """A composed Chart keeps its calculation time; its script is linked by chart id below."""
+    del script
+    results = data.get("results")
+    if not isinstance(results, list):
+        return chunk
+    enriched: list[Any] = []
+    for result in results:
+        if not isinstance(result, dict) or result.get("kind") != "chart":
+            enriched.append(result)
+            continue
+        chart = result.get("chart")
+        if not isinstance(chart, dict):
+            enriched.append(result)
+            continue
+        moment = _moment(computed_at)
+        enriched.append(
+            {
+                **result,
+                "chart": {**chart, **({"computed_at": moment} if moment else {})},
+            }
+        )
+    return chunk.model_copy(update={"data": {**data, "results": enriched}})
+
+
+def _link_answer_charts(cards: list[DataChunk]) -> list[DataChunk]:
+    """Copy each native chart's script into the composed snapshot that names the same chart."""
+    charts = {
+        str(card.data["chart_id"]): card.data
+        for card in cards
+        if isinstance(card.data, dict)
+        and card.data.get("card") == "chart"
+        and card.data.get("chart_id")
+    }
+    if not charts:
+        return cards
+    linked: list[DataChunk] = []
+    for card in cards:
+        data = card.data
+        if not isinstance(data, dict) or data.get("card") != "answer":
+            linked.append(card)
+            continue
+        results = data.get("results")
+        if not isinstance(results, list):
+            linked.append(card)
+            continue
+        enriched: list[Any] = []
+        for result in results:
+            chart = result.get("chart") if isinstance(result, dict) else None
+            native = charts.get(str(chart.get("chart_id"))) if isinstance(chart, dict) else None
+            if native is None:
+                enriched.append(result)
+                continue
+            source = {key: native[key] for key in ("script", "computed_at") if key in native}
+            enriched.append({**result, "chart": {**chart, **source}})
+        linked.append(card.model_copy(update={"data": {**data, "results": enriched}}))
+    return linked
 
 
 def _run_scripts(messages: list[ModelMessage]) -> dict[str, str]:
@@ -84,7 +149,7 @@ def nested_cards(part: ToolReturnPart, *, script: str | None = None) -> list[Dat
             chunk = _as_data_chunk(item)
             if chunk is not None:
                 cards.append(_chart_source(chunk, script, nested.timestamp or part.timestamp))
-    return cards
+    return _link_answer_charts(cards)
 
 
 def _cards_from_messages(messages: list[ModelMessage], scripts: dict[str, str]) -> list[DataChunk]:
@@ -95,7 +160,7 @@ def _cards_from_messages(messages: list[ModelMessage], scripts: dict[str, str]) 
         for part in message.parts:
             if isinstance(part, ToolReturnPart) and part.tool_name == RUN_CODE_TOOL_NAME:
                 cards.extend(nested_cards(part, script=scripts.get(part.tool_call_id)))
-    return cards
+    return _link_answer_charts(cards)
 
 
 def cards_from_messages(messages: list[ModelMessage]) -> list[DataChunk]:
@@ -117,7 +182,7 @@ def cards_for_transcript(messages: list[ModelMessage]) -> list[DataChunk]:
                 chunk = _as_data_chunk(item)
                 if chunk is not None:
                     cards.append(_chart_source(chunk, None, part.timestamp))
-    return cards
+    return _link_answer_charts(cards)
 
 
 def ui_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:

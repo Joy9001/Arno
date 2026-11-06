@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from fin_agent.agent.presentation import ResultRegistry
+
 
 @dataclass
 class AgentDeps:
@@ -26,6 +28,8 @@ class AgentDeps:
     statement_imports: tuple[tuple[str, str], ...] = ()
     # Charts and cards a tool produced inside this turn, for the post-run extractor.
     cards: list[dict[str, object]] = field(default_factory=list)
+    # Bounded result snapshots for this turn. IDs are never reused across turns.
+    presentation: ResultRegistry = field(default_factory=ResultRegistry)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.
     approvals: int = 0
     # How many approval cards this turn offered. Offered and approved read as two states.

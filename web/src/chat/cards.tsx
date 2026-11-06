@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
   CheckCircle2,
-  Code2,
   FileText,
   KeyRound,
   Loader2,
@@ -13,143 +12,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ImportRecord } from "../types";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { api, errorMessage } from "../api";
+import { displayText } from "./display-text";
 import { formatRupees } from "./format";
-import { formatMoment } from "../format";
 import { ProjectionCard, type ProjectionPayload } from "../projection";
-
-const COLORS = ["#0b6cf0", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff"];
-
-function unitValue(value: number, unit: string): string {
-  if (unit === "paise") return formatRupees(value);
-  if (unit === "percent") return `${value}%`;
-  return new Intl.NumberFormat("en-IN").format(value);
-}
-
-type Point = { x: string; y: number };
-type Series = { name: string; points: Point[] };
-
-function chartRows(series: Series[]): Record<string, string | number>[] {
-  const rows = new Map<string, Record<string, string | number>>();
-  for (const line of series) {
-    for (const point of line.points) {
-      const row = rows.get(point.x) ?? { x: point.x };
-      row[line.name] = point.y;
-      rows.set(point.x, row);
-    }
-  }
-  return [...rows.values()];
-}
-
-export function ChartCard({ data }: { data: Record<string, unknown> }) {
-  const type = String(data.type ?? "line");
-  const title = String(data.title ?? "Chart");
-  const unit = String(data.unit ?? "paise");
-  const series = (data.series as Series[] | undefined) ?? [];
-  const asOf = data.as_of ? String(data.as_of) : null;
-  const computedAt = data.computed_at ? String(data.computed_at) : null;
-  const script = typeof data.script === "string" ? data.script : null;
-  const rows = chartRows(series);
-  const tick = (value: number) => unitValue(value, unit);
-
-  return (
-    <figure className="chat-card chart-card">
-      <figcaption>
-        <strong>{title}</strong>
-        <span className="fine">
-          {computedAt ? `Calculated ${formatMoment(computedAt)}` : ""}
-          {computedAt && asOf ? " · " : ""}
-          {asOf ? `as of ${asOf}` : ""}
-        </span>
-      </figcaption>
-      <div className="chart-box">
-        <ResponsiveContainer width="100%" height={240}>
-          {type === "donut" ? (
-            <PieChart>
-              <Pie
-                data={series[0]?.points.map((point) => ({ name: point.x, value: point.y })) ?? []}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={55}
-                outerRadius={90}
-                paddingAngle={2}
-                isAnimationActive={false}
-              >
-                {(series[0]?.points ?? []).map((point, index) => (
-                  <Cell key={point.x} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip formatter={(value) => tick(Number(value))} />
-              <Legend />
-            </PieChart>
-          ) : type === "bar" || type === "stacked_bar" ? (
-            <BarChart data={rows}>
-              <CartesianGrid stroke="#2a2a2c" vertical={false} />
-              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
-              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
-              <Tooltip formatter={(value) => tick(Number(value))} />
-              {series.map((line, index) => (
-                <Bar
-                  key={line.name}
-                  dataKey={line.name}
-                  stackId={type === "stacked_bar" ? "stack" : undefined}
-                  fill={COLORS[index % COLORS.length]}
-                  isAnimationActive={false}
-                />
-              ))}
-            </BarChart>
-          ) : (
-            <LineChart data={rows}>
-              <CartesianGrid stroke="#2a2a2c" vertical={false} />
-              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
-              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
-              <Tooltip formatter={(value) => tick(Number(value))} />
-              {series.map((line, index) => (
-                <Line
-                  key={line.name}
-                  type="monotone"
-                  dataKey={line.name}
-                  stroke={COLORS[index % COLORS.length]}
-                  dot={false}
-                  strokeWidth={2}
-                  isAnimationActive={false}
-                />
-              ))}
-            </LineChart>
-          )}
-        </ResponsiveContainer>
-      </div>
-      <details>
-        <summary className="fine">
-          <Code2 size={14} strokeWidth={1.8} aria-hidden="true" />{" "}
-          {script ? "Script behind this chart" : "Source unavailable"}
-        </summary>
-        {script ? (
-          <pre className="sql">{script}</pre>
-        ) : (
-          <p className="fine">
-            The script that calculated this chart was not saved for this reply.
-          </p>
-        )}
-      </details>
-    </figure>
-  );
-}
+import { AnswerCard, ResultCard, Unavailable } from "./answer-ui";
+import { ChartCard } from "./chart";
+import { AnswerBoundary } from "./answer-boundary";
+import { chartSchema } from "./answer-data";
+import { projectionSchema } from "./projection-schema";
 
 function UndoButton({ undoId }: { undoId?: string | null }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
@@ -243,13 +114,19 @@ function ImportCard({ data }: { data: Record<string, unknown> }) {
   }, [importId, retry]);
 
   const status = detail?.status ?? String(data.status ?? "parsing");
-  const reason = detail?.reason ?? (data.reason ? String(data.reason) : null);
+  const reason = detail?.reason
+    ? displayText(detail.reason)
+    : data.reason
+      ? displayText(String(data.reason))
+      : null;
   const visibleReason = status === "needs_password" ? null : reason;
   const filename =
-    detail?.attachment?.filename ??
-    (data.filename ? String(data.filename) : null) ??
-    "Statement";
-  const account = detail?.account?.name;
+    detail?.attachment?.filename
+      ? displayText(detail.attachment.filename)
+      : data.filename
+        ? displayText(String(data.filename))
+        : "Statement";
+  const account = detail?.account?.name ? displayText(detail.account.name) : undefined;
   const action = importAction(status, importId);
   const ActionIcon = action?.icon;
   const undone = status === "rejected" && Boolean(detail?.undone_at);
@@ -329,8 +206,22 @@ export function Card({
   onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const card = String(data.card ?? "card");
-  if (card === "chart") return <ChartCard data={data} />;
-  if (card === "projection") return <ProjectionCard data={data} onEvidence={onEvidence} />;
+  if (card === "answer") return <AnswerCard data={data} onEvidence={onEvidence} />;
+  if (card === "result") return <ResultCard data={data} onEvidence={onEvidence} />;
+  if (card === "chart") {
+    const parsed = chartSchema.safeParse(data);
+    const fallback = <Unavailable what="This chart" />;
+    return <AnswerBoundary resetKey={data} fallback={fallback}>
+      {parsed.success ? <ChartCard data={parsed.data} /> : fallback}
+    </AnswerBoundary>;
+  }
+  if (card === "projection") {
+    const parsed = projectionSchema.safeParse(data);
+    const fallback = <Unavailable what="This receipt" />;
+    return <AnswerBoundary resetKey={data} fallback={fallback}>
+      {parsed.success ? <ProjectionCard data={parsed.data} onEvidence={onEvidence} /> : fallback}
+    </AnswerBoundary>;
+  }
 
   if (card === "capture") {
     const attachmentId = String(data.attachment_id ?? "");
@@ -346,18 +237,18 @@ export function Card({
         </div>
         <div className="capture-fields">
           <div className="chat-card-head">
-            <strong>{String(data.title ?? "Photo logged")}</strong>
+            <strong>{displayText(String(data.title ?? "Photo logged"))}</strong>
             <span className="money">{formatRupees(amount)}</span>
           </div>
           <dl>
             <dt>Merchant</dt>
-            <dd>{String(data.merchant ?? "unknown")}</dd>
+            <dd>{displayText(String(data.merchant ?? "unknown"))}</dd>
             <dt>Date</dt>
-            <dd>{String(data.date ?? "unknown")}</dd>
+            <dd>{displayText(String(data.date ?? "unknown"))}</dd>
             <dt>Method</dt>
             <dd>{method.toLowerCase()}</dd>
             <dt>UPI ref</dt>
-            <dd>{data.upi_ref ? String(data.upi_ref) : "not shown"}</dd>
+            <dd>{data.upi_ref ? displayText(String(data.upi_ref)) : "not shown"}</dd>
           </dl>
           <UndoButton undoId={data.undo_id as string | undefined} />
         </div>
@@ -378,9 +269,9 @@ export function Card({
         )}
         <div className="capture-fields">
           <div className="chat-card-head">
-            <strong>{String(data.title ?? "Capture failed")}</strong>
+            <strong>{displayText(String(data.title ?? "Capture failed"))}</strong>
           </div>
-          <p>{String(data.note ?? "The file is saved. Retry it.")}</p>
+          <p>{displayText(String(data.note ?? "The file is saved. Retry it."))}</p>
           <Button
             type="button"
             variant="outline"
@@ -396,8 +287,8 @@ export function Card({
   }
 
   if (card === "movement" || card === "correction" || card === "undo") {
-    const title = String(data.title ?? "Logged");
-    const summary = data.summary ? String(data.summary) : "";
+    const title = displayText(String(data.title ?? "Logged"));
+    const summary = data.summary ? displayText(String(data.summary)) : "";
     return (
       <div className="chat-card">
         <div className="chat-card-head">
@@ -407,7 +298,7 @@ export function Card({
           )}
         </div>
         {summary && <p>{summary}</p>}
-        {Boolean(data.rule) && <p className="fine">Rule: {String(data.rule)}</p>}
+        {Boolean(data.rule) && <p className="fine">Rule: {displayText(String(data.rule))}</p>}
         {typeof data.rows_changed === "number" && data.rows_changed > 0 && (
           <p className="fine">{data.rows_changed} past row(s) changed.</p>
         )}
@@ -422,9 +313,9 @@ export function Card({
     return (
       <div className="chat-card">
         <div className="chat-card-head">
-          <strong>{String(data.title ?? "Remembered")}</strong>
+          <strong>{displayText(String(data.title ?? "Remembered"))}</strong>
         </div>
-        <p>{String(data.text ?? "")}</p>
+        <p>{displayText(String(data.text ?? ""))}</p>
         <UndoButton undoId={data.undo_id as string | undefined} />
       </div>
     );
@@ -434,9 +325,9 @@ export function Card({
     return (
       <div className="chat-card">
         <div className="chat-card-head">
-          <strong>{String(data.title ?? "Setup saved")}</strong>
+          <strong>{displayText(String(data.title ?? "Setup saved"))}</strong>
         </div>
-        <p>{String(data.summary ?? "")}</p>
+        <p>{displayText(String(data.summary ?? ""))}</p>
         <UndoButton undoId={data.undo_id as string | undefined} />
       </div>
     );
@@ -446,7 +337,7 @@ export function Card({
     return (
       <details className="chat-card">
         <summary>{String(data.row_count ?? 0)} row(s) from read-only SQL</summary>
-        <pre className="sql">{String(data.sql ?? "")}</pre>
+        <pre className="sql">{displayText(String(data.sql ?? ""))}</pre>
       </details>
     );
   }
@@ -484,8 +375,8 @@ export function Card({
 
   return (
     <details className="chat-card">
-      <summary>{card}</summary>
-      <pre>{JSON.stringify(data, null, 2)}</pre>
+      <summary>{displayText(card)}</summary>
+      <pre>{displayText(JSON.stringify(data, null, 2))}</pre>
     </details>
   );
 }
@@ -494,8 +385,8 @@ export function NumberFlags({ amounts }: { amounts: string[] }) {
   if (!amounts.length) return null;
   return (
     <p className="note">
-      Not verified against a ledger row: {amounts.join(", ")}. Check them in the ledger before you
-      rely on them.
+      Not verified against a ledger row: {amounts.map(displayText).join(", ")}. Check them in the
+      ledger before you rely on them.
     </p>
   );
 }

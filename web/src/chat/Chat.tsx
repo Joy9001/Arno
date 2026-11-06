@@ -14,6 +14,7 @@ import {
   ComposerPrimitive,
   CompositeAttachmentAdapter,
   Suggestions,
+  Tools,
   useAui,
   useAuiState,
   useRemoteThreadListRuntime,
@@ -59,6 +60,7 @@ import {
 import { photoAttachmentAdapter } from "./photo-attachment";
 import { statementAttachmentAdapter } from "./statement-attachment";
 import { StreamCheckpoints, createThreadStreamStorage } from "./streams";
+import { CHAT_TOOLKIT } from "./tools";
 import type { ThreadList } from "./types";
 
 const attachmentAdapter = new CompositeAttachmentAdapter([
@@ -68,6 +70,7 @@ const attachmentAdapter = new CompositeAttachmentAdapter([
 
 const AUI_CONFIG = AuiConfig({
   suggestions: Suggestions(FIN_SUGGESTIONS),
+  tools: Tools({ toolkit: CHAT_TOOLKIT }),
 });
 
 const THREAD_STORAGE = "fin-agent-thread";

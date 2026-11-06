@@ -20,6 +20,11 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.presentation import (
+    PresentationError,
+    TableInput,
+    build_answer,
+)
 from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
 from fin_agent.db.conn import connect
 from fin_agent.engine.money import amortize as amortize_fn
@@ -93,19 +98,40 @@ def _card_data(card: dict[str, Any]) -> list[DataChunk]:
     return [DataChunk(type="data-card", data=card)]
 
 
+def _cards_data(cards: list[dict[str, Any]]) -> list[DataChunk] | None:
+    return [DataChunk(type="data-card", data=card) for card in cards] or None
+
+
 def _read_call(fn: Callable[[psycopg.Connection], dict[str, Any]]) -> dict[str, Any]:
     with closing(connect()) as conn:
         return fn(conn)
 
 
-def _finish_read(ctx: RunContext[AgentDeps], payload: dict[str, Any]) -> ToolReturn:
+def _finish_read(
+    ctx: RunContext[AgentDeps],
+    payload: dict[str, Any],
+    *,
+    kind: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> ToolReturn:
     if payload.get("outside_text"):
         with closing(connect()) as conn:
             flag_outside_text(conn, ctx.deps.conversation_id)
             conn.commit()
     card = payload.pop("_card", None)
-    metadata = _card_data(card) if card else None
-    return ToolReturn(return_value=payload, metadata=metadata)
+    cards: list[dict[str, Any]] = []
+    if kind is not None:
+        registration = ctx.deps.presentation.register_read(kind, payload, context=context)
+        payload["ui_results"] = registration.descriptors
+        if card:
+            card = {**card, "result_id": registration.primary_id}
+        if card:
+            cards.append(card)
+        if registration.fallback:
+            cards.append(registration.fallback)
+    elif card:
+        cards.append(card)
+    return ToolReturn(return_value=payload, metadata=_cards_data(cards))
 
 
 async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
@@ -113,7 +139,7 @@ async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
     schedules behind the next 30 days, goals, who owes what, remembered preferences, what setup
     is missing, and data warnings. The sandbox has no clock, so get today's date here."""
     payload = _read_call(read_tools.get_financial_context)
-    return _finish_read(ctx, payload)
+    return _finish_read(ctx, payload, kind="context")
 
 
 async def query_movements(
@@ -132,7 +158,15 @@ async def query_movements(
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    return _finish_read(ctx, payload)
+    return _finish_read(
+        ctx,
+        payload,
+        kind="movements",
+        context={
+            "period": {"label": plain.get("period")} if plain and plain.get("period") else None,
+            "filters": plain,
+        },
+    )
 
 
 async def summarize_spending(
@@ -154,7 +188,12 @@ async def summarize_spending(
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    return _finish_read(ctx, payload)
+    return _finish_read(
+        ctx,
+        payload,
+        kind="spending",
+        context={"group_by": group_by, "filters": plain},
+    )
 
 
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
@@ -177,7 +216,7 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
         "row_count": payload["row_count"],
         "truncated": payload["truncated"],
     }
-    return _finish_read(ctx, payload)
+    return _finish_read(ctx, payload, kind="query")
 
 
 async def project(
@@ -204,7 +243,12 @@ async def project(
         raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
     payload["_card"] = projection_tools.card(result)
-    return _finish_read(ctx, payload)
+    return _finish_read(
+        ctx,
+        payload,
+        kind="project",
+        context={"card": payload["_card"]},
+    )
 
 
 async def amortize(
@@ -219,7 +263,6 @@ async def amortize(
     to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to compare
     a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
     instead of writing the formula."""
-    del ctx
     start: date | None = ledger_today()
     if loan:
         with closing(connect()) as conn:
@@ -246,9 +289,12 @@ async def amortize(
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
+    card = {"card": "amortize", "title": "Loan schedule", **result}
+    registered = ctx.deps.presentation.register_calculation("amortize", result, card)
+    card["result_id"] = registered.result_id
     return ToolReturn(
-        return_value=result,
-        metadata=_card_data({"card": "amortize", "title": "Loan schedule", **result}),
+        return_value={**result, "ui_results": [registered.descriptor()]},
+        metadata=_card_data(card),
     )
 
 
@@ -261,14 +307,16 @@ async def compound(
 ) -> ToolReturn:
     """Growth of a monthly investment at an assumed annual rate. The rate is an assumption, not a
     prediction or advice: state it in your answer."""
-    del ctx
     try:
         result = compound_fn(monthly_paise, annual_rate, months, start_paise=start_paise)
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
+    card = {"card": "compound", "title": "Growth at an assumed rate", **result}
+    registered = ctx.deps.presentation.register_calculation("compound", result, card)
+    card["result_id"] = registered.result_id
     return ToolReturn(
-        return_value=result,
-        metadata=_card_data({"card": "compound", "title": "Growth at an assumed rate", **result}),
+        return_value={**result, "ui_results": [registered.descriptor()]},
+        metadata=_card_data(card),
     )
 
 
@@ -282,7 +330,6 @@ async def show_chart(
 ) -> ToolReturn:
     """Show the user a chart: line, bar, stacked_bar, or donut. Take values from variables in your
     script, never typed by hand. Use one when a shape says more than a sentence."""
-    del ctx
     if not series:
         raise ModelRetry("a chart needs at least one series")
     if len(series) > 8:
@@ -316,10 +363,54 @@ async def show_chart(
         "unit": unit,
         "as_of": as_of,
     }
+    card = {"card": "chart", **spec}
+    registered = ctx.deps.presentation.register_calculation("chart", {"shown": True}, card)
+    card["result_id"] = registered.result_id
     return ToolReturn(
-        return_value={"chart_id": chart_id, "shown": True},
-        metadata=_card_data({"card": "chart", **spec}),
+        return_value={
+            "chart_id": chart_id,
+            "shown": True,
+            "ui_results": [registered.descriptor()],
+        },
+        metadata=_card_data(card),
     )
+
+
+async def show_table(ctx: RunContext[AgentDeps], table: TableInput) -> ToolReturn:
+    """Show a table you computed in your script. Pass columns with an explicit type (money,
+    number, text, or date), rows of cells, and optionally the ui_results ids it came from. Money
+    cells are integer paise. At most 12 columns and 50 rows; a comparison is better as a table
+    than as prose."""
+    try:
+        registered = ctx.deps.presentation.register_table(table)
+    except PresentationError as exc:
+        raise ModelRetry(str(exc)) from exc
+    card = {
+        "card": "result",
+        "result_id": registered.result_id,
+        "snapshot": registered.snapshot,
+    }
+    return ToolReturn(
+        return_value={
+            "table_id": registered.result_id,
+            "shown": True,
+            "ui_results": [registered.descriptor()],
+        },
+        metadata=_card_data(card),
+    )
+
+
+async def present(ctx: RunContext[AgentDeps], display: dict[str, Any]) -> ToolReturn:
+    """Compose the answer from this turn's ui_results. display is a bounded tree:
+    {"_type": "Stack" | "Comparison" | "Summary" | "Table" | "Chart" | "Receipt",
+     "children": [...], "result_id": "res_1"}. Containers have children; leaves have a result_id
+    and no other props. Use only a view the result offers. Comparison aligns sections and never
+    computes a difference."""
+    try:
+        card, return_value = build_answer(ctx.deps.presentation, display)
+    except PresentationError as exc:
+        raise ModelRetry(str(exc)) from exc
+    return ToolReturn(return_value=return_value, metadata=_card_data(card))
 
 
 def build_read_toolset() -> FunctionToolset[AgentDeps]:
@@ -333,6 +424,8 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
             amortize,
             compound,
             show_chart,
+            show_table,
+            present,
         ],
         timeout=60,
     ).with_metadata(code_mode=True)

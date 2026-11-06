@@ -10,8 +10,9 @@ wins and this file is stale.
 
 ![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
 
-*Figure: the model sees seven tools. A script reaches the eight read tools through `run_code`, and
-every write is a direct call with its own card ([note](diagrams/sd-tool-surface.md)).*
+*Figure: the read/write execution boundary. Scripts reach read and presentation tools through
+`run_code`; every write is a direct call with its own card. The original diagram omits the
+presentation-only `show_table` and `present` tools described below ([note](diagrams/sd-tool-surface.md)).*
 
 ---
 
@@ -68,7 +69,8 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
 }
 ```
 
-UI: source IDs for citations.
+UI: source IDs for citations. The turn also gets separate `ui_results` descriptors for accounts,
+upcoming payments, goals, and owed, without a wall of context cards.
 
 A balance is known only when an explicit opening balance, a user-stated balance, or a committed
 statement anchors it. Those sources all persist `statement_balance_paise` with a valid
@@ -380,18 +382,139 @@ class Series:
     points: list[Point]    # Point = {"x": str, "y": int}
 ```
 
-**Output:** Model: `{"chart_id", "shown": True}`. UI: the checked spec, `as_of`, and the script as
-its citation.
+**Output:** Model: `{"chart_id", "shown": True, "ui_results": [descriptor]}`. UI: the checked spec,
+`as_of`, and the script as its citation.
 
 **Logic**
 
 ```
 validate: series and point limits, a donut has one series, values are numbers
 attach the script that made it
+register a Chart-only result for this turn
 after run_code returns: read the spec from its metadata and emit it as a data part,
                         stored with the message so it survives a reload
 no ledger write, no audit
 ```
+
+### `show_table`
+
+**Description:** "Show a table you computed in your script. Pass columns with an explicit type
+(money, number, text, or date), rows of cells, and optionally the ui_results ids it came from.
+Money cells are integer paise. At most 12 columns and 50 rows; a comparison is better as a table
+than as prose."
+
+**Input**
+
+```python
+show_table(title: str, columns: list[TableColumn], rows: list[list[Any]],
+           source_result_ids: list[str] = [], as_of: str | None = None)
+
+class TableInput:
+    title: str
+    columns: list[{"label": str, "type": "money" | "number" | "text" | "date"}]
+    rows: list[list[str | int | float | None]]   # at most 50 rows, 12 columns
+    source_result_ids: list[str] = []            # current-turn ui_results ids
+    as_of: str | None = None
+```
+
+Pydantic AI flattens the tool's single `TableInput` model into these named arguments in the
+CodeMode catalog. Scripts call `await show_table(title=..., columns=..., rows=...)`, without a
+`table=` wrapper.
+
+**Output:** Model: `{"table_id", "shown": True, "ui_results": [descriptor]}`. UI: a readable
+result card with a caption, typed cells, and any source result titles.
+
+**Logic**
+
+```
+validate: title, 1-12 typed columns, 0-50 rows, each row has one cell per column
+money cells must be integer paise or null; number cells numeric or null; text cells not objects
+resolve every source_result_ids against this turn's registry (unknown is ModelRetry)
+register a Table/Summary result; unknown is not zero
+```
+
+### `present`
+
+**Description:** "Compose the answer from this turn's ui_results. display is a bounded tree:
+{'_type': 'Stack' | 'Comparison' | 'Summary' | 'Table' | 'Chart' | 'Receipt', 'children': [...],
+'result_id': 'res_1'}. Containers have children; leaves have a result_id and no other props. Use
+only a view the result offers. Comparison aligns sections and never computes a difference."
+
+**Input**
+
+```python
+present(display: AnswerNode)
+
+class AnswerNode:
+    _type: Literal["Stack", "Comparison", "Summary", "Table", "Chart", "Receipt"]
+    children: list[AnswerNode] | None
+    result_id: str | None       # leaves only
+```
+
+**Output:** Model: `{"shown": True, "sections": int, "results": [{"id", "title"}]}`. UI: one
+`data-card` with `{card: "answer", version: 1, display, results}`. `results` holds only the
+referenced snapshots, deep-copied from the registry, so the card survives a reload without the
+turn's registry.
+
+**Logic**
+
+```
+validate: at most 12 nodes and 3 container levels, no unknown props, no HTML/CSS/URL/action props,
+          containers have children and no result_id, leaves have a result_id and no children,
+          Comparison has at least two leaf sections
+for each leaf: the id is current for this turn and the view is in the result's offered views
+                (missing/stale/unsupported -> ModelRetry with the offered views)
+copy only the referenced snapshots, in tree order
+```
+
+The views are deliberately narrow. `Summary` is headline values plus coverage; `Table` is the
+saved typed table; `Chart` is a saved chart spec; `Receipt` is the original projection card with
+its curve, sources, and evidence control. A spending result offers Summary, Table, and Chart; a
+movements or query result offers Summary and Table; a projection offers Receipt, Summary, and
+Table. The frontend resolves every leaf from the enclosing saved `results`; the model cannot pass
+a number.
+
+### Result registry
+
+Every read tool adds a compact `ui_results` descriptor to its return:
+
+```python
+{"id": "res_1", "title": "Spending by category, 2026-09-01 to 2026-09-30",
+ "views": ["Summary", "Table", "Chart"]}
+```
+
+The registry lives on `AgentDeps`; each ID includes a random registry scope so a stale ID cannot
+resolve to a different result in another turn. A turn keeps at most 64 results. Snapshots carry the
+period, filters, coverage gaps, source IDs that the tool actually returned, and `as_of` where it
+applies. Unknown money is `{"type": "unknown"}`; it is never filled with zero. Ordinary
+spending, movement, and query reads also emit a readable `card: "result"` fallback, so a turn that
+does not call `present` still shows its data. Native chart, projection, amortize, and compound
+cards keep their existing controls and gain a `result_id`; a composed answer hides a native card
+only when the same assistant message covers it with the matching view.
+
+Read results in one assistant message collect into one closed **Supporting data** disclosure with a
+read count, rather than one top-level card per read. A valid composed answer removes the result
+views it already shows; if there is no valid answer, or the stream failed, the same disclosure keeps
+the readable data. Legacy `card: "query"` records are deduplicated when an equivalent saved query
+result carries the same SQL. Capture, import, undo, movement, approval, chart, and projection cards
+stay outside the disclosure. Empty results show one concise empty line plus coverage, never both a
+metrics block and a second empty table. Displayed titles, cells, notes, and Markdown strip only the
+internal `<outside>` and `</outside>` envelope markers; saved messages and result snapshots are not
+rewritten.
+
+Computed table columns carry stable positional keys. Their source lineage retains each source's
+period, filters, coverage, assumptions, SQL, and ledger IDs, including when one derived table feeds
+another. Lineage is flat, deduplicated, and capped at 48 sources; exceeding the cap is a retry rather
+than silently losing evidence. Incomplete coverage stays visible beside the derived table.
+Source preview limits remain attributed to the source; they never describe a derived table's rows.
+
+Projection summaries show an unknown probability until a floor is configured, matching the native
+receipt and its optimistic variants. Summary percentages use the same rounding as the receipt.
+Saved answer data, including legacy standalone charts and receipts, is validated through every
+nested chart/receipt field that a renderer
+uses. Invalid data cannot suppress a valid fallback card, and a widget error boundary isolates an
+unexpected rendering failure from the conversation. Run `pnpm test:answers` in `web` for the Python
+snapshot to TypeScript validation/rendering contract checks (no database or model required).
 
 ---
 

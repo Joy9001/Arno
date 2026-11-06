@@ -5,6 +5,7 @@ import { code } from "@streamdown/code";
 import { memo, type ComponentProps, type FC } from "react";
 
 import { cn } from "@/lib/utils";
+import { markdownRemarkPlugins } from "@/chat/markdown-plugins";
 
 const MarkdownTextImpl: FC = () => {
   return (
@@ -12,6 +13,7 @@ const MarkdownTextImpl: FC = () => {
       containerClassName="aui-md"
       components={defaultComponents}
       plugins={{ code }}
+      remarkPlugins={markdownRemarkPlugins}
       controls={{ code: true, table: false }}
       codeBlockMaxHeight={320}
       // Finance replies may quote untrusted text. The custom link and image
@@ -133,20 +135,23 @@ const defaultComponents = {
     />
   ),
   table: ({ className, ...props }: ComponentProps<"table">) => (
-    <div className="aui-md-table-wrapper my-3 overflow-x-auto">
+    <div className="aui-md-table-wrapper answer-md-table my-3 overflow-x-auto">
       <table
         className={cn(
-          "aui-md-table w-full border-separate border-spacing-0",
+          "aui-md-table w-full border-collapse text-[13px]",
           className,
         )}
         {...props}
       />
     </div>
   ),
+  thead: ({ className, ...props }: ComponentProps<"thead">) => (
+    <thead className={cn("aui-md-thead bg-transparent", className)} {...props} />
+  ),
   th: ({ className, ...props }: ComponentProps<"th">) => (
     <th
       className={cn(
-        "aui-md-th bg-muted px-3 py-1.5 text-start font-medium first:rounded-ss-lg last:rounded-se-lg [[align=center]]:text-center [[align=right]]:text-right",
+        "aui-md-th border-muted-foreground/20 border-b px-0 py-2 pe-3 text-start text-[11px] font-medium text-muted-foreground last:pe-0 [[align=center]]:text-center [[align=right]]:text-right",
         className,
       )}
       {...props}
@@ -155,7 +160,7 @@ const defaultComponents = {
   td: ({ className, ...props }: ComponentProps<"td">) => (
     <td
       className={cn(
-        "aui-md-td border-muted-foreground/20 border-s border-b px-3 py-1.5 text-start last:border-e [[align=center]]:text-center [[align=right]]:text-right",
+        "aui-md-td border-muted-foreground/20 border-b px-0 py-2 pe-3 text-start align-top last:pe-0 [[align=center]]:text-center [[align=right]]:text-right",
         className,
       )}
       {...props}
@@ -163,10 +168,7 @@ const defaultComponents = {
   ),
   tr: ({ className, ...props }: ComponentProps<"tr">) => (
     <tr
-      className={cn(
-        "aui-md-tr m-0 border-b p-0 first:border-t [&:last-child>td:first-child]:rounded-es-lg [&:last-child>td:last-child]:rounded-ee-lg",
-        className,
-      )}
+      className={cn("aui-md-tr m-0 p-0 [&:last-child>td]:border-b-0", className)}
       {...props}
     />
   ),

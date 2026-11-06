@@ -132,7 +132,7 @@ export function EvidencePanel({
                 {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}
               </li>
             )}
-            {payload.optimistic && (
+            {floorSet && payload.optimistic && (
               <li>
                 Unconfirmed income is shown separately:{" "}
                 {percent(payload.optimistic.floor_probability)} above floor, optimistic only
