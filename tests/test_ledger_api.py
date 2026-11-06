@@ -8,6 +8,8 @@ import zipfile
 
 import pytest
 
+from fin_agent.ledger.common import today as ledger_today
+
 
 def _category(client, name: str) -> dict:
     categories = client.get("/api/categories").json()["categories"]
@@ -126,6 +128,8 @@ def test_correction_endpoint_edits_labels_without_a_reversal(authed_client):
 
 
 def test_schedules_goals_and_settings_endpoints(authed_client):
+    # Relative to today so the next occurrence never goes stale with the calendar.
+    today = ledger_today()
     bank = authed_client.post(
         "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}
     ).json()
@@ -139,13 +143,13 @@ def test_schedules_goals_and_settings_endpoints(authed_client):
             "amount_paise": 2_800_000,
             "account_id": bank["id"],
             "category_id": rent["id"],
-            "rule": "FREQ=MONTHLY;BYMONTHDAY=5",
-            "starts": "2026-11-01",
-            "holiday_adjust": "next",
+            "rule": f"FREQ=MONTHLY;BYMONTHDAY={today.day}",
+            "starts": today.isoformat(),
+            "holiday_adjust": "none",
         },
     )
     assert schedule.status_code == 201, schedule.text
-    assert schedule.json()["next_date"] == "2026-11-05"
+    assert schedule.json()["next_date"] == today.isoformat()
 
     upcoming = authed_client.get("/api/schedules/upcoming?days=30").json()
     assert any(event["name"] == "Rent" for event in upcoming["events"])
