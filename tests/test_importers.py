@@ -158,11 +158,43 @@ def test_check_statement_catches_a_day_month_swap_and_a_short_chain():
 def test_checks_require_rows_unless_empty_and_compare_ledger_opening():
     empty = check_statement([], 1000, 1000, empty_statement=True)
     assert empty["status"] == "VERIFIED"
+    assert empty["opening_source"] == "printed"
+    manual_zero = check_statement([], None, 0, empty_statement=True, manual_opening=0)
+    assert manual_zero["status"] == "VERIFIED"
+    assert manual_zero["opening_source"] == "manual"
+    assert manual_zero["opening_paise"] == 0
     assert check_statement([], 1000, 900, empty_statement=True)["status"] == "FAILED"
     rows = [{"date": "2026-04-01", "debit": 100, "credit": 0, "balance": 900}]
     disagreement = check_statement(rows, 1000, 900, ledger_opening=1200)
     assert disagreement["status"] == "DISCREPANCY"
     assert disagreement["opening_matches_ledger"] is False
+
+
+def test_a_printed_opening_without_running_balances_still_verifies():
+    rows = [{"date": "2026-04-01", "debit": 100, "credit": 0, "balance": None}]
+    result = check_statement(rows, 1000, 900)
+    assert result["status"] == "VERIFIED"
+    assert result["opening_source"] == "printed"
+    assert result["opening_paise"] == 1000
+
+
+def test_a_parser_zero_is_never_labeled_printed():
+    rows = [{"date": "2026-04-01", "debit": 100, "credit": 0, "balance": None}]
+    result = check_statement(rows, 0, -100)
+    assert result["status"] == "VERIFIED"
+    assert result["opening_source"] == "parser-zero"
+
+
+def test_a_manual_opening_wins_over_a_parser_claim_and_is_labeled_manual():
+    rows = [
+        {"date": "2026-04-01", "debit": 100, "credit": 0, "balance": None},
+        {"date": "2026-04-02", "debit": 200, "credit": 0, "balance": None},
+    ]
+    result = check_statement(rows, 0, 700, manual_opening=1000)
+    assert result["status"] == "VERIFIED"
+    assert result["opening_source"] == "manual"
+    assert result["opening_paise"] == 1000
+    assert result["opening_matches_ledger"] is True
 
 
 @pytest.mark.parametrize(

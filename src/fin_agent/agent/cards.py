@@ -129,12 +129,13 @@ def ui_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
 
 
 def data_part(chunk: DataChunk) -> dict[str, Any]:
-    return {
-        "type": chunk.type,
-        "id": chunk.id,
-        "data": chunk.data,
-        "transient": chunk.transient,
-    }
+    payload = {"type": chunk.type, "data": chunk.data}
+    # The UI chunk schema makes these optional, not nullable.
+    if chunk.id is not None:
+        payload["id"] = chunk.id
+    if chunk.transient is not None:
+        payload["transient"] = chunk.transient
+    return payload
 
 
 def attach_to_last_assistant(
@@ -153,9 +154,10 @@ def attach_to_last_assistant(
 def with_data(
     message: dict[str, Any], type_name: str, data: Any, identifier: str | None = None
 ) -> None:
-    message.setdefault("parts", []).append(
-        {"type": type_name, "id": identifier, "data": data, "transient": None}
-    )
+    part = {"type": type_name, "data": data}
+    if identifier is not None:
+        part["id"] = identifier
+    message.setdefault("parts", []).append(part)
 
 
 __all__ = [

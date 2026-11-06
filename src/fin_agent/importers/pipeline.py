@@ -16,7 +16,12 @@ from psycopg.types.json import Jsonb
 
 from fin_agent.db.conn import connect
 from fin_agent.importers.categorizer import categorize_import
-from fin_agent.importers.checks import account_check
+from fin_agent.importers.checks import (
+    INPUT_REASONS,
+    account_check,
+    check_statement,
+    opening_is_evidenced,
+)
 from fin_agent.importers.helpers import HELPER_VERSION
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.layout import detect_fingerprint
@@ -25,7 +30,7 @@ from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_scr
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.periods import derive_period, ledger_last_date, ledger_opening
 from fin_agent.importers.readers import Doc, DocError, open_documents
-from fin_agent.importers.reconcile import insert_lines, reconcile
+from fin_agent.importers.reconcile import credit_decision_required, insert_lines, reconcile
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import today as ledger_today
@@ -206,13 +211,21 @@ def retry_with_account(conn: psycopg.Connection, *, import_id: str, account_id: 
 
 
 def retry_with_opening(conn: psycopg.Connection, *, import_id: str, opening_paise: int) -> None:
-    if opening_paise < 0:
-        raise ValueError("The opening balance cannot be negative")
-    row = conn.execute("SELECT review FROM imports WHERE id = %s", (import_id,)).fetchone()
+    row = conn.execute("SELECT * FROM imports WHERE id = %s", (import_id,)).fetchone()
     if row is None:
         raise ValueError("No such import")
     review = dict(row["review"] or {})
     review["manual_opening_paise"] = int(opening_paise)
+    lines = [
+        dict(line)
+        for line in conn.execute(
+            "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY date, id", (import_id,)
+        ).fetchall()
+    ]
+    if lines and row["status"] in ("review", "failed"):
+        # Recheck the stored rows instead of reparsing: the user's card-credit decisions survive.
+        _recheck_opening(conn, row=row, review=review, lines=lines, opening_paise=opening_paise)
+        return
     conn.execute(
         """
         UPDATE imports SET status = 'parsing', reason = NULL, review = %s WHERE id = %s
@@ -224,6 +237,56 @@ def retry_with_opening(conn: psycopg.Connection, *, import_id: str, opening_pais
         key=f"import:{import_id}:opening:{datetime.now().isoformat(timespec='microseconds')}",
         kind="import_statement",
         payload={"import_id": import_id},
+    )
+    conn.commit()
+
+
+def _recheck_opening(
+    conn: psycopg.Connection,
+    *,
+    row: dict[str, Any],
+    review: dict[str, Any],
+    lines: list[dict[str, Any]],
+    opening_paise: int,
+) -> None:
+    rows = [
+        {
+            "date": line["date"].isoformat(),
+            "debit": int(line["debit_paise"] or 0),
+            "credit": int(line["credit_paise"] or 0),
+            "balance": line["balance_paise"],
+        }
+        for line in lines
+    ]
+    period = None
+    if row["period_start"] and row["period_end"]:
+        period = (row["period_start"].isoformat(), row["period_end"].isoformat())
+    check = check_statement(
+        rows,
+        None,
+        row["closing_balance_paise"],
+        period=period,
+        manual_opening=int(opening_paise),
+    )
+    status = "review"
+    reason = None
+    if check["status"] != "VERIFIED":
+        reason = check.get("reason") or "The opening, rows, and closing do not reconcile."
+    conn.execute(
+        """
+        UPDATE imports
+        SET status = %s, reason = %s, review = %s, check_result = %s,
+            opening_balance_paise = %s
+        WHERE id = %s
+        """,
+        (
+            status,
+            reason,
+            Jsonb(review),
+            Jsonb(check),
+            int(opening_paise),
+            row["id"],
+        ),
     )
     conn.commit()
 
@@ -254,6 +317,7 @@ def _context(
     account: dict[str, Any] | None,
     period: dict[str, Any] | None,
     opening: dict[str, Any] | None,
+    manual_opening_paise: int | None,
     fingerprint: str | None,
     expected_fingerprint: str | None,
 ) -> ScriptContext:
@@ -261,6 +325,7 @@ def _context(
         period=(period["start"], period["end"]) if period else None,
         ledger_opening_paise=opening["paise"] if opening else None,
         ledger_opening_as_of=opening["as_of"] if opening else None,
+        manual_opening_paise=manual_opening_paise,
         account_name=account["name"] if account else None,
         fingerprint=fingerprint,
         expected_fingerprint=expected_fingerprint,
@@ -273,22 +338,16 @@ def _check_account(
     *,
     period: dict[str, Any] | None,
     ledger_opening_paise: int | None,
+    manual_opening_paise: int | None,
     expected_fingerprint: str | None,
 ) -> dict[str, Any]:
-    result = account_check(
+    return account_check(
         parsed_account,
         period=(period["start"], period["end"]) if period else None,
         ledger_opening=ledger_opening_paise,
+        manual_opening=manual_opening_paise,
         expected_fingerprint=expected_fingerprint,
     )
-    opening = parsed_account.get("opening")
-    result["opening_paise"] = opening if isinstance(opening, int) else ledger_opening_paise
-    closing = parsed_account.get("closing")
-    if not isinstance(closing, int) and parsed_account.get("rows"):
-        last = parsed_account["rows"][-1].get("balance")
-        closing = last if isinstance(last, int) else None
-    result["closing_paise"] = closing
-    return result
 
 
 def _finalize(
@@ -450,8 +509,8 @@ async def _run_import_body(
             else None
         )
         manual_opening = (row.get("review") or {}).get("manual_opening_paise")
-        if opening is None and manual_opening is not None:
-            opening = {"paise": int(manual_opening), "as_of": None}
+        if manual_opening is not None:
+            manual_opening = int(manual_opening)
         fingerprint = detect_fingerprint(doc) or _account_fingerprint(account)
         layout = layout_for(conn, fingerprint)
         if layout is not None and layout["fingerprint"] != fingerprint:
@@ -469,6 +528,7 @@ async def _run_import_body(
             account=account,
             period=period,
             opening=opening,
+            manual_opening_paise=manual_opening,
             fingerprint=fingerprint,
             expected_fingerprint=layout["fingerprint"] if layout else None,
         )
@@ -483,6 +543,7 @@ async def _run_import_body(
                 parsed,
                 period=period,
                 ledger_opening_paise=opening["paise"] if opening else None,
+                manual_opening_paise=manual_opening,
                 expected_fingerprint=layout["fingerprint"],
             )
             if check["status"] == "VERIFIED":
@@ -501,6 +562,17 @@ async def _run_import_body(
                     await categorize_import(conn, import_id, resolved)
                     touch_layout(conn, layout["id"])
                     conn.commit()
+                return
+            if check.get("reason") in INPUT_REASONS:
+                # A missing input cannot be repaired by replaying the layout; ask for it.
+                with closing(connect()) as conn:
+                    _set_status(
+                        conn,
+                        import_id,
+                        "needs_input",
+                        reason="What was the opening balance?",
+                        check_result=Jsonb(check),
+                    )
                 return
 
     if parser_runner is None:
@@ -558,20 +630,16 @@ async def _run_import_body(
             period = derive_period(doc, ledger_last=ledger_last, today=ledger_today())
         if opening is None and period:
             opening = ledger_opening(conn, resolved["id"], date.fromisoformat(period["start"]))
-        if opening is None and manual_opening is not None:
-            opening = {"paise": int(manual_opening), "as_of": None}
         check = _check_account(
             parsed,
             period=period,
             ledger_opening_paise=opening["paise"] if opening else None,
+            manual_opening_paise=manual_opening,
             expected_fingerprint=fingerprint,
         )
         if check["status"] != "VERIFIED":
             reason = check.get("reason") or "the checks did not pass"
-            if reason in (
-                "opening balance not found in the file or the ledger",
-                "closing balance not found in the file",
-            ):
+            if reason in INPUT_REASONS:
                 _set_status(
                     conn,
                     import_id,
@@ -630,12 +698,21 @@ def import_payload(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
     if row is None:
         raise ValueError("No such import")
     account = None
+    account_row = None
     if row["account_id"]:
-        account_row = conn.execute(
-            "SELECT id, name, kind, institution, last4 FROM accounts WHERE id = %s",
+        fetched = conn.execute(
+            """
+            SELECT id, name, kind, institution, last4,
+                   statement_balance_paise, statement_balance_as_of
+            FROM accounts WHERE id = %s
+            """,
             (row["account_id"],),
         ).fetchone()
-        account = dict(account_row) if account_row else None
+        if fetched is not None:
+            account_row = dict(fetched)
+            account = {
+                key: account_row[key] for key in ("id", "name", "kind", "institution", "last4")
+            }
     lines = [
         dict(line)
         for line in conn.execute(
@@ -651,6 +728,17 @@ def import_payload(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
         (import_id,),
     ).fetchone()
     check = row["check_result"] or {}
+    opening_evidenced = opening_is_evidenced(
+        check=check,
+        review=row["review"] or {},
+        account=account_row,
+        period_start=row["period_start"],
+    )
+    opening_required = (
+        row["status"] in ("review", "needs_input", "failed")
+        and not opening_evidenced
+        and (bool(lines) or "opening" in str(row["reason"] or "").lower())
+    )
     return {
         "import_id": row["id"],
         "status": row["status"],
@@ -666,6 +754,9 @@ def import_payload(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
         "closing_paise": row["closing_balance_paise"],
         "check": check.get("status") if check else None,
         "check_detail": check or None,
+        "opening_source": check.get("opening_source"),
+        "opening_evidenced": opening_evidenced,
+        "opening_required": opening_required,
         "counts": row["counts"],
         "review": row["review"],
         "reason": row["reason"],
@@ -692,6 +783,13 @@ def import_payload(conn: psycopg.Connection, import_id: str) -> dict[str, Any]:
                     "suggested_transfer_account_id"
                 ),
                 "transfer_confirmed": bool((line["match_detail"] or {}).get("transfer_confirmed")),
+                "credit_kind": (line["match_detail"] or {}).get("credit_kind"),
+                "credit_source_account_id": (line["match_detail"] or {}).get(
+                    "credit_source_account_id"
+                ),
+                "credit_decision_required": credit_decision_required(
+                    line, account["kind"] if account else None
+                ),
                 "candidates": (line["match_detail"] or {}).get("candidates", [])
                 if line["match_state"] == "ambiguous"
                 else [],

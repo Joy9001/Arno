@@ -35,6 +35,9 @@ A Python script whose last expression is one of:
 - Dates are ISO strings (`to_iso` / `date_any`). Day first, because this is India.
 - `debit` and `credit` are both non-negative. A row has one of them, never both.
 - A row may carry `balance` when the statement prints a running balance.
+- `opening` is the value the statement actually prints. If it prints none, leave it `None`.
+  Never default it to zero or to `ledger_opening()`; a fallback is not a printed fact and the
+  host will ask the user for an evidenced opening instead.
 - `headers` is the column-header row exactly as printed. It is the layout fingerprint.
 - `counterparty` is the payee, merchant, or person the narration names, cleaned of reference
   numbers, UPI handles, and bank codes. Extract it in the script from the narration's own
@@ -70,8 +73,9 @@ Scripts use `await` for every host call and keyword arguments, for example
 
 ## The checks (all must pass)
 
-1. `opening + credits - debits == closing`, where a missing printed opening may come from
-   `ledger_opening`.
+1. `opening + credits - debits == closing`. The `opening` must be printed by the statement, or
+   come from the host's anchored ledger balance/user answer. A parser-supplied number with no
+   printed running balance to corroborate it is a claim, not evidence.
 2. Every printed running balance follows from the row before it.
 3. Every date falls inside the statement period, which the host took from the header or the
    ledger. Do not make the period up from the rows; that would be circular.
@@ -93,9 +97,10 @@ A failure writes nothing. Read the check's `reason` and repair the script.
   the `balance` move is a second signal. Opening and closing are usually in a summary block,
   not only in the header.
 - **Slice credit card export**: unknown format. Expect `Date`, `Transaction Details`,
-  `Amount`, no running balance. A card statement often has no opening or closing balance; the
-  host supplies the ledger opening, and the total check is the only balance check. Dues and
-  refunds can be negative. Do not invent a balance column.
+  `Amount`, no running balance. A card statement often has no opening or closing balance; leave
+  `opening` null when none is printed. The host supplies an evidenced opening or asks the user;
+  the total check is the only balance check. Dues and refunds can be negative. Do not invent a
+  balance column.
 - **CSV/TSV/XLSX exports**: use header names to find columns, not fixed indexes. A new
   `Value Date` column must not be glued into the narration; if it appears, include it in
   `headers` and leave it out of `description`.

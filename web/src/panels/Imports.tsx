@@ -61,6 +61,7 @@ function StatusBadge({ status }: { status: ImportRecord["status"] }) {
 
 function needsDecision(line: ImportLine): boolean {
   return (
+    line.credit_decision_required ||
     line.match_state === "ambiguous" ||
     Boolean(line.suggested_transfer_account_id && !line.transfer_confirmed)
   );
@@ -216,7 +217,21 @@ function LineTable({
                               ? ` · ${accountNames.get(line.suggested_transfer_account_id)}`
                               : ""
                           }`
-                        : (line.suggested_category?.category_name ?? "—")}
+                        : line.credit_kind === "refund"
+                          ? `Refund${
+                              line.suggested_category
+                                ? ` · ${line.suggested_category.category_name}`
+                                : ""
+                            }`
+                          : line.credit_kind === "transfer"
+                            ? `Repayment${
+                                accountNames.get(line.credit_source_account_id ?? "")
+                                  ? ` · ${accountNames.get(line.credit_source_account_id ?? "")}`
+                                  : ""
+                              }`
+                            : line.credit_kind === "income"
+                              ? "Income"
+                              : (line.suggested_category?.category_name ?? "—")}
                     </td>
                     <td>
                       <span className="act-line-state">
@@ -231,6 +246,9 @@ function LineTable({
                           <span className="fine">
                             {line.transfer_confirmed ? "Confirmed" : "Needs confirmation"}
                           </span>
+                        )}
+                        {line.credit_decision_required && (
+                          <span className="fine">Needs classification</span>
                         )}
                       </span>
                     </td>
@@ -358,6 +376,128 @@ function AmbiguousRows({
               onClick={() => void resolve(line.id, "ignore")}
             >
               Ignore
+            </button>
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function CreditClassifyRows({
+  detail,
+  accounts,
+  onResolved,
+}: {
+  detail: ImportRecord;
+  accounts: AccountSummary["accounts"];
+  onResolved: (next: ImportRecord) => void;
+}) {
+  const [kind, setKind] = useState<Record<string, string>>({});
+  const [source, setSource] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pending = detail.lines.filter((line) => line.credit_decision_required);
+  if (pending.length === 0) return null;
+  const funding = accounts.filter(
+    (account) =>
+      ["bank", "cash", "wallet"].includes(account.kind) && account.id !== detail.account?.id,
+  );
+
+  async function classify(lineId: string) {
+    setBusy(lineId);
+    setError(null);
+    try {
+      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/lines/${lineId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          resolution: "classify_credit",
+          credit_kind: kind[lineId],
+          source_account_id: kind[lineId] === "transfer" ? source[lineId] : null,
+        }),
+      });
+      onResolved(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="subcard">
+      <div className="section-head">
+        <h3>Card credits</h3>
+        <span className="fine">
+          {pending.length} {pending.length === 1 ? "line" : "lines"}
+        </span>
+      </div>
+      <p className="muted">
+        A credit on this card is not income by default. Say whether it is a merchant refund, a
+        repayment from one of your accounts, or genuinely other income.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {pending.map((line) => (
+        <div key={line.id} className="ambiguous" aria-busy={busy === line.id}>
+          <div>
+            <strong>{formatPaise(line.amount_paise)}</strong> on {formatDate(line.date)}
+            <p className="fine">{line.description}</p>
+          </div>
+          <div className="row-actions">
+            <select
+              aria-label={`What is the credit on ${formatDate(line.date)}?`}
+              value={kind[line.id] ?? ""}
+              disabled={busy === line.id}
+              onChange={(event) =>
+                setKind((current) => ({ ...current, [line.id]: event.target.value }))
+              }
+            >
+              <option value="">Choose what this credit is</option>
+              <option value="refund">Merchant refund</option>
+              <option value="transfer">Card repayment from my account</option>
+              <option value="income">Other income</option>
+            </select>
+            {kind[line.id] === "transfer" && (
+              <select
+                aria-label={`Account that paid the card on ${formatDate(line.date)}`}
+                value={source[line.id] ?? ""}
+                disabled={busy === line.id}
+                onChange={(event) =>
+                  setSource((current) => ({ ...current, [line.id]: event.target.value }))
+                }
+              >
+                <option value="">Account that paid</option>
+                {funding.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {kind[line.id] === "transfer" && funding.length === 0 && (
+              <span className="fine">Add a bank, cash, or wallet account first.</span>
+            )}
+            <button
+              type="button"
+              disabled={
+                busy !== null ||
+                !kind[line.id] ||
+                (kind[line.id] === "transfer" && !source[line.id])
+              }
+              onClick={() => void classify(line.id)}
+            >
+              {busy === line.id ? (
+                <>
+                  <Busy />
+                  Saving…
+                </>
+              ) : (
+                "Save choice"
+              )}
             </button>
           </div>
         </div>
@@ -575,10 +715,15 @@ export function ImportsPanel({
   const pendingTransferCount = selectedLines.filter(
     (line) => line.suggested_transfer_account_id && !line.transfer_confirmed,
   ).length;
+  const pendingCreditCount = selectedLines.filter(
+    (line) => line.credit_decision_required,
+  ).length;
+  const openingRequired = selected?.opening_required ?? false;
   const ambiguousCount =
     selected?.counts?.ambiguous ??
     selectedLines.filter((line) => line.match_state === "ambiguous").length;
-  const decisions = ambiguousCount + pendingTransferCount;
+  const decisions =
+    ambiguousCount + pendingTransferCount + pendingCreditCount + (openingRequired ? 1 : 0);
   const needsPoll = Boolean(
     selected && ["parsing", "needs_password", "needs_input"].includes(selected.status),
   );
@@ -744,6 +889,16 @@ export function ImportsPanel({
         pendingTransferCount === 1 ? "transfer" : "transfers"
       }`,
     );
+  }
+  if (pendingCreditCount > 0) {
+    blockers.push(
+      `${pendingCreditCount} unclassified card ${
+        pendingCreditCount === 1 ? "credit" : "credits"
+      }`,
+    );
+  }
+  if (openingRequired) {
+    blockers.push("the opening balance");
   }
 
   return (
@@ -1200,7 +1355,7 @@ export function ImportsPanel({
                 </div>
               )}
 
-              {selected.status === "review" && (decisions > 0 || pendingTransferCount > 0) && (
+              {selected.status === "review" && decisions > 0 && (
                 <section className="act-decisions" aria-labelledby="import-decisions-heading">
                   <div className="section-head">
                     <h3 id="import-decisions-heading">Needs your review</h3>
@@ -1209,6 +1364,51 @@ export function ImportsPanel({
                   <p className="fine act-decision-note">
                     Nothing reaches the ledger until every item here is resolved and you commit.
                   </p>
+                  {openingRequired && (
+                    <div className="password-card">
+                      <h4>Opening balance needed</h4>
+                      <p className="fine">
+                        This statement's opening balance is not confirmed. Enter the actual
+                        opening from the statement or your records, including a negative card
+                        balance if that is the real figure. Zero is accepted only when it is the
+                        real balance; your value is recorded as a manual entry, not a printed fact.
+                      </p>
+                      <div className="row-actions">
+                        <input
+                          type="number"
+                          step="0.01"
+                          aria-label="Opening balance in rupees"
+                          placeholder="Opening balance in rupees"
+                          value={openingRupees}
+                          disabled={busy !== null}
+                          onChange={(event) => setOpeningRupees(event.target.value)}
+                        />
+                        <button
+                          type="button"
+                          disabled={!openingRupees || busy !== null}
+                          onClick={() =>
+                            void act("opening", {
+                              opening_paise: Math.round(Number(openingRupees) * 100),
+                            })
+                          }
+                        >
+                          {busy === "opening" ? (
+                            <>
+                              <Busy />
+                              Saving…
+                            </>
+                          ) : (
+                            "Use this opening"
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <CreditClassifyRows
+                    detail={selected}
+                    accounts={accounts.data?.accounts ?? []}
+                    onResolved={applySelected}
+                  />
                   <TransferRows
                     detail={selected}
                     accountNames={accountNames}

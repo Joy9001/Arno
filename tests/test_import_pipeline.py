@@ -19,9 +19,10 @@ from fin_agent.importers.pipeline import (
     _run_import,
     create_import,
     import_payload,
+    retry_with_opening,
 )
 from fin_agent.importers.readers import Doc
-from fin_agent.importers.reconcile import insert_lines, reconcile
+from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
 from fin_agent.ledger.accounts import account_summary, create_account, set_statement_balance
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import ledger_balance, system_account
@@ -695,8 +696,12 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
         ),
     )
     ledger.execute(
-        "UPDATE imports SET check_result = %s WHERE id = %s",
-        (Jsonb({"status": "VERIFIED"}), import_id),
+        "UPDATE imports SET check_result = %s, review = %s WHERE id = %s",
+        (
+            Jsonb({"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0}),
+            Jsonb({"manual_opening_paise": 0}),
+            import_id,
+        ),
     )
     ledger.commit()
 
@@ -753,3 +758,466 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
         "SELECT * FROM accounts WHERE id = %s", (account["id"],)
     ).fetchone()
     assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
+
+
+def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> dict:
+    return create_account(
+        conn,
+        kind="card",
+        name=f"Slice card {last4}",
+        institution="Slice",
+        last4=last4,
+        opening_balance_paise=opening_paise,
+        opening_balance_as_of=date(2026, 3, 31),
+        credit_limit_paise=500000,
+        statement_day=25,
+        due_day=5,
+    )
+
+
+def _verify(conn, import_id: str, opening_paise: int = 0) -> None:
+    row = conn.execute("SELECT review FROM imports WHERE id = %s", (import_id,)).fetchone()
+    review = dict(row["review"] or {})
+    review["manual_opening_paise"] = opening_paise
+    conn.execute(
+        "UPDATE imports SET check_result = %s, review = %s WHERE id = %s",
+        (
+            Jsonb(
+                {
+                    "status": "VERIFIED",
+                    "opening_source": "manual",
+                    "opening_paise": opening_paise,
+                }
+            ),
+            Jsonb(review),
+            import_id,
+        ),
+    )
+    conn.commit()
+
+
+def _line(conn, import_id: str, index: int = 0) -> dict:
+    return conn.execute(
+        "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY date, id", (import_id,)
+    ).fetchall()[index]
+
+
+def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
+    card = _card(ledger)
+    ledger.commit()
+    spending = system_account(ledger, "spending")
+    before = ledger_balance(ledger, spending["ledger_account_id"])
+    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [{"date": "2026-04-04", "description": "Merchant refund", "debit": 0, "credit": 10395}],
+    )
+    _verify(ledger, import_id)
+    line = _line(ledger, import_id)
+
+    resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=line["id"],
+        resolution="classify_credit",
+        credit_kind="refund",
+        category_id=str(food["id"]),
+    )
+    commit_import(ledger, import_id, categorize=False)
+
+    assert ledger_balance(ledger, spending["ledger_account_id"]) == before - 10395
+    card_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
+    assert ledger_balance(ledger, card_row["ledger_account_id"]) == 10395
+    movement = ledger.execute(
+        """
+        SELECT m.id, m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (line["id"],),
+    ).fetchone()
+    assert movement["kind"] == "refund"
+    assert (
+        ledger.execute("SELECT count(*) AS n FROM movements WHERE kind = 'income'").fetchone()["n"]
+        == 0
+    )
+    label = ledger.execute(
+        "SELECT category_id FROM transfer_labels WHERE movement_id = %s", (movement["id"],)
+    ).fetchone()
+    assert label["category_id"] == food["id"]
+
+
+def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liability(ledger):
+    bank = create_account(
+        ledger,
+        kind="bank",
+        name="Axis savings",
+        last4="1111",
+        opening_balance_paise=100000,
+        opening_balance_as_of=date(2026, 3, 31),
+    )
+    card = _card(ledger, opening_paise=-100000)
+    ledger.commit()
+    spending = system_account(ledger, "spending")
+    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
+    )
+    _verify(ledger, import_id)
+    line = _line(ledger, import_id)
+
+    resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=line["id"],
+        resolution="classify_credit",
+        credit_kind="transfer",
+        source_account_id=bank["id"],
+    )
+    commit_import(ledger, import_id, categorize=False)
+
+    bank_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (bank["id"],)).fetchone()
+    card_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
+    assert ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
+    assert ledger_balance(ledger, card_row["ledger_account_id"]) == -100000 + 42800
+    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+    assert (
+        ledger.execute("SELECT count(*) AS n FROM movements WHERE kind = 'income'").fetchone()["n"]
+        == 0
+    )
+    movement = ledger.execute(
+        """
+        SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (line["id"],),
+    ).fetchone()
+    assert movement["kind"] == "transfer"
+
+
+def test_an_unclassified_card_credit_blocks_the_whole_commit_before_writes(ledger):
+    card = _card(ledger)
+    ledger.commit()
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [
+            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
+            {"date": "2026-04-02", "description": "Refund", "debit": 0, "credit": 10395},
+        ],
+    )
+    _verify(ledger, import_id)
+
+    with pytest.raises(ConflictLedgerError, match="card credit"):
+        commit_import(ledger, import_id, categorize=False)
+
+    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
+    lines = ledger.execute(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s", (import_id,)
+    ).fetchall()
+    assert all(line["match_state"] == "new" and line["movement_id"] is None for line in lines)
+
+
+def test_a_card_repayment_without_a_funding_account_blocks_before_writes(ledger):
+    card = _card(ledger)
+    ledger.commit()
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [
+            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
+            {"date": "2026-04-02", "description": "Repayment", "debit": 0, "credit": 20000},
+        ],
+    )
+    credit = _line(ledger, import_id, index=1)
+    ledger.execute(
+        """
+        UPDATE statement_lines
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
+        WHERE id = %s
+        """,
+        (Jsonb({"credit_kind": "transfer"}), credit["id"]),
+    )
+    _verify(ledger, import_id)
+
+    with pytest.raises(ConflictLedgerError, match="card credit"):
+        commit_import(ledger, import_id, categorize=False)
+
+    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
+    lines = ledger.execute(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s", (import_id,)
+    ).fetchall()
+    assert all(line["match_state"] == "new" and line["movement_id"] is None for line in lines)
+
+
+def test_a_card_repayment_rejects_a_missing_same_or_system_funding_account(ledger):
+    card = _card(ledger)
+    ledger.commit()
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
+    )
+    line = _line(ledger, import_id)
+    income = system_account(ledger, "income")
+
+    for source_account_id in ("acc_missing", card["id"], income["id"]):
+        with pytest.raises(ValueError, match="account"):
+            resolve_line(
+                ledger,
+                import_id=import_id,
+                line_id=line["id"],
+                resolution="classify_credit",
+                credit_kind="transfer",
+                source_account_id=source_account_id,
+            )
+    stored = ledger.execute(
+        "SELECT match_detail FROM statement_lines WHERE id = %s", (line["id"],)
+    ).fetchone()["match_detail"]
+    assert "credit_kind" not in (stored or {})
+
+
+def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger):
+    card = _card(ledger)
+    ledger.commit()
+    spending = system_account(ledger, "spending")
+    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [{"date": "2026-04-06", "description": "Cashback", "debit": 0, "credit": 5000}],
+    )
+    _verify(ledger, import_id)
+    line = _line(ledger, import_id)
+
+    resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=line["id"],
+        resolution="classify_credit",
+        credit_kind="income",
+    )
+    commit_import(ledger, import_id, categorize=False)
+
+    movement = ledger.execute(
+        """
+        SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (line["id"],),
+    ).fetchone()
+    assert movement["kind"] == "income"
+    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+
+
+def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(ledger):
+    bank = create_account(
+        ledger,
+        kind="bank",
+        name="Axis savings",
+        last4="1111",
+        opening_balance_paise=100000,
+        opening_balance_as_of=date(2026, 3, 31),
+    )
+    card = _card(ledger)
+    ledger.commit()
+    import_id, _ = _review_import(
+        ledger,
+        card,
+        [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
+    )
+    line = _line(ledger, import_id)
+    ledger.execute(
+        """
+        UPDATE statement_lines
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
+        WHERE id = %s
+        """,
+        (
+            Jsonb({"suggested_transfer_account_id": bank["id"], "transfer_confirmed": True}),
+            line["id"],
+        ),
+    )
+    _verify(ledger, import_id)
+
+    commit_import(ledger, import_id, categorize=False)
+
+    movement = ledger.execute(
+        """
+        SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
+        WHERE sl.id = %s
+        """,
+        (line["id"],),
+    ).fetchone()
+    assert movement["kind"] == "transfer"
+    bank_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (bank["id"],)).fetchone()
+    assert ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
+
+
+def _assumed_zero_review(conn, account: dict, rows: list[dict], closing: int) -> str:
+    """A saved review shaped like the F12 case: source label says printed, no evidence."""
+    raw_account = conn.execute("SELECT * FROM accounts WHERE id = %s", (account["id"],)).fetchone()
+    import_id = new_id(conn, "imp")
+    conn.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
+                             opening_balance_paise, closing_balance_paise, check_result,
+                             commit_groups)
+        VALUES (%s, 'hash-assumed-zero', 'review', %s, '2026-04-01', '2026-04-30',
+                0, %s, %s, '[]'::jsonb)
+        """,
+        (
+            import_id,
+            account["id"],
+            closing,
+            Jsonb(
+                {
+                    "status": "VERIFIED",
+                    "opening_source": "printed",
+                    "opening_paise": 0,
+                    "closing_paise": closing,
+                    "chain_ok": None,
+                    "rows": len(rows),
+                }
+            ),
+        ),
+    )
+    insert_lines(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        parsed_account={"rows": rows},
+    )
+    reconcile(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    conn.commit()
+    return import_id
+
+
+def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledger):
+    card = _card(ledger, opening_paise=None)
+    ledger.commit()
+    import_id = _assumed_zero_review(
+        ledger,
+        card,
+        [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
+        closing=-42800,
+    )
+
+    detail = import_payload(ledger, import_id)
+    assert detail["check"] == "VERIFIED"
+    assert detail["opening_source"] == "printed"
+    assert detail["opening_evidenced"] is False
+    assert detail["opening_required"] is True
+
+    with pytest.raises(ConflictLedgerError, match="opening balance"):
+        commit_import(ledger, import_id, categorize=False)
+    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
+
+
+def test_manual_zero_opening_is_accepted_and_labeled_manual(ledger):
+    card = _card(ledger, opening_paise=None)
+    ledger.commit()
+    import_id = _assumed_zero_review(
+        ledger,
+        card,
+        [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
+        closing=-42800,
+    )
+
+    retry_with_opening(ledger, import_id=import_id, opening_paise=0)
+
+    detail = import_payload(ledger, import_id)
+    assert detail["check"] == "VERIFIED"
+    assert detail["opening_source"] == "manual"
+    assert detail["opening_paise"] == 0
+    assert detail["opening_evidenced"] is True
+    assert detail["opening_required"] is False
+    assert commit_import(ledger, import_id, categorize=False)["status"] == "committed"
+
+
+def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
+    card = _card(ledger, opening_paise=None)
+    ledger.commit()
+    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+    import_id = _assumed_zero_review(
+        ledger,
+        card,
+        [
+            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
+            {"date": "2026-04-02", "description": "Merchant refund", "debit": 0, "credit": 10395},
+        ],
+        closing=-32405,
+    )
+    credit = _line(ledger, import_id, index=1)
+    resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=credit["id"],
+        resolution="classify_credit",
+        credit_kind="refund",
+        category_id=str(food["id"]),
+    )
+
+    retry_with_opening(ledger, import_id=import_id, opening_paise=0)
+
+    detail = import_payload(ledger, import_id)
+    assert detail["check"] == "VERIFIED"
+    assert detail["opening_source"] == "manual"
+    stored = ledger.execute(
+        "SELECT match_state, movement_id, match_detail FROM statement_lines WHERE id = %s",
+        (credit["id"],),
+    ).fetchone()
+    assert stored["match_state"] == "new"
+    assert stored["movement_id"] is None
+    assert stored["match_detail"]["credit_kind"] == "refund"
+    assert stored["match_detail"]["credit_classified_by"] == "user"
+    commit_import(ledger, import_id, categorize=False)
+
+
+def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):
+    from fin_agent.importers.checks import check_statement
+
+    account = _account(ledger)
+    raw_account = ledger.execute(
+        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
+    ).fetchone()
+    import_id = new_id(ledger, "imp")
+    ledger.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
+                             opening_balance_paise, closing_balance_paise, commit_groups)
+        VALUES (%s, 'hash-printed-bank', 'review', %s, '2026-04-01', '2026-04-30',
+                24567890, 24522890, '[]'::jsonb)
+        """,
+        (import_id, account["id"]),
+    )
+    rows = [{"date": "2026-04-03", "debit": 45000, "credit": 0}]
+    insert_lines(
+        ledger,
+        import_id=import_id,
+        account=raw_account,
+        parsed_account={"rows": [{**rows[0], "description": "SWIGGY"}]},
+    )
+    check = check_statement(rows, 24567890, 24522890, period=("2026-04-01", "2026-04-30"))
+    assert check["status"] == "VERIFIED"
+    assert check["opening_source"] == "printed"
+    ledger.execute("UPDATE imports SET check_result = %s WHERE id = %s", (Jsonb(check), import_id))
+    reconcile(
+        ledger,
+        import_id=import_id,
+        account=raw_account,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    ledger.commit()
+
+    detail = import_payload(ledger, import_id)
+    assert detail["opening_evidenced"] is True
+    assert detail["opening_required"] is False
+    assert commit_import(ledger, import_id, categorize=False)["status"] == "committed"

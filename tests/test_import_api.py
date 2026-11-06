@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
+from psycopg.types.json import Jsonb
+
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.pipeline import _run_import
+from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
 from tests.import_fixtures import SBI_PARSER, sbi_csv
@@ -157,3 +160,146 @@ async def test_review_commit_and_undo_over_rest(authed_client, ledger):
 
     history = authed_client.get("/api/imports").json()
     assert history["items"][0]["import_id"] == import_id
+
+
+def _assumed_zero_card_review(conn, rows: list[dict], closing: int) -> tuple[str, dict]:
+    card = create_account(
+        conn,
+        kind="card",
+        name="Slice card",
+        institution="Slice",
+        last4="4242",
+        credit_limit_paise=500000,
+        statement_day=25,
+        due_day=5,
+    )
+    conn.commit()
+    raw_account = conn.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
+    import_id = new_id(conn, "imp")
+    conn.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
+                             opening_balance_paise, closing_balance_paise, check_result,
+                             commit_groups)
+        VALUES (%s, 'hash-api-opening', 'review', %s, '2026-04-01', '2026-04-30',
+                0, %s, %s, '[]'::jsonb)
+        """,
+        (
+            import_id,
+            card["id"],
+            closing,
+            Jsonb(
+                {
+                    "status": "VERIFIED",
+                    "opening_source": "printed",
+                    "opening_paise": 0,
+                    "closing_paise": closing,
+                    "chain_ok": None,
+                    "rows": len(rows),
+                }
+            ),
+        ),
+    )
+    insert_lines(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        parsed_account={"rows": rows},
+    )
+    reconcile(
+        conn,
+        import_id=import_id,
+        account=raw_account,
+        period=(date(2026, 4, 1), date(2026, 4, 30)),
+    )
+    conn.commit()
+    return import_id, card
+
+
+def test_opening_api_accepts_a_manual_zero_and_labels_it_manual(authed_client, ledger):
+    import_id, _ = _assumed_zero_card_review(
+        ledger,
+        [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
+        closing=-42800,
+    )
+
+    blocked = authed_client.post(f"/api/imports/{import_id}/commit")
+    assert blocked.status_code == 409, blocked.text
+    assert "opening" in blocked.json()["detail"].lower()
+
+    response = authed_client.post(f"/api/imports/{import_id}/opening", json={"opening_paise": 0})
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["status"] == "review"
+    assert body["check"] == "VERIFIED"
+    assert body["opening_source"] == "manual"
+    assert body["opening_paise"] == 0
+    assert body["opening_evidenced"] is True
+    assert body["opening_required"] is False
+
+    committed = authed_client.post(f"/api/imports/{import_id}/commit")
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["status"] == "committed"
+
+
+def test_opening_api_accepts_a_signed_card_balance_honestly(authed_client, ledger):
+    import_id, _ = _assumed_zero_card_review(
+        ledger,
+        [
+            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
+            {"date": "2026-04-02", "description": "Merchant refund", "debit": 0, "credit": 10395},
+        ],
+        closing=-132405,
+    )
+
+    response = authed_client.post(
+        f"/api/imports/{import_id}/opening", json={"opening_paise": -100000}
+    )
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["check"] == "VERIFIED"
+    assert body["opening_source"] == "manual"
+    assert body["opening_paise"] == -100000
+    assert body["opening_required"] is False
+
+
+def test_opening_api_recheck_preserves_card_credit_decisions(authed_client, ledger):
+    import_id, _ = _assumed_zero_card_review(
+        ledger,
+        [
+            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
+            {"date": "2026-04-02", "description": "Merchant refund", "debit": 0, "credit": 10395},
+        ],
+        closing=-32405,
+    )
+    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+    credit = ledger.execute(
+        """
+        SELECT id FROM statement_lines
+        WHERE import_id = %s AND amount_paise > 0
+        """,
+        (import_id,),
+    ).fetchone()
+    resolve_line(
+        ledger,
+        import_id=import_id,
+        line_id=credit["id"],
+        resolution="classify_credit",
+        credit_kind="refund",
+        category_id=str(food["id"]),
+    )
+
+    response = authed_client.post(f"/api/imports/{import_id}/opening", json={"opening_paise": 0})
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["check"] == "VERIFIED"
+    assert body["opening_source"] == "manual"
+
+    stored = ledger.execute(
+        "SELECT match_state, movement_id, match_detail FROM statement_lines WHERE id = %s",
+        (credit["id"],),
+    ).fetchone()
+    assert stored["match_state"] == "new"
+    assert stored["movement_id"] is None
+    assert stored["match_detail"]["credit_kind"] == "refund"
+    assert stored["match_detail"]["credit_classified_by"] == "user"

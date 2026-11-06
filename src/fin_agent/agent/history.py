@@ -476,7 +476,7 @@ def recover_crashed_runs(conn: psycopg.Connection) -> list[dict[str, Any]]:
         content = {
             "id": client_id,
             "role": "assistant",
-            "parts": [{"type": "data-ending", "data": {"note": note}, "transient": None}],
+            "parts": [{"type": "data-ending", "data": {"note": note}}],
         }
         conn.execute(
             """

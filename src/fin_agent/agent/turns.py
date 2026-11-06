@@ -141,7 +141,13 @@ def encode_saved_turn(ui_message: dict[str, Any]) -> list[str]:
             )
             chunks.append(_event_chunk({"type": "text-end", "id": text_id}))
         elif isinstance(kind, str) and kind.startswith("data-"):
-            chunks.append(_event_chunk({**part, "id": part.get("id")}))
+            # Older stored parts may carry null optionals; the chunk schema forbids null.
+            payload = {
+                key: value
+                for key, value in part.items()
+                if not (key in {"id", "transient"} and value is None)
+            }
+            chunks.append(_event_chunk(payload))
     chunks.append(_event_chunk({"type": "finish"}))
     return chunks
 

@@ -42,6 +42,7 @@ class ScriptContext:
     period: tuple[str, str] | None = None
     ledger_opening_paise: int | None = None
     ledger_opening_as_of: str | None = None
+    manual_opening_paise: int | None = None
     account_name: str | None = None
     fingerprint: str | None = None
     expected_fingerprint: str | None = None
@@ -117,6 +118,7 @@ async def run_script(
             closing,
             period=context.period,
             ledger_opening=context.ledger_opening_paise,
+            manual_opening=context.manual_opening_paise,
             headers=headers,
             expected_fingerprint=context.expected_fingerprint,
             empty_statement=empty_statement,

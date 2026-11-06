@@ -9,15 +9,39 @@ printed opening is compared with the ledger's.
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any
 
 from fin_agent.importers.layout import normalize_headers
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+OPENING_MISSING = "opening balance not found in the file or the ledger"
+CLOSING_MISSING = "closing balance not found in the file"
+INPUT_REASONS = (OPENING_MISSING, CLOSING_MISSING)
+
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _opening_value(
+    opening: Any,
+    ledger_opening: int | None,
+    manual_opening: int | None,
+) -> tuple[int | None, str | None]:
+    """Choose the opening and its provenance.
+
+    A user-entered value is trusted. An anchored ledger value is trusted. A parser value is a
+    claim: a zero is exactly the known fallback shape, so it is never labeled as printed.
+    """
+    if _is_int(manual_opening):
+        return manual_opening, "manual"
+    if _is_int(ledger_opening):
+        return ledger_opening, "ledger"
+    if _is_int(opening):
+        return opening, "printed" if opening else "parser-zero"
+    return None, None
 
 
 def check_statement(
@@ -27,6 +51,7 @@ def check_statement(
     *,
     period: tuple[str, str] | list[str] | None = None,
     ledger_opening: int | None = None,
+    manual_opening: int | None = None,
     headers: Any = None,
     expected_fingerprint: str | None = None,
     empty_statement: bool = False,
@@ -38,6 +63,9 @@ def check_statement(
         "reason": None,
         "chain_breaks": [],
         "computed_closing": None,
+        "opening_source": None,
+        "opening_paise": None,
+        "closing_paise": None,
     }
     try:
         if not isinstance(rows, list):
@@ -46,12 +74,16 @@ def check_statement(
         count = len(rows)
         result["rows"] = count
         if count == 0:
-            effective_opening = opening if _is_int(opening) else ledger_opening
-            if empty_statement and _is_int(effective_opening) and effective_opening == closing:
+            effective_opening, opening_source = _opening_value(
+                opening, ledger_opening, manual_opening
+            )
+            if empty_statement and effective_opening is not None and effective_opening == closing:
                 result.update(
                     status="VERIFIED",
                     computed_closing=closing,
-                    opening_source="printed" if _is_int(opening) else "ledger",
+                    opening_source=opening_source,
+                    opening_paise=effective_opening,
+                    closing_paise=effective_opening,
                     reason="empty statement, balance unchanged",
                 )
                 return result
@@ -75,9 +107,9 @@ def check_statement(
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(row.get("date") or "")):
                 result["reason"] = f"row {index}: bad date {row.get('date')!r}"
                 return result
-        effective_opening = opening if _is_int(opening) else ledger_opening
-        if not _is_int(effective_opening):
-            result["reason"] = "opening balance not found in the file or the ledger"
+        effective_opening, opening_source = _opening_value(opening, ledger_opening, manual_opening)
+        if effective_opening is None:
+            result["reason"] = OPENING_MISSING
             return result
         effective_closing = closing
         if not _is_int(effective_closing):
@@ -86,9 +118,11 @@ def check_statement(
                 effective_closing = last
                 result["closing_source"] = "last running balance"
             else:
-                result["reason"] = "closing balance not found in the file"
+                result["reason"] = CLOSING_MISSING
                 return result
-        result["opening_source"] = "printed" if _is_int(opening) else "ledger"
+        result["opening_source"] = opening_source
+        result["opening_paise"] = effective_opening
+        result["closing_paise"] = effective_closing
         credits = sum(row["credit"] for row in rows)
         debits = sum(row["debit"] for row in rows)
         computed = int(effective_opening) + credits - debits
@@ -123,8 +157,12 @@ def check_statement(
             result["fingerprint"] = actual
             result["header_match"] = actual == expected_fingerprint
 
+        # A manual value is the user's evidence; a parser claim never overrides it.
         opening_disagrees = (
-            _is_int(opening) and ledger_opening is not None and opening != ledger_opening
+            opening_source == "ledger"
+            and _is_int(opening)
+            and ledger_opening is not None
+            and opening != ledger_opening
         )
         result["opening_matches_ledger"] = not opening_disagrees
         if opening_disagrees:
@@ -146,6 +184,45 @@ def check_statement(
         return result
 
 
+def opening_is_evidenced(
+    *,
+    check: dict[str, Any],
+    review: dict[str, Any],
+    account: dict[str, Any] | None,
+    period_start: Any = None,
+) -> bool:
+    """Whether a saved opening is backed by trusted evidence.
+
+    The narrower rule is local to a first card import: a parser label alone (including the old
+    `opening_source=printed` on a fallback zero) cannot commit without a user manual entry or a
+    prior anchored ledger balance. Bank formats, including printed openings with no running
+    balances, keep their existing contract.
+    """
+    if check.get("status") != "VERIFIED":
+        return False
+    if check.get("reason") == "empty statement, balance unchanged":
+        return True
+    if account is None or account.get("kind") != "card":
+        return True
+    manual = review.get("manual_opening_paise")
+    if (
+        _is_int(manual)
+        and check.get("opening_source") == "manual"
+        and check.get("opening_paise") == manual
+    ):
+        return True
+    if check.get("opening_source") == "ledger":
+        anchor = account.get("statement_balance_paise")
+        as_of = account.get("statement_balance_as_of")
+        if isinstance(as_of, str):
+            as_of = date.fromisoformat(as_of)
+        if isinstance(period_start, str):
+            period_start = date.fromisoformat(period_start)
+        if _is_int(anchor) and as_of is not None:
+            return period_start is None or as_of < period_start
+    return False
+
+
 def account_check(account: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     return check_statement(
         account.get("rows"),
@@ -164,4 +241,12 @@ def worst_status(statuses: list[str]) -> str:
     return min(statuses, key=lambda status: rank.get(status, 0))
 
 
-__all__ = ["account_check", "check_statement", "worst_status"]
+__all__ = [
+    "CLOSING_MISSING",
+    "INPUT_REASONS",
+    "OPENING_MISSING",
+    "account_check",
+    "check_statement",
+    "opening_is_evidenced",
+    "worst_status",
+]

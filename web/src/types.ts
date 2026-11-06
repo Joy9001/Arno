@@ -253,6 +253,9 @@ export type ImportLine = {
   suggested_category: { category_id: string; category_name: string; source: string } | null;
   suggested_transfer_account_id: string | null;
   transfer_confirmed: boolean;
+  credit_kind: "refund" | "transfer" | "income" | null;
+  credit_source_account_id: string | null;
+  credit_decision_required: boolean;
   candidates: ImportCandidate[];
 };
 
@@ -280,6 +283,9 @@ export type ImportRecord = {
   closing_paise: number | null;
   check: "VERIFIED" | "DISCREPANCY" | "FAILED" | null;
   check_detail: Record<string, unknown> | null;
+  opening_source: "manual" | "ledger" | "printed" | "parser-zero" | null;
+  opening_evidenced: boolean;
+  opening_required: boolean;
   counts: ImportCounts | null;
   review: {
     counts?: ImportCounts;

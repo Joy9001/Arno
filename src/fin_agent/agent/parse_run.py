@@ -20,7 +20,7 @@ from pydantic_ai_harness.skills import Skills
 from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, turn_limits
 from fin_agent.agent.models import primary_model
 from fin_agent.agent.skills_backend import LocalFilesBackend
-from fin_agent.importers.checks import account_check, worst_status
+from fin_agent.importers.checks import INPUT_REASONS, account_check, worst_status
 from fin_agent.importers.helpers import HELPER_VERSION
 from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_script
 from fin_agent.importers.readers import Doc
@@ -35,7 +35,9 @@ INSTRUCTIONS = (
     "you must not try to write anything. Read the sample with the host functions, then write "
     "one Python script that returns accounts and rows. Call `submit_parser` with the script's "
     "text; never submit rows. The server reruns the text in a fresh sandbox. If a check fails, "
-    "repair the script and submit it again. Load the `parse-statement` skill before you begin."
+    "repair the script and submit it again. Return `opening` only when the statement prints it; "
+    "never default a missing opening to zero or to `ledger_opening()`. Load the `parse-statement` "
+    "skill before you begin."
 )
 
 PROMPT = """A new statement layout needs a parser.
@@ -50,7 +52,10 @@ File summary: {info}
 
 Read a sample with `doc_info`, `doc_words`, `doc_words_range`, or `doc_cells`, then submit a
 script. Return only the accounts and rows the statement contains. For a page with no text
-layer, use `transcribe_page`."""
+layer, use `transcribe_page`.
+
+Set `opening` only to a value the statement actually prints. If it prints none, return
+`opening: None`; do not substitute zero or the ledger opening."""
 
 
 @dataclass
@@ -106,6 +111,7 @@ def _check_accounts(deps: ParseDeps, accounts: list[dict[str, Any]]) -> list[dic
             account,
             period=deps.context.period,
             ledger_opening=deps.context.ledger_opening_paise,
+            manual_opening=deps.context.manual_opening_paise,
             expected_fingerprint=deps.context.expected_fingerprint,
         )
         for account in accounts
@@ -163,6 +169,7 @@ def build_parse_agent(
             closing,
             period=ctx.deps.context.period,
             ledger_opening=ctx.deps.context.ledger_opening_paise,
+            manual_opening=ctx.deps.context.manual_opening_paise,
             headers=headers,
             expected_fingerprint=ctx.deps.context.expected_fingerprint,
             empty_statement=empty_statement,
@@ -209,9 +216,15 @@ def build_parse_agent(
         if not accounts:
             return {"status": "failed", "reason": reason or "no accounts", "counts": {}}
         checks = _check_accounts(ctx.deps, accounts)
+        # A missing opening (or closing) cannot be repaired by rewriting the script; submit it
+        # so the pipeline can ask the user instead of burning another submission.
+        input_only = bool(checks) and all(
+            check.get("status") == "VERIFIED" or check.get("reason") in INPUT_REASONS
+            for check in checks
+        )
         status = (
             "parser_submitted"
-            if all(check.get("status") == "VERIFIED" for check in checks)
+            if all(check.get("status") == "VERIFIED" for check in checks) or input_only
             else "failed"
         )
         ctx.deps.submitted = {

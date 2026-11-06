@@ -13,8 +13,10 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
+from fin_agent.importers.checks import opening_is_evidenced
 from fin_agent.importers.layouts import save_layout
 from fin_agent.importers.pipeline import _finish_open_transaction
+from fin_agent.importers.reconcile import credit_decision_required
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.audit import undo_group, write_group
@@ -152,6 +154,43 @@ def _new_movement(
         )
         capture_group = _capture_statement_line(conn, movement_id=str(transfer["id"]), line=line)
         return {"id": transfer["id"], "undo_id": [transfer["undo_id"], capture_group]}
+    credit_kind = detail.get("credit_kind")
+    if amount > 0 and account["kind"] == "card":
+        if credit_kind not in ("refund", "transfer", "income"):
+            raise InvalidLedgerError("Choose what this card credit is before committing")
+        if credit_kind == "refund":
+            category = detail.get("credit_category_id") or (suggested or {}).get("category_id")
+            refund = movements_mod.record_refund(
+                conn,
+                account_id=account["id"],
+                amount_paise=amount,
+                description=description,
+                payee_id=payee["id"] if payee else None,
+                category_id=category,
+                date=line["date"],
+                idempotency_key=f"stmt:{line['id']}",
+                actor="user",
+            )
+            capture_group = _capture_statement_line(conn, movement_id=str(refund["id"]), line=line)
+            return {"id": refund["id"], "undo_id": [refund["undo_id"], capture_group]}
+        if credit_kind == "transfer":
+            source_id = detail.get("credit_source_account_id")
+            if not source_id:
+                raise InvalidLedgerError("Choose the account that paid this card")
+            transfer = movements_mod.record_transfer(
+                conn,
+                from_account_id=source_id,
+                to_account_id=account["id"],
+                amount_paise=amount,
+                description=description,
+                date=line["date"],
+                idempotency_key=f"stmt:{line['id']}",
+                actor="user",
+            )
+            capture_group = _capture_statement_line(
+                conn, movement_id=str(transfer["id"]), line=line
+            )
+            return {"id": transfer["id"], "undo_id": [transfer["undo_id"], capture_group]}
     if amount < 0:
         record = movements_mod.record_expense(
             conn,
@@ -257,6 +296,16 @@ def commit_import(
             (import_id,),
         ).fetchall()
     ]
+    if not opening_is_evidenced(
+        check=check,
+        review=row["review"] or {},
+        account=account,
+        period_start=row["period_start"],
+    ):
+        raise ConflictLedgerError(
+            "Confirm this statement's opening balance on the review screen first.",
+            details={"opening_required": True},
+        )
     unresolved = [line for line in lines if line["match_state"] == "ambiguous"]
     if unresolved:
         raise ConflictLedgerError(
@@ -274,6 +323,38 @@ def commit_import(
         raise ConflictLedgerError(
             "Confirm every payment to your own account on the review screen first.",
             details={"unconfirmed_transfers": [line["id"] for line in unconfirmed]},
+        )
+    unclassified = [line["id"] for line in lines if credit_decision_required(line, account["kind"])]
+    if unclassified:
+        raise ConflictLedgerError(
+            "Choose what each card credit is on the review screen first.",
+            details={"unclassified_credits": unclassified},
+        )
+    invalid_sources: list[str] = []
+    for line in lines:
+        detail = line["match_detail"] or {}
+        if (
+            account["kind"] != "card"
+            or int(line["amount_paise"]) <= 0
+            or line["match_state"] in ("ignored", "certain", "merged")
+            or line.get("movement_id")
+            or detail.get("credit_kind") != "transfer"
+            or detail.get("suggested_transfer_account_id")
+        ):
+            continue
+        source = conn.execute(
+            """
+            SELECT 1 FROM accounts
+            WHERE id = %s AND active AND kind IN ('bank', 'cash', 'wallet') AND id <> %s
+            """,
+            (detail.get("credit_source_account_id"), account["id"]),
+        ).fetchone()
+        if source is None:
+            invalid_sources.append(line["id"])
+    if invalid_sources:
+        raise ConflictLedgerError(
+            "Choose the account that paid each card repayment on the review screen first.",
+            details={"invalid_credit_sources": invalid_sources},
         )
     group_ids = [str(group) for group in (row["commit_groups"] or [])]
     committed_lines = 0

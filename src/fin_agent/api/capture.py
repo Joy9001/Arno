@@ -152,7 +152,7 @@ def _save_card(
     content = {
         "id": client_id,
         "role": "assistant",
-        "parts": [{"type": "data-card", "id": client_id, "data": card, "transient": None}],
+        "parts": [{"type": "data-card", "id": client_id, "data": card}],
     }
     conn.execute(
         """

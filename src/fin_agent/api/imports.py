@@ -47,12 +47,17 @@ class AccountIn(ApiModel):
 
 
 class OpeningIn(ApiModel):
-    opening_paise: int = Field(ge=0)
+    opening_paise: int
 
 
 class ResolveLine(ApiModel):
-    resolution: Literal["new", "ignore", "merge", "confirm_transfer", "reject_transfer"]
+    resolution: Literal[
+        "new", "ignore", "merge", "confirm_transfer", "reject_transfer", "classify_credit"
+    ]
     movement_id: str | None = None
+    credit_kind: Literal["refund", "transfer", "income"] | None = None
+    category_id: str | None = None
+    source_account_id: str | None = None
 
 
 @router.post("/attachments", status_code=status.HTTP_201_CREATED)
@@ -235,6 +240,9 @@ def resolve_import_line(
             line_id=line_id,
             resolution=body.resolution,
             movement_id=body.movement_id,
+            credit_kind=body.credit_kind,
+            category_id=body.category_id,
+            source_account_id=body.source_account_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

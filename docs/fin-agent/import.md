@@ -182,7 +182,7 @@ often has no running balance, so only its total is checked. So the following che
 | Every date falls inside the period, taken from outside the parser: a month name in the header, or the day after the ledger's last row. If the parser supplied it, a swapped format would flip both | A day/month swap |
 | The normalized column headers match the saved fingerprint; otherwise the layout counts as new | A new column dirtying the narrations |
 | At least one row, unless the statement says there were none | A parser that drops every row when opening equals closing |
-| The printed opening matches the ledger, and a statement that prints none takes the ledger's. On a first import with neither, the import card asks | A gap between statements |
+| The opening is evidenced by a user manual entry, a trusted prior/ledger balance, or the statement's printed opening. A parser fallback zero is never labeled printed. On a first card import with no prior or manual opening, the review card asks before commit | A missing opening silently defaulted to zero, or a gap between statements |
 
 No check covers the text of a narration. A misread payee shows up on the review screen, which stays
 the last guard.

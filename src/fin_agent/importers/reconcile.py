@@ -17,10 +17,28 @@ from psycopg.types.json import Jsonb
 from fin_agent.importers.identifiers import find_upi_ref, scrub
 from fin_agent.ledger.audit import new_id
 
+CREDIT_KINDS = ("refund", "transfer", "income")
+
 
 def content_hash(day: str, amount_paise: int, description: str) -> str:
     normalized = " ".join(str(description or "").lower().split())
     return hashlib.sha256(f"{day}|{amount_paise}|{normalized}".encode()).hexdigest()
+
+
+def credit_decision_required(line: dict[str, Any], account_kind: str | None) -> bool:
+    """A card credit is never income by default; it needs an explicit user decision."""
+    detail = line.get("match_detail") or {}
+    if (
+        account_kind != "card"
+        or int(line.get("amount_paise") or 0) <= 0
+        or line.get("match_state") in ("ignored", "certain", "merged")
+        or line.get("movement_id")
+        or detail.get("suggested_transfer_account_id")
+    ):
+        return False
+    if detail.get("credit_kind") not in CREDIT_KINDS:
+        return True
+    return detail["credit_kind"] == "transfer" and not detail.get("credit_source_account_id")
 
 
 def insert_lines(
@@ -394,6 +412,9 @@ def resolve_line(
     line_id: str,
     resolution: str,
     movement_id: str | None = None,
+    credit_kind: str | None = None,
+    category_id: str | None = None,
+    source_account_id: str | None = None,
 ) -> dict[str, Any]:
     line = conn.execute(
         "SELECT * FROM statement_lines WHERE id = %s AND import_id = %s",
@@ -431,10 +452,86 @@ def resolve_line(
             (line_id,),
         )
         _set_match(conn, line_id, "new", None, {"transfer_rejected": True})
+    elif resolution == "classify_credit":
+        _classify_credit(
+            conn,
+            import_id=import_id,
+            line=line,
+            credit_kind=credit_kind,
+            category_id=category_id,
+            source_account_id=source_account_id,
+        )
     else:
-        raise ValueError("resolution is ignore, new, merge, confirm_transfer, or reject_transfer")
+        raise ValueError(
+            "resolution is ignore, new, merge, confirm_transfer, reject_transfer, "
+            "or classify_credit"
+        )
     conn.commit()
     return dict(conn.execute("SELECT * FROM statement_lines WHERE id = %s", (line_id,)).fetchone())
 
 
-__all__ = ["content_hash", "insert_lines", "reconcile", "resolve_line"]
+def _classify_credit(
+    conn: psycopg.Connection,
+    *,
+    import_id: str,
+    line: dict[str, Any],
+    credit_kind: str | None,
+    category_id: str | None,
+    source_account_id: str | None,
+) -> None:
+    if line["match_state"] != "new" or line.get("movement_id"):
+        raise ValueError("Only an unmatched new line can be classified")
+    if int(line["amount_paise"]) <= 0:
+        raise ValueError("Only a credit line can be classified")
+    account = conn.execute(
+        """
+        SELECT a.id, a.kind FROM imports i JOIN accounts a ON a.id = i.account_id
+        WHERE i.id = %s
+        """,
+        (import_id,),
+    ).fetchone()
+    if account is None or account["kind"] != "card":
+        raise ValueError("Only a card credit needs this classification")
+    if credit_kind not in CREDIT_KINDS:
+        raise ValueError("credit_kind must be refund, transfer, or income")
+    changes: dict[str, Any] = {"credit_kind": credit_kind, "credit_classified_by": "user"}
+    if credit_kind == "refund":
+        suggested = (line.get("match_detail") or {}).get("suggested_category") or {}
+        chosen = str(category_id or suggested.get("category_id") or "").strip()
+        if chosen:
+            category = conn.execute(
+                "SELECT id FROM categories WHERE id = %s AND active", (chosen,)
+            ).fetchone()
+            if category is None:
+                raise ValueError("No such category")
+            changes["credit_category_id"] = str(category["id"])
+    elif credit_kind == "transfer":
+        source_id = str(source_account_id or "").strip()
+        if not source_id:
+            raise ValueError("A card repayment needs the account that paid it")
+        if source_id == str(account["id"]):
+            raise ValueError("Choose the account that paid the card, not the card itself")
+        source = conn.execute(
+            """
+            SELECT id FROM accounts
+            WHERE id = %s AND active AND kind IN ('bank', 'cash', 'wallet')
+            """,
+            (source_id,),
+        ).fetchone()
+        if source is None:
+            raise ValueError("Choose an active bank, cash, or wallet account")
+        changes["credit_source_account_id"] = str(source["id"])
+    conn.execute(
+        """
+        UPDATE statement_lines
+        SET match_state = 'new', movement_id = NULL,
+            match_detail = ((coalesce(match_detail, '{}'::jsonb)
+                            - 'credit_source_account_id' - 'credit_category_id') || %s),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (Jsonb(changes), line["id"]),
+    )
+
+
+__all__ = ["content_hash", "credit_decision_required", "insert_lines", "reconcile", "resolve_line"]

@@ -168,7 +168,7 @@ explicitly deferred with a reason.
 | J14 | Goals and fenced savings | S | Not run | |
 | J15 | Schedules and calendar boundaries | S / F | Not run | |
 | J16 | Protected SBI import | H / H-copy | Not run | Password required; never place it in this log or chat. |
-| J17 | First Slice cycle | H / H-copy | Not run | Independent transaction checks still needed. |
+| J17 | First Slice cycle | H / H-copy | Partial; blocked before commit | All eight source rows independently checked; F11/F12 require fixes before accepting the financial import. |
 | J18 | Multicycle backfill | H / H-copy | Not run | |
 | J19 | Capture/statement reconciliation | H-copy | Not run | |
 | J20 | Import reject, commit, undo | H-copy | Not run | |
@@ -265,3 +265,100 @@ Outstanding manual UI check: an authenticated owner should sign in and confirm H
 Accounts summary still show `Unknown` for the unknown-balance SBI account (F08), and that a
 movement-only account stays Unknown (F09). This run made no financial writes and sent no chat
 messages.
+
+## Chat stream validation fix (6 November 2026)
+
+Observed failure: the user uploaded one real Slice statement in chat and sent "Import this
+statement into my Slice credit-card account. Let me review it before committing." The import
+started, then the frontend rejected the assistant's streamed query card with
+`Type validation failed: Value: {"type":"data-card","id":null,...,"transient":null}` and showed
+"Fin-Agent could not finish that answer."
+
+| Item | Evidence |
+|---|---|
+| Root cause | Fin-Agent's own SSE encoder (`agent/cards.py:data_part`) always wrote `id` and `transient`, including `null`. The installed client parser (`ai@7.0.159`, `uiMessageChunkSchema`) declares `id: z.string().optional()` and `transient: z.boolean().optional()`; null fails. Pydantic AI's own chunk encoder already uses `exclude_none=True`, so only the hand-built parts were malformed. A read-only reproduction with the installed `parseJsonEventStream` produced the same `AI_TypeValidationError` shape. |
+| Fix | `agent/cards.py` now omits unset `id`/`transient` in `data_part` and `with_data`, preserving explicit ids and `transient: false`; `agent/turns.py:encode_saved_turn` strips null optionals when replaying older stored parts; `api/capture.py:_save_card` and `agent/history.py:recover_crashed_runs` no longer store `transient: null`. Client validation was not loosened and no card was removed. |
+| Regression | New `tests/test_chat_stream_schema.py` streams a real `run_code` -> `run_query` card through `/api/chat` and validates the emitted SSE with the installed frontend `ai` package (`parseJsonEventStream` + `uiMessageChunkSchema`). It also covers replayed legacy nulls, an import card with explicit `id`, and `transient: false`. Result: 3 new tests passed; with `tests/test_chat_statement_attachment.py`, 9 passed. Ruff check and format pass on the touched files. |
+| Import state (read-only) | Exactly one import exists: `imp_01M6PXJGRJFBE83FDGDHG0MHER`, status `review`, account linked (`acc_01M6NVSZMAEZCTVCN6S2RG6X43`), 8 new parsed lines, created 2026-11-05 22:34:19 UTC. Its `import_statement` job is `done`; no job is pending/running and no conversation has `run_started_at`. No upload, parse retry, approval, commit, cancellation, or owner-data write was performed. |
+| Runtime | No active turn/import job before reload. `docker compose build api` + `docker compose up -d --no-deps api` only; `db`, `backup`, `phoenix`, and `speaches` stayed up and volumes were untouched. New api container `b9c90ff3dafb` is healthy; `GET /api/health` returned `{"status":"ok","database":"ok","schema_version":12}`; no errors in the recent api log. Container SHA-256 for `cards.py`, `turns.py`, `history.py`, and `capture.py` matches the host working tree, and an in-container check confirms unset optionals are omitted while explicit values are preserved. |
+| UI boundary | `preview_status` reported no preview tab (`available: false`), so no authenticated live UI verification was possible; no sign-in or browser switch was attempted. This is protocol-level regression evidence, not a claim that the owner UI was retested. |
+
+The import card was already at `review` before the reload, so no second import is needed. The
+review/commit step remains the owner's human UI action. The client bundle did not change, so a
+page refresh is not required for the fix; retrying the failed answer (or sending the next message)
+uses the fixed API stream.
+
+## Independent source review of the first chat statement (6 November 2026)
+
+The parent performed this bounded check after the user explicitly allowed direct work because
+two DeepSeek verification attempts failed with provider overload. This was a read-only source
+review, not a new upload, parser retry, approval, or financial commit.
+
+| Item | Observed result |
+|---|---|
+| Source identity | Uploaded attachment and local Slice June PDF have the same SHA-256. Detailed evidence is confined to ignored private/e2e/slice-june-review.md. |
+| Extraction | All eight transaction rows match the source's full dates/year, narration, exact paise and debit/credit direction. Six purchases and two credits; no extra summary/rewards/GST rows, omissions, or duplicates found. Printed period and summary arithmetic also match. |
+| Current import | One import remains in review, linked to Slice; job done; no line has a committed movement ID. No owner financial changes were made by the check. |
+| F11 (P0): credit booking is incorrect | Both source credits lack an own-account transfer suggestion. The commit path in importers/commit.py:_new_movement treats positive unclassified lines as income. A merchant refund must offset consumption, and a card repayment must not become income. The latter needs a human funding-account decision; the current review has no pending transfer decision and no general row-type editor. Do not commit this review as-is. |
+| F12 (P1): absent opening is falsely labeled printed | The generated parser defaults a missing ledger opening to zero. The PDF prints no opening balance, but check_result says opening_source=printed. A balancing sum is not independent evidence of a printed opening. Correct provenance/verification must cover the existing review, not just future parser instructions. |
+| UI boundary | T3 preview opened a temporary app tab, but snapshot timed out twice with Preview automation snapshot timed out after 15000ms. The tab was closed; no live signed-in review acceptance is claimed. |
+
+J17 has partial source-extraction evidence but is blocked on F11/F12 before financial commit.
+No full journey is marked Pass. The ignored private review contains exact source comparisons;
+public findings deliberately omit transaction amounts and counterparties.
+
+## F11 card-credit booking fix, local implementation (6 November 2026)
+
+F11 is fixed in the working tree only. No deployment, image rebuild, owner-data write, import
+retry, approval, or commit was performed, and no live signed-in UI or owner import acceptance is
+claimed. The existing Slice review was not modified.
+
+| Item | Result |
+|---|---|
+| Root cause | `importers/commit.py:_new_movement` booked every remaining positive statement line as income, including card refunds and card repayments. |
+| Decision model | A positive unmatched line on a card account now requires an explicit `credit_kind` recorded in `statement_lines.match_detail`: `refund`, `transfer` (own-account repayment), or `income`. Card direction alone no longer implies income. No migration was needed. |
+| Refund | Booked with the existing `record_refund`, so it offsets consumption in the selected/suggested category instead of creating income. |
+| Repayment | Booked with the existing balanced `record_transfer`; the user must choose an active bank/cash/wallet account. The card itself, a system account, missing, inactive, or unknown accounts are rejected. No funding account is assumed. |
+| Explicit income | Still possible only when the user selects "Other income" for that card credit. |
+| Preflight | `commit_import` now blocks unclassified card credits and classified repayments with a missing/invalid funding account before the line loop, so no ledger, capture, or payee writes happen. Ignored lines, reconciled movements, and genuinely suggested/confirmed transfers keep their previous paths. |
+| Review API | Narrow typed extension: `PATCH /api/imports/{id}/lines/{line_id}` accepts `resolution=classify_credit` with optional `credit_kind`, `category_id`, `source_account_id`. The import payload exposes `credit_kind`, `credit_source_account_id`, and `credit_decision_required` per line, so existing saved reviews acquire the controls without re-uploading. |
+| Shared UI | The existing `ImportsPanel` (used by Activity -> Imports and chat deep links) shows a Card credits decision block with the three choices and a funding-account selector for repayments. It also counts these in the decision blockers and line table. No redesign. |
+| Tests | New focused tests in `tests/test_import_pipeline.py` cover: refund reduces spending and never creates income; repayment debits the chosen bank and reduces card liability with no income/spending; missing classification and missing funding account block before any movement is written; unknown/same/system funding accounts are rejected; explicit income still works; a confirmed suggested transfer still commits. Existing transfer and reconciliation tests were kept. |
+| Checks | `pytest tests/test_import_pipeline.py tests/test_import_reconcile.py tests/test_import_api.py` -> 35 passed. Ruff check/format on touched Python files passed. `pnpm typecheck`, `pnpm lint`, and `pnpm build` passed. |
+| UI / runtime boundary | Not deployed or reloaded; no authenticated live UI check. The frontend bundle was built locally only. |
+| Remaining | F12 (absent opening balance wrongly labeled as printed) is a separate next task and is not addressed here. The existing review must still be reviewed and committed by the owner after both fixes. |
+
+## F12 opening-provenance guard, local implementation (6 November 2026)
+
+F12 is narrowed to the affected card path in the working tree only. No deployment, image rebuild,
+owner-data write, import retry, approval, or commit was performed. The existing review was not
+modified.
+
+| Item | Result |
+|---|---|
+| Provenance rule | A parser-supplied zero is recorded as `parser-zero`, never as `printed`. A user value is `manual`; a host ledger value is `ledger`. A parser's nonzero value still carries the existing `printed` label for bank compatibility. |
+| Card guard | `commit_import` now re-evaluates the saved evidence before any write. A first card import with neither a user manual opening nor a trusted prior/ledger opening is blocked with an opening-input conflict, even when the saved check says `opening_source=printed`. |
+| Resolution | The existing `review.manual_opening_paise` and `POST /api/imports/{id}/opening` route are reused. For a review that already has rows, the host rechecks the stored rows in place and labels the result `manual`, so F11 card-credit decisions survive; an import with no rows keeps the existing job retry. The Imports review screen shows the opening input and disables commit until it is resolved. |
+| Compatibility | Bank imports keep their previous contract, including printed openings with no running-balance column. Empty statements and manual zero remain valid. Signed manual card values are accepted rather than clamped. General historical-anchor/source-proof redesign is deferred. |
+| Files | `importers/checks.py`, `importers/commit.py`, `importers/pipeline.py`, `importers/monty.py`, `agent/parse_run.py`, `agent/skills/parse-statement/SKILL.md`, `api/imports.py`, `web/src/panels/Imports.tsx`, `web/src/types.ts`, plus focused tests. |
+| Tests | `pytest tests/test_importers.py tests/test_import_pipeline.py tests/test_import_api.py` -> 50 passed. Directly affected import set: `pytest tests/test_import_reconcile.py tests/test_agent_parse_run.py tests/test_import_injection.py tests/test_import_history_pagination.py tests/test_chat_statement_attachment.py` -> 26 passed. Ruff check/format passed on touched Python files; `pnpm typecheck`, `pnpm lint`, and the production build passed. |
+| UI / runtime boundary | Not deployed or reloaded; no authenticated live UI check. The owner still performs the review and commit action. |
+| Remaining | The owner must confirm the actual opening (including an explicit zero if true) on the existing card review, then classify the two card credits under F11, then commit. A general historical-anchor rule for bank gaps was explicitly deferred to keep this fix local. |
+
+## F11/F12 local deployment and review payload check (6 November 2026)
+
+F11/F12 are deployed to the local api. This was a read-only verification: no owner-data write,
+import retry, approval, cancellation, or commit was performed, and no signed-in browser UI check
+is claimed.
+
+| Item | Result |
+|---|---|
+| Deployment | `docker compose build api` then `docker compose up -d --no-deps api` with the existing project configuration (`compose.yaml;compose.gpu.yaml`) and no profile change. Only api was recreated (container `917350a65a3a`, image `ghcr.io/joy9001/fin-agent:0.1.2`); `db`, `backup`, `phoenix`, and `speaches` kept their previous uptime and volumes. No Compose file was edited. |
+| Health | `GET /api/health` -> `{"status":"ok","database":"ok","schema_version":12}`; the container is healthy and the recent api log has no errors or tracebacks. |
+| Source identity | HEAD `db86223`; the working tree still holds the uncommitted F11/F12 changes. Container `/app` sources and the installed package under `.venv/.../site-packages` match the working tree by SHA-256 for `importers/pipeline.py`, `checks.py`, `commit.py`, `reconcile.py`, `monty.py`, and `api/imports.py`. |
+| Active work | Read-only check before reload: no pending/running job and no conversation with `run_started_at` or `active_run_id`. |
+| Review payload | `import_payload` read inside `BEGIN READ ONLY` (`transaction_read_only=on`). One import `imp_01M6PXJGRJFBE83FDGDHG0MHER`, status `review`, `committed_at` null, 8 lines all `new`, no movement IDs. Account is the Slice card (`acc_01M6NVSZMAEZCTVCN6S2RG6X43`). |
+| Opening evidence | `opening_required=true`, `opening_evidenced=false`, and the review has no manual opening. The stored `check_result` still carries the old parser label `opening_source=printed` with the parser fallback value; the payload does not treat it as established evidence, so the commit guard stays active. The review bundle keys the opening input off `opening_required` and does not present the old label as a printed fact. |
+| Card credits | Both card credits are already classified by the user (`credit_classified_by=user`, updated 06 Nov 07:23 and 07:25 UTC): one repayment with a funding account and one merchant refund with a category. `credit_decision_required` is false for every line, so no unresolved credit decisions remain. This differs from the brief's expectation of two unresolved decisions; this check did not alter the rows. |
+| Web bundle | `/app/web/dist/index.html` references `assets/index-DKfpKnBX.js`, which contains `Opening balance needed`, `Card credits`, `Merchant refund`, `Card repayment from my account`, and `Other income`. This is bundle verification only, not signed-in UI acceptance. |
+| Remaining human steps | In Activity -> Imports, open this review, enter the real card opening (explicit zero only if true), review the two already-classified credits, and commit. If either classification is wrong, change it before committing. |
