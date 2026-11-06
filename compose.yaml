@@ -128,13 +128,17 @@ services:
       - "127.0.0.1:11434:11434"
 
   # `docker compose --profile local-stt up`: local speech-to-text for the STT role.
-  # The first voice note downloads Whisper into the volume; later notes reuse it.
+  # speaches returns 404 until a model is installed; PRELOAD_MODELS installs STT_MODEL into the
+  # volume at startup (once). Needs 0.9.0-rc.3 or newer.
   speaches:
-    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu
+    image: ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu
     profiles: ["local-stt"]
     restart: unless-stopped
     logging: *default-logging
     environment:
+      PRELOAD_MODELS: '["${STT_MODEL:-Systran/faster-whisper-small}"]'
+      # -1 keeps the model loaded; the 300 s default reloaded it into VRAM (~75 s) after any idle gap.
+      STT_MODEL_TTL: "-1"
       ENABLE_UI: "false"
       WHISPER__INFERENCE_DEVICE: cpu
       WHISPER__COMPUTE_TYPE: int8

@@ -525,7 +525,7 @@ Answer each when its layer arrives, not before.
 - **L7:** the cloud-versus-local Hinglish comparison is **not measured on this host**. No `STT_*`
   endpoint and no Hinglish audio corpus are configured, so the Hinglish and voice-transcript eval
   cases test the agent downstream of a transcript, not the speech model. The code path is one for
-  both. Locally, `speaches` 0.8.3-cpu (Whisper through faster-whisper) is the `local-stt` Compose
+  both. Locally, `speaches` 0.9.0-rc.3-cpu (Whisper through faster-whisper) is the `local-stt` Compose
   profile. **Qwen3-ASR 0.6B and 1.7B are Apache-2.0** (checked on Hugging Face, November 3, 2026),
   and vLLM serves them through the same OpenAI-compatible `/v1/audio/transcriptions` API,
   including its prompt field, so Qwen3-ASR is a viable local alternative to Whisper. The

@@ -100,6 +100,11 @@ async def _transcribe_audio(
     fields = {"model": config.model, "response_format": "json"}
     if prompt:
         fields["prompt"] = prompt
+    # Whisper guesses the language from the first seconds, and a short clip often guesses wrong
+    # (a "Hello" came back as Japanese). `STT_LANGUAGE=en` pins it; unset keeps auto-detect.
+    language = os.environ.get("STT_LANGUAGE", "").strip()
+    if language:
+        fields["language"] = language
     headers = {}
     if config.api_key and config.api_key != "not-needed":
         headers["Authorization"] = f"Bearer {config.api_key}"

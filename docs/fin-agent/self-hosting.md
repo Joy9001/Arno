@@ -193,7 +193,8 @@ STT_API_KEY=not-needed
 STT_PAYEE_CONTEXT=1
 ```
 
-The first voice note downloads the model into the `speaches-data` volume. A cloud
+speaches installs `STT_MODEL` (`PRELOAD_MODELS`) into the `speaches-data` volume on
+first start (speaches returns 404 until a model is installed). A cloud
 OpenAI-compatible transcription endpoint works too; with a cloud endpoint, the optional payee-name
 prompt sends those names out as well. Set `STT_PAYEE_CONTEXT=0` to keep them local.
 

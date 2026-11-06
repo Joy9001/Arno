@@ -164,6 +164,16 @@ def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_prompt
     )
     assert without.status_code == 200
     assert b'name="prompt"' not in calls[1]["body"]
+    assert b'name="language"' not in calls[1]["body"]
+
+    monkeypatch.setenv("STT_LANGUAGE", "en")
+    pinned = authed_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_voice_ok"},
+    )
+    assert pinned.status_code == 200
+    assert b'name="language"' in calls[2]["body"]
 
 
 def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(

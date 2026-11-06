@@ -1,0 +1,19 @@
+# NVIDIA GPU for local speech-to-text. Add it with
+# `docker compose -f compose.yaml -f compose.gpu.yaml --profile local-stt up -d`, or set
+# `COMPOSE_FILE=compose.yaml:compose.gpu.yaml` in .env (use `;` as the separator on Windows).
+# Needs the NVIDIA driver, plus the NVIDIA Container Toolkit on Linux (built in on Docker Desktop).
+services:
+  speaches:
+    image: ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cuda
+    environment:
+      WHISPER__INFERENCE_DEVICE: cuda
+      # GTX 16xx cards have broken fp16: the model then ignores its audio and answers "Thank you."
+      # `int8_float32` avoids fp16 and fits a 4 GB card (~2 GB). Use float16 on RTX or newer cards.
+      WHISPER__COMPUTE_TYPE: int8_float32
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
