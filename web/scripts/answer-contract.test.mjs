@@ -23,7 +23,8 @@ const { displayText, remarkStripOutsideMarkers } = await server.ssrLoadModule("/
 const { markdownRemarkPlugins } = await server.ssrLoadModule("/src/chat/markdown-plugins.ts");
 const { buildSupportingPlan, coveredByNativeCard, fallbackViews, messageCoverage } =
   await server.ssrLoadModule("/src/chat/supporting-data.ts");
-const { ProjectionSummary } = await server.ssrLoadModule("/src/projection.tsx");
+const { ProjectionBody, ProjectionChart, ProjectionSummary } = await server.ssrLoadModule("/src/projection.tsx");
+const { TodaySummary } = await server.ssrLoadModule("/src/Today.tsx");
 const { EvidencePanel } = await server.ssrLoadModule("/src/EvidencePanel.tsx");
 const render = (Component, data) => renderToStaticMarkup(React.createElement(Component, { data }));
 const cardPart = (data) => ({ type: "data", name: "card", data });
@@ -104,6 +105,83 @@ test("optimistic variants do not show a probability without a floor", () => {
     assert.match(html, /No floor set/);
     assert.doesNotMatch(html, /99%|optimistic only/);
   }
+});
+
+test("an explicitly unknown starting balance suppresses forecast numbers on every surface", () => {
+  const receipt = structuredClone(fixtures.answers.receipt.results[0].receipt);
+  const unknown = {
+    ...receipt,
+    data_quality: {
+      ...receipt.data_quality,
+      balance_ages: [{ account: "Unknown bank", as_of: null, age_days: null, known: false }],
+      setup_gaps: ["no liquid account has a known balance"],
+    },
+  };
+
+  const card = render(Card, { ...unknown, card: "projection" });
+  assert.match(card, /Unknown bank/);
+  assert.match(card, /Add a statement balance/);
+  assert.match(card, /Data quality and sources/);
+  assert.doesNotMatch(card, /Lowest median balance/);
+  assert.doesNotMatch(card, /above floor/);
+  assert.doesNotMatch(card, /₹3,000/);
+
+  const body = renderToStaticMarkup(React.createElement(ProjectionBody, { payload: unknown }));
+  assert.match(body, /Unknown bank/);
+  assert.match(body, /Data quality/);
+  assert.doesNotMatch(body, /Lowest median point/);
+  assert.doesNotMatch(body, /Chance above/);
+
+  const chart = renderToStaticMarkup(React.createElement(ProjectionChart, { payload: unknown }));
+  assert.match(chart, /Unknown bank/);
+  assert.doesNotMatch(chart, /<svg/);
+
+  const home = {
+    as_of: "2026-11-06",
+    spendable_paise: 0,
+    cash_quality: {
+      status: "unknown",
+      known_paise: 0,
+      known_count: 0,
+      unknown_count: 1,
+      unknown_accounts: ["Unknown bank"],
+    },
+    projection: unknown,
+    unread_count: 0,
+    needs_you: [],
+    recent: [],
+  };
+  const homeHtml = renderToStaticMarkup(
+    React.createElement(TodaySummary, {
+      data: home,
+      horizon: 90,
+      onHorizon: () => {},
+      onOpenProjection: () => {},
+    }),
+  );
+  assert.match(homeHtml, /Unknown bank/);
+  assert.match(homeHtml, /statement balance/);
+  assert.doesNotMatch(homeHtml, /chance the floor holds/);
+  assert.doesNotMatch(homeHtml, /Lowest median balance/);
+  assert.match(homeHtml, /Projection/);
+});
+
+test("a known zero, a stale-but-stated balance and an unset floor still support a forecast", () => {
+  for (const balance_ages of [
+    [{ account: "Zero bank", as_of: "2026-11-06", age_days: 0, amount_paise: 0, known: true }],
+    [{ account: "Stale bank", as_of: "2026-09-01", age_days: 66, amount_paise: 100_000, known: true }],
+  ]) {
+    const payload = structuredClone(fixtures.answers.receipt.results[0].receipt);
+    payload.data_quality = { ...payload.data_quality, balance_ages, setup_gaps: ["no floor set"] };
+    const html = render(Card, { ...payload, card: "projection" });
+    assert.match(html, /Lowest median balance/);
+    assert.match(html, /₹3,000/);
+  }
+
+  const legacy = structuredClone(fixtures.answers.receipt.results[0].receipt);
+  delete legacy.data_quality.balance_ages;
+  legacy.data_quality.setup_gaps = ["no floor set"];
+  assert.match(render(Card, { ...legacy, card: "projection" }), /Lowest median balance/);
 });
 
 test("invalid charts, table dimensions and missing views cannot hide valid fallback cards", () => {

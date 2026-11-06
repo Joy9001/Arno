@@ -128,10 +128,14 @@ def account_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, 
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     }
     if row["kind"] == "card":
-        owed = max(-balance, 0)
-        limit = row["credit_limit_paise"] or 0
+        # A ledger movement alone does not establish a card's outstanding debt, so an unknown
+        # card must not look like a zero balance with the whole limit still available.
+        owed = max(-balance, 0) if has_known_balance(row) else None
+        limit = row["credit_limit_paise"]
         payload["card_outstanding_paise"] = owed
-        payload["available_credit_paise"] = max(limit - owed, 0)
+        payload["available_credit_paise"] = (
+            max(limit - owed, 0) if owed is not None and limit is not None else None
+        )
     if row["kind"] == "loan":
         payload["loan_outstanding_paise"] = max(-balance, 0)
     return payload

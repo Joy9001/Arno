@@ -483,6 +483,7 @@ def load_inputs(
             as_of=row["as_of_date"],
             statement_age_days=row["age_days"],
             kind=row["kind"],
+            known=row["known"],
         )
         for row in liquid_rows
     )
@@ -494,6 +495,7 @@ def load_inputs(
             due_day=int(row["due_day"]),
             outstanding_paise=int(row["outstanding_paise"]),
             credit_limit_paise=int(row["credit_limit_paise"] or 0),
+            known=row["known"],
         )
         for row in card_rows
     )

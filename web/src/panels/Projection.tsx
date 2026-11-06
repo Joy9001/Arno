@@ -5,7 +5,12 @@ import { AlertTriangle, Calculator } from "lucide-react";
 import { Busy } from "../Loading";
 import { formatDate, formatPaise, isoDate, percent } from "../format";
 import { ProjectionBody, type ProjectionPayload } from "../projection";
-import { lowAmount, OBLIGATION_WARNING, paymentMethodLabel } from "../projectionData";
+import {
+  lowAmount,
+  OBLIGATION_WARNING,
+  paymentMethodLabel,
+  projectionReadiness,
+} from "../projectionData";
 import { useApi } from "../useApi";
 import {
   MoneyAsk,
@@ -175,14 +180,14 @@ export function ProjectionPanel() {
   const purchase = data?.hypothetical as PurchaseMeta | undefined;
   const verdict = data?.verdict ? VERDICT[data.verdict] : null;
   const aboveThreshold = data ? data.floor_probability >= data.floor_threshold : false;
+  const readiness = data ? projectionReadiness(data) : { ready: true, message: null };
+  const gated = !readiness.ready;
   const staleBalances =
     data?.data_quality.balance_ages?.filter(
-      (row) => row.known === false || (row.age_days ?? 0) > 30,
+      (row) => row.known !== false && (row.age_days ?? 0) > 30,
     ) ?? [];
   const staleNote = staleBalances.length
-    ? `Balance data is stale for ${staleBalances.map((row) => row.account).join(", ")}. The projection uses the recorded balances${
-        staleBalances.some((row) => row.known === false) ? " and counts an unknown balance as zero" : ""
-      }.`
+    ? `Balance data is stale for ${staleBalances.map((row) => row.account).join(", ")}. The projection uses the recorded balances.`
     : null;
 
   return (
@@ -202,12 +207,18 @@ export function ProjectionPanel() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
         >
-          {verdict && (
+          {!gated && verdict && (
             <div className="moneyv-verdict">
               <span className={`moneyv-chip ${verdict.tone}`}>{verdict.text}</span>
               {purchase?.feasible === false && <span className="moneyv-chip warn">Not feasible as entered</span>}
               {data.verdict_reason && <p className="moneyv-verdict-note">{data.verdict_reason}</p>}
             </div>
+          )}
+
+          {gated && (
+            <MoneySection title="Why there is no forecast" note="A required balance is missing">
+              <ProjectionBody payload={data} />
+            </MoneySection>
           )}
 
           {purchase?.amount_paise !== undefined && (
@@ -222,55 +233,59 @@ export function ProjectionPanel() {
             </p>
           )}
 
-          <MoneySummary
-            label="Projection summary"
-            cells={[
-              floorSet
-                ? {
-                    label: "Chance above floor",
-                    value: percent(data.floor_probability),
-                    note: `Threshold ${percent(data.floor_threshold)}${
-                      data.runs ? ` · ${data.runs.toLocaleString("en-IN")} seeded futures` : " · seeded futures"
-                    }`,
-                    tone: aboveThreshold ? "positive" : "negative",
-                  }
-                : {
-                    label: "Chance above zero",
-                    value: percent(data.floor_probability),
-                    note: "No floor is set; this measures staying at or above ₹0",
-                  },
-              {
-                label: "Lowest median balance",
-                value: medianLow === null ? "—" : formatPaise(medianLow),
-                note: `On ${formatDate(data.median_low.date)}`,
-              },
-              {
-                label: "Floor",
-                value: floorSet && floorText ? floorText : "No floor",
-                note: floorSet
-                  ? "Set in Profile"
-                  : <MoneyAsk prompt="Set my financial floor." label="Ask to set one" />,
-              },
-              {
-                label: "10th–90th percentile",
-                value: lowPoint
-                  ? `${formatPaise(lowPoint.p10_paise)} – ${formatPaise(lowPoint.p90_paise)}`
-                  : "—",
-                note: lowPoint ? "Range at the lowest median point" : "Curve not available",
-              },
-            ]}
-          />
-          <p className="moneyv-facts">
-            {data.first_floor_crossing
-              ? `The median crosses ${floorSet ? "the floor" : "zero"} on ${formatDate(data.first_floor_crossing)}`
-              : `The median never crosses ${floorSet ? "the floor" : "zero"} within the horizon`}
-            {data.optimistic
-              ? ` · with unconfirmed income: ${percent(data.optimistic.floor_probability)} above ${
-                  floorSet ? "floor" : "zero"
-                } (optimistic only)`
-              : ""}
-          </p>
-          {data.obligations_met === false && (
+          {!gated && (
+            <MoneySummary
+              label="Projection summary"
+              cells={[
+                floorSet
+                  ? {
+                      label: "Chance above floor",
+                      value: percent(data.floor_probability),
+                      note: `Threshold ${percent(data.floor_threshold)}${
+                        data.runs ? ` · ${data.runs.toLocaleString("en-IN")} seeded futures` : " · seeded futures"
+                      }`,
+                      tone: aboveThreshold ? "positive" : "negative",
+                    }
+                  : {
+                      label: "Chance above zero",
+                      value: percent(data.floor_probability),
+                      note: "No floor is set; this measures staying at or above ₹0",
+                    },
+                {
+                  label: "Lowest median balance",
+                  value: medianLow === null ? "—" : formatPaise(medianLow),
+                  note: `On ${formatDate(data.median_low.date)}`,
+                },
+                {
+                  label: "Floor",
+                  value: floorSet && floorText ? floorText : "No floor",
+                  note: floorSet
+                    ? "Set in Profile"
+                    : <MoneyAsk prompt="Set my financial floor." label="Ask to set one" />,
+                },
+                {
+                  label: "10th–90th percentile",
+                  value: lowPoint
+                    ? `${formatPaise(lowPoint.p10_paise)} – ${formatPaise(lowPoint.p90_paise)}`
+                    : "—",
+                  note: lowPoint ? "Range at the lowest median point" : "Curve not available",
+                },
+              ]}
+            />
+          )}
+          {!gated && (
+            <p className="moneyv-facts">
+              {data.first_floor_crossing
+                ? `The median crosses ${floorSet ? "the floor" : "zero"} on ${formatDate(data.first_floor_crossing)}`
+                : `The median never crosses ${floorSet ? "the floor" : "zero"} within the horizon`}
+              {data.optimistic
+                ? ` · with unconfirmed income: ${percent(data.optimistic.floor_probability)} above ${
+                    floorSet ? "floor" : "zero"
+                  } (optimistic only)`
+                : ""}
+            </p>
+          )}
+          {!gated && data.obligations_met === false && (
             <p className="moneyv-basis moneyv-warning">
               <AlertTriangle size={15} aria-hidden="true" /> {OBLIGATION_WARNING}
             </p>
@@ -298,37 +313,39 @@ export function ProjectionPanel() {
                   {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}
                 </li>
               )}
-              {data.optimistic && (
+              {!gated && data.optimistic && (
                 <li>
                   Unconfirmed income is shown separately:{" "}
                   {percent(data.optimistic.floor_probability)} above{" "}
                   {floorSet ? "floor" : "zero"}, optimistic only
                 </li>
               )}
-              {data.obligations_met === false && <li>{OBLIGATION_WARNING}</li>}
+              {!gated && data.obligations_met === false && <li>{OBLIGATION_WARNING}</li>}
             </ul>
           </MoneySection>
 
-          <MoneySection title={data.hypothetical ? "If you buy it" : "The projection"} note={`Next ${data.horizon_days} days`}>
-            <p className="moneyv-legend">
-              <span>
-                <i aria-hidden="true" /> Median
-              </span>
-              <span>
-                <i className="band" aria-hidden="true" /> 10th–90th percentile
-              </span>
-              {floorSet && (
+          {!gated && (
+            <MoneySection title={data.hypothetical ? "If you buy it" : "The projection"} note={`Next ${data.horizon_days} days`}>
+              <p className="moneyv-legend">
                 <span>
-                  <i className="floor" aria-hidden="true" /> {floorText ?? "Floor"}
+                  <i aria-hidden="true" /> Median
                 </span>
-              )}
-            </p>
-            {/* The shared body's summary repeats the strip above; its chart, tradeoffs, goals,
-                data quality, and sources follow here. */}
-            <div className="moneyv-projection-body">
-              <ProjectionBody payload={data} />
-            </div>
-          </MoneySection>
+                <span>
+                  <i className="band" aria-hidden="true" /> 10th–90th percentile
+                </span>
+                {floorSet && (
+                  <span>
+                    <i className="floor" aria-hidden="true" /> {floorText ?? "Floor"}
+                  </span>
+                )}
+              </p>
+              {/* The shared body's summary repeats the strip above; its chart, tradeoffs, goals,
+                  data quality, and sources follow here. */}
+              <div className="moneyv-projection-body">
+                <ProjectionBody payload={data} />
+              </div>
+            </MoneySection>
+          )}
         </motion.div>
       )}
 

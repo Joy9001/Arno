@@ -187,7 +187,11 @@ function AccountDetailDialog({ account, onClose }: { account: Account; onClose: 
                 <dt>Credit limit</dt>
                 <dd>{formatPaise(row.credit_limit_paise)}</dd>
                 <dt>Available credit</dt>
-                <dd>{formatPaise(row.available_credit_paise ?? null)}</dd>
+                <dd>
+                  {row.available_credit_paise == null
+                    ? "Unknown"
+                    : formatPaise(row.available_credit_paise)}
+                </dd>
                 <dt>Statement day</dt>
                 <dd>{row.statement_day ? `Day ${row.statement_day}` : "Not recorded"}</dd>
                 <dt>Next due</dt>
@@ -253,8 +257,11 @@ function AccountRow({ account }: { account: Account }) {
             <span className="moneyv-meta">Ledger balance</span>
             <span className="moneyv-meta">{statement}</span>
             <span className="moneyv-meta">
-              Available {formatPaise(account.available_credit_paise ?? null)} · next due{" "}
-              {nextDueLabel(account.due_day)}
+              Available{" "}
+              {account.available_credit_paise == null
+                ? "Unknown"
+                : formatPaise(account.available_credit_paise)}{" "}
+              · next due {nextDueLabel(account.due_day)}
             </span>
             {disagreement && (
               <span className="moneyv-inline-warn">
@@ -384,6 +391,9 @@ export function AccountsPanel() {
   }
 
   const cards = data.accounts.filter((account) => account.kind === "card");
+  const cardsWithoutBalance = cards.filter(
+    (account) => account.card_outstanding_paise == null,
+  );
   const loans = data.accounts.filter((account) => account.kind === "loan");
   const banking = data.accounts.filter((account) =>
     ["bank", "cash", "wallet"].includes(account.kind),
@@ -435,8 +445,14 @@ export function AccountsPanel() {
               },
               {
                 label: "Card balance",
-                value: formatPaise(data.card_owed_paise),
-                note: cards.length ? `Owed on ${countLabel(cards.length, "card")}` : "No cards",
+                value:
+                  data.card_owed_paise == null ? "Unknown" : formatPaise(data.card_owed_paise),
+                tone: cardsWithoutBalance.length ? "warning" : undefined,
+                note: cardsWithoutBalance.length
+                  ? `${countLabel(cardsWithoutBalance.length, "card")} without a known balance`
+                  : cards.length
+                    ? `Owed on ${countLabel(cards.length, "card")}`
+                    : "No cards",
               },
               {
                 label: "Loan outstanding",

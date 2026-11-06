@@ -463,10 +463,17 @@ def account_summary(conn: psycopg.Connection) -> dict[str, Any]:
     liquid_total = sum(
         account["balance_paise"] for account in accounts if account["liquid"] and account["active"]
     )
-    card_owed = sum(
-        account.get("card_outstanding_paise", 0)
-        for account in accounts
-        if account["kind"] == "card" and account["active"]
+    active_cards = [
+        account for account in accounts if account["kind"] == "card" and account["active"]
+    ]
+    known_cards = [
+        account for account in active_cards if account["card_outstanding_paise"] is not None
+    ]
+    # One unknown card makes the headline incomplete rather than silently zero.
+    card_owed = (
+        None
+        if len(known_cards) != len(active_cards)
+        else sum(int(account["card_outstanding_paise"]) for account in known_cards)
     )
     loan_outstanding = sum(
         account.get("loan_outstanding_paise", 0)

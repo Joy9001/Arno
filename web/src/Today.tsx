@@ -4,7 +4,7 @@ import { formatRupees } from "./chat/format";
 import { formatDate } from "./format";
 import { Busy } from "./Loading";
 import { ProjectionChart, type ProjectionPayload } from "./projection";
-import { OBLIGATION_WARNING } from "./projectionData";
+import { OBLIGATION_WARNING, projectionReadiness } from "./projectionData";
 import type { CashQuality, Movement, NotificationItem } from "./types";
 
 export type HomePayload = {
@@ -52,6 +52,15 @@ export function TodaySummary({
     (projection.floor_paise !== undefined ? formatRupees(projection.floor_paise) : null);
   const floorSet = projection.floor_set ?? (projection.floor_paise ?? 0) > 0;
   const holds = projection.floor_probability >= projection.floor_threshold;
+  const readiness = projectionReadiness(projection);
+  const cashMessage =
+    cash.status === "no_accounts"
+      ? "The projection needs a liquid account. Add a bank, cash, or wallet account with its balance."
+      : `The projection needs a known starting balance. Add a statement balance or import a statement${
+          cashNames ? ` for ${cashNames}${cashMore}` : ""
+        }.`;
+  const gated = !readiness.ready || cash.status !== "known";
+  const gateMessage = readiness.message ?? cashMessage;
 
   return (
     <section className="today" aria-label="Today's money">
@@ -100,58 +109,67 @@ export function TodaySummary({
           </div>
         </div>
 
-        <p className="today-verdict">
-          {floorSet ? (
-            <>
-              <b className={holds ? "good" : "danger"}>
-                {Math.round(projection.floor_probability * 100)}%
-              </b>{" "}
-              chance the floor holds
-              {floorText ? <> · floor {floorText}</> : null}
-            </>
-          ) : (
-            <>
-              <b className="neutral">No floor set</b>
-              {onOpenSettings ? (
-                <>
-                  {" "}
-                  ·{" "}
-                  <button type="button" className="inline-link" onClick={onOpenSettings}>
-                    Set a floor
-                  </button>
-                </>
-              ) : null}
-            </>
-          )}
-        </p>
-
-        {projection.obligations_met === false && (
+        {gated ? (
           <p className="today-warning">
             <AlertTriangle size={15} aria-hidden="true" />
-            <span>{OBLIGATION_WARNING}</span>
+            <span>{gateMessage}</span>
           </p>
+        ) : (
+          <>
+            <p className="today-verdict">
+              {floorSet ? (
+                <>
+                  <b className={holds ? "good" : "danger"}>
+                    {Math.round(projection.floor_probability * 100)}%
+                  </b>{" "}
+                  chance the floor holds
+                  {floorText ? <> · floor {floorText}</> : null}
+                </>
+              ) : (
+                <>
+                  <b className="neutral">No floor set</b>
+                  {onOpenSettings ? (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <button type="button" className="inline-link" onClick={onOpenSettings}>
+                        Set a floor
+                      </button>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </p>
+
+            {projection.obligations_met === false && (
+              <p className="today-warning">
+                <AlertTriangle size={15} aria-hidden="true" />
+                <span>{OBLIGATION_WARNING}</span>
+              </p>
+            )}
+
+            <div className={busy ? "today-chart busy" : "today-chart"}>
+              <ProjectionChart payload={projection} height={110} />
+            </div>
+
+            <p className="today-facts">
+              {low ? (
+                <>
+                  Lowest median balance {low} on {formatDate(projection.median_low.date)}
+                </>
+              ) : (
+                "No median balance was returned for this horizon."
+              )}
+              {projection.first_floor_crossing
+                ? ` · median crosses ${floorSet ? "the floor" : "₹0"} on ${formatDate(
+                    projection.first_floor_crossing,
+                  )}`
+                : floorSet
+                  ? " · median stays above the floor"
+                  : ""}
+            </p>
+          </>
         )}
-
-        <div className={busy ? "today-chart busy" : "today-chart"}>
-          <ProjectionChart payload={projection} height={110} />
-        </div>
-
-        <p className="today-facts">
-          {low ? (
-            <>
-              Lowest median balance {low} on {formatDate(projection.median_low.date)}
-            </>
-          ) : (
-            "No median balance was returned for this horizon."
-          )}
-          {projection.first_floor_crossing
-            ? ` · median crosses ${floorSet ? "the floor" : "₹0"} on ${formatDate(
-                projection.first_floor_crossing,
-              )}`
-            : floorSet
-              ? " · median stays above the floor"
-              : ""}
-        </p>
 
         <div className="today-foot">
           {onOpenEvidence && projection.sources?.length ? (

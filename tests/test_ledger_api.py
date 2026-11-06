@@ -70,6 +70,50 @@ def test_accounts_movements_and_undo_round_trip(authed_client):
     assert authed_client.get(f"/api/accounts/{account['id']}").json()["balance_paise"] == 5_000_000
 
 
+def test_unknown_card_reports_null_outstanding_and_available_credit(authed_client):
+    created = authed_client.post(
+        "/api/accounts",
+        json={
+            "kind": "card",
+            "name": "Unknown card",
+            "credit_limit_paise": 10_000_000,
+            "statement_day": 5,
+            "due_day": 25,
+        },
+    )
+    assert created.status_code == 201, created.text
+    card = created.json()
+    assert card["card_outstanding_paise"] is None
+    assert card["available_credit_paise"] is None
+    assert card["credit_limit_paise"] == 10_000_000
+    assert card["statement_day"] == 5
+    assert card["due_day"] == 25
+
+    summary = authed_client.get("/api/accounts").json()
+    assert summary["card_owed_paise"] is None
+
+
+def test_known_zero_card_reports_numeric_zero_and_full_available_credit(authed_client):
+    created = authed_client.post(
+        "/api/accounts",
+        json={
+            "kind": "card",
+            "name": "Zero card",
+            "opening_balance_paise": 0,
+            "credit_limit_paise": 10_000_000,
+            "statement_day": 5,
+            "due_day": 25,
+        },
+    )
+    assert created.status_code == 201, created.text
+    card = created.json()
+    assert card["card_outstanding_paise"] == 0
+    assert card["available_credit_paise"] == 10_000_000
+
+    summary = authed_client.get("/api/accounts").json()
+    assert summary["card_owed_paise"] == 0
+
+
 def test_transfer_split_and_people_payloads(authed_client):
     bank = authed_client.post(
         "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}

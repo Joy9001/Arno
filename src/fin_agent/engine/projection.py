@@ -38,6 +38,7 @@ class LiquidAccount:
     as_of: date | None = None
     statement_age_days: int | None = None
     kind: str = "bank"
+    known: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +49,7 @@ class CardAccount:
     due_day: int
     outstanding_paise: int
     credit_limit_paise: int
+    known: bool = True
 
     @property
     def available_credit_paise(self) -> int:

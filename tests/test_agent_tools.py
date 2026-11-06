@@ -95,6 +95,61 @@ def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
     assert context["liquid_total"] == {"paise": 10_000, "text": "₹100"}
 
 
+def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledger):
+    from fin_agent.ledger.accounts import create_account
+    from fin_agent.ledger.common import today as ledger_today
+    from fin_agent.ledger.movements import record_expense
+
+    card = create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        credit_limit_paise=10_000_000,
+        statement_day=5,
+        due_day=25,
+    )
+    record_expense(ledger, account_id=card["id"], amount_paise=3_000_000, description="Headphones")
+
+    context = read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == card["id"])
+    assert row["known"] is False
+    assert row["balance"] is None
+    assert row["outstanding"] is None
+    assert row["available_credit"] is None
+    assert row["credit_limit"] == {"paise": 10_000_000, "text": "₹1,00,000"}
+    assert row["statement_day"] == 5
+    assert row["due_day"] == 25
+
+    from fin_agent.ledger.accounts import set_statement_balance
+
+    set_statement_balance(ledger, card["id"], balance_paise=-3_000_000, as_of=ledger_today())
+    context = read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == card["id"])
+    assert row["known"] is True
+    assert row["outstanding"] == {"paise": 3_000_000, "text": "₹30,000"}
+    assert row["available_credit"] == {"paise": 7_000_000, "text": "₹70,000"}
+
+
+def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
+    from fin_agent.ledger.accounts import create_account
+
+    card = create_account(
+        ledger,
+        kind="card",
+        name="Zero card",
+        opening_balance_paise=0,
+        credit_limit_paise=10_000_000,
+        statement_day=5,
+        due_day=25,
+    )
+
+    context = read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == card["id"])
+    assert row["known"] is True
+    assert row["outstanding"] == {"paise": 0, "text": "₹0"}
+    assert row["available_credit"] == {"paise": 10_000_000, "text": "₹1,00,000"}
+
+
 def test_unknown_balance_is_null_not_zero():
     from fin_agent.engine.money import money
 

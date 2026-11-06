@@ -76,6 +76,25 @@ def test_briefing_keeps_a_movement_only_account_unknown(ledger):
     assert "Liquid balance: unknown" in payload["template"]
 
 
+def test_briefing_does_not_report_an_unknown_card_owed_as_zero(ledger):
+    from fin_agent.ledger.accounts import create_account
+
+    create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        credit_limit_paise=500_000,
+        statement_day=5,
+        due_day=25,
+    )
+
+    payload = compose_briefing(ledger, as_of=date(2026, 11, 1))
+
+    assert payload["numbers"]["liquid"]["card_owed_paise"] is None
+    assert payload["numbers"]["liquid"]["card_owed"] is None
+    assert "Your week" in payload["template"]
+
+
 def test_briefing_uses_one_model_call_and_falls_back_to_the_template(db):
     good = asyncio.run(
         send_weekly_briefing(

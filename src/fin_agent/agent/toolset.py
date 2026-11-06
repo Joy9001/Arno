@@ -201,7 +201,10 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     Try query_movements and summarize_spending first. Prefer the views v_spending, v_cashflow,
     v_balances, and v_owed. Tables: accounts, movements, transfer_labels, captures, imports,
     statement_lines, schedules, goals, payees, categories, category_rules, baselines, preferences,
-    messages, conversations, settings. The role cannot write and has a 2-second timeout."""
+    messages, conversations, settings. The database is PostgreSQL. For conversation search:
+    messages(conversation_id, role, body_text, created_at) and
+    conversations(id, title, created_at, updated_at). The role cannot write and has a 2-second
+    timeout."""
     try:
         payload = read_tools.run_query(sql)
     except psycopg.errors.QueryCanceled as exc:
@@ -227,7 +230,9 @@ async def project(
     """Forecast the user's cash against their floor (the minimum balance they want to keep).
     Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
     data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict
-    and the tradeoffs. Never give your own verdict: the engine decides. State the data_quality
+    and the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid
+    account has a known balance), the curve starts from an unknown balance: say what is missing
+    instead of quoting its probabilities or balances. State the data_quality
     notes in your answer. horizon_days is a minimum; the engine always looks at least 90 days and
     as far as a goal deadline."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:

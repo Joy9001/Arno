@@ -314,3 +314,77 @@ def test_every_verdict_is_one_of_the_three_and_yes_clears_the_threshold():
             assert result["tradeoffs"] == []
         if result["verdict"] == "no":
             assert result["tradeoffs"] == []
+
+
+def test_an_unknown_starting_balance_gets_no_verdict_and_no_tradeoffs():
+    inputs = replace(
+        _inputs(start=50_000),
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=50_000, known=False),),
+    )
+    result = afford(
+        inputs,
+        Hypothetical(amount_paise=10_000, date=date(2026, 1, 1)),
+        runs=20,
+    )
+    assert "verdict" not in result
+    assert result["tradeoffs"] == []
+    assert result["verdict_reason"] == (
+        "No liquid account has a known balance, so there is no affordability verdict."
+    )
+    assert "floor_probability" in result
+
+
+def test_a_card_purchase_on_an_unknown_card_is_infeasible():
+    card = CardAccount(
+        id="card",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=0,
+        credit_limit_paise=1_000_000,
+        known=False,
+    )
+    result = afford(
+        _inputs(start=1_000_000, cards=(card,)),
+        Hypothetical(
+            amount_paise=100_000,
+            date=date(2026, 1, 1),
+            method="card",
+            account="Slice card",
+        ),
+        runs=20,
+    )
+    assert result["hypothetical"]["feasible"] is False
+    assert result["verdict_reason"] == (
+        "Slice card has no known outstanding balance, so its available credit is unknown."
+    )
+
+
+def test_the_card_tradeoff_is_not_offered_for_an_unknown_card():
+    card = CardAccount(
+        id="card",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=0,
+        credit_limit_paise=1_000_000,
+        known=False,
+    )
+    result = afford(
+        _inputs(
+            start=50_000,
+            cards=(card,),
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 20),
+                    amount_paise=200_000,
+                    name="Salary",
+                    kind="income_fixed",
+                ),
+            ),
+        ),
+        Hypothetical(amount_paise=100_000, date=date(2026, 1, 1), method="account"),
+        runs=50,
+    )
+    assert result["verdict"] == "yes-but"
+    assert all(trade["kind"] != "pay_by_card" for trade in result["tradeoffs"])

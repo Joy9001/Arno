@@ -137,6 +137,10 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
             )
         if not known:
             warnings.append(f"{row['name']} has no stated balance")
+        # A known zero is a real zero; only an absent card value falls through to the loan value.
+        outstanding_paise = row.get("card_outstanding_paise")
+        if outstanding_paise is None:
+            outstanding_paise = row.get("loan_outstanding_paise")
         accounts.append(
             {
                 "id": row["id"],
@@ -148,10 +152,10 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
                 "as_of": as_of or None,
                 "statement_age_days": age,
                 "credit_limit": money(row["credit_limit_paise"]),
+                "statement_day": row["statement_day"],
+                "due_day": row["due_day"],
                 "available_credit": money(row.get("available_credit_paise")),
-                "outstanding": money(
-                    row.get("card_outstanding_paise") or row.get("loan_outstanding_paise")
-                ),
+                "outstanding": money(outstanding_paise),
                 "covered": {
                     "from": coverage_row["from"],
                     "to": coverage_row["to"],

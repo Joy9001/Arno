@@ -49,7 +49,11 @@ def _month_add(day: date, months: int) -> date:
 
 def _pick_card(inputs: ProjectionInput, account: str | None) -> CardAccount | None:
     if not account:
-        return max(inputs.cards, key=lambda card: card.available_credit_paise, default=None)
+        return max(
+            inputs.cards,
+            key=lambda card: (card.known, card.available_credit_paise),
+            default=None,
+        )
     wanted = account.strip().lower()
     return next(
         (card for card in inputs.cards if card.id == account or card.name.lower() == wanted),
@@ -96,6 +100,12 @@ def _hypothetical_inputs(
     card = _pick_card(inputs, hypothetical.account)
     if card is None:
         return inputs, meta, "no card with available credit was found"
+    if not card.known:
+        return (
+            inputs,
+            meta,
+            (f"{card.name} has no known outstanding balance, so its available credit is unknown."),
+        )
     if amount > card.available_credit_paise:
         available = money(card.available_credit_paise)["text"]
         return (
@@ -218,6 +228,9 @@ def _card_tradeoff(
             method=method,
             emi_months=(hypothetical.emi_months or 3) if method == "emi" else None,
         )
+        card = _pick_card(inputs, candidate.account)
+        if card is None or not card.known:
+            continue
         modified, meta, reason = _hypothetical_inputs(inputs, candidate)
         if reason is not None:
             continue
@@ -380,6 +393,7 @@ def afford(
             raise ValueError("an EMI tenure is 2 to 48 months")
     if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
+    known_start = any(account.known for account in inputs.liquid)
     needed = max(0, (hypothetical.date - inputs.as_of).days + 1)
     if needed > (inputs.ask_horizon_days or 0):
         inputs = replace(inputs, ask_horizon_days=needed)
@@ -465,6 +479,13 @@ def afford(
             "first_floor_crossing": baseline["first_floor_crossing"],
         }
     result["verdict_threshold"] = threshold
+    if not known_start:
+        # There is no starting balance to test, so there is no verdict to issue.
+        result.pop("verdict", None)
+        result["tradeoffs"] = []
+        result["verdict_reason"] = reason or (
+            "No liquid account has a known balance, so there is no affordability verdict."
+        )
     result["data_quality"]["gaps"].append(
         f"the verdict uses {runs} seeded walks at a {threshold:.0%} floor probability threshold"
     )

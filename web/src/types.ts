@@ -16,8 +16,8 @@ export type Account = {
   due_day: number | null;
   rate_bps: number | null;
   tenure_months: number | null;
-  card_outstanding_paise?: number;
-  available_credit_paise?: number;
+  card_outstanding_paise?: number | null;
+  available_credit_paise?: number | null;
   loan_outstanding_paise?: number;
 };
 
@@ -32,7 +32,7 @@ export type CashQuality = {
 export type AccountSummary = {
   accounts: Account[];
   liquid_total_paise: number;
-  card_owed_paise: number;
+  card_owed_paise: number | null;
   loan_outstanding_paise: number;
   cash_quality: CashQuality;
   as_of: string;

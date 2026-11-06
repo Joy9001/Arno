@@ -108,6 +108,27 @@ def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger)
     assert source["detail"] == "liquid · balance unknown"
 
 
+def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
+    from fin_agent.ledger.accounts import create_account
+
+    create_account(ledger, kind="bank", name="SBI Savings")
+
+    result = projection_tools.project(
+        ledger,
+        as_of=date(2026, 11, 1),
+        runs=20,
+        hypothetical={
+            "amount_paise": 5_000_000,
+            "date": date(2026, 11, 1),
+            "method": "account",
+        },
+    )
+    assert "verdict" not in result
+    assert result["tradeoffs"] == []
+    assert "no liquid account has a known balance" in result["data_quality"]["setup_gaps"]
+    assert "verdict" not in projection_tools.summary(result)
+
+
 def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger):
     result = projection_tools.project(
         demo_ledger,

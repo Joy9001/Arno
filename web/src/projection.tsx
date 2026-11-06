@@ -14,7 +14,13 @@ import {
 } from "recharts";
 import { formatPaise } from "./format";
 import { Mark } from "./Mark";
-import { dataQualityNotes, lowAmount, OBLIGATION_WARNING, paymentMethodLabel } from "./projectionData";
+import {
+  dataQualityNotes,
+  lowAmount,
+  OBLIGATION_WARNING,
+  paymentMethodLabel,
+  projectionReadiness,
+} from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
 
 export type Money = { paise: number; text: string };
@@ -134,6 +140,15 @@ export function ProjectionChart({
   payload: ProjectionPayload;
   height?: number;
 }) {
+  const reducedMotion = useReducedMotion();
+  const readiness = projectionReadiness(payload);
+  if (!readiness.ready) {
+    return (
+      <div role="img" aria-label={readiness.message ?? "Projection unavailable"}>
+        <p className="empty-inline">{readiness.message}</p>
+      </div>
+    );
+  }
   const rows = payload.curve.map((point) => ({
     date: point.date,
     label: new Date(`${point.date}T00:00:00`).toLocaleDateString("en-IN", {
@@ -146,7 +161,6 @@ export function ProjectionChart({
   const floor = payload.floor?.paise ?? payload.floor_paise ?? null;
   const floorSet = payload.floor_set ?? (floor !== null && floor > 0);
   const showFloor = floorSet && floor !== null;
-  const reducedMotion = useReducedMotion();
   const firstPoint = rows[0];
   const lastPoint = rows[rows.length - 1];
   const chartDescription = lastPoint
@@ -371,6 +385,16 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
 }
 
 export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
+  const readiness = projectionReadiness(payload);
+  if (!readiness.ready) {
+    return (
+      <>
+        <p className="empty-inline">{readiness.message}</p>
+        <DataQuality payload={payload} />
+        <Citations payload={payload} />
+      </>
+    );
+  }
   return (
     <>
       <ProjectionSummary payload={payload} />
@@ -391,12 +415,20 @@ export function ProjectionCard({
   onEvidence?: (payload: ProjectionPayload) => void;
 }) {
   const payload = data as unknown as ProjectionPayload;
+  const readiness = projectionReadiness(payload);
+  const gated = !readiness.ready;
+  const title = data.title ? String(data.title) : "Projection";
   const median = lowAmount(payload);
   const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
   const floorText =
     payload.floor?.text ??
     (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
+  const floorBadge = floorSet
+    ? `${percent(payload.floor_probability)} above floor`
+    : "No floor set";
+  const badgeTone =
+    gated || !floorSet ? "muted" : payload.floor_probability >= payload.floor_threshold ? "good" : "danger";
   const purchase = payload.hypothetical as
     | { amount_paise?: number; date?: string; method?: string; emi_months?: number }
     | undefined;
@@ -413,14 +445,18 @@ export function ProjectionCard({
       <div className="receipt-top">
         <div className="receipt-title">
           <Mark size={20} />
-          <strong>{verdict?.text ?? (data.title ? String(data.title) : "Projection")}</strong>
+          <strong>{gated ? title : (verdict?.text ?? title)}</strong>
         </div>
-        <span className={`badge ${!floorSet ? "muted" : payload.floor_probability >= payload.floor_threshold ? "good" : "danger"}`}>
-          {floorSet ? `${percent(payload.floor_probability)} above floor` : "No floor set"}
+        <span className={`badge ${badgeTone}`}>
+          {gated ? "Balance unknown" : floorBadge}
         </span>
       </div>
 
-      {payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>}
+      {gated ? (
+        <p className="receipt-note">{readiness.message}</p>
+      ) : (
+        payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>
+      )}
       {purchase?.amount_paise !== undefined && (
         <p className="receipt-note">
           Purchase of {formatPaise(purchase.amount_paise)}
@@ -430,23 +466,25 @@ export function ProjectionCard({
         </p>
       )}
 
-      <dl className="receipt-metrics">
-        <div>
-          <dt>Chance above floor</dt>
-          <dd>{floorSet ? percent(payload.floor_probability) : "—"}</dd>
-          <span>{percent(payload.floor_threshold)} threshold</span>
-        </div>
-        <div>
-          <dt>Lowest median balance</dt>
-          <dd>{median === null ? "—" : formatPaise(median)}</dd>
-          <span>{dateLabel(payload.median_low.date)}</span>
-        </div>
-      </dl>
+      {!gated && (
+        <dl className="receipt-metrics">
+          <div>
+            <dt>Chance above floor</dt>
+            <dd>{floorSet ? percent(payload.floor_probability) : "—"}</dd>
+            <span>{percent(payload.floor_threshold)} threshold</span>
+          </div>
+          <div>
+            <dt>Lowest median balance</dt>
+            <dd>{median === null ? "—" : formatPaise(median)}</dd>
+            <span>{dateLabel(payload.median_low.date)}</span>
+          </div>
+        </dl>
+      )}
 
       <div className="receipt-foot">
         <span className="fine">
           {payload.horizon_days}-day projection
-          {floorSet && floorText ? ` · floor ${floorText}` : ""}
+          {!gated && floorSet && floorText ? ` · floor ${floorText}` : ""}
         </span>
         {onEvidence && (
           <button
@@ -466,12 +504,14 @@ export function ProjectionCard({
           open={open}
           onToggle={(event) => setOpen(event.currentTarget.open)}
         >
-          <summary>Open the curve, tradeoffs, and sources</summary>
+          <summary>{gated ? "Data quality and sources" : "Open the curve, tradeoffs, and sources"}</summary>
           {open && (
             <>
-              <ProjectionChart payload={payload} />
-              {payload.tradeoffs?.length ? <Tradeoffs tradeoffs={payload.tradeoffs} /> : null}
-              {payload.goals?.length ? <Goals goals={payload.goals} /> : null}
+              {!gated && <ProjectionChart payload={payload} />}
+              {!gated && payload.tradeoffs?.length ? (
+                <Tradeoffs tradeoffs={payload.tradeoffs} />
+              ) : null}
+              {!gated && payload.goals?.length ? <Goals goals={payload.goals} /> : null}
               <DataQuality payload={payload} />
               <Citations payload={payload} />
             </>
