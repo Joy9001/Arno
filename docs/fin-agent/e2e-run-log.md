@@ -16,11 +16,72 @@ not count as a completed user journey.
   selected agent/write/approval/turn/safety set, and 15 passes on an overlapping final rerun.
   These are separate runs, not a summed count of unique tests or a replacement for UI evidence.
 - No real statement was imported by the journey-planning work. No financial data was changed.
-- All 360 catalog cases start Not run. The observed greeting subchecks do not mean that all
-  steps and variations of J01 were executed.
+- At catalog creation, all 360 cases started Not run. Current execution progress is recorded
+  below and ticked beside each exercised case in the catalog; a tick alone is not a pass.
 - Checkpoint `55e1156` and a separate follow-up fix commit are on the current branch; no PR was
   opened. Record the actual build and dirty-diff identity before the next execution; a commit SHA
   alone is insufficient for this working tree.
+
+## Seeded greeting baseline (6 November 2026)
+
+Run `2026-11-06-J01-seeded`; owner sends messages, parent inspects. Session
+`__LOCALID_vcjblliltyh`. Owner confirmed this is an existing installation with previously
+supplied information; no reset or empty-installation assumption applies. This is an adapted
+J01 sequence, not a pass for the catalog's E starting state.
+
+| Field | Observed evidence |
+|---|---|
+| User action window | 6 November 2026, 21:44:36-21:45:11 IST; ledger date 2026-11-06, Asia/Kolkata. |
+| UI | Existing authenticated Chrome tab, `https://joy04-dev.tailf9d528.ts.net/#home`; Browser MCP used to inspect Fin-Agent. |
+| Build | HEAD `e0b720a16bb635c10bbeca50c516ce532f6d247a`; working tree clean before progress-document edits. API container `3b7a1ebf0db7`, image `sha256:c0ca7657f6b9a37fa3e8ae0d4e1e732167b552fafde5a3801951834c75148894`. Source/image equivalence not asserted. |
+| Starting state | Two seeded accounts; both without stated balances. Saved card limit and billing dates exist. Exact financial values are in ignored private evidence. No ledger activity appears in Money or Recent activity. |
+| Model | `deepseek-v4.1-flash`, provider endpoint `opencode.ai`. No configuration changed. |
+| Traces | Three roots and three LLM children; all `UNSET`; one model request per turn, zero tool spans, no retry/fallback spans. Root inputs are the exact current prompts and root outputs match the model replies. The same opaque authenticated user ID and supplied session appear on all three roots. |
+| History | One effective snapshot, one internal `Snapshot read.` acknowledgment, and each prior user/assistant exchange once in the inspected continuation. Third request has eight top-level tool definitions. Internal acknowledgment/reminders do not appear in the rendered chat. |
+| Logs | Three `/api/chat` requests and provider completions returned HTTP 200 in the trace time window; no error/traceback in that window. `UnpricedModelWarning` confirms the displayed zero cost is not a measured monetary cost (F04); token ceilings remain applicable. |
+| State writes | Read-only application DB audit check found zero audit writes during the three-turn window. Persisted conversation has exactly three user and three assistant rows. Their `trace_id` columns are null; trace correlation uses the Phoenix session and timestamps (existing F03 evidence gap). |
+| Persistence | Parent reloaded Home through Chrome. All three exchanges and their notes remained; no duplicate reply or exposed internal snapshot/reminder. Browser console after reload reported no messages. J01.08 Pass. |
+| Financial result | Cash headline correctly says Unknown. Chat and Money nevertheless claim all of the saved card limit is available (F13). Snapshot contains that availability with `known=false` and null balance/outstanding. Saved billing dates are missing from the snapshot, prompting repeated questions (F15). First and third replies carry a false unverified-number note for the saved limit (F14). Home also shows a numeric lowest median balance from an unknown starting balance (F16). |
+| Inspection method | Initially inspected Phoenix UI in Chrome; owner then requested read-only Phoenix DB queries instead. Subsequent trace inspection uses `BEGIN READ ONLY`; Browser MCP is reserved for Fin-Agent. |
+| Execution result | J01 Partial; J01.01 adapted seeded sequence exercised with F13-F16 open, original empty E acceptance unrun. J01.08 Pass. Other J01 cases remain unrun; no new model turn was sent by the parent. |
+| Next checkpoint | Consult owner on fixes before any DeepSeek implementation task. No application change, rebuild, import approval/commit, or financial-data write performed by this inspection. |
+
+| Turn | Exact submitted prompt | Input / output tokens | Cache-read tokens | Root latency | Trace |
+|---|---|---|---|---|---|
+| 1 | Hey | 12,102 / 313 | Not reported | 4.81 s | [a5bb7739](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/a5bb7739a3999a9ee157214e5a87570e) |
+| 2 | What can you help me with? | 12,425 / 286 | 12,032 | 4.49 s | [cdc8eae9](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/cdc8eae9594f320ca49561e8e7d85141) |
+| 3 | What accounts do I have? | 12,720 / 224 | 12,288 | 3.45 s | [70d2115b](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/70d2115be8b31e57f69b7caeccd7a169) |
+
+Private evidence: `private/e2e/session-vcjblliltyh.md` (git-ignored). The catalog now has an
+execution column for all 360 cases and a step checklist for this active run. A tick means
+executed and recorded; it never silently changes an acceptance result to Pass.
+
+## Monthly spending honesty (6 November 2026)
+
+**J01.04 Pass**, same existing-data session `__LOCALID_vcjblliltyh`, no committed spending
+history or statement coverage. Owner sent "How much did I spend last month?" at 22:00:12 IST;
+reply completed at 22:00:17. This executes the missing-history variation with seeded account
+setup preserved. F13-F16 implementations were not deployed during this check.
+
+- UI reply correctly identifies October 2026 as uncovered and calls spending unknown, not zero.
+- Opening Supporting data shows exactly one read, an empty result, and the warning that no
+  statement covers 2026-10 and values are not a complete total. No fabricated total/chart.
+- Phoenix DB confirms `summarize_spending(group_by="none", period="last_month")`, invoked
+  inside `run_code`: period 2026-10-01 through 2026-10-31, empty groups, `total=null`,
+  `coverage.complete=false`, and gap 2026-10. Two model requests; two tool spans represent
+  one wrapper and one nested financial read, not two financial queries.
+- Both model spans, both tool spans, and root are UNSET. Root latency 4.99 s; authenticated
+  user/session and current input are correct. Requests use 12,955/124 and 13,210/131 input/output
+  tokens, with 12,672 and 12,928 cache-read tokens respectively. No retry/fallback observed.
+- Correlated application and provider requests return HTTP 200; no error/traceback in the turn
+  window. Fin-Agent browser console reports no messages. Read-only application audit query
+  finds zero financial/setup writes; user text and final reply are persisted. The additional
+  empty assistant body row holds the tool response and is not a duplicate rendered answer.
+- Reload through Fin-Agent Chrome preserves the question, answer, and Supporting data
+  disclosure without rendering duplicate replies or exposing internal messages.
+
+Trace: [0da62990](http://127.0.0.1:6006/projects/UHJvamVjdDoy/spans/0da62990fb11654421d271b958e0aacf).
+The case is ticked in the catalog; the whole J01 journey remains Partial.
 
 ## Observed greeting evidence
 
@@ -152,7 +213,7 @@ explicitly deferred with a reason.
 
 | Journey | Area | Initial state | Status | Case results / finding links |
 |---|---|---|---|---|
-| J01 | Greeting and empty-data honesty | E | Not run | O01-O06 provide starting subcheck evidence only. |
+| J01 | Greeting and empty-data honesty | E; current run uses existing seeded data | Partial | J01.04 and J01.08 Pass; J01.01 seeded sequence inspected with F13-F16 findings. Empty E acceptance remains unrun. |
 | J02 | Conversational setup | E → S | Partial | First setup turn and card retry observed in c85f6355. Card guidance, import route, and cash truth fixed in working tree; live card and import retest open. |
 | J03 | Account identity and balances | S / H-copy | Not run | |
 | J04 | Precise daily expense | S | Not run | |
@@ -221,6 +282,10 @@ These are starting investigation items, not claims that the new journeys reprodu
 
 | Finding | Cases | State | Next evidence needed |
 |---|---|---|---|
+| F13 (P0): unknown card outstanding is treated as zero when calculating available credit | J01.01 seeded variant, J03, J12 | Reproduced in chat, Money, and model snapshot | Guard card outstanding and available credit with balance knowledge; retain known limits and explicit known zero. Owner consultation before implementation. |
+| F14 (P1): number check warns about a saved credit limit present in the snapshot | J01.01 seeded variant, J31 | Reproduced on first and third replies | Verify the checker receives the effective snapshot/history; add a regression that accepts sourced values while still flagging invented values. |
+| F15 (P1): snapshot omits saved statement/due days and the agent asks for them again | J01.01 seeded variant, J02, J12 | Money details and trace snapshot disagree in available context | Include saved card dates in model context and confirm the follow-up requests only missing facts. |
+| F16 (P1): Home shows a numeric lowest forecast balance despite unknown starting cash | J01.09 subcheck, J22-J24, J31 | Home reproduced; full Sources/Projection inspection pending | Decide how incomplete projections should be presented; verify missing inputs before accepting any forecast. |
 | F01: time-derived snapshot may remain stale without audited writes | J25.06-J25.07 | Open; source-path inference | Idle thread across a ledger-date boundary, inspect snapshot/reminder and current answer. |
 | F02: refresh may duplicate a pin after compaction changes history position | J25.08 | Open; source-path inference | Actual compaction followed by refresh; inspect exactly one current effective snapshot. |
 | F03: Flag does not currently provide a direct trace navigation path | J31, evidence protocol | Open product gap | Flag a synthetic reply and verify discoverability via conversation/time; decide intended navigation separately. |
@@ -362,3 +427,55 @@ is claimed.
 | Card credits | Both card credits are already classified by the user (`credit_classified_by=user`, updated 06 Nov 07:23 and 07:25 UTC): one repayment with a funding account and one merchant refund with a category. `credit_decision_required` is false for every line, so no unresolved credit decisions remain. This differs from the brief's expectation of two unresolved decisions; this check did not alter the rows. |
 | Web bundle | `/app/web/dist/index.html` references `assets/index-DKfpKnBX.js`, which contains `Opening balance needed`, `Card credits`, `Merchant refund`, `Card repayment from my account`, and `Other income`. This is bundle verification only, not signed-in UI acceptance. |
 | Remaining human steps | In Activity -> Imports, open this review, enter the real card opening (explicit zero only if true), review the two already-classified credits, and commit. If either classification is wrong, change it before committing. |
+
+## J01 batch 2 (6 November 2026)
+
+Owner sent the earlier six-message batch and the revised batch 2. Sessions
+`__LOCALID_vcjblliltyh` (original) and `__LOCALID_q4mi4x3jffj` (new). The F13-F16 fixes were in
+the working tree but not deployed, so the api ran the previous build. Read-only DB check: zero
+audit writes in the window.
+
+| Case | Result | Evidence |
+|---|---|---|
+| J01.05 | Fail (F17) | `project(hypothetical=₹30,000)` returned verdict `no` from an unknown starting balance; the reply led with "The engine's verdict is **no**" and "−₹30,000 on day one", then caveated it. Missing inputs were named correctly. |
+| J01.07 | Pass | One multiline user message, one turn. Reply still says available credit equals the full limit (F13, fix not deployed). |
+| J01.03 | Pass | Coherent short reply; history sent once. |
+| J01.06 | Partial | Emoji-only turns in both threads produced no writes. Spaces-only send-disabled behavior not yet confirmed by the owner. |
+| J01.02 | Pass | New thread's model history holds only its own prompts. "What were we talking about earlier?" recalled the other thread through `run_query` on `messages`, which is the designed conversation search, not a history leak. The "Hi" reply re-asked saved card statement/due days (F15, fix not deployed). |
+
+New findings:
+
+- **F17 (P1):** The affordability engine issues yes/yes-but/no verdicts when no liquid account has a
+  known balance. The undeployed UI gate hides it in panels, but the model still receives and
+  quotes the verdict. Fix at the engine/tool so every caller gets "no verdict" instead.
+- **F18 (P1, regression in the F13 fix):** `jobs/briefing.py` does `int(summary["card_owed_paise"])`,
+  which now raises when a card's outstanding is unknown.
+- **F19 (P0):** `tools/projection.py:_card_rows` still derives available credit from ledger activity
+  alone, so a card purchase or the card tradeoff can treat an unknown card as fully available.
+- **F20 (P2):** For conversation search, the model guessed SQLite (`sqlite_master`, `PRAGMA`) and a
+  nonexistent column before finding the schema: 4 calls for one recall. The `run_query`
+  description lists table names without columns or the Postgres dialect.
+
+## F17-F20 and live-reply quote fix, local implementation (6 November 2026)
+
+Implemented in the working tree and committed; **not deployed** (an SBI import job was running
+on the api, and a rebuild would have killed it).
+
+| Item | Result |
+|---|---|
+| F17 | `engine/affordability.py:afford` omits the verdict and tradeoffs when no liquid account has a known balance; `project` tool docstring tells the model to name what is missing instead of quoting the curve. |
+| F18 | `jobs/briefing.py` keeps an unknown card total as `None`. |
+| F19 | `known` flag carried on `LiquidAccount`/`CardAccount`; an unknown card is never picked for a card/EMI purchase and is skipped by the card tradeoff. |
+| F20 | `run_query` docstring names PostgreSQL and the `messages`/`conversations` columns. |
+| Quote 422 | The stream's start chunk had no `messageId`, so the browser invented one and the saved reply used another; quoting a just-streamed reply returned 422. `api/chat.py` now sets `server_message_id`, and `save_records` stores the last assistant message under it. Regression: `test_a_just_streamed_reply_can_be_quoted_by_its_streamed_id`. |
+| F14 test | `test_a_snapshot_only_card_limit_is_grounded_but_inventions_are_flagged` failed because its fake model read the per-turn `<system>` reminder as the prompt; the test now skips it. |
+| Checks | 141 passed across turns, quote, stream schema, number check, affordability, projection tool, workflows, agent tools, ledger accounts/API, home API. Ruff check/format clean; web typecheck and lint clean. |
+
+## SBI import timing and import redesign (6 November 2026)
+
+First SBI PDF (939 rows, 3 Nov 2025-3 Nov 2026): parse run 4 min 6 s (34 model calls across
+parse and categorize), then the categorizer sent 25-key chunks sequentially with a 120 s timeout;
+the first chunk timed out and its lines lost suggestions. The import card said "Parsing" for both
+stages. Parsers are saved to `statement_layouts` only on commit, so every upload before the first
+approval re-runs the 4-minute parse. The owner judged the import design unfit and is redesigning
+it in a separate session; testing resumes after that.
