@@ -165,6 +165,34 @@ def test_a_quote_can_name_the_live_assistant_client_id(authed_client, demo_ledge
     assert stored["metadata"]["custom"]["quote"]["messageId"] == "live-assistant-id"
 
 
+def test_a_just_streamed_reply_can_be_quoted_by_its_streamed_id(authed_client, demo_ledger):
+    """The browser only knows the id from the stream's start chunk until it reloads."""
+    import json
+
+    _thread(demo_ledger, "thread_quote")
+    seen: list[list[Any]] = []
+    with authed_client.app.state.agent.override(model=_capture(seen, "Your floor is unset.")):
+        first = authed_client.post("/api/chat", json=_body("client_first", text="Floor?"))
+    assert first.status_code == 200, first.text
+    start = next(
+        json.loads(line[len("data: ") :])
+        for line in first.text.splitlines()
+        if line.startswith("data: {") and '"type":"start"' in line.replace(" ", "")
+    )
+    streamed_id = start["messageId"]
+
+    body = _body(
+        "client_second",
+        text="Why?",
+        quote={"text": "Your floor is unset.", "messageId": streamed_id},
+    )
+    with authed_client.app.state.agent.override(model=_capture(seen)):
+        second = authed_client.post("/api/chat", json=body)
+
+    assert second.status_code == 200, second.text
+    assert "> Your floor is unset." in _user_text(seen[-1])
+
+
 def test_a_quote_source_must_be_a_text_message_in_the_same_thread(authed_client, demo_ledger):
     _thread(demo_ledger, "thread_quote_a")
     _thread(demo_ledger, "thread_quote_b")

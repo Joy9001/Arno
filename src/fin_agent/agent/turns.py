@@ -82,6 +82,7 @@ class ChatTurn:
     used_fallback: bool = False
     number_flags: list[str] = field(default_factory=list)
     initial_cards: list[dict[str, Any]] = field(default_factory=list)
+    reply_id: str | None = None
     note: str | None = None
     ending: str | None = None
 
@@ -211,6 +212,7 @@ class TurnManager:
         title: str | None = None,
         run_id: str | None = None,
         initial_cards: list[dict[str, Any]] | None = None,
+        reply_id: str | None = None,
     ) -> ChatTurn:
         from pydantic_ai import CancellationToken
 
@@ -228,6 +230,7 @@ class TurnManager:
                 deps=deps,
                 title=title,
                 initial_cards=initial_cards or [],
+                reply_id=reply_id,
                 token=CancellationToken(),
             )
             self.turns[thread_id] = turn
@@ -268,7 +271,10 @@ class TurnManager:
             note = "The reply hit the output cap. Ask for the rest."
         # Real use notes money and percentages only; bare counts are an eval-only check
         # (system-design step 9), so a day or a list size never earns a "couldn't trace" note.
-        flags = check_messages(reply, messages, kinds=("money", "percent")) if reply else []
+        # Trace against what the model could see, history included: a pinned snapshot carries
+        # figures the current turn never repeats. Old assistant replies are not sources.
+        context = all_messages or [*turn.history, *messages]
+        flags = check_messages(reply, context, kinds=("money", "percent")) if reply else []
         badge = None
         primary = getattr(getattr(self.agent, "model", None), "model_name", None)
         if failed_attempts or (primary and model_name and model_name != primary):
@@ -291,6 +297,7 @@ class TurnManager:
                     title=turn.title,
                     all_messages=all_messages,
                     extra_cards=turn.initial_cards,
+                    reply_id=turn.reply_id,
                 )
                 if failed_attempts:
                     conn.execute(

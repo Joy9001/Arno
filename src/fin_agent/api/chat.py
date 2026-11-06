@@ -398,6 +398,9 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
     if quote is not None:
         # The quote is context on this turn only; the client's own message stays untouched.
         adapter = replace(adapter, run_input=with_quote(adapter.run_input, quote))
+    # The streamed reply carries the id it is saved under, so the browser can quote it at once.
+    reply_id = f"msg_{uuid.uuid4().hex}"
+    adapter = replace(adapter, server_message_id=reply_id)
     try:
         turn = await app.state.turns.start(
             adapter=adapter,
@@ -408,6 +411,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
             title=title,
             run_id=run_id,
             initial_cards=initial_cards,
+            reply_id=reply_id,
         )
     except TurnBusy as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

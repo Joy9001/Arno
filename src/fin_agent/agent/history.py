@@ -301,8 +301,12 @@ def save_records(
     title: str | None = None,
     all_messages: list[Any] | None = None,
     extra_cards: list[dict[str, Any]] | None = None,
+    reply_id: str | None = None,
 ) -> dict[str, Any]:
-    """Write both records in one transaction and clear the running marker."""
+    """Write both records in one transaction and clear the running marker.
+
+    `reply_id` is the id the stream already gave the browser; the reply is saved under it.
+    """
     from fin_agent.agent.cards import attach_to_last_assistant, ui_messages, with_data
 
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
@@ -352,6 +356,8 @@ def save_records(
         }
         ui.append(last_assistant)
     if last_assistant is not None:
+        if reply_id:
+            last_assistant["id"] = reply_id
         if extra_cards:
             existing = {
                 json.dumps(part.get("data"), sort_keys=True, default=str)

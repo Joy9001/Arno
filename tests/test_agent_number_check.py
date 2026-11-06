@@ -152,6 +152,24 @@ def test_a_pinned_snapshot_counts_as_a_source():
     assert check_messages("Your SBI balance is ₹1,24,873.50.", [snapshot]) == []
 
 
+def test_a_pinned_snapshot_traces_but_old_assistant_prose_does_not():
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+    from pydantic_ai_harness.compaction import pin
+
+    from fin_agent.agent.number_check import check_messages
+
+    history = [
+        ModelRequest(parts=[pin('{"credit_limit": {"paise": 10000000, "text": "₹1,00,000"}}')]),
+        ModelResponse(parts=[TextPart("Snapshot read.")]),
+        ModelRequest(parts=[UserPromptPart(content="what is my limit?")]),
+        ModelResponse(parts=[TextPart("Your card limit is ₹2,50,000.")]),
+        ModelRequest(parts=[UserPromptPart(content="tell me once more")]),
+    ]
+    assert check_messages("Your card limit is ₹1,00,000.", history) == []
+    # The prior reply is the model's own prose, never evidence for the next turn.
+    assert check_messages("Your card limit is ₹2,50,000.", history) == ["₹2,50,000"]
+
+
 def test_month_dates_and_narrow_spaces_are_not_bare_numbers():
     assert check("October 2026 and 2026-10 are the period.", {}) == []
     assert check("August **2025** has no entries.", {}) == []
