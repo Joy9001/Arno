@@ -9,20 +9,20 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-import psycopg
-
-from fin_agent.config import Settings
+from fin_agent.config import Settings, get_settings
+from fin_agent.db.conn import Connection
 from fin_agent.db.migrate import pending
 from fin_agent.ledger.export import export_pg_dump
 
 logger = logging.getLogger("fin_agent")
 
 
-def dump_before_migrating(conn: psycopg.Connection, settings: Settings) -> Path | None:
+async def dump_before_migrating(conn: Connection, settings: Settings | None = None) -> Path | None:
     """Write a plain `pg_dump` when migrations are pending on a non-empty database."""
-    if not pending(conn):
+    if not await pending(conn):
         return None
-    applied = conn.execute("SELECT count(*) AS n FROM schema_version").fetchone()["n"]
+    settings = settings or get_settings()
+    applied = await conn.fetchval("SELECT count(*) FROM schema_version")
     if not applied:
         return None
     settings.pre_migration_dir.mkdir(parents=True, exist_ok=True)

@@ -23,7 +23,7 @@ def test_ledger_endpoints_require_a_session(client):
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
-def test_accounts_movements_and_undo_round_trip(authed_client):
+async def test_accounts_movements_and_undo_round_trip(authed_client):
     created = authed_client.post(
         "/api/accounts",
         json={
@@ -70,7 +70,7 @@ def test_accounts_movements_and_undo_round_trip(authed_client):
     assert authed_client.get(f"/api/accounts/{account['id']}").json()["balance_paise"] == 5_000_000
 
 
-def test_unknown_card_reports_null_outstanding_and_available_credit(authed_client):
+async def test_unknown_card_reports_null_outstanding_and_available_credit(authed_client):
     created = authed_client.post(
         "/api/accounts",
         json={
@@ -93,7 +93,7 @@ def test_unknown_card_reports_null_outstanding_and_available_credit(authed_clien
     assert summary["card_owed_paise"] is None
 
 
-def test_known_zero_card_reports_numeric_zero_and_full_available_credit(authed_client):
+async def test_known_zero_card_reports_numeric_zero_and_full_available_credit(authed_client):
     created = authed_client.post(
         "/api/accounts",
         json={
@@ -114,7 +114,7 @@ def test_known_zero_card_reports_numeric_zero_and_full_available_credit(authed_c
     assert summary["card_owed_paise"] == 0
 
 
-def test_transfer_split_and_people_payloads(authed_client):
+async def test_transfer_split_and_people_payloads(authed_client):
     bank = authed_client.post(
         "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}
     ).json()
@@ -144,7 +144,7 @@ def test_transfer_split_and_people_payloads(authed_client):
     assert ravi_row["next_expected_date"] == "2026-12-01"
 
 
-def test_correction_endpoint_edits_labels_without_a_reversal(authed_client):
+async def test_correction_endpoint_edits_labels_without_a_reversal(authed_client):
     bank = authed_client.post(
         "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}
     ).json()
@@ -171,7 +171,7 @@ def test_correction_endpoint_edits_labels_without_a_reversal(authed_client):
     assert authed_client.get(f"/api/accounts/{bank['id']}").json()["balance_paise"] == 9_900_000
 
 
-def test_schedules_goals_and_settings_endpoints(authed_client):
+async def test_schedules_goals_and_settings_endpoints(authed_client):
     # Relative to today so the next occurrence never goes stale with the calendar.
     today = ledger_today()
     bank = authed_client.post(
@@ -217,7 +217,7 @@ def test_schedules_goals_and_settings_endpoints(authed_client):
     assert settings["profile"]["display_name"] == "You"
 
 
-def test_category_and_rule_endpoints(authed_client):
+async def test_category_and_rule_endpoints(authed_client):
     category = authed_client.post("/api/categories", json={"name": "Pets", "reducible": True})
     assert category.status_code == 201, category.text
     category_id = category.json()["id"]
@@ -241,19 +241,18 @@ def test_category_and_rule_endpoints(authed_client):
     )
 
 
-def test_backup_status_and_exports(authed_client, db):
+async def test_backup_status_and_exports(authed_client, db):
     status = authed_client.get("/api/backup/status").json()
     assert status["due"] is True
     assert status["overdue"] is True
     assert status["last_success_at"] is None
 
-    db.execute(
+    await db.execute(
         """
         INSERT INTO backup_runs (started_at, finished_at, status, dump_bytes, duration_ms)
         VALUES (now() - interval '2 hours', now() - interval '119 minutes', 'success', 12345, 1000)
         """
     )
-    db.commit()
     fresh = authed_client.get("/api/backup/status").json()
     assert fresh["due"] is False
     assert fresh["overdue"] is False
@@ -277,7 +276,7 @@ def test_backup_status_and_exports(authed_client, db):
 @pytest.mark.skipif(
     not (os.environ.get("PG_DUMP") or shutil.which("pg_dump")), reason="pg_dump is not installed"
 )
-def test_pg_dump_export(authed_client):
+async def test_pg_dump_export(authed_client):
     response = authed_client.get("/api/export/pg_dump")
 
     assert response.status_code == 200
@@ -285,7 +284,7 @@ def test_pg_dump_export(authed_client):
     assert b"PostgreSQL database dump" in response.content
 
 
-def test_movement_validation_is_a_problem_document(authed_client):
+async def test_movement_validation_is_a_problem_document(authed_client):
     response = authed_client.post(
         "/api/movements",
         json={"kind": "expense", "account_id": "nope", "amount_paise": 0},
@@ -297,6 +296,6 @@ def test_movement_validation_is_a_problem_document(authed_client):
     assert body["status"] == 422
 
 
-def test_export_json_is_valid_json(authed_client):
+async def test_export_json_is_valid_json(authed_client):
     payload = json.loads(authed_client.get("/api/export/json").content)
     assert payload["version"] == 1

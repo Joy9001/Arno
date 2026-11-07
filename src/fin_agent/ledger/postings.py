@@ -10,9 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import WriteGroup, india_noon, new_id
 from fin_agent.ledger.common import require_active_account
 from fin_agent.ledger.errors import InvalidLedgerError
@@ -57,12 +55,12 @@ class MovementRecord:
         return str(self.movement["id"])
 
 
-def _existing_by_key(conn: psycopg.Connection, key: str) -> dict[str, Any] | None:
-    return conn.execute("SELECT * FROM movements WHERE idempotency_key = %s", (key,)).fetchone()
+async def _existing_by_key(conn: Connection, key: str) -> dict[str, Any] | None:
+    return await conn.fetchrow("SELECT * FROM movements WHERE idempotency_key = $1", key)
 
 
-def create_movement_in_group(
-    conn: psycopg.Connection,
+async def create_movement_in_group(
+    conn: Connection,
     group: WriteGroup,
     *,
     date: date,
@@ -84,19 +82,16 @@ def create_movement_in_group(
         raise InvalidLedgerError("Only a reversal movement may point at the movement it reverses")
 
     if idempotency_key:
-        existing = _existing_by_key(conn, idempotency_key)
+        existing = await _existing_by_key(conn, idempotency_key)
         if existing is not None:
-            ids = tuple(
-                row["id"]
-                for row in conn.execute(
-                    """
-                    SELECT t.id FROM pgledger_transfers t
-                    WHERE t.metadata ->> 'movement_id' = %s ORDER BY t.id
-                    """,
-                    (existing["id"],),
-                ).fetchall()
+            rows = await conn.fetch(
+                """
+                SELECT t.id FROM pgledger_transfers t
+                WHERE t.metadata ->> 'movement_id' = $1 ORDER BY t.id
+                """,
+                existing["id"],
             )
-            return MovementRecord(movement=existing, transfer_ids=ids)
+            return MovementRecord(movement=existing, transfer_ids=tuple(row["id"] for row in rows))
 
     resolved: list[tuple[TransferSpec, dict[str, Any], dict[str, Any]]] = []
     for transfer in transfers:
@@ -104,28 +99,35 @@ def create_movement_in_group(
             raise InvalidLedgerError("Transfer amounts must be positive")
         if transfer.from_account_id == transfer.to_account_id:
             raise InvalidLedgerError("A transfer needs two different accounts")
-        from_account = require_active_account(conn, transfer.from_account_id)
-        to_account = require_active_account(conn, transfer.to_account_id)
+        from_account = await require_active_account(conn, transfer.from_account_id)
+        to_account = await require_active_account(conn, transfer.to_account_id)
         if from_account["ledger_account_id"] == to_account["ledger_account_id"]:
             raise InvalidLedgerError("A transfer needs two different ledger accounts")
         resolved.append((transfer, from_account, to_account))
 
-    movement_id = new_id(conn, "mov")
-    movement = conn.execute(
+    movement_id = await new_id(conn, "mov")
+    movement = await conn.fetchrow(
         """
         INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
         """,
-        (movement_id, date, description.strip(), kind, reverses_id, idempotency_key),
-    ).fetchone()
+        movement_id,
+        date,
+        description.strip(),
+        kind,
+        reverses_id,
+        idempotency_key,
+    )
     group.record_created("movements", movement)
 
-    placeholders = ", ".join(
-        ["ROW(%s::text, %s::text, %s::numeric)::transfer_request"] * len(resolved)
-    )
+    row_placeholders: list[str] = []
     params: list[Any] = []
     for transfer, from_account, to_account in resolved:
+        start = len(params) + 1
+        row_placeholders.append(
+            f"ROW(${start}::text, ${start + 1}::text, ${start + 2}::numeric)::transfer_request"
+        )
         params.extend(
             [
                 from_account["ledger_account_id"],
@@ -133,20 +135,24 @@ def create_movement_in_group(
                 transfer.amount_paise,
             ]
         )
+    event_index = len(params) + 1
     params.extend(
         [
             india_noon(date),
-            Jsonb({"movement_id": movement_id}),
+            {"movement_id": movement_id},
             idempotency_key,
         ]
     )
-    created = conn.execute(
+    created = await conn.fetch(
         f"""
         SELECT id, from_account_id, to_account_id, amount::bigint AS amount
-        FROM pgledger_create_transfers(ARRAY[{placeholders}], %s, %s::jsonb, %s)
+        FROM pgledger_create_transfers(
+            ARRAY[{", ".join(row_placeholders)}], ${event_index}, ${event_index + 1}::jsonb,
+            ${event_index + 2}
+        )
         """,
-        params,
-    ).fetchall()
+        *params,
+    )
 
     unused = list(created)
     ordered_ids: list[str] = []
@@ -166,38 +172,34 @@ def create_movement_in_group(
         row = unused.pop(match_index)
         ordered_ids.append(str(row["id"]))
         if transfer.has_label():
-            label = conn.execute(
+            label = await conn.fetchrow(
                 """
                 INSERT INTO transfer_labels
                     (transfer_id, movement_id, category_id, payee_id, expected_date, note)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING *
                 """,
-                (
-                    row["id"],
-                    movement_id,
-                    transfer.category_id,
-                    transfer.payee_id,
-                    transfer.expected_date,
-                    transfer.note,
-                ),
-            ).fetchone()
+                row["id"],
+                movement_id,
+                transfer.category_id,
+                transfer.payee_id,
+                transfer.expected_date,
+                transfer.note,
+            )
             group.record_created("transfer_labels", label)
 
     if capture is not None:
-        capture_row = conn.execute(
+        capture_row = await conn.fetchrow(
             """
             INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
-            VALUES (%s, %s, %s, %s, %s) RETURNING *
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
             """,
-            (
-                movement_id,
-                capture.get("kind", "chat"),
-                capture.get("ref"),
-                capture.get("upi_ref"),
-                capture.get("confidence"),
-            ),
-        ).fetchone()
+            movement_id,
+            capture.get("kind", "chat"),
+            capture.get("ref"),
+            capture.get("upi_ref"),
+            capture.get("confidence"),
+        )
         group.record_created("captures", capture_row)
 
     return MovementRecord(movement=movement, transfer_ids=tuple(ordered_ids))

@@ -12,13 +12,12 @@ import json
 import logging
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 from pydantic_ai import Agent, ModelSettings
 
 from fin_agent.agent.models import primary_model
 from fin_agent.agent.spend import ceiling_name
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.categories import normalize_pattern
 
 logger = logging.getLogger("fin_agent.importers.categorizer")
@@ -44,14 +43,15 @@ def _suggested_category(row: dict[str, Any], source: str) -> dict[str, Any]:
     }
 
 
-def _write_detail(conn: psycopg.Connection, line_id: str, changes: dict[str, Any]) -> None:
-    conn.execute(
+async def _write_detail(conn: Connection, line_id: str, changes: dict[str, Any]) -> None:
+    await conn.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s, updated_at = now()
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1::jsonb, updated_at = now()
+        WHERE id = $2
         """,
-        (Jsonb(changes), line_id),
+        changes,
+        line_id,
     )
 
 
@@ -90,7 +90,7 @@ async def _ask(
 
 
 async def categorize_import(
-    conn: psycopg.Connection,
+    conn: Connection,
     import_id: str,
     account: dict[str, Any],
     *,
@@ -102,7 +102,7 @@ async def categorize_import(
 
 
 async def _categorize_import(
-    conn: psycopg.Connection,
+    conn: Connection,
     import_id: str,
     account: dict[str, Any],
     *,
@@ -110,32 +110,29 @@ async def _categorize_import(
     spend_store: Any = None,
 ) -> dict[str, Any]:
     counts = {"lines": 0, "rule_hits": 0, "llm_keys": 0, "llm_calls": 0, "transfers": 0}
-    lines = [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT id, description_raw, amount_paise, match_detail
-            FROM statement_lines
-            WHERE import_id = %s AND match_state IN ('new', 'certain')
-            ORDER BY date, id
-            """,
-            (import_id,),
-        ).fetchall()
-    ]
+    lines = await conn.fetch(
+        """
+        SELECT id, description_raw, amount_paise, match_detail
+        FROM statement_lines
+        WHERE import_id = $1 AND match_state IN ('new', 'certain')
+        ORDER BY date, id
+        """,
+        import_id,
+    )
     counts["lines"] = len(lines)
     if not lines:
         return counts
 
     rules = {
         str(row["merchant_pattern"]): dict(row)
-        for row in conn.execute(
+        for row in await conn.fetch(
             """
             SELECT r.merchant_pattern, r.category_id, c.name AS category_name
             FROM category_rules r
             JOIN categories c ON c.id = r.category_id
             WHERE c.active
             """
-        ).fetchall()
+        )
     }
     pending: dict[str, dict[str, Any]] = {}
     for line in lines:
@@ -145,7 +142,7 @@ async def _categorize_import(
             continue
         rule = rules.get(key)
         if rule is not None:
-            _write_detail(
+            await _write_detail(
                 conn,
                 line["id"],
                 {"suggested_category": _suggested_category(rule, "rule")},
@@ -168,27 +165,19 @@ async def _categorize_import(
     if not pending:
         return counts
 
-    category_rows = [
-        dict(row)
-        for row in conn.execute(
-            "SELECT id, name FROM categories WHERE active ORDER BY name"
-        ).fetchall()
-    ]
+    category_rows = await conn.fetch("SELECT id, name FROM categories WHERE active ORDER BY name")
     categories = [str(row["name"]) for row in category_rows]
     if not categories:
         return counts
-    own_accounts = [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT id, name, kind, institution, last4
-            FROM accounts
-            WHERE active AND kind IN ('bank', 'card', 'wallet') AND id <> %s
-            ORDER BY kind, name
-            """,
-            (account["id"],),
-        ).fetchall()
-    ]
+    own_accounts = await conn.fetch(
+        """
+        SELECT id, name, kind, institution, last4
+        FROM accounts
+        WHERE active AND kind IN ('bank', 'card', 'wallet') AND id <> $1
+        ORDER BY kind, name
+        """,
+        account["id"],
+    )
     own_by_id = {str(row["id"]): row for row in own_accounts}
     by_name = {str(row["name"]): row for row in category_rows}
 
@@ -247,19 +236,20 @@ async def _categorize_import(
                         "source": "llm",
                     }
                     if entry["counterparty"]:
-                        conn.execute(
+                        await conn.execute(
                             """
                             INSERT INTO category_rules (merchant_pattern, category_id, source)
-                            VALUES (%s, %s, 'llm')
+                            VALUES ($1, $2, 'llm')
                             ON CONFLICT (merchant_pattern) DO UPDATE
                             SET category_id = EXCLUDED.category_id, source = 'llm',
                                 updated_at = now()
                             """,
-                            (key, category["id"]),
+                            key,
+                            category["id"],
                         )
                 if changes:
                     for line_id in entry["lines"]:
-                        _write_detail(conn, line_id, changes)
+                        await _write_detail(conn, line_id, changes)
                 pending.pop(key, None)
 
     return counts

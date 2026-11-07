@@ -5,23 +5,22 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.importers.helpers import HELPER_VERSION
 from fin_agent.ledger.audit import new_id
 
 
-def layout_for(conn: psycopg.Connection, fingerprint: str | None) -> dict[str, Any] | None:
+async def layout_for(conn: Connection, fingerprint: str | None) -> dict[str, Any] | None:
     if not fingerprint:
         return None
-    return conn.execute(
-        "SELECT * FROM statement_layouts WHERE fingerprint = %s",
-        (fingerprint,),
-    ).fetchone()
+    return await conn.fetchrow(
+        "SELECT * FROM statement_layouts WHERE fingerprint = $1",
+        fingerprint,
+    )
 
 
-def save_layout(
-    conn: psycopg.Connection,
+async def save_layout(
+    conn: Connection,
     *,
     institution: str,
     fingerprint: str,
@@ -29,11 +28,11 @@ def save_layout(
     source_import_id: str,
 ) -> dict[str, Any]:
     """Called only from a committed import, never from a rejected or failed one."""
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO statement_layouts
             (id, institution, fingerprint, parser, helper_version, source_import_id, last_used_at)
-        VALUES (%s, %s, %s, %s, %s, %s, now())
+        VALUES ($1, $2, $3, $4, $5, $6, now())
         ON CONFLICT (fingerprint) DO UPDATE
         SET institution = EXCLUDED.institution,
             parser = EXCLUDED.parser,
@@ -42,22 +41,21 @@ def save_layout(
             last_used_at = now()
         RETURNING *
         """,
-        (
-            new_id(conn, "lay"),
-            institution[:120] or "unknown",
-            fingerprint,
-            parser,
-            HELPER_VERSION,
-            source_import_id,
-        ),
-    ).fetchone()
+        await new_id(conn, "lay"),
+        institution[:120] or "unknown",
+        fingerprint,
+        parser,
+        HELPER_VERSION,
+        source_import_id,
+    )
     return row
 
 
-def touch_layout(conn: psycopg.Connection, layout_id: str) -> None:
-    conn.execute(
-        "UPDATE statement_layouts SET last_used_at = %s WHERE id = %s",
-        (datetime.now().astimezone(), layout_id),
+async def touch_layout(conn: Connection, layout_id: str) -> None:
+    await conn.execute(
+        "UPDATE statement_layouts SET last_used_at = $1 WHERE id = $2",
+        datetime.now().astimezone(),
+        layout_id,
     )
 
 

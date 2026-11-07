@@ -7,17 +7,17 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
-import psycopg
 import pytest
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import dict_row
 
 from fin_agent.api.capture import MAX_CAPTURE_BYTES
 from fin_agent.api.imports import MAX_UPLOAD_BYTES
 from fin_agent.api.middleware import CONTENT_SECURITY_POLICY
 from fin_agent.backup_restore import build_manifest, restore_from_restic
+from fin_agent.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
 from fin_agent.db.pre_migration import dump_before_migrating
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
@@ -29,10 +29,12 @@ REQUIRED_POLICY = (
 )
 
 
-def _admin_conn():
+@asynccontextmanager
+async def _admin_conn() -> AsyncIterator[Connection]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     info["dbname"] = "postgres"
-    return psycopg.connect(make_conninfo(**info), autocommit=True, row_factory=dict_row)
+    async with connect(make_conninfo(**info), autocommit=True) as conn:
+        yield conn
 
 
 def test_security_headers_are_the_exact_required_policy(client):
@@ -55,7 +57,7 @@ def test_both_upload_paths_share_the_25_mb_cap():
     assert MAX_CAPTURE_BYTES == MAX_UPLOAD_BYTES
 
 
-def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, settings, db):
+async def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
@@ -75,42 +77,45 @@ def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, se
     assert client.get("/api/export/json").status_code == 200
     assert client.post("/api/auth/enrollments").status_code == 200
 
-    passkey_id = db.execute("SELECT id FROM webauthn_credentials").fetchone()["id"]
+    passkey_id = (await db.fetchrow("SELECT id FROM webauthn_credentials"))["id"]
     renamed = client.patch(f"/api/auth/passkeys/{passkey_id}", json={"name": "Laptop"})
     assert renamed.status_code == 200, renamed.text
 
-    db.execute("UPDATE sessions SET reverified_at = now() - interval '6 minutes'")
-    db.commit()
+    await db.execute("UPDATE sessions SET reverified_at = now() - interval '6 minutes'")
     assert client.get("/api/export/json").status_code == 403
 
 
-def test_backup_manifest_changes_when_a_table_changes(demo_ledger):
-    demo_ledger.execute("INSERT INTO preferences (body, created_by) VALUES ('Loves UPI', 'user')")
-    demo_ledger.commit()
-    before = build_manifest(demo_ledger)
+async def test_backup_manifest_changes_when_a_table_changes(demo_ledger):
+    await demo_ledger.execute(
+        "INSERT INTO preferences (body, created_by) VALUES ('Loves UPI', 'user')"
+    )
+    before = await build_manifest(demo_ledger)
     assert before["format"] == "fin-agent-backup-manifest"
     assert before["tables"]["preferences"]["rows"] >= 1
     assert before["tables"]["accounts"]["rows"] > 0
 
-    demo_ledger.execute("UPDATE preferences SET body = 'Loves cards'")
-    demo_ledger.commit()
-    after = build_manifest(demo_ledger)
+    await demo_ledger.execute("UPDATE preferences SET body = 'Loves cards'")
+    after = await build_manifest(demo_ledger)
     assert after["tables"]["preferences"]["md5"] != before["tables"]["preferences"]["md5"]
 
 
-def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, settings, tmp_path):
+async def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, settings, tmp_path):
     from dataclasses import replace
 
-    assert dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path)) is None
+    assert await dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path)) is None
 
     import fin_agent.db.pre_migration as pre_migration
 
     original_pending = pre_migration.pending
     original_dump = pre_migration.export_pg_dump
-    pre_migration.pending = lambda conn: [object()]
+
+    async def fake_pending(conn):
+        return [object()]
+
+    pre_migration.pending = fake_pending
     pre_migration.export_pg_dump = lambda url: b"-- pre-migration dump\n"
     try:
-        path = dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path))
+        path = await dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path))
     finally:
         pre_migration.pending = original_pending
         pre_migration.export_pg_dump = original_dump
@@ -132,39 +137,44 @@ def _binary(env_name: str, name: str) -> str | None:
     ),
     reason="restic or the PostgreSQL 18 client is missing",
 )
-def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
+async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
     db = demo_ledger
-    preference = db.execute(
-        "INSERT INTO preferences (body, created_by) VALUES ('Prefers UPI', 'agent') RETURNING id"
-    ).fetchone()["id"]
-    conversation = db.execute(
-        "INSERT INTO conversations (title) VALUES ('L8 drill') RETURNING id"
-    ).fetchone()["id"]
-    message = db.execute(
-        """
-        INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-        VALUES (%s, 'l8-drill-1', 'user', '[]'::jsonb, 'Dinner at Swiggy')
-        RETURNING id
-        """,
-        (conversation,),
-    ).fetchone()["id"]
-    db.execute(
+    preference = (
+        await db.fetchrow(
+            "INSERT INTO preferences (body, created_by) "
+            "VALUES ('Prefers UPI', 'agent') RETURNING id"
+        )
+    )["id"]
+    conversation = (
+        await db.fetchrow("INSERT INTO conversations (title) VALUES ('L8 drill') RETURNING id")
+    )["id"]
+    message = (
+        await db.fetchrow(
+            """
+            INSERT INTO messages (conversation_id, client_id, role, content, body_text)
+            VALUES ($1, 'l8-drill-1', 'user', '[]'::jsonb, 'Dinner at Swiggy')
+            RETURNING id
+            """,
+            conversation,
+        )
+    )["id"]
+    await db.execute(
         """
         INSERT INTO attachments (kind, filename, content_type, size_bytes, sha256, data)
-        VALUES ('photo', 'receipt.jpg', 'image/jpeg', 3, 'abc123', %s)
+        VALUES ('photo', 'receipt.jpg', 'image/jpeg', 3, 'abc123', $1)
         """,
-        (b"\x01\x02\x03",),
+        b"\x01\x02\x03",
     )
-    db.execute(
+    await db.execute(
         """
         INSERT INTO audit_log (actor, message_id, group_id, table_name, row_id, after)
-        VALUES ('agent', %s, 'l8-group', 'preferences', %s, '{"body":"Prefers UPI"}'::jsonb)
+        VALUES ('agent', $1, 'l8-group', 'preferences', $2, '{"body":"Prefers UPI"}'::jsonb)
         """,
-        (message, preference),
+        message,
+        preference,
     )
-    db.commit()
 
-    manifest = build_manifest(db)
+    manifest = await build_manifest(db)
     source = os.environ["DATABASE_URL"]
     dump = tmp_path / "fin_agent.dump"
     env = os.environ.copy()
@@ -211,30 +221,29 @@ def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path):
     target_info["dbname"] = "fin_agent_l8_restore_test"
     target = make_conninfo(**target_info)
     try:
-        report = restore_from_restic(
+        report = await restore_from_restic(
             repository=str(repo),
             password="local-drill-password",
             target_dsn=target,
             force=True,
         )
         assert report.ok, report.as_dict()
-        with psycopg.connect(target, row_factory=dict_row) as restored:
-            assert restored.execute("SELECT body FROM preferences").fetchone()["body"] == (
+        async with connect(target) as restored:
+            assert (await restored.fetchrow("SELECT body FROM preferences"))["body"] == (
                 "Prefers UPI"
             )
-            assert (
-                restored.execute("SELECT body_text FROM messages").fetchone()["body_text"]
-                == "Dinner at Swiggy"
+            assert (await restored.fetchrow("SELECT body_text FROM messages"))["body_text"] == (
+                "Dinner at Swiggy"
             )
-            assert restored.execute("SELECT sha256 FROM attachments").fetchone()["sha256"] == (
+            assert (await restored.fetchrow("SELECT sha256 FROM attachments"))["sha256"] == (
                 "abc123"
             )
-            assert restored.execute("SELECT count(*) AS n FROM audit_log").fetchone()["n"] >= 1
-            assert restored.execute("SELECT count(*) AS n FROM schedules").fetchone()["n"] > 0
-            assert restored.execute("SELECT count(*) AS n FROM goals").fetchone()["n"] > 0
+            assert (await restored.fetchrow("SELECT count(*) AS n FROM audit_log"))["n"] >= 1
+            assert (await restored.fetchrow("SELECT count(*) AS n FROM schedules"))["n"] > 0
+            assert (await restored.fetchrow("SELECT count(*) AS n FROM goals"))["n"] > 0
     finally:
-        with _admin_conn() as admin:
-            admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_restore_test" WITH (FORCE)')
+        async with _admin_conn() as admin:
+            await admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_restore_test" WITH (FORCE)')
 
 
 BACKUP_SCRIPT = Path(__file__).resolve().parents[1] / "backup" / "backup.sh"
@@ -274,10 +283,10 @@ BACKUP_SCRIPT_SKIP = _backup_script_skip_reason()
 
 
 @pytest.mark.skipif(BACKUP_SCRIPT_SKIP is not None, reason=BACKUP_SCRIPT_SKIP or "")
-def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(demo_ledger, tmp_path: Path):
+async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
+    demo_ledger, tmp_path: Path
+):
     """A write that commits mid-backup must not land in the manifest but miss the dump."""
-    db = demo_ledger
-    db.commit()
     source = os.environ["DATABASE_URL"]
     info = conninfo_to_dict(source)
     dump = tmp_path / "fin_agent.dump"
@@ -322,7 +331,7 @@ def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(demo_ledger
     target_info["dbname"] = "fin_agent_l8_snapshot_test"
     target = make_conninfo(**target_info)
     try:
-        report = restore_from_restic(
+        report = await restore_from_restic(
             repository=str(repo),
             password="race-drill-password",
             target_dsn=target,
@@ -330,14 +339,16 @@ def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(demo_ledger
         )
         assert report.checks.get("manifest_matches") is True, report.as_dict()
         assert report.ok, report.as_dict()
-        with psycopg.connect(target, row_factory=dict_row) as restored:
-            raced = restored.execute(
-                "SELECT count(*) AS n FROM preferences WHERE body = 'raced write'"
-            ).fetchone()["n"]
+        async with connect(target) as restored:
+            raced = (
+                await restored.fetchrow(
+                    "SELECT count(*) AS n FROM preferences WHERE body = 'raced write'"
+                )
+            )["n"]
         assert raced == 0
     finally:
-        with _admin_conn() as admin:
-            admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_snapshot_test" WITH (FORCE)')
+        async with _admin_conn() as admin:
+            await admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_snapshot_test" WITH (FORCE)')
 
 
 @pytest.mark.skipif(

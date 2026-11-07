@@ -179,23 +179,21 @@ async def test_a_model_failure_saves_a_plain_note(app, db, monkeypatch):
         )
 
 
-def test_crash_recovery_leaves_a_note_and_clears_the_marker(db):
-    db.execute(
+async def test_crash_recovery_leaves_a_note_and_clears_the_marker(db):
+    await db.execute(
         "INSERT INTO conversations (id, title, run_started_at, active_run_id) "
         "VALUES ('thread-crash', 'crash', now(), 'run_x')"
     )
-    db.commit()
-    recovered = recover_crashed_runs(db)
-    db.commit()
+    recovered = await recover_crashed_runs(db)
     assert recovered and recovered[0]["thread_id"] == "thread-crash"
-    row = db.execute(
+    row = await db.fetchrow(
         "SELECT run_started_at, active_run_id FROM conversations WHERE id = 'thread-crash'"
-    ).fetchone()
+    )
     assert row["run_started_at"] is None
     assert row["active_run_id"] is None
-    message = db.execute(
+    message = await db.fetchrow(
         "SELECT content FROM messages WHERE conversation_id = 'thread-crash'"
-    ).fetchone()
+    )
     assert "interrupted by a restart" in json.dumps(message["content"])
 
 
@@ -214,9 +212,7 @@ async def test_deploy_drain_stops_and_saves(app, db, monkeypatch):
             await app.state.turns.drain()
         await _until(lambda: app.state.turns.get("thread-drain") is None)
     assert app.state.turns.get("thread-drain") is None
-    row = db.execute(
-        "SELECT run_started_at FROM conversations WHERE id = 'thread-drain'"
-    ).fetchone()
+    row = await db.fetchrow("SELECT run_started_at FROM conversations WHERE id = 'thread-drain'")
     assert row["run_started_at"] is None
 
 
@@ -259,7 +255,7 @@ def _flag_amounts(thread: dict) -> list[list[str]]:
 async def test_a_snapshot_only_card_limit_is_grounded_but_inventions_are_flagged(
     app, ledger, monkeypatch
 ):
-    create_account(
+    await create_account(
         ledger,
         kind="card",
         name="Slice card",
@@ -268,7 +264,6 @@ async def test_a_snapshot_only_card_limit_is_grounded_but_inventions_are_flagged
         statement_day=5,
         due_day=25,
     )
-    ledger.commit()
     async with live_server(app, monkeypatch, _limit_model()) as client:
 
         async def ask(message_id: str, text: str) -> str:

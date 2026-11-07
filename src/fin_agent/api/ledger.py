@@ -307,39 +307,39 @@ def _named(items: list[dict[str, Any]], key: str = "items") -> dict[str, Any]:
 
 
 @router.get("/accounts")
-def get_accounts(conn: Database) -> dict[str, Any]:
-    return accounts.account_summary(conn)
+async def get_accounts(conn: Database) -> dict[str, Any]:
+    return await accounts.account_summary(conn)
 
 
 @router.post("/accounts", status_code=201)
-def post_account(body: AccountCreate, conn: Database) -> dict[str, Any]:
-    return accounts.create_account(conn, **body.model_dump())
+async def post_account(body: AccountCreate, conn: Database) -> dict[str, Any]:
+    return await accounts.create_account(conn, **body.model_dump())
 
 
 @router.get("/accounts/{account_id}")
-def get_account(account_id: str, conn: Database) -> dict[str, Any]:
-    return accounts.get_account(conn, account_id)
+async def get_account(account_id: str, conn: Database) -> dict[str, Any]:
+    return await accounts.get_account(conn, account_id)
 
 
 @router.patch("/accounts/{account_id}")
-def patch_account(account_id: str, body: AccountUpdate, conn: Database) -> dict[str, Any]:
-    return accounts.update_account(conn, account_id, **body.model_dump(exclude_unset=True))
+async def patch_account(account_id: str, body: AccountUpdate, conn: Database) -> dict[str, Any]:
+    return await accounts.update_account(conn, account_id, **body.model_dump(exclude_unset=True))
 
 
 @router.post("/accounts/{account_id}/statement-balance")
-def post_statement_balance(
+async def post_statement_balance(
     account_id: str, body: StatementBalance, conn: Database
 ) -> dict[str, Any]:
-    return accounts.set_statement_balance(conn, account_id, **body.model_dump())
+    return await accounts.set_statement_balance(conn, account_id, **body.model_dump())
 
 
 @router.delete("/accounts/{account_id}")
-def delete_account(account_id: str, conn: Database) -> dict[str, Any]:
-    return accounts.archive_account(conn, account_id)
+async def delete_account(account_id: str, conn: Database) -> dict[str, Any]:
+    return await accounts.archive_account(conn, account_id)
 
 
 @router.get("/movements")
-def get_movements(
+async def get_movements(
     conn: Database,
     start: Date | None = None,
     end: Date | None = None,
@@ -351,7 +351,7 @@ def get_movements(
     cursor: str | None = None,
     include_reversed: bool = False,
 ) -> dict[str, Any]:
-    return movements.list_movements(
+    return await movements.list_movements(
         conn,
         start=start,
         end=end,
@@ -366,146 +366,151 @@ def get_movements(
 
 
 @router.post("/movements", status_code=201)
-def post_movement(body: MovementIn, conn: Database) -> dict[str, Any]:
+async def post_movement(body: MovementIn, conn: Database) -> dict[str, Any]:
     data = body.model_dump()
     kind = data.pop("kind")
     if kind == "expense":
-        return movements.record_expense(conn, **data)
+        return await movements.record_expense(conn, **data)
     if kind == "income":
-        return movements.record_income(conn, **data)
+        return await movements.record_income(conn, **data)
     if kind == "transfer":
-        return movements.record_transfer(conn, **data)
+        return await movements.record_transfer(conn, **data)
     if kind == "split":
-        return movements.record_split(conn, **data)
+        return await movements.record_split(conn, **data)
     if kind == "loan":
-        return movements.record_loan_payment(conn, **data)
+        return await movements.record_loan_payment(conn, **data)
     if kind == "refund":
-        return movements.record_refund(conn, **data)
+        return await movements.record_refund(conn, **data)
     if kind == "settlement":
-        return movements.record_settlement(conn, **data)
+        return await movements.record_settlement(conn, **data)
     if kind == "lending":
-        return movements.record_lending(conn, **data)
+        return await movements.record_lending(conn, **data)
     raise AssertionError(f"Unhandled movement kind {kind}")
 
 
 @router.get("/movements/{movement_id}")
-def get_movement(movement_id: str, conn: Database) -> dict[str, Any]:
-    return provenance.attach_sources(conn, movement_id, movements.get_movement(conn, movement_id))
+async def get_movement(movement_id: str, conn: Database) -> dict[str, Any]:
+    movement = await movements.get_movement(conn, movement_id)
+    return await provenance.attach_sources(conn, movement_id, movement)
 
 
 @router.post("/movements/{movement_id}/correct")
-def post_correction(movement_id: str, body: Correction, conn: Database) -> dict[str, Any]:
-    return movements.correct_movement(
+async def post_correction(movement_id: str, body: Correction, conn: Database) -> dict[str, Any]:
+    return await movements.correct_movement(
         conn, movement_id, changes=body.model_dump(exclude_unset=True), scope=body.scope
     )
 
 
 @router.post("/undo/{undo_id}")
-def post_undo(undo_id: str, conn: Database) -> dict[str, Any]:
+async def post_undo(undo_id: str, conn: Database) -> dict[str, Any]:
     from fin_agent.ledger.audit import undo_group
 
-    return undo_group(conn, undo_id)
+    return await undo_group(conn, undo_id)
 
 
 @router.post("/undo")
-def post_undo_latest(conn: Database) -> dict[str, Any]:
+async def post_undo_latest(conn: Database) -> dict[str, Any]:
     from fin_agent.ledger.audit import undo_latest
 
-    return undo_latest(conn)
+    return await undo_latest(conn)
 
 
 @router.get("/categories")
-def get_categories(conn: Database) -> dict[str, Any]:
-    return categories.category_tree(conn)
+async def get_categories(conn: Database) -> dict[str, Any]:
+    return await categories.category_tree(conn)
 
 
 @router.post("/categories", status_code=201)
-def post_category(body: CategoryCreate, conn: Database) -> dict[str, Any]:
-    return categories.create_category(conn, **body.model_dump())
+async def post_category(body: CategoryCreate, conn: Database) -> dict[str, Any]:
+    return await categories.create_category(conn, **body.model_dump())
 
 
 @router.patch("/categories/{category_id}")
-def patch_category(category_id: str, body: CategoryUpdate, conn: Database) -> dict[str, Any]:
-    return categories.update_category(conn, category_id, **body.model_dump(exclude_unset=True))
+async def patch_category(category_id: str, body: CategoryUpdate, conn: Database) -> dict[str, Any]:
+    return await categories.update_category(
+        conn, category_id, **body.model_dump(exclude_unset=True)
+    )
 
 
 @router.delete("/categories/{category_id}")
-def delete_category(category_id: str, conn: Database) -> dict[str, Any]:
-    return categories.archive_category(conn, category_id)
+async def delete_category(category_id: str, conn: Database) -> dict[str, Any]:
+    return await categories.archive_category(conn, category_id)
 
 
 @router.get("/category-rules")
-def get_rules(conn: Database) -> dict[str, Any]:
-    return _named([dict(row) for row in categories.list_rules(conn)])
+async def get_rules(conn: Database) -> dict[str, Any]:
+    return _named(await categories.list_rules(conn))
 
 
 @router.post("/category-rules", status_code=201)
-def post_rule(body: RuleCreate, conn: Database) -> dict[str, Any]:
-    return categories.upsert_rule(conn, **body.model_dump())
+async def post_rule(body: RuleCreate, conn: Database) -> dict[str, Any]:
+    return await categories.upsert_rule(conn, **body.model_dump())
 
 
 @router.delete("/category-rules/{rule_id}")
-def delete_rule(rule_id: str, conn: Database) -> dict[str, Any]:
-    return categories.delete_rule(conn, rule_id)
+async def delete_rule(rule_id: str, conn: Database) -> dict[str, Any]:
+    return await categories.delete_rule(conn, rule_id)
 
 
 @router.get("/schedules/upcoming")
-def get_upcoming(conn: Database, days: int = Query(default=30, ge=1, le=730)) -> dict[str, Any]:
-    return schedules.upcoming(conn, days=days)
+async def get_upcoming(
+    conn: Database, days: int = Query(default=30, ge=1, le=730)
+) -> dict[str, Any]:
+    return await schedules.upcoming(conn, days=days)
 
 
 @router.get("/schedules")
-def get_schedules(conn: Database) -> dict[str, Any]:
-    return _named(schedules.list_schedules(conn))
+async def get_schedules(conn: Database) -> dict[str, Any]:
+    return _named(await schedules.list_schedules(conn))
 
 
 @router.post("/schedules", status_code=201)
-def post_schedule(body: ScheduleCreate, conn: Database) -> dict[str, Any]:
-    return schedules.create_schedule(conn, **body.model_dump())
+async def post_schedule(body: ScheduleCreate, conn: Database) -> dict[str, Any]:
+    return await schedules.create_schedule(conn, **body.model_dump())
 
 
 @router.get("/schedules/{schedule_id}")
-def get_schedule(schedule_id: str, conn: Database) -> dict[str, Any]:
-    return schedules.get_schedule(conn, schedule_id)
+async def get_schedule(schedule_id: str, conn: Database) -> dict[str, Any]:
+    return await schedules.get_schedule(conn, schedule_id)
 
 
 @router.patch("/schedules/{schedule_id}")
-def patch_schedule(schedule_id: str, body: ScheduleUpdate, conn: Database) -> dict[str, Any]:
-    return schedules.update_schedule(conn, schedule_id, **body.model_dump(exclude_unset=True))
+async def patch_schedule(schedule_id: str, body: ScheduleUpdate, conn: Database) -> dict[str, Any]:
+    return await schedules.update_schedule(conn, schedule_id, **body.model_dump(exclude_unset=True))
 
 
 @router.delete("/schedules/{schedule_id}")
-def delete_schedule(schedule_id: str, conn: Database) -> dict[str, Any]:
-    return schedules.archive_schedule(conn, schedule_id)
+async def delete_schedule(schedule_id: str, conn: Database) -> dict[str, Any]:
+    return await schedules.archive_schedule(conn, schedule_id)
 
 
 @router.get("/goals")
-def get_goals(conn: Database) -> dict[str, Any]:
-    return goals.goals_summary(conn)
+async def get_goals(conn: Database) -> dict[str, Any]:
+    return await goals.goals_summary(conn)
 
 
 @router.post("/goals", status_code=201)
-def post_goal(body: GoalCreate, conn: Database) -> dict[str, Any]:
-    return goals.create_goal(conn, **body.model_dump())
+async def post_goal(body: GoalCreate, conn: Database) -> dict[str, Any]:
+    return await goals.create_goal(conn, **body.model_dump())
 
 
 @router.get("/goals/{goal_id}")
-def get_goal(goal_id: str, conn: Database) -> dict[str, Any]:
-    return goals.get_goal(conn, goal_id)
+async def get_goal(goal_id: str, conn: Database) -> dict[str, Any]:
+    return await goals.get_goal(conn, goal_id)
 
 
 @router.patch("/goals/{goal_id}")
-def patch_goal(goal_id: str, body: GoalUpdate, conn: Database) -> dict[str, Any]:
-    return goals.update_goal(conn, goal_id, **body.model_dump(exclude_unset=True))
+async def patch_goal(goal_id: str, body: GoalUpdate, conn: Database) -> dict[str, Any]:
+    return await goals.update_goal(conn, goal_id, **body.model_dump(exclude_unset=True))
 
 
 @router.delete("/goals/{goal_id}")
-def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
-    return goals.archive_goal(conn, goal_id)
+async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
+    return await goals.archive_goal(conn, goal_id)
 
 
 @router.get("/projection")
-def get_projection(
+async def get_projection(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
     amount_paise: int | None = Query(default=None, gt=0),
@@ -527,51 +532,53 @@ def get_projection(
             "account": account,
         }
     try:
-        return projection_tools.project(conn, horizon_days=horizon_days, hypothetical=hypothetical)
+        return await projection_tools.project(
+            conn, horizon_days=horizon_days, hypothetical=hypothetical
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/people")
-def get_people(conn: Database) -> dict[str, Any]:
-    return payees.people(conn)
+async def get_people(conn: Database) -> dict[str, Any]:
+    return await payees.people(conn)
 
 
 @router.get("/payees")
-def get_payees(conn: Database) -> dict[str, Any]:
-    return _named([dict(row) for row in payees.list_payees(conn)])
+async def get_payees(conn: Database) -> dict[str, Any]:
+    return _named(await payees.list_payees(conn))
 
 
 @router.post("/payees", status_code=201)
-def post_payee(body: PayeeCreate, conn: Database) -> dict[str, Any]:
-    return payees.create_payee(conn, **body.model_dump())
+async def post_payee(body: PayeeCreate, conn: Database) -> dict[str, Any]:
+    return await payees.create_payee(conn, **body.model_dump())
 
 
 @router.patch("/payees/{payee_id}")
-def patch_payee(payee_id: str, body: PayeeUpdate, conn: Database) -> dict[str, Any]:
-    return payees.update_payee(conn, payee_id, **body.model_dump(exclude_unset=True))
+async def patch_payee(payee_id: str, body: PayeeUpdate, conn: Database) -> dict[str, Any]:
+    return await payees.update_payee(conn, payee_id, **body.model_dump(exclude_unset=True))
 
 
 @router.get("/settings")
-def get_settings(conn: Database) -> dict[str, Any]:
-    return settings.read_settings(conn)
+async def get_settings(conn: Database) -> dict[str, Any]:
+    return await settings.read_settings(conn)
 
 
 @router.patch("/settings")
-def patch_settings(body: SettingsUpdate, conn: Database) -> dict[str, Any]:
-    return settings.update_settings(conn, **body.model_dump(exclude_unset=True))
+async def patch_settings(body: SettingsUpdate, conn: Database) -> dict[str, Any]:
+    return await settings.update_settings(conn, **body.model_dump(exclude_unset=True))
 
 
 @router.patch("/preferences/{preference_id}/content")
-def patch_preference_content(
+async def patch_preference_content(
     preference_id: str, body: PreferenceContentUpdate, conn: Database
 ) -> dict[str, Any]:
-    return preference_edits.update_preference_body(conn, preference_id, body.body)
+    return await preference_edits.update_preference_body(conn, preference_id, body.body)
 
 
 @router.get("/backup/status")
-def get_backup_status(conn: Database) -> dict[str, Any]:
-    return settings.backup_status(conn)
+async def get_backup_status(conn: Database) -> dict[str, Any]:
+    return await settings.backup_status(conn)
 
 
 @router.get("/runtime-info")
@@ -581,21 +588,21 @@ def get_runtime_info() -> dict[str, Any]:
 
 
 @router.get("/export/json")
-def get_export_json(conn: Database, fresh: FreshSession) -> JSONResponse:
+async def get_export_json(conn: Database, fresh: FreshSession) -> JSONResponse:
     del fresh
     stamp = datetime.now().strftime("%Y%m%d")
     return JSONResponse(
-        export.export_json(conn),
+        await export.export_json(conn),
         headers={"Content-Disposition": f'attachment; filename="fin-agent-{stamp}.json"'},
     )
 
 
 @router.get("/export/csv")
-def get_export_csv(conn: Database, fresh: FreshSession) -> Response:
+async def get_export_csv(conn: Database, fresh: FreshSession) -> Response:
     del fresh
     stamp = datetime.now().strftime("%Y%m%d")
     return Response(
-        export.export_csv_zip(conn),
+        await export.export_csv_zip(conn),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="fin-agent-{stamp}.zip"'},
     )
@@ -616,7 +623,7 @@ def get_export_pg_dump(conn: Database, fresh: FreshSession) -> Response:
 
 
 @router.get("/import-history")
-def get_import_history(
+async def get_import_history(
     conn: Database,
     limit: int = Query(default=import_history.DEFAULT_LIMIT, ge=1, le=import_history.MAX_LIMIT),
     cursor: str | None = None,
@@ -626,4 +633,4 @@ def get_import_history(
     This is deliberately additive: `GET /api/imports` keeps its existing shape and 200-row cap
     for every current client. The Imports screen uses this keyset route to reach older data.
     """
-    return import_history.list_import_history(conn, limit=limit, cursor=cursor)
+    return await import_history.list_import_history(conn, limit=limit, cursor=cursor)

@@ -10,8 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.notifications import _payload
 
 MAX_LIMIT = 200
@@ -35,26 +34,26 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
         raise ValueError("Invalid notification cursor") from exc
 
 
-def count_unread(conn: psycopg.Connection) -> int:
-    row = conn.execute("SELECT count(*) AS n FROM notifications WHERE read_at IS NULL").fetchone()
+async def count_unread(conn: Connection) -> int:
+    row = await conn.fetchrow("SELECT count(*) AS n FROM notifications WHERE read_at IS NULL")
     return int(row["n"])
 
 
-def unread_first(conn: psycopg.Connection, *, limit: int = 4) -> list[dict[str, Any]]:
+async def unread_first(conn: Connection, *, limit: int = 4) -> list[dict[str, Any]]:
     """The newest `limit` items with unread first, however old the unread ones are."""
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT * FROM notifications
         ORDER BY (read_at IS NULL) DESC, created_at DESC, id DESC
-        LIMIT %s
+        LIMIT $1
         """,
-        (_clamp(limit),),
-    ).fetchall()
+        _clamp(limit),
+    )
     return [_payload(row) for row in rows]
 
 
-def list_page(
-    conn: psycopg.Connection, *, limit: int = 50, cursor: str | None = None
+async def list_page(
+    conn: Connection, *, limit: int = 50, cursor: str | None = None
 ) -> dict[str, Any]:
     """One page of the full inbox, newest first, with a cursor for the next page."""
     limit = _clamp(limit)
@@ -62,18 +61,19 @@ def list_page(
     params: list[Any] = []
     if cursor:
         created_at, notification_id = _decode_cursor(cursor)
-        where = "WHERE (created_at, id) < (%s, %s)"
+        where = "WHERE (created_at, id) < ($1, $2)"
         params.extend([created_at, notification_id])
 
-    rows = conn.execute(
+    rows = await conn.fetch(
         f"""
         SELECT * FROM notifications
         {where}
         ORDER BY created_at DESC, id DESC
-        LIMIT %s
+        LIMIT ${len(params) + 1}
         """,  # noqa: S608 - `where` is a constant fragment, never user text
-        (*params, limit + 1),
-    ).fetchall()
+        *params,
+        limit + 1,
+    )
     has_more = len(rows) > limit
     rows = rows[:limit]
     next_cursor = (
@@ -81,7 +81,7 @@ def list_page(
     )
     return {
         "notifications": [_payload(row) for row in rows],
-        "unread_count": count_unread(conn),
+        "unread_count": await count_unread(conn),
         "as_of": datetime.now(UTC).isoformat(),
         "next_cursor": next_cursor,
     }

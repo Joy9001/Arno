@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 
-import psycopg
+import asyncpg
 import pytest
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import dict_row
 
+from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
 from fin_agent.db.migrate import applied, current_version, discover, run_migrations
 
 EXPECTED_TABLES = {
@@ -58,34 +57,34 @@ def _agent_ro_dsn() -> str:
     return make_conninfo(**info)
 
 
-def test_every_migration_is_recorded_once(db):
-    rows = applied(db)
+async def test_every_migration_is_recorded_once(db):
+    rows = await applied(db)
     versions = [row["version"] for row in rows]
 
     assert versions == list(range(1, len(discover()) + 1))
-    assert current_version(db) == len(discover())
+    assert await current_version(db) == len(discover())
     names = [row["name"] for row in rows]
     assert names[0] == "pgledger"
     assert {"views", "grants", "ledger_l1", "enrollment_tokens"} <= set(names)
 
 
-def test_migrations_are_idempotent(db):
-    assert run_migrations(db) == []
-    assert current_version(db) == len(discover())
+async def test_migrations_are_idempotent(db):
+    assert await run_migrations(db) == []
+    assert await current_version(db) == len(discover())
 
 
-def test_schema_v1_has_every_designed_table_and_view(db):
+async def test_schema_v1_has_every_designed_table_and_view(db):
     tables = {
         row["table_name"]
-        for row in db.execute(
+        for row in await db.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-        ).fetchall()
+        )
     }
     views = {
         row["table_name"]
-        for row in db.execute(
+        for row in await db.fetch(
             "SELECT table_name FROM information_schema.views WHERE table_schema = 'public'"
-        ).fetchall()
+        )
     }
 
     assert EXPECTED_TABLES <= tables
@@ -98,58 +97,57 @@ def test_schema_v1_has_every_designed_table_and_view(db):
     } <= views
 
 
-def test_money_columns_are_whole_paise_bigints(db):
-    columns = db.execute(
+async def test_money_columns_are_whole_paise_bigints(db):
+    columns = await db.fetch(
         """
         SELECT table_name, column_name, data_type
         FROM information_schema.columns
         WHERE table_schema = 'public' AND column_name LIKE '%_paise'
         """
-    ).fetchall()
+    )
 
     assert columns, "expected *_paise columns"
     assert {row["data_type"] for row in columns} == {"bigint"}
 
 
-def test_pgledger_ids_are_prefixed_ulids(db):
-    row = db.execute("SELECT pgledger_generate_id('acc') AS id").fetchone()
+async def test_pgledger_ids_are_prefixed_ulids(db):
+    row = await db.fetchrow("SELECT pgledger_generate_id('acc') AS id")
 
     assert row["id"].startswith("acc_")
     assert len(row["id"].split("_", 1)[1]) == 26
 
 
-def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
-    with psycopg.connect(_agent_ro_dsn(), row_factory=dict_row) as conn:
-        assert conn.execute("SELECT current_user AS who").fetchone()["who"] == "agent_ro"
-        assert conn.execute("SELECT count(*) AS n FROM accounts").fetchone()["n"] == 0
-        assert conn.execute("SELECT count(*) AS n FROM v_balances").fetchone()["n"] == 0
+async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
+    async with connect(_agent_ro_dsn()) as conn:
+        assert (await conn.fetchrow("SELECT current_user AS who"))["who"] == "agent_ro"
+        assert (await conn.fetchrow("SELECT count(*) AS n FROM accounts"))["n"] == 0
+        assert (await conn.fetchrow("SELECT count(*) AS n FROM v_balances"))["n"] == 0
 
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute("SELECT count(*) FROM users")
-        conn.rollback()
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await conn.execute("SELECT count(*) FROM users")
 
 
-def test_agent_ro_cannot_write_or_create_temp_tables():
-    with psycopg.connect(_agent_ro_dsn(), row_factory=dict_row) as conn:
-        with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
-            conn.execute("INSERT INTO categories (name) VALUES ('x')")
-        conn.rollback()
+async def test_agent_ro_cannot_write_or_create_temp_tables():
+    async with connect(_agent_ro_dsn()) as conn:
+        with pytest.raises(asyncpg.ReadOnlySQLTransactionError):
+            await conn.execute("INSERT INTO categories (name) VALUES ('x')")
 
-        temp_allowed = conn.execute(
-            "SELECT has_database_privilege(current_user, current_database(), 'TEMP') AS allowed"
-        ).fetchone()["allowed"]
+        temp_allowed = (
+            await conn.fetchrow(
+                "SELECT has_database_privilege(current_user, current_database(), 'TEMP') AS allowed"
+            )
+        )["allowed"]
         assert temp_allowed is False
-        with pytest.raises(psycopg.errors.Error):
-            conn.execute("CREATE TEMP TABLE scratch (id int)")
-        conn.rollback()
+        with pytest.raises(asyncpg.PostgresError):
+            await conn.execute("CREATE TEMP TABLE scratch (id int)")
 
 
-def test_agent_ro_has_read_only_and_two_second_defaults():
-    with psycopg.connect(_agent_ro_dsn(), row_factory=dict_row) as conn:
-        row = conn.execute(
+async def test_agent_ro_has_read_only_and_two_second_defaults():
+    async with connect(_agent_ro_dsn()) as conn:
+        row = await conn.fetchrow(
             "SELECT current_setting('default_transaction_read_only') AS ro, "
             "current_setting('statement_timeout') AS timeout"
-        ).fetchone()
+        )
 
     assert row["ro"] == "on"
     assert row["timeout"] == "2s"

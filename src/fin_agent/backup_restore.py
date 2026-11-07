@@ -18,12 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import psycopg
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import dict_row
+from asyncpg import PostgresError
 
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect, conninfo_to_dict, make_conninfo, quote_ident
 
 MANIFEST_NAME = "backup_manifest.json"
 DUMP_NAMES = ("fin_agent.dump", "fin_agent.sql")
@@ -74,8 +71,8 @@ class RestoreReport:
         }
 
 
-def build_manifest(conn: psycopg.Connection) -> dict[str, Any]:
-    row = conn.execute("SELECT fin_agent_backup_manifest() AS manifest").fetchone()
+async def build_manifest(conn: Connection) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT fin_agent_backup_manifest() AS manifest")
     return dict(row["manifest"])
 
 
@@ -168,37 +165,41 @@ def _admin_dsn(target_dsn: str) -> tuple[str, dict[str, Any]]:
     return admin, info
 
 
-def _database_has_tables(target_dsn: str) -> bool:
+async def _database_has_tables(target_dsn: str) -> bool:
     try:
-        with psycopg.connect(target_dsn, connect_timeout=10, row_factory=dict_row) as conn:
-            row = conn.execute(
+        async with connect(target_dsn) as conn:
+            count = await conn.fetchval(
                 """
-                SELECT count(*) AS n FROM information_schema.tables
+                SELECT count(*) FROM information_schema.tables
                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
                 """
-            ).fetchone()
-            return bool(row["n"])
-    except psycopg.OperationalError:
+            )
+            return bool(count)
+    except OSError, PostgresError:
         return False
 
 
-def prepare_database(target_dsn: str, *, force: bool = False) -> str:
+async def prepare_database(target_dsn: str, *, force: bool = False) -> str:
     """Create the target, or replace it only when it is empty or `force` is set."""
     admin, info = _admin_dsn(target_dsn)
     name = str(info["dbname"])
-    with psycopg.connect(admin, autocommit=True) as conn:
+    async with connect(admin) as conn:
         exists = (
-            conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
-            is not None
+            await conn.fetchrow("SELECT 1 FROM pg_database WHERE datname = $1", name) is not None
         )
         if exists:
-            if _database_has_tables(target_dsn) and not force:
+            if await _database_has_tables(target_dsn) and not force:
                 raise RestoreError(
                     f"Database {name!r} already has tables. Pass --force to replace it, or choose "
                     "a fresh database."
                 )
-            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
-        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+            await conn.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = $1 AND pid <> pg_backend_pid()",
+                name,
+            )
+            await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(name)}")
+        await conn.execute(f"CREATE DATABASE {quote_ident(name)}")
     return name
 
 
@@ -246,8 +247,8 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_database(
-    conn: psycopg.Connection,
+async def verify_database(
+    conn: Connection,
     *,
     manifest: dict[str, Any] | None,
     dump_sha256: str | None,
@@ -256,33 +257,33 @@ def verify_database(
     checks: dict[str, bool] = {}
     mismatches: list[str] = []
 
-    tables = conn.execute(
+    tables = await conn.fetch(
         """
         SELECT table_name FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
         """
-    ).fetchall()
+    )
     present = {str(row["table_name"]) for row in tables}
     checks["required_tables"] = REQUIRED_TABLES <= present
 
-    version = conn.execute("SELECT coalesce(max(version), 0) AS v FROM schema_version").fetchone()
-    checks["schema_version"] = int(version["v"]) > 0
+    version = await conn.fetchval("SELECT coalesce(max(version), 0) AS version FROM schema_version")
+    checks["schema_version"] = int(version) > 0
 
-    unbalanced = conn.execute(
+    unbalanced = await conn.fetchval(
         """
-        SELECT count(*) AS n FROM (
+        SELECT count(*) FROM (
             SELECT e.transfer_id
             FROM pgledger_entries e
             GROUP BY e.transfer_id
             HAVING sum(e.amount) <> 0
         ) AS bad
         """
-    ).fetchone()["n"]
+    )
     checks["ledger_transfers_balance"] = unbalanced == 0
 
-    drifted = conn.execute(
+    drifted = await conn.fetchval(
         """
-        SELECT count(*) AS n FROM (
+        SELECT count(*) FROM (
             SELECT a.id
             FROM pgledger_accounts a
             LEFT JOIN (
@@ -291,7 +292,7 @@ def verify_database(
             WHERE coalesce(e.total, 0) <> a.balance
         ) AS bad
         """
-    ).fetchone()["n"]
+    )
     checks["account_balances_match_entries"] = drifted == 0
 
     if manifest is None:
@@ -308,7 +309,7 @@ def verify_database(
         checks["manifest_matches"] = False
         mismatches.append("The dump's SHA-256 does not match the manifest.")
 
-    actual = build_manifest(conn)
+    actual = await build_manifest(conn)
     expected_tables = manifest.get("tables") or {}
     actual_tables = actual.get("tables") or {}
     for table in sorted(set(expected_tables) | set(actual_tables)):
@@ -329,7 +330,7 @@ def verify_database(
     return checks, mismatches
 
 
-def restore_from_directory(
+async def restore_from_directory(
     directory: Path,
     target_dsn: str,
     *,
@@ -343,10 +344,10 @@ def restore_from_directory(
         raise RestoreError(f"{manifest_path} is not a Fin-Agent backup manifest.")
     dump_hash = _sha256(dump)
 
-    name = prepare_database(target_dsn, force=force)
+    name = await prepare_database(target_dsn, force=force)
     _restore_dump(dump, target_dsn)
-    with connect(target_dsn) as conn:
-        checks, mismatches = verify_database(
+    async with connect(target_dsn) as conn:
+        checks, mismatches = await verify_database(
             conn,
             manifest=manifest,
             dump_sha256=dump_hash,
@@ -367,7 +368,7 @@ def restore_from_directory(
     return report
 
 
-def restore_from_restic(
+async def restore_from_restic(
     *,
     repository: str,
     password: str,
@@ -383,7 +384,7 @@ def restore_from_restic(
         )
     if keep_directory is not None:
         directory = extract_snapshot(repository, password, keep_directory, snapshot=snapshot)
-        return restore_from_directory(
+        return await restore_from_directory(
             directory,
             target_dsn,
             force=force,
@@ -394,7 +395,7 @@ def restore_from_restic(
         prefix="fin-agent-restore-", ignore_cleanup_errors=True
     ) as tmp:
         directory = extract_snapshot(repository, password, Path(tmp), snapshot=snapshot)
-        return restore_from_directory(
+        return await restore_from_directory(
             directory,
             target_dsn,
             force=force,

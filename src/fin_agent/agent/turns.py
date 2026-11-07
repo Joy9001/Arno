@@ -11,7 +11,6 @@ import json
 import logging
 import uuid
 import weakref
-from contextlib import closing
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -279,9 +278,9 @@ class TurnManager:
         primary = getattr(getattr(self.agent, "model", None), "model_name", None)
         if failed_attempts or (primary and model_name and model_name != primary):
             badge = model_name or "backup"
-        with closing(connect()) as conn:
-            with conn.transaction():
-                save_records(
+        async with connect() as conn:
+            async with conn.transaction():
+                await save_records(
                     conn,
                     thread_id=turn.thread_id,
                     run_id=turn.run_id,
@@ -300,14 +299,14 @@ class TurnManager:
                     reply_id=turn.reply_id,
                 )
                 if failed_attempts:
-                    conn.execute(
+                    await conn.execute(
                         """
                         UPDATE settings
-                        SET last_model_error_type = %s, last_model_error_at = now(),
+                        SET last_model_error_type = $1, last_model_error_at = now(),
                             updated_at = now()
                         WHERE id = 1
                         """,
-                        (", ".join(sorted(set(failed_attempts)))[:200],),
+                        ", ".join(sorted(set(failed_attempts)))[:200],
                     )
         turn.number_flags = flags
         turn.model_name = model_name
@@ -365,16 +364,15 @@ class TurnManager:
                 async for chunk in self._encoded(adapter, stream, captured_ref, turn):
                     await turn.push(_plain_errors(chunk))
             if not turn.saved:
-                with closing(connect()) as conn:
-                    with conn.transaction():
-                        conn.execute(
-                            """
-                            UPDATE settings
-                            SET last_model_error_type = 'ModelStreamError',
-                                last_model_error_at = now(), updated_at = now()
-                            WHERE id = 1
-                            """
-                        )
+                async with connect() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE settings
+                        SET last_model_error_type = 'ModelStreamError',
+                            last_model_error_at = now(), updated_at = now()
+                        WHERE id = 1
+                        """
+                    )
                 await self._save(
                     turn,
                     list(captured_ref[0]),
@@ -401,17 +399,16 @@ class TurnManager:
         except Exception as exc:  # noqa: BLE001 - every failure must save
             logger.error("chat turn failed (%s)", type(exc).__name__)
             turn.error = str(exc)
-            with closing(connect()) as conn:
-                with conn.transaction():
-                    conn.execute(
-                        """
-                        UPDATE settings
-                        SET last_model_error_type = %s, last_model_error_at = now(),
-                            updated_at = now()
-                        WHERE id = 1
-                        """,
-                        (type(exc).__name__[:200],),
-                    )
+            async with connect() as conn:
+                await conn.execute(
+                    """
+                    UPDATE settings
+                    SET last_model_error_type = $1, last_model_error_at = now(),
+                        updated_at = now()
+                    WHERE id = 1
+                    """,
+                    type(exc).__name__[:200],
+                )
             if not turn.saved:
                 await self._save(
                     turn,

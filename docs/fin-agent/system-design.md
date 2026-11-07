@@ -953,7 +953,7 @@ out of the table, so after a crash the import card asks again.
 |---|---|---|
 | **A plain table** | **Yes** | About 80 lines in the prototype, and no new dependency. It's in every dump |
 | APScheduler 3 | No | Its store needs SQLAlchemy and doesn't track a job that was running when the process died, so this table would still be needed |
-| [Procrastinate](https://procrastinate.readthedocs.io/en/stable/howto/advanced/cron.html) | Close second | Mature and uses psycopg. But it skips runs over 10 minutes late by default, wants a per-minute task for your own schedules, and [leaves stalled-job retry to you](https://procrastinate.readthedocs.io/en/stable/howto/production/retry_stalled_jobs.html). Docs only |
+| [Procrastinate](https://procrastinate.readthedocs.io/en/stable/howto/advanced/cron.html) | Close second | Mature, but built around a synchronous Postgres driver rather than the app's async one. It also skips runs over 10 minutes late by default, wants a per-minute task for your own schedules, and [leaves stalled-job retry to you](https://procrastinate.readthedocs.io/en/stable/howto/production/retry_stalled_jobs.html). Docs only |
 | [pgtask](https://github.com/Kludex/pgtask) | Not yet | The best fit on paper, with a built-in "latest" catch-up and a harness capability. But it's marked Pre-Alpha, its Python client has no schedule API, and its migration failed on a fresh Postgres 18.6 on Windows, which may be platform-specific. [Parked](parked.md#a-job-library) |
 | [DBOS](https://docs.dbos.dev/python/tutorials/scheduled-workflows) | No | Replay machinery that isn't needed, and its backfill runs every missed occurrence rather than one. Docs only |
 
@@ -1034,7 +1034,7 @@ Job tests used real Postgres 18.6.
 | The same, a schedule every 5 seconds with about 4 missed | 1 catch-up run, and no duplicate keys |
 | The same, the same key twice and a rolled-back insert | One job, and no rolled-back job |
 | pgtask's `migrate()` on a fresh Postgres 18.6 on Windows | Failed in migration 3. Not investigated further |
-| A `psycopg_pool` pool across a Postgres restart | Hadn't recovered 14 seconds after the restart. Inconclusive; backoff or Windows may explain it |
+| A connection pool across a Postgres restart | Hadn't recovered 14 seconds after the restart. Inconclusive; backoff or Windows may explain it |
 | Data checksums on a fresh Postgres 18.6 | On by default |
 
 **Not tested:** the AI SDK's `useChat` reattaching ([since tested](#the-interface-tests-november-1-2026)), real providers, Linux and Docker (Compose restarts

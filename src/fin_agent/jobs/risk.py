@@ -9,13 +9,10 @@ state re-arms, and a later turn warns again.
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from datetime import date
 from typing import Any
 
-import psycopg
-
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.engine.money import money
 from fin_agent.ledger.audit import new_id
 from fin_agent.notifications import create_notification, send_push_for_kind
@@ -24,10 +21,10 @@ from fin_agent.tools import projection as projection_tools
 logger = logging.getLogger("fin_agent.jobs.risk")
 
 
-def risk_warning(conn: psycopg.Connection, *, horizon_days: int = 90) -> dict[str, Any] | None:
+async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str, Any] | None:
     """Check the projection and create at most one warning for the current episode."""
-    projection = projection_tools.project(conn, horizon_days=horizon_days)
-    state = conn.execute("SELECT * FROM risk_state WHERE id = 1").fetchone()
+    projection = await projection_tools.project(conn, horizon_days=horizon_days)
+    state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1")
     last_crossing = state["first_floor_crossing"] if state else None
     armed = bool(state["armed"]) if state else True
 
@@ -43,7 +40,7 @@ def risk_warning(conn: psycopg.Connection, *, horizon_days: int = 90) -> dict[st
 
     row = None
     if at_risk and armed:
-        episode_key = new_id(conn, "rsk")
+        episode_key = await new_id(conn, "rsk")
         parts = []
         if probability_low:
             parts.append(
@@ -59,7 +56,7 @@ def risk_warning(conn: psycopg.Connection, *, horizon_days: int = 90) -> dict[st
             f"Floor {money(floor)['text'] if floor else 'unknown'}. "
             "This is a projection, not a prediction; the data-quality notes are in the app."
         )
-        row = create_notification(
+        row = await create_notification(
             conn,
             kind="risk_warning",
             title="Your projection is riskier",
@@ -79,42 +76,38 @@ def risk_warning(conn: psycopg.Connection, *, horizon_days: int = 90) -> dict[st
     elif not at_risk:
         armed = True
 
-    conn.execute(
+    await conn.execute(
         """
         UPDATE risk_state
-        SET floor_probability = %s,
-            floor_threshold = %s,
-            first_floor_crossing = %s,
-            armed = %s,
-            episode_key = CASE WHEN %s THEN episode_key ELSE NULL END,
+        SET floor_probability = $1,
+            floor_threshold = $2,
+            first_floor_crossing = $3,
+            armed = $4,
+            episode_key = CASE WHEN $5 THEN episode_key ELSE NULL END,
             last_checked_at = now(),
             updated_at = now()
         WHERE id = 1
         """,
-        (
-            probability,
-            threshold,
-            crossing,
-            armed,
-            at_risk,
-        ),
+        probability,
+        threshold,
+        crossing,
+        armed,
+        at_risk,
     )
     if row is not None:
-        conn.execute(
-            "UPDATE risk_state SET episode_key = %s WHERE id = 1",
-            (row["dedupe_key"],),
+        await conn.execute(
+            "UPDATE risk_state SET episode_key = $1 WHERE id = 1",
+            row["dedupe_key"],
         )
     return row
 
 
-def handle_risk_check(payload: dict[str, Any]) -> dict[str, Any]:
-    with closing(connect()) as conn:
-        row = None
-        with conn.transaction():
-            row = risk_warning(conn)
+async def handle_risk_check(payload: dict[str, Any]) -> dict[str, Any]:
+    async with connect() as conn:
+        async with conn.transaction():
+            row = await risk_warning(conn)
         if row is not None:
-            send_push_for_kind(conn, "risk_warning")
-            conn.commit()
+            await send_push_for_kind(conn, "risk_warning")
         return {
             "warning_id": row["id"] if row else None,
             "reason": payload.get("reason", "nightly"),

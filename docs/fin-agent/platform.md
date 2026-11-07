@@ -312,7 +312,7 @@ were updated on November 4, 2026:
 | Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
 | LLM provider sees data | The self-hoster's choice for each role. See [What each role sends](#what-each-role-sends) |
 | Malicious or compromised dependency | Lockfiles, the permissive-license allowlist in `scripts/license_audit.py`, and `pip-audit` + `pnpm audit` in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
-| GPL, AGPL, or unknown license in the image | The same audit fails the build. Weak copyleft (`psycopg` LGPL-3.0, `pywebpush` MPL-2.0) is allowed only as unmodified libraries and is named in `THIRD_PARTY_NOTICES.md` |
+| GPL, AGPL, or unknown license in the image | The same audit fails the build. Weak copyleft (`pywebpush` MPL-2.0) is allowed only as unmodified libraries and is named in `THIRD_PARTY_NOTICES.md` |
 | Upload flood or a huge file | 25 MB cap on statements, photos, and audio; one user behind a passkey; spend ceilings |
 | Logs leak finances | Logs are standard Python/Uvicorn stdout, kept on the host. They are not shipped to a central log store |
 | Traces hold your finances | Phoenix stays on the host's loopback with outside requests off and authentication on. It uses its own role, which owns only its database, and `agent_ro` can't connect to that database. Retention is the Phoenix default (0, infinite) unless the operator sets a policy. Reaching it over the tailnet needs a deliberate change and its login. Pydantic AI's default instrumentation records prompts, replies, and tool data. There is no custom pre-export redaction |

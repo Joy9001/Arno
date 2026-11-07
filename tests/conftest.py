@@ -7,17 +7,16 @@ refused, and each model role's endpoint defaults to a closed loopback port.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import socket
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from psycopg.conninfo import conninfo_to_dict
-from psycopg.rows import dict_row
 
 # Set before importing fin_agent, so Settings.from_env sees them.
 os.environ.setdefault("FIN_AGENT_RP_ID", "localhost")
@@ -49,6 +48,7 @@ from fin_agent.api.app import create_app  # noqa: E402
 from fin_agent.auth.setup import issue_setup_token  # noqa: E402
 from fin_agent.config import Settings, get_settings  # noqa: E402
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
+from fin_agent.db.conn import Connection, connect, conninfo_to_dict  # noqa: E402
 from fin_agent.db.migrate import run_migrations  # noqa: E402
 from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
 from fin_agent.ledger.categories import ensure_default_categories  # noqa: E402
@@ -135,25 +135,27 @@ def block_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(scope="session")
-def migrated() -> list[int]:
+def migrated() -> list[str]:
     """Start from an empty public schema and apply every migration once."""
     dsn = _dsn()
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
-        conn.execute("CREATE SCHEMA public")
 
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        applied = run_migrations(conn)
-        set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
-        set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
-    return applied
+    async def _run() -> list[str]:
+        async with connect(dsn) as conn:
+            await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+            await conn.execute("CREATE SCHEMA public")
+            applied = await run_migrations(conn)
+            await set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
+            await set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
+            return applied
+
+    return asyncio.run(_run())
 
 
 @pytest.fixture(autouse=True)
-def clean_database(migrated: list[int]) -> None:
-    with psycopg.connect(_dsn(), autocommit=True) as conn:
-        conn.execute(RESET_TABLES)
-        conn.execute(
+async def clean_database(migrated: list[str]) -> None:
+    async with connect(_dsn()) as conn:
+        await conn.execute(RESET_TABLES)
+        await conn.execute(
             """
             UPDATE settings
             SET base_currency = 'INR',
@@ -169,7 +171,7 @@ def clean_database(migrated: list[int]) -> None:
             WHERE id = 1
             """
         )
-        conn.execute("INSERT INTO risk_state (id) VALUES (1) ON CONFLICT DO NOTHING")
+        await conn.execute("INSERT INTO risk_state (id) VALUES (1) ON CONFLICT DO NOTHING")
 
 
 @pytest.fixture
@@ -194,38 +196,38 @@ def client(app):
 
 
 @pytest.fixture
-def setup_token(client: TestClient) -> str:
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
-        return issue_setup_token(conn, ttl_hours=1).token
+async def setup_token(client: TestClient) -> str:
+    async with connect(_dsn()) as conn:
+        return (await issue_setup_token(conn, ttl_hours=1)).token
 
 
 @pytest.fixture
-def db():
-    with psycopg.connect(_dsn(), row_factory=dict_row) as conn:
+async def db() -> AsyncIterator[Connection]:
+    async with connect(_dsn()) as conn:
         yield conn
 
 
 @pytest.fixture
-def ledger(db):
+async def ledger(db: Connection) -> Connection:
     """A database with the Indian categories and the three system accounts."""
-    ensure_default_categories(db)
-    ensure_system_accounts(db)
+    await ensure_default_categories(db)
+    await ensure_system_accounts(db)
     return db
 
 
 @pytest.fixture
-def demo_ledger(db):
+async def demo_ledger(db: Connection) -> Connection:
     """The seeded synthetic persona, as a fixture (today fixed for deterministic tests)."""
     from datetime import date
 
     from fin_agent.demo.persona import seed_demo
 
-    seed_demo(db, today=date(2026, 11, 1), reset=True)
+    await seed_demo(db, today=date(2026, 11, 1), reset=True)
     return db
 
 
 @pytest.fixture
-def authed_client(client, setup_token, settings):
+async def authed_client(client, setup_token, settings):
     """A TestClient with a registered passkey, a session, and a fresh passkey check.
 
     The L8 step-up wall is tested separately in `test_l8_ship.py`; most tests are about ledger
@@ -240,6 +242,6 @@ def authed_client(client, setup_token, settings):
         json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
     )
     assert verified.status_code == 200, verified.text
-    with psycopg.connect(_dsn(), autocommit=True) as conn:
-        conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
+    async with connect(_dsn()) as conn:
+        await conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
     return client

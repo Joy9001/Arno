@@ -3,7 +3,7 @@ from __future__ import annotations
 from fin_agent.notifications import create_notification, mark_read
 
 
-def test_home_composes_one_payload(authed_client):
+async def test_home_composes_one_payload(authed_client):
     account = authed_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "SBI Salary", "opening_balance_paise": 18_420_000},
@@ -48,7 +48,7 @@ def test_home_composes_one_payload(authed_client):
     assert body["recent"][0]["description"] == "Lunch"
 
 
-def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
+async def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
     body = authed_client.get("/api/home?horizon_days=90").json()
 
     assert body["spendable_paise"] == 0
@@ -56,7 +56,7 @@ def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
     assert body["cash_quality"]["unknown_count"] == 0
 
 
-def test_home_marks_an_account_without_a_balance_as_unknown(authed_client):
+async def test_home_marks_an_account_without_a_balance_as_unknown(authed_client):
     created = authed_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
     assert created.status_code == 201, created.text
 
@@ -72,7 +72,7 @@ def test_home_marks_an_account_without_a_balance_as_unknown(authed_client):
     }
 
 
-def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
+async def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
     created = authed_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
     assert created.status_code == 201, created.text
     recorded = authed_client.post(
@@ -100,7 +100,7 @@ def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
     }
 
 
-def test_home_treats_an_explicit_zero_opening_as_known(authed_client):
+async def test_home_treats_an_explicit_zero_opening_as_known(authed_client):
     created = authed_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "Zero bank", "opening_balance_paise": 0},
@@ -119,7 +119,7 @@ def test_home_treats_an_explicit_zero_opening_as_known(authed_client):
     }
 
 
-def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total(authed_client):
+async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total(authed_client):
     known_zero = authed_client.post(
         "/api/accounts", json={"kind": "bank", "name": "Zero bank"}
     ).json()
@@ -151,19 +151,17 @@ def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total(authe
     }
 
 
-def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db):
-    unread = create_notification(db, kind="reminder", title="Older unread reminder")
-    read = create_notification(db, kind="reminder", title="Newer read reminder")
-    db.commit()
-    mark_read(db, read["id"])
-    db.commit()
+async def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db):
+    unread = await create_notification(db, kind="reminder", title="Older unread reminder")
+    read = await create_notification(db, kind="reminder", title="Newer read reminder")
+    await mark_read(db, read["id"])
 
     body = authed_client.get("/api/home?horizon_days=90").json()
 
     assert body["needs_you"][0]["id"] == unread["id"]
 
 
-def test_home_rejects_an_out_of_range_horizon(authed_client):
+async def test_home_rejects_an_out_of_range_horizon(authed_client):
     response = authed_client.get("/api/home?horizon_days=0")
 
     assert response.status_code == 422

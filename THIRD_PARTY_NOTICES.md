@@ -116,7 +116,6 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `msoffcrypto-tool` | MIT |
 | `olefile` | BSD |
 | `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | Apache-2.0 |
-| `psycopg`, `psycopg-binary`, `psycopg-pool` | LGPL-3.0 |
 | `pydantic` | MIT |
 | `pydantic-ai`, `pydantic-ai-harness`, `pydantic-evals` | MIT |
 | `pypdfium2` | BSD-3-Clause or Apache-2.0 |
@@ -131,7 +130,7 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `uvicorn` | BSD-3-Clause |
 | `webauthn` | BSD-3-Clause |
 
-Weak-copyleft libraries are used unmodified: `psycopg` is LGPL-3.0, and `pywebpush` is MPL-2.0.
+Weak-copyleft libraries are used unmodified: `pywebpush` is MPL-2.0.
 These are the direct dependency licenses. Fin-Agent's own source is MIT (`LICENSE`). The
 `python:3.14-slim` base image ships Debian packages under their own licenses, and the database
 and Phoenix services run as separate Compose images with their own licenses, listed under

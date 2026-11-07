@@ -26,6 +26,16 @@ def _flag(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _validate_postgres_dsn(dsn: str) -> None:
+    from fin_agent.db.conn import conninfo_to_dict
+
+    info = conninfo_to_dict(dsn)
+    if not info.get("host"):
+        raise ValueError("DATABASE_URL is missing a host")
+    if not info.get("dbname"):
+        raise ValueError("DATABASE_URL is missing a database name")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
@@ -56,9 +66,7 @@ class Settings:
                 "DATABASE_URL is not set. Example: postgresql://app:app@localhost:5432/fin_agent"
             )
         try:
-            from psycopg.conninfo import conninfo_to_dict
-
-            conninfo_to_dict(database_url)
+            _validate_postgres_dsn(database_url)
         except Exception as exc:  # noqa: BLE001 - normalize driver errors
             raise ConfigurationError(f"DATABASE_URL is not a valid libpq URI: {exc}") from exc
 

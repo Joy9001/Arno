@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import psycopg
+from fin_agent.db.conn import Connection, connect
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 INCLUDE_RE = re.compile(r"^\s*\\i\s+(\S+)\s*$")
@@ -84,55 +84,64 @@ def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
     return migrations
 
 
-def current_version(conn: psycopg.Connection) -> int:
-    conn.execute(SCHEMA_VERSION_DDL)
-    row = conn.execute("SELECT coalesce(max(version), 0) AS version FROM schema_version").fetchone()
-    return int(row["version"])
+async def current_version(conn: Connection) -> int:
+    await conn.execute(SCHEMA_VERSION_DDL)
+    version = await conn.fetchval("SELECT coalesce(max(version), 0) AS version FROM schema_version")
+    return int(version)
 
 
-def applied(conn: psycopg.Connection) -> list[dict]:
-    conn.execute(SCHEMA_VERSION_DDL)
-    return list(
-        conn.execute(
-            "SELECT version, name, checksum, applied_at FROM schema_version ORDER BY version"
-        ).fetchall()
+async def applied(conn: Connection) -> list[dict]:
+    await conn.execute(SCHEMA_VERSION_DDL)
+    return await conn.fetch(
+        "SELECT version, name, checksum, applied_at FROM schema_version ORDER BY version"
     )
 
 
-def run_migrations(conn: psycopg.Connection, directory: Path = MIGRATIONS_DIR) -> list[int]:
+async def run_migrations(
+    conn: Connection | None = None, directory: Path = MIGRATIONS_DIR
+) -> list[int]:
     """Apply pending migrations. Returns the versions applied in this call."""
-    conn.execute(SCHEMA_VERSION_DDL)
-    conn.commit()
 
-    migrations = discover(directory)
-    by_version = {m.version: m for m in migrations}
-    recorded = {int(row["version"]): row["checksum"] for row in applied(conn)}
+    async def _run(conn: Connection) -> list[int]:
+        await conn.execute(SCHEMA_VERSION_DDL)
 
-    for version, checksum in recorded.items():
-        if version not in by_version:
-            raise MigrationError(f"Database has migration {version}, which is missing from disk")
-        if by_version[version].checksum != checksum:
-            raise MigrationError(
-                f"Migration {version} ({by_version[version].name}) changed after it was applied"
-            )
+        migrations = discover(directory)
+        by_version = {m.version: m for m in migrations}
+        recorded = {int(row["version"]): row["checksum"] for row in await applied(conn)}
 
-    newly_applied: list[int] = []
-    for migration in migrations:
-        if migration.version in recorded:
-            continue
-        with conn.transaction():
-            conn.execute(migration.sql)
-            conn.execute(
-                "INSERT INTO schema_version (version, name, checksum) VALUES (%s, %s, %s)",
-                (migration.version, migration.name, migration.checksum),
-            )
-        newly_applied.append(migration.version)
-    return newly_applied
+        for version, checksum in recorded.items():
+            if version not in by_version:
+                raise MigrationError(
+                    f"Database has migration {version}, which is missing from disk"
+                )
+            if by_version[version].checksum != checksum:
+                raise MigrationError(
+                    f"Migration {version} ({by_version[version].name}) changed after it was applied"
+                )
+
+        newly_applied: list[int] = []
+        for migration in migrations:
+            if migration.version in recorded:
+                continue
+            async with conn.transaction():
+                await conn.execute(migration.sql)
+                await conn.execute(
+                    "INSERT INTO schema_version (version, name, checksum) VALUES ($1, $2, $3)",
+                    migration.version,
+                    migration.name,
+                    migration.checksum,
+                )
+            newly_applied.append(migration.version)
+        return newly_applied
+
+    if conn is None:
+        async with connect() as owned:
+            return await _run(owned)
+    return await _run(conn)
 
 
-def pending(conn: psycopg.Connection, directory: Path = MIGRATIONS_DIR) -> list[Migration]:
+async def pending(conn: Connection, directory: Path = MIGRATIONS_DIR) -> list[Migration]:
     """Return the migrations this database has not applied yet, without applying anything."""
-    conn.execute(SCHEMA_VERSION_DDL)
-    conn.commit()
-    recorded = {int(row["version"]) for row in applied(conn)}
+    await conn.execute(SCHEMA_VERSION_DDL)
+    recorded = {int(row["version"]) for row in await applied(conn)}
     return [migration for migration in discover(directory) if migration.version not in recorded]

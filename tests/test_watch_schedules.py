@@ -17,106 +17,90 @@ from fin_agent.jobs.schedules import (
 from fin_agent.scheduled_questions import create_question
 
 
-def _job_count(db, kind: str) -> int:
-    return int(
-        db.execute("SELECT count(*) AS n FROM jobs WHERE kind = %s", (kind,)).fetchone()["n"]
-    )
+async def _job_count(db, kind: str) -> int:
+    return int(await db.fetchval("SELECT count(*) FROM jobs WHERE kind = $1", kind))
 
 
-def test_builtin_schedules_seed_once_and_follow_the_notification_time(db):
-    ensure_builtin_schedules(db)
-    ensure_builtin_schedules(db)
-    rows = db.execute("SELECT * FROM job_schedules ORDER BY kind").fetchall()
+async def test_builtin_schedules_seed_once_and_follow_the_notification_time(db):
+    await ensure_builtin_schedules(db)
+    await ensure_builtin_schedules(db)
+    rows = await db.fetch("SELECT * FROM job_schedules ORDER BY kind")
     assert {row["kind"] for row in rows} == set(BUILTIN_KINDS)
     assert len(rows) == len(BUILTIN_KINDS)
-    briefing = db.execute("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'").fetchone()
+    briefing = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'")
     local = briefing["next_run_at"].astimezone(INDIA)
     assert local.weekday() == 6
     assert (local.hour, local.minute) == (8, 0)
 
-    db.execute(
+    await db.execute(
         "UPDATE settings SET notification_time = '09:30', weekly_briefing_dow = 3 WHERE id = 1"
     )
-    db.commit()
-    ensure_builtin_schedules(db)
-    briefing = db.execute("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'").fetchone()
+    await ensure_builtin_schedules(db)
+    briefing = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'")
     assert "BYDAY=WE" in briefing["rule"]
     assert "BYHOUR=9" in briefing["rule"]
     assert "BYMINUTE=30" in briefing["rule"]
 
 
-def test_a_missed_weekly_run_fires_once_and_moves_on_from_now(db):
-    ensure_builtin_schedules(db)
+async def test_a_missed_weekly_run_fires_once_and_moves_on_from_now(db):
+    await ensure_builtin_schedules(db)
     old = datetime.now(INDIA) - timedelta(days=42)
-    db.execute("UPDATE job_schedules SET next_run_at = %s WHERE kind = 'weekly_briefing'", (old,))
-    db.commit()
+    await db.execute(
+        "UPDATE job_schedules SET next_run_at = $1 WHERE kind = 'weekly_briefing'", old
+    )
 
-    assert enqueue_due_schedules(db) == 1
-    db.commit()
-    jobs = db.execute("SELECT * FROM jobs WHERE kind = 'weekly_briefing'").fetchall()
+    assert await enqueue_due_schedules(db) == 1
+    jobs = await db.fetch("SELECT * FROM jobs WHERE kind = 'weekly_briefing'")
     assert len(jobs) == 1
     assert jobs[0]["key"] == f"weekly_briefing:{period_for('weekly_briefing', old)}"
     assert jobs[0]["payload"]["period"] == period_for("weekly_briefing", old)
-    schedule = db.execute("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'").fetchone()
+    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'")
     assert schedule["next_run_at"] > datetime.now(INDIA)
     assert schedule["last_run_at"] is not None
 
     # A restart that re-reads the same due row must not add a second job for that period.
-    db.execute("UPDATE job_schedules SET next_run_at = %s WHERE kind = 'weekly_briefing'", (old,))
-    db.commit()
-    enqueue_due_schedules(db)
-    db.commit()
-    assert _job_count(db, "weekly_briefing") == 1
+    await db.execute(
+        "UPDATE job_schedules SET next_run_at = $1 WHERE kind = 'weekly_briefing'", old
+    )
+    await enqueue_due_schedules(db)
+    assert await _job_count(db, "weekly_briefing") == 1
 
 
-def test_nightly_jobs_use_their_own_period_keys(db):
-    ensure_builtin_schedules(db)
+async def test_nightly_jobs_use_their_own_period_keys(db):
+    await ensure_builtin_schedules(db)
     old = datetime.now(INDIA) - timedelta(days=2)
     for kind in ("risk_check", "pattern_detection", "recompute_baselines", "backup_check"):
-        db.execute("UPDATE job_schedules SET next_run_at = %s WHERE kind = %s", (old, kind))
-    db.commit()
-    assert enqueue_due_schedules(db) == 4
-    db.commit()
+        await db.execute("UPDATE job_schedules SET next_run_at = $1 WHERE kind = $2", old, kind)
+    assert await enqueue_due_schedules(db) == 4
     keys = {
         row["kind"]: row["key"]
-        for row in db.execute(
-            "SELECT kind, key FROM jobs WHERE kind <> 'weekly_briefing'"
-        ).fetchall()
+        for row in await db.fetch("SELECT kind, key FROM jobs WHERE kind <> 'weekly_briefing'")
     }
     for kind in ("risk_check", "pattern_detection", "recompute_baselines", "backup_check"):
         assert keys[kind] == f"{kind}:{period_for(kind, old)}"
 
 
-def test_a_scheduled_question_is_mirrored_and_keyed_by_the_question(db):
-    question = create_question(
+async def test_a_scheduled_question_is_mirrored_and_keyed_by_the_question(db):
+    question = await create_question(
         db,
         prompt="What did I spend on food this week?",
         rule="FREQ=WEEKLY;BYDAY=SU",
     )
-    db.commit()
-    schedule = db.execute(
-        "SELECT * FROM job_schedules WHERE kind = 'scheduled_question'"
-    ).fetchone()
+    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
     assert schedule["payload"]["scheduled_question_id"] == question["id"]
     assert schedule["next_run_at"] > datetime.now(INDIA)
 
     old = datetime.now(INDIA) - timedelta(days=1)
-    db.execute("UPDATE job_schedules SET next_run_at = %s WHERE id = %s", (old, schedule["id"]))
-    db.commit()
-    enqueue_due_schedules(db)
-    db.commit()
-    job = db.execute("SELECT * FROM jobs WHERE kind = 'scheduled_question'").fetchone()
+    await db.execute("UPDATE job_schedules SET next_run_at = $1 WHERE id = $2", old, schedule["id"])
+    await enqueue_due_schedules(db)
+    job = await db.fetchrow("SELECT * FROM jobs WHERE kind = 'scheduled_question'")
     assert job["key"].startswith(f"scheduled_question:{question['id']}:")
 
     from fin_agent.scheduled_questions import archive_question
 
-    archive_question(db, question["id"])
-    db.commit()
-    sync_scheduled_questions(db)
-    db.commit()
-    schedule = db.execute(
-        "SELECT * FROM job_schedules WHERE kind = 'scheduled_question'"
-    ).fetchone()
+    await archive_question(db, question["id"])
+    await sync_scheduled_questions(db)
+    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
     assert schedule["active"] is False
 
 

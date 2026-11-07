@@ -15,9 +15,9 @@ from __future__ import annotations
 import os
 
 import httpx
-import psycopg
 
 from fin_agent.agent.models import role_config
+from fin_agent.db.conn import Connection
 from fin_agent.tools.mark import clean_outside
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -40,18 +40,18 @@ def configured() -> bool:
     )
 
 
-def payee_names_prompt(conn: psycopg.Connection) -> str | None:
+async def payee_names_prompt(conn: Connection, *, limit: int = MAX_PAYEE_NAMES) -> str | None:
     """Payee names as a recognition hint. Names only; no amounts, balances, or notes."""
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT DISTINCT display_name
         FROM payees
         WHERE active AND display_name IS NOT NULL AND display_name <> ''
         ORDER BY display_name
-        LIMIT %s
+        LIMIT $1
         """,
-        (MAX_PAYEE_NAMES,),
-    ).fetchall()
+        limit,
+    )
     names: list[str] = []
     seen: set[str] = set()
     for row in rows:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import psycopg
+import asyncpg
 from fastapi import APIRouter, Request, Response
 
 from fin_agent.api.problems import problem
@@ -18,12 +18,12 @@ router = APIRouter(tags=["instance"])
 
 
 @router.get("/api/health", response_model=None)
-def health(request: Request, response: Response) -> Any:
+async def health(request: Request, response: Response) -> Any:
     try:
-        with connect(request.app.state.settings.database_url) as conn:
-            conn.execute("SELECT 1")
-            schema_version = current_version(conn)
-    except psycopg.Error as exc:
+        async with connect(request.app.state.settings.database_url) as conn:
+            await conn.execute("SELECT 1")
+            schema_version = await current_version(conn)
+    except (asyncpg.PostgresError, OSError) as exc:
         logger.warning("health check: database unreachable (%s)", type(exc).__name__)
         return problem(503, detail="The database is unreachable.")
     response.headers["Cache-Control"] = "no-store"

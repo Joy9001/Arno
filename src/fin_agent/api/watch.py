@@ -69,60 +69,57 @@ class QuestionUpdate(ApiModel):
 
 
 @router.get("/notifications")
-def get_notifications(
+async def get_notifications(
     conn: Database,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
 ) -> dict[str, Any]:
     try:
-        return list_notification_page(conn, limit=limit, cursor=cursor)
+        return await list_notification_page(conn, limit=limit, cursor=cursor)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/notifications/read-all")
-def post_read_all(conn: Database) -> dict[str, Any]:
-    updated = mark_all_read(conn)
-    conn.commit()
+async def post_read_all(conn: Database) -> dict[str, Any]:
+    updated = await mark_all_read(conn)
     return {"updated": updated}
 
 
 @router.post("/notifications/{notification_id}/read")
 @router.patch("/notifications/{notification_id}", include_in_schema=False)
-def post_read(notification_id: str, conn: Database) -> dict[str, Any]:
-    row = mark_read(conn, notification_id)
+async def post_read(notification_id: str, conn: Database) -> dict[str, Any]:
+    row = await mark_read(conn, notification_id)
     if row is None:
         raise HTTPException(status_code=404, detail="That notification does not exist.")
-    conn.commit()
     return row
 
 
 @router.post("/notifications/{notification_id}/chat")
-def post_notification_chat(notification_id: str, conn: Database) -> dict[str, Any]:
+async def post_notification_chat(notification_id: str, conn: Database) -> dict[str, Any]:
     """Open a new chat seeded with this notification; the user can ask a follow-up."""
-    row = conn.execute("SELECT * FROM notifications WHERE id = %s", (notification_id,)).fetchone()
+    row = await conn.fetchrow("SELECT * FROM notifications WHERE id = $1", notification_id)
     if row is None:
         raise HTTPException(status_code=404, detail="That notification does not exist.")
     notification = dict(row)
     text, outside = seed_chat_text(notification)
-    thread = history_mod.create_thread(
+    thread = await history_mod.create_thread(
         conn,
         title=f"Inbox: {notification['title']}"[:80],
     )
     if outside:
-        conn.execute(
-            "UPDATE conversations SET outside_text_at = now(), updated_at = now() WHERE id = %s",
-            (thread["id"],),
+        await conn.execute(
+            "UPDATE conversations SET outside_text_at = now(), updated_at = now() WHERE id = $1",
+            thread["id"],
         )
-    client_id = new_id(conn, "msg")
-    history_mod.record_user_message(
+    client_id = await new_id(conn, "msg")
+    await history_mod.record_user_message(
         conn,
         thread_id=thread["id"],
         client_id=client_id,
         text=text,
     )
-    mark_read(conn, notification_id)
-    conn.commit()
+    await mark_read(conn, notification_id)
     return {
         "thread_id": thread["id"],
         "title": thread["title"],
@@ -133,16 +130,14 @@ def post_notification_chat(notification_id: str, conn: Database) -> dict[str, An
 
 @router.get("/push/key")
 @router.get("/push/vapid", include_in_schema=False)
-def get_push_key(conn: Database) -> dict[str, Any]:
-    payload = public_push_key(conn)
-    conn.commit()
-    return payload
+async def get_push_key(conn: Database) -> dict[str, Any]:
+    return await public_push_key(conn)
 
 
 @router.post("/push/subscribe", status_code=201)
-def post_push_subscribe(body: PushSubscribe, conn: Database) -> dict[str, Any]:
+async def post_push_subscribe(body: PushSubscribe, conn: Database) -> dict[str, Any]:
     try:
-        row = subscribe(
+        row = await subscribe(
             conn,
             endpoint=body.endpoint,
             p256dh=body.keys.p256dh,
@@ -150,45 +145,41 @@ def post_push_subscribe(body: PushSubscribe, conn: Database) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    conn.commit()
     return {"subscribed": True, "subscription": row}
 
 
 @router.delete("/push/subscribe")
-def delete_push_subscribe(body: PushUnsubscribe, conn: Database) -> dict[str, Any]:
-    removed = unsubscribe(conn, endpoint=body.endpoint)
-    conn.commit()
+async def delete_push_subscribe(body: PushUnsubscribe, conn: Database) -> dict[str, Any]:
+    removed = await unsubscribe(conn, endpoint=body.endpoint)
     return {"subscribed": False, "removed": removed}
 
 
 @router.get("/scheduled-questions")
-def get_scheduled_questions(
+async def get_scheduled_questions(
     conn: Database, include_inactive: bool = Query(default=False)
 ) -> dict[str, Any]:
     return {
-        "questions": questions_mod.list_questions(conn, include_inactive=include_inactive),
+        "questions": await questions_mod.list_questions(conn, include_inactive=include_inactive),
         "default_spend_limit_usd": str(questions_mod.DEFAULT_SPEND_LIMIT_USD),
         "as_of": ledger_today().isoformat(),
     }
 
 
 @router.post("/scheduled-questions", status_code=201)
-def post_scheduled_question(body: QuestionCreate, conn: Database) -> dict[str, Any]:
-    row = questions_mod.create_question(
+async def post_scheduled_question(body: QuestionCreate, conn: Database) -> dict[str, Any]:
+    return await questions_mod.create_question(
         conn,
         prompt=body.prompt,
         rule=body.rule,
         spend_limit_usd=body.spend_limit_usd,
     )
-    conn.commit()
-    return row
 
 
 @router.patch("/scheduled-questions/{question_id}")
-def patch_scheduled_question(
+async def patch_scheduled_question(
     question_id: str, body: QuestionUpdate, conn: Database
 ) -> dict[str, Any]:
-    row = questions_mod.update_question(
+    return await questions_mod.update_question(
         conn,
         question_id,
         prompt=body.prompt,
@@ -196,24 +187,18 @@ def patch_scheduled_question(
         spend_limit_usd=body.spend_limit_usd,
         active=body.active,
     )
-    conn.commit()
-    return row
 
 
 @router.delete("/scheduled-questions/{question_id}")
-def delete_scheduled_question(question_id: str, conn: Database) -> dict[str, Any]:
-    row = questions_mod.archive_question(conn, question_id)
-    conn.commit()
-    return row
+async def delete_scheduled_question(question_id: str, conn: Database) -> dict[str, Any]:
+    return await questions_mod.archive_question(conn, question_id)
 
 
 @router.get("/jobs")
-def get_jobs(conn: Database, limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
-    ensure_builtin_schedules(conn)
-    sync_scheduled_questions(conn)
-    payload = job_status(conn, limit=limit)
-    conn.commit()
-    return payload
+async def get_jobs(conn: Database, limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
+    await ensure_builtin_schedules(conn)
+    await sync_scheduled_questions(conn)
+    return await job_status(conn, limit=limit)
 
 
 __all__ = ["router"]

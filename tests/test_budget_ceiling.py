@@ -38,7 +38,7 @@ def _never_called(messages, info: AgentInfo):
     raise AssertionError("the ceiling must stop the model request")
 
 
-def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(authed_client):
+async def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(authed_client):
     calls = {"n": 0}
 
     def script(messages, info: AgentInfo):
@@ -169,7 +169,7 @@ def test_the_summary_attempt_is_charged_once_to_the_shared_ledger():
     assert entry.tokens > 0
 
 
-def test_a_scheduled_question_refuses_at_the_ceiling(db):
+async def test_a_scheduled_question_refuses_at_the_ceiling(db):
     from fin_agent.jobs.questions import answer_question
 
     question = {"id": "sq_ceiling", "prompt": "What did I spend?", "spend_limit_cents": 250}
@@ -179,6 +179,6 @@ def test_a_scheduled_question_refuses_at_the_ceiling(db):
         spend_store=ExhaustedStore(),
         question_budget_usd=Decimal("2.50"),
     )
-    answer = __import__("asyncio").run(answer_question(db, question, agent=agent))
+    answer = await answer_question(db, question, agent=agent)
 
     assert "ceiling" in answer

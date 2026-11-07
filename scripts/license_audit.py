@@ -2,7 +2,7 @@
 
 Python: every installed distribution, including transitive ones. Web: every package pnpm resolves.
 The allowlist is permissive licenses plus the two weak-copyleft libraries the stack already uses
-(psycopg is LGPL-3.0; py-vapid and certifi are MPL-2.0). GPL, AGPL, SSPL, Elastic, and unknown
+(py-vapid and certifi are MPL-2.0). GPL, AGPL, SSPL, Elastic, and unknown
 licenses fail the build.
 
 Run: uv run python scripts/license_audit.py

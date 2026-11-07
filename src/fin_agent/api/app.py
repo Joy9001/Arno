@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-import psycopg
+import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -38,25 +38,23 @@ from fin_agent.observability import bootstrap_observability, shutdown_observabil
 logger = logging.getLogger("fin_agent")
 
 
-def _bootstrap(settings: Settings) -> list[int]:
-    applied: list[int] = []
-    conn = connect(settings.database_url)
-    try:
+async def _bootstrap(settings: Settings) -> list[str]:
+    applied: list[str] = []
+    async with connect(settings.database_url) as conn:
         if settings.auto_migrate:
-            dump_before_migrating(conn, settings)
-            applied = run_migrations(conn)
+            await dump_before_migrating(conn, settings)
+            applied = await run_migrations(conn)
             if applied:
                 logger.info("applied migrations %s", applied)
-        set_agent_ro_password(conn, settings.agent_ro_password)
-        set_backup_password(conn, settings.backup_password)
-        ensure_default_categories(conn)
-        ensure_system_accounts(conn)
-        ensure_vapid_keys(conn, subject=settings.vapid_subject)
-        ensure_builtin_schedules(conn)
-        sync_scheduled_questions(conn)
-        conn.commit()
-        if setup_required(conn):
-            token = ensure_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+        await set_agent_ro_password(conn, settings.agent_ro_password)
+        await set_backup_password(conn, settings.backup_password)
+        await ensure_default_categories(conn)
+        await ensure_system_accounts(conn)
+        await ensure_vapid_keys(conn, subject=settings.vapid_subject)
+        await ensure_builtin_schedules(conn)
+        await sync_scheduled_questions(conn)
+        if await setup_required(conn):
+            token = await ensure_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
             if token:
                 logger.warning(
                     "%s",
@@ -73,27 +71,20 @@ def _bootstrap(settings: Settings) -> list[int]:
                 logger.warning(
                     "First-run setup is open. Run `fin-agent setup` for a fresh enrollment link."
                 )
-    finally:
-        conn.close()
     return applied
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool = None
-    _bootstrap(app.state.settings)
-    conn = connect(app.state.settings.database_url)
-    try:
-        recovered = recover_crashed_runs(conn)
-        conn.commit()
+    await _bootstrap(app.state.settings)
+    async with connect(app.state.settings.database_url) as conn:
+        recovered = await recover_crashed_runs(conn)
         if recovered:
             logger.warning("recovered %d interrupted chat turn(s)", len(recovered))
-        interrupted = recover_interrupted_jobs(conn)
-        conn.commit()
+        interrupted = await recover_interrupted_jobs(conn)
         if interrupted:
             logger.warning("requeued %d interrupted job(s)", interrupted)
-    finally:
-        conn.close()
     spend_store, pool = await make_spend_store(app.state.settings.database_url)
     app.state.spend_store = spend_store
     app.state.spend_pool = pool
@@ -153,8 +144,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def validation_exception(request: Request, exc: RequestValidationError):
         return problem(422, detail="The request body or query is not valid.")
 
-    @app.exception_handler(psycopg.OperationalError)
-    async def database_unreachable(request: Request, exc: psycopg.OperationalError):
+    @app.exception_handler(asyncpg.PostgresConnectionError)
+    @app.exception_handler(asyncpg.CannotConnectNowError)
+    @app.exception_handler(asyncpg.ConnectionDoesNotExistError)
+    @app.exception_handler(OSError)
+    async def database_unreachable(request: Request, exc: Exception):
         route = request.scope.get("route")
         logger.warning(
             "database unreachable while serving %s",

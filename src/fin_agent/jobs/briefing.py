@@ -6,14 +6,11 @@ from __future__ import annotations
 
 import json
 import logging
-from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-
 from fin_agent.agent.models import primary_model
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.engine.money import money
 from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import accounts as accounts_mod
@@ -44,32 +41,32 @@ def _percent_change(current: int | None, previous: int | None) -> float | None:
     return round((current - previous) / previous * 100, 1)
 
 
-def briefing_numbers(conn: psycopg.Connection, *, as_of: date | None = None) -> dict[str, Any]:
+async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> dict[str, Any]:
     """Every number in the brief, computed here from the ledger and the engine."""
     day = as_of or ledger_today()
     week_start = day - timedelta(days=6)
     before_start = day - timedelta(days=13)
     before_end = day - timedelta(days=7)
 
-    this_week = read_tools.summarize_spending(
+    this_week = await read_tools.summarize_spending(
         conn, group_by="none", period=f"{week_start.isoformat()}..{day.isoformat()}"
     )
-    last_week = read_tools.summarize_spending(
+    last_week = await read_tools.summarize_spending(
         conn, group_by="none", period=f"{before_start.isoformat()}..{before_end.isoformat()}"
     )
-    categories = read_tools.summarize_spending(
+    categories = await read_tools.summarize_spending(
         conn, group_by="category", period=f"{week_start.isoformat()}..{day.isoformat()}"
     )
     current_paise = _sum_paise(this_week.get("total"))
     previous_paise = _sum_paise(last_week.get("total"))
 
-    summary = accounts_mod.account_summary(conn)
+    summary = await accounts_mod.account_summary(conn)
     liquid_paise = (
         int(summary["liquid_total_paise"]) if summary["cash_quality"]["status"] == "known" else None
     )
     card_owed_paise = summary["card_owed_paise"]
 
-    upcoming_rows = schedules_mod.upcoming(conn, days=7, start=day)["events"]
+    upcoming_rows = (await schedules_mod.upcoming(conn, days=7, start=day))["events"]
     bills = [
         event
         for event in upcoming_rows
@@ -78,9 +75,9 @@ def briefing_numbers(conn: psycopg.Connection, *, as_of: date | None = None) -> 
     ]
     bills_total = sum(int(event["amount_paise"]) for event in bills)
 
-    projection = projection_tools.project(conn, horizon_days=90, as_of=day)
+    projection = await projection_tools.project(conn, horizon_days=90, as_of=day)
 
-    goal_rows = [row for row in goals_mod.list_goals(conn) if row["status"] == "active"]
+    goal_rows = [row for row in await goals_mod.list_goals(conn) if row["status"] == "active"]
     top_goals = sorted(goal_rows, key=lambda row: row["remaining_paise"], reverse=True)[:3]
 
     top_categories = []
@@ -248,23 +245,21 @@ async def write_prose(
         return text
 
 
-def compose_briefing(conn: psycopg.Connection, *, as_of: date | None = None) -> dict[str, Any]:
-    numbers = briefing_numbers(conn, as_of=as_of)
+async def compose_briefing(conn: Connection, *, as_of: date | None = None) -> dict[str, Any]:
+    numbers = await briefing_numbers(conn, as_of=as_of)
     return {"numbers": numbers, "template": render_template(numbers)}
 
 
 async def send_weekly_briefing(
-    conn: psycopg.Connection,
+    conn: Connection,
     *,
     as_of: date | None = None,
     period: str | None = None,
     model: Any = None,
     spend_store: Any = None,
 ) -> dict[str, Any] | None:
-    numbers = briefing_numbers(conn, as_of=as_of)
+    numbers = await briefing_numbers(conn, as_of=as_of)
     template = render_template(numbers)
-    # No database transaction stays open across an LLM call.
-    conn.commit()
     body = template
     prose_error = None
     try:
@@ -274,17 +269,17 @@ async def send_weekly_briefing(
         logger.info(
             "weekly briefing prose failed (%s); using the template", type(prose_error).__name__
         )
-        conn.execute(
+        await conn.execute(
             """
             UPDATE settings
-            SET last_model_error_type = %s, last_model_error_at = now(), updated_at = now()
+            SET last_model_error_type = $1, last_model_error_at = now(), updated_at = now()
             WHERE id = 1
             """,
-            (prose_error[:200],),
+            prose_error[:200],
         )
     day = as_of or ledger_today()
     period = period or day.strftime("%G-W%V")
-    row = create_notification(
+    row = await create_notification(
         conn,
         kind="weekly_briefing",
         title="Weekly briefing",
@@ -302,15 +297,13 @@ async def send_weekly_briefing(
 
 
 async def handle_weekly_briefing(payload: dict[str, Any]) -> dict[str, Any]:
-    with closing(connect()) as conn:
+    async with connect() as conn:
         row = await send_weekly_briefing(
             conn,
             period=payload.get("period"),
         )
-        conn.commit()
         if row is not None:
-            send_push_for_kind(conn, "weekly_briefing")
-            conn.commit()
+            await send_push_for_kind(conn, "weekly_briefing")
         return {"notification_id": row["id"] if row else None}
 
 

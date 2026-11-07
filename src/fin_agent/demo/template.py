@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import re
 
-import psycopg
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo, quote_ident
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
@@ -24,32 +22,28 @@ def database_dsn(base_dsn: str, name: str) -> str:
     return make_conninfo(**info)
 
 
-def _admin_connection(admin_dsn: str) -> psycopg.Connection:
+def _admin_dsn(admin_dsn: str) -> str:
     info = conninfo_to_dict(admin_dsn)
     info["dbname"] = "postgres"
-    return psycopg.connect(make_conninfo(**info), autocommit=True)
+    return make_conninfo(**info)
 
 
-def create_database(admin_dsn: str, target: str) -> None:
+async def create_database(admin_dsn: str, target: str) -> None:
     if not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    with _admin_connection(admin_dsn) as conn:
-        conn.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(target))
-        )
-        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(target)))
+    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
+        await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(target)} WITH (FORCE)")
+        await conn.execute(f"CREATE DATABASE {quote_ident(target)}")
 
 
-def drop_database(admin_dsn: str, target: str) -> None:
+async def drop_database(admin_dsn: str, target: str) -> None:
     if not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    with _admin_connection(admin_dsn) as conn:
-        conn.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(target))
-        )
+    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
+        await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(target)} WITH (FORCE)")
 
 
-def clone_database(
+async def clone_database(
     admin_dsn: str,
     *,
     source: str,
@@ -58,21 +52,15 @@ def clone_database(
 ) -> None:
     if not NAME_RE.match(source) or not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    with _admin_connection(admin_dsn) as conn:
+    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
         if terminate:
-            conn.execute(
+            await conn.execute(
                 """
                 SELECT pg_terminate_backend(pid)
                 FROM pg_stat_activity
-                WHERE datname = %s AND pid <> pg_backend_pid()
+                WHERE datname = $1 AND pid <> pg_backend_pid()
                 """,
-                (source,),
+                source,
             )
-        conn.execute(
-            sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(target))
-        )
-        conn.execute(
-            sql.SQL("CREATE DATABASE {} TEMPLATE {}").format(
-                sql.Identifier(target), sql.Identifier(source)
-            )
-        )
+        await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(target)} WITH (FORCE)")
+        await conn.execute(f"CREATE DATABASE {quote_ident(target)} TEMPLATE {quote_ident(source)}")

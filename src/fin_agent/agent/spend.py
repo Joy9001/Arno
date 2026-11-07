@@ -1,4 +1,4 @@
-"""The spend store's asyncpg pool. asyncpg is a second driver, used only for this.
+"""The spend store's asyncpg pool.
 
 The app's chat path gets its bootstrap store. Scheduled and host paths (parse, categorizer,
 vision, briefing, photo) open a store for the length of one model run. They all write to the
@@ -16,9 +16,9 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import asyncpg
-from psycopg.conninfo import conninfo_to_dict
 
 from fin_agent.config import get_settings
+from fin_agent.db.conn import conninfo_to_dict
 
 logger = logging.getLogger("fin_agent.spend")
 

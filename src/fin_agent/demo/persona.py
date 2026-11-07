@@ -10,9 +10,7 @@ import calendar
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
+from fin_agent.db.conn import Connection
 from fin_agent.india.workdays import last_working_day
 from fin_agent.ledger.accounts import create_account, list_accounts, set_statement_balance
 from fin_agent.ledger.categories import ensure_default_categories, upsert_rule
@@ -54,27 +52,28 @@ class DemoSeedError(RuntimeError):
     pass
 
 
-def _category(conn: psycopg.Connection, name: str) -> str:
-    row = conn.execute("SELECT id FROM categories WHERE name = %s", (name,)).fetchone()
+async def _category(conn: Connection, name: str) -> str:
+    row = await conn.fetchrow("SELECT id FROM categories WHERE name = $1", name)
     if row is None:
         raise DemoSeedError(f"Category {name} is missing")
     return str(row["id"])
 
 
-def _seed_baselines(conn: psycopg.Connection, amounts: dict[str, int]) -> None:
+async def _seed_baselines(conn: Connection, amounts: dict[str, int]) -> None:
     """Estimated daily spend, so the demo projection has variable spend before real history."""
     for category_id, amount in amounts.items():
-        conn.execute(
+        await conn.execute(
             """
             INSERT INTO baselines (category_id, amount_per_day_paise, source, window_days)
-            VALUES (%s, %s, 'estimated', NULL)
+            VALUES ($1, $2, 'estimated', NULL)
             ON CONFLICT (category_id) DO UPDATE
             SET amount_per_day_paise = EXCLUDED.amount_per_day_paise,
                 source = 'estimated',
                 window_days = NULL,
                 updated_at = now()
             """,
-            (category_id, amount),
+            category_id,
+            amount,
         )
 
 
@@ -103,8 +102,8 @@ def _recent_complete_months(today: date, count: int = 3) -> list[tuple[date, dat
     return months
 
 
-def _seed_statement_coverage(
-    conn: psycopg.Connection,
+async def _seed_statement_coverage(
+    conn: Connection,
     accounts: list[dict[str, Any]],
     today: date,
     *,
@@ -121,30 +120,25 @@ def _seed_statement_coverage(
     inserted = 0
     for account in accounts:
         for start, end, key in months:
-            conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO imports (
                     file_hash, parser, account_id, period_start, period_end,
                     check_result, status, committed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'committed', now())
+                ) VALUES ($1, $2, $3, $4, $5, $6, 'committed', now())
                 """,
-                (
-                    f"demo-statement:{account['id']}:{key}",
-                    "synthetic-demo",
-                    account["id"],
-                    start,
-                    end,
-                    Jsonb(
-                        {
-                            "status": "VERIFIED",
-                            "synthetic": True,
-                            "source": "demo persona coverage",
-                        }
-                    ),
-                ),
+                f"demo-statement:{account['id']}:{key}",
+                "synthetic-demo",
+                account["id"],
+                start,
+                end,
+                {
+                    "status": "VERIFIED",
+                    "synthetic": True,
+                    "source": "demo persona coverage",
+                },
             )
             inserted += 1
-    conn.commit()
     return {
         "months": [key for _, _, key in months],
         "gap": gap_month,
@@ -152,8 +146,8 @@ def _seed_statement_coverage(
     }
 
 
-def seed_demo(
-    conn: psycopg.Connection,
+async def seed_demo(
+    conn: Connection,
     *,
     today: date | None = None,
     reset: bool = True,
@@ -170,30 +164,32 @@ def seed_demo(
     """
     today = today or date.today()
     if not reset:
-        existing = conn.execute(
-            "SELECT count(*) AS n FROM accounts WHERE kind NOT IN ('spending', 'income', 'equity')"
-        ).fetchone()["n"]
+        existing = (
+            await conn.fetchrow(
+                "SELECT count(*) AS n FROM accounts "
+                "WHERE kind NOT IN ('spending', 'income', 'equity')"
+            )
+        )["n"]
         if existing:
             raise DemoSeedError("The ledger already has accounts; pass reset=True")
     else:
-        conn.execute(_RESET_TABLES)
-        conn.commit()
+        await conn.execute(_RESET_TABLES)
 
-    update_settings(conn, actor="system", **DEMO_SETTINGS)
-    ensure_default_categories(conn)
-    food = _category(conn, "Food & Dining")
-    groceries = _category(conn, "Groceries")
-    transport = _category(conn, "Transport")
-    fuel = _category(conn, "Fuel")
-    shopping = _category(conn, "Shopping")
-    subscriptions = _category(conn, "Subscriptions")
-    utilities = _category(conn, "Utilities")
-    rent = _category(conn, "Rent")
-    insurance = _category(conn, "Insurance")
-    family = _category(conn, "Family Transfer")
-    savings = _category(conn, "Savings & Investments")
-    interest = _category(conn, "Loan Interest")
-    _seed_baselines(
+    await update_settings(conn, actor="system", **DEMO_SETTINGS)
+    await ensure_default_categories(conn)
+    food = await _category(conn, "Food & Dining")
+    groceries = await _category(conn, "Groceries")
+    transport = await _category(conn, "Transport")
+    fuel = await _category(conn, "Fuel")
+    shopping = await _category(conn, "Shopping")
+    subscriptions = await _category(conn, "Subscriptions")
+    utilities = await _category(conn, "Utilities")
+    rent = await _category(conn, "Rent")
+    insurance = await _category(conn, "Insurance")
+    family = await _category(conn, "Family Transfer")
+    savings = await _category(conn, "Savings & Investments")
+    interest = await _category(conn, "Loan Interest")
+    await _seed_baselines(
         conn,
         {
             food: 5_000,
@@ -205,137 +201,167 @@ def seed_demo(
         },
     )
 
-    hdfc = create_account(
-        conn,
-        kind="bank",
-        name="HDFC Savings",
-        institution="HDFC Bank",
-        last4="4821",
-        opening_balance_paise=80_000_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    hdfc = (
+        await create_account(
+            conn,
+            kind="bank",
+            name="HDFC Savings",
+            institution="HDFC Bank",
+            last4="4821",
+            opening_balance_paise=80_000_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
-    sbi = create_account(
-        conn,
-        kind="bank",
-        name="SBI Salary",
-        institution="State Bank of India",
-        last4="7710",
-        opening_balance_paise=4_200_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    sbi = (
+        await create_account(
+            conn,
+            kind="bank",
+            name="SBI Salary",
+            institution="State Bank of India",
+            last4="7710",
+            opening_balance_paise=4_200_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
-    slice_card = create_account(
-        conn,
-        kind="card",
-        name="Slice card",
-        institution="Slice",
-        last4="2207",
-        credit_limit_paise=10_000_000,
-        statement_day=5,
-        due_day=25,
-        actor="system",
+    slice_card = (
+        await create_account(
+            conn,
+            kind="card",
+            name="Slice card",
+            institution="Slice",
+            last4="2207",
+            credit_limit_paise=10_000_000,
+            statement_day=5,
+            due_day=25,
+            actor="system",
+        )
     )["id"]
-    cash = create_account(
-        conn,
-        kind="cash",
-        name="Cash",
-        opening_balance_paise=800_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    cash = (
+        await create_account(
+            conn,
+            kind="cash",
+            name="Cash",
+            opening_balance_paise=800_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
-    wallet = create_account(
-        conn,
-        kind="wallet",
-        name="PhonePe wallet",
-        institution="PhonePe",
-        opening_balance_paise=350_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    wallet = (
+        await create_account(
+            conn,
+            kind="wallet",
+            name="PhonePe wallet",
+            institution="PhonePe",
+            opening_balance_paise=350_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
-    loan = create_account(
-        conn,
-        kind="loan",
-        name="Home loan",
-        institution="HDFC Bank",
-        last4="9004",
-        opening_balance_paise=-350_000_000,
-        opening_balance_as_of=_day(today, 18, 1),
-        rate_bps=850,
-        tenure_months=240,
-        actor="system",
+    loan = (
+        await create_account(
+            conn,
+            kind="loan",
+            name="Home loan",
+            institution="HDFC Bank",
+            last4="9004",
+            opening_balance_paise=-350_000_000,
+            opening_balance_as_of=_day(today, 18, 1),
+            rate_bps=850,
+            tenure_months=240,
+            actor="system",
+        )
     )["id"]
-    epf = create_account(
-        conn,
-        kind="asset",
-        name="EPF",
-        institution="EPFO",
-        opening_balance_paise=42_000_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    epf = (
+        await create_account(
+            conn,
+            kind="asset",
+            name="EPF",
+            institution="EPFO",
+            opening_balance_paise=42_000_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
-    mutual_funds = create_account(
-        conn,
-        kind="asset",
-        name="Mutual funds",
-        institution="Zerodha Coin",
-        opening_balance_paise=15_000_000,
-        opening_balance_as_of=_day(today, 3, 1),
-        actor="system",
+    mutual_funds = (
+        await create_account(
+            conn,
+            kind="asset",
+            name="Mutual funds",
+            institution="Zerodha Coin",
+            opening_balance_paise=15_000_000,
+            opening_balance_as_of=_day(today, 3, 1),
+            actor="system",
+        )
     )["id"]
 
-    swiggy = create_payee(conn, display_name="Swiggy", kind="merchant", actor="system")["id"]
-    bigbasket = create_payee(
-        conn,
-        display_name="BigBasket",
-        kind="merchant",
-        default_category_id=groceries,
-        actor="system",
-    )["id"]
-    netflix = create_payee(
-        conn,
-        display_name="Netflix",
-        kind="merchant",
-        default_category_id=subscriptions,
-        actor="system",
-    )["id"]
-    uber = create_payee(
-        conn,
-        display_name="Uber",
-        kind="merchant",
-        default_category_id=transport,
-        actor="system",
-    )["id"]
-    landlord = create_payee(
-        conn,
-        display_name="Ramesh (landlord)",
-        kind="person",
-        upi_id="ramesh@okaxis",
-        default_category_id=rent,
-        actor="system",
-    )["id"]
-    ravi = create_payee(conn, display_name="Ravi", kind="person", actor="system")["id"]
-    amit = create_payee(conn, display_name="Amit", kind="person", actor="system")["id"]
-    mom = create_payee(
-        conn, display_name="Mom", kind="person", default_category_id=family, actor="system"
-    )["id"]
-    employer = create_payee(conn, display_name="Acme Corp", kind="organization", actor="system")[
+    swiggy = (await create_payee(conn, display_name="Swiggy", kind="merchant", actor="system"))[
         "id"
     ]
+    bigbasket = (
+        await create_payee(
+            conn,
+            display_name="BigBasket",
+            kind="merchant",
+            default_category_id=groceries,
+            actor="system",
+        )
+    )["id"]
+    netflix = (
+        await create_payee(
+            conn,
+            display_name="Netflix",
+            kind="merchant",
+            default_category_id=subscriptions,
+            actor="system",
+        )
+    )["id"]
+    uber = (
+        await create_payee(
+            conn,
+            display_name="Uber",
+            kind="merchant",
+            default_category_id=transport,
+            actor="system",
+        )
+    )["id"]
+    landlord = (
+        await create_payee(
+            conn,
+            display_name="Ramesh (landlord)",
+            kind="person",
+            upi_id="ramesh@okaxis",
+            default_category_id=rent,
+            actor="system",
+        )
+    )["id"]
+    ravi = (await create_payee(conn, display_name="Ravi", kind="person", actor="system"))["id"]
+    amit = (await create_payee(conn, display_name="Amit", kind="person", actor="system"))["id"]
+    mom = (
+        await create_payee(
+            conn, display_name="Mom", kind="person", default_category_id=family, actor="system"
+        )
+    )["id"]
+    employer = (
+        await create_payee(conn, display_name="Acme Corp", kind="organization", actor="system")
+    )["id"]
 
     salary_rule = "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1"
-    salary = create_schedule(
-        conn,
-        kind="income_fixed",
-        name="Salary",
-        amount_paise=15_000_000,
-        account_id=sbi,
-        rule=salary_rule,
-        starts=_month_start(today, 11),
-        holiday_adjust="previous",
-        actor="system",
+    salary = (
+        await create_schedule(
+            conn,
+            kind="income_fixed",
+            name="Salary",
+            amount_paise=15_000_000,
+            account_id=sbi,
+            rule=salary_rule,
+            starts=_month_start(today, 11),
+            holiday_adjust="previous",
+            actor="system",
+        )
     )["id"]
-    create_schedule(
+    await create_schedule(
         conn,
         kind="income_variable",
         name="Freelance work",
@@ -346,7 +372,7 @@ def seed_demo(
         confirmed=False,
         actor="system",
     )
-    create_schedule(
+    await create_schedule(
         conn,
         kind="income_oneoff",
         name="Diwali bonus",
@@ -356,7 +382,7 @@ def seed_demo(
         starts=today + timedelta(days=20),
         actor="system",
     )
-    create_schedule(
+    await create_schedule(
         conn,
         kind="obligation",
         subtype="rent",
@@ -369,20 +395,22 @@ def seed_demo(
         holiday_adjust="next",
         actor="system",
     )
-    emi_schedule = create_schedule(
-        conn,
-        kind="obligation",
-        subtype="emi",
-        name="Home loan EMI",
-        amount_paise=3_150_000,
-        account_id=hdfc,
-        category_id=interest,
-        rule="FREQ=MONTHLY;BYMONTHDAY=10",
-        starts=_month_start(today, 11),
-        holiday_adjust="next",
-        actor="system",
+    emi_schedule = (
+        await create_schedule(
+            conn,
+            kind="obligation",
+            subtype="emi",
+            name="Home loan EMI",
+            amount_paise=3_150_000,
+            account_id=hdfc,
+            category_id=interest,
+            rule="FREQ=MONTHLY;BYMONTHDAY=10",
+            starts=_month_start(today, 11),
+            holiday_adjust="next",
+            actor="system",
+        )
     )["id"]
-    create_schedule(
+    await create_schedule(
         conn,
         kind="obligation",
         subtype="subscription",
@@ -395,7 +423,7 @@ def seed_demo(
         holiday_adjust="next",
         actor="system",
     )
-    create_schedule(
+    await create_schedule(
         conn,
         kind="obligation",
         subtype="insurance",
@@ -408,7 +436,7 @@ def seed_demo(
         holiday_adjust="next",
         actor="system",
     )
-    create_schedule(
+    await create_schedule(
         conn,
         kind="obligation",
         subtype="family_transfer",
@@ -421,7 +449,7 @@ def seed_demo(
         holiday_adjust="next",
         actor="system",
     )
-    create_schedule(
+    await create_schedule(
         conn,
         kind="instalment",
         name="Phone on card",
@@ -433,7 +461,7 @@ def seed_demo(
         actor="system",
     )
 
-    goa = create_goal(
+    goa = await create_goal(
         conn,
         name="Goa trip",
         target_paise=12_000_000,
@@ -442,34 +470,38 @@ def seed_demo(
         actor="system",
     )
     goal_account = goa["account_id"]
-    goal_schedule = create_schedule(
-        conn,
-        kind="goal_contribution",
-        name="Goa trip contribution",
-        amount_paise=1_000_000,
-        account_id=hdfc,
-        category_id=savings,
-        rule="FREQ=MONTHLY;BYMONTHDAY=7",
-        starts=_month_start(today, 5),
-        actor="system",
+    goal_schedule = (
+        await create_schedule(
+            conn,
+            kind="goal_contribution",
+            name="Goa trip contribution",
+            amount_paise=1_000_000,
+            account_id=hdfc,
+            category_id=savings,
+            rule="FREQ=MONTHLY;BYMONTHDAY=7",
+            starts=_month_start(today, 5),
+            actor="system",
+        )
     )["id"]
-    update_goal(conn, goa["id"], contribution_schedule_id=goal_schedule, actor="system")
-    update_account_emi(conn, loan, emi_schedule)
+    await update_goal(conn, goa["id"], contribution_schedule_id=goal_schedule, actor="system")
+    await update_account_emi(conn, loan, emi_schedule)
 
-    upsert_rule(
+    await upsert_rule(
         conn, merchant_pattern="BigBasket", category_id=groceries, source="llm", actor="system"
     )
-    upsert_rule(
+    await upsert_rule(
         conn, merchant_pattern="BigBasket", category_id=shopping, source="user", actor="system"
     )
-    upsert_rule(conn, merchant_pattern="Swiggy", category_id=food, source="user", actor="system")
+    await upsert_rule(
+        conn, merchant_pattern="Swiggy", category_id=food, source="user", actor="system"
+    )
 
     for months_ago in (3, 2, 1, 0):
         salary_day = last_working_day(
             _month_start(today, months_ago).year, _month_start(today, months_ago).month
         )
         if salary_day <= today:
-            record_income(
+            await record_income(
                 conn,
                 account_id=sbi,
                 amount_paise=15_000_000,
@@ -479,7 +511,7 @@ def seed_demo(
                 idempotency_key=f"demo:salary:{salary_day.isoformat()}",
                 actor="system",
             )
-            record_transfer(
+            await record_transfer(
                 conn,
                 from_account_id=sbi,
                 to_account_id=hdfc,
@@ -490,7 +522,7 @@ def seed_demo(
             )
         rent_day = _day(today, months_ago, 5)
         if rent_day <= today:
-            record_expense(
+            await record_expense(
                 conn,
                 account_id=hdfc,
                 amount_paise=2_800_000,
@@ -511,7 +543,7 @@ def seed_demo(
         ):
             when = _day(today, months_ago, day_number)
             if when <= today:
-                record_expense(
+                await record_expense(
                     conn,
                     account_id=hdfc,
                     amount_paise=amount,
@@ -523,7 +555,7 @@ def seed_demo(
                 )
         netflix_day = _day(today, months_ago, 12)
         if netflix_day <= today:
-            record_expense(
+            await record_expense(
                 conn,
                 account_id=slice_card,
                 amount_paise=64_900,
@@ -535,7 +567,7 @@ def seed_demo(
             )
         utility_day = _day(today, months_ago, 14)
         if utility_day <= today:
-            record_expense(
+            await record_expense(
                 conn,
                 account_id=hdfc,
                 amount_paise=220_000,
@@ -546,7 +578,7 @@ def seed_demo(
             )
         fuel_day = _day(today, months_ago, 21)
         if fuel_day <= today:
-            record_expense(
+            await record_expense(
                 conn,
                 account_id=hdfc,
                 amount_paise=300_000,
@@ -557,7 +589,7 @@ def seed_demo(
             )
         emi_day = _day(today, months_ago, 10)
         if emi_day <= today:
-            record_loan_payment(
+            await record_loan_payment(
                 conn,
                 account_id=hdfc,
                 loan_account_id=loan,
@@ -570,7 +602,7 @@ def seed_demo(
             )
         sip_day = _day(today, months_ago, 8)
         if sip_day <= today:
-            record_transfer(
+            await record_transfer(
                 conn,
                 from_account_id=hdfc,
                 to_account_id=mutual_funds,
@@ -582,7 +614,7 @@ def seed_demo(
             )
         family_day = _day(today, months_ago, 3)
         if family_day <= today:
-            record_expense(
+            await record_expense(
                 conn,
                 account_id=hdfc,
                 amount_paise=1_500_000,
@@ -594,7 +626,7 @@ def seed_demo(
             )
         goal_day = _day(today, months_ago, 7)
         if goal_day <= today:
-            record_transfer(
+            await record_transfer(
                 conn,
                 from_account_id=hdfc,
                 to_account_id=goal_account,
@@ -606,7 +638,7 @@ def seed_demo(
             )
 
     dinner_day = today - timedelta(days=18)
-    record_split(
+    await record_split(
         conn,
         account_id=hdfc,
         my_share_paise=40_000,
@@ -621,7 +653,7 @@ def seed_demo(
         date=dinner_day,
         actor="system",
     )
-    record_settlement(
+    await record_settlement(
         conn,
         account_id=hdfc,
         payee_id=ravi,
@@ -631,7 +663,7 @@ def seed_demo(
         date=today - timedelta(days=10),
         actor="system",
     )
-    record_lending(
+    await record_lending(
         conn,
         account_id=hdfc,
         payee_id=ravi,
@@ -641,7 +673,7 @@ def seed_demo(
         date=today - timedelta(days=40),
         actor="system",
     )
-    record_lending(
+    await record_lending(
         conn,
         account_id=hdfc,
         payee_id=employer,
@@ -651,7 +683,7 @@ def seed_demo(
         date=today - timedelta(days=6),
         actor="system",
     )
-    record_settlement(
+    await record_settlement(
         conn,
         account_id=hdfc,
         payee_id=employer,
@@ -661,7 +693,7 @@ def seed_demo(
         date=today - timedelta(days=5),
         actor="system",
     )
-    record_refund(
+    await record_refund(
         conn,
         account_id=hdfc,
         amount_paise=30_000,
@@ -672,7 +704,7 @@ def seed_demo(
         actor="system",
     )
 
-    dinner = record_expense(
+    dinner = await record_expense(
         conn,
         account_id=hdfc,
         amount_paise=250_000,
@@ -682,7 +714,7 @@ def seed_demo(
         date=today - timedelta(days=2),
         actor="system",
     )
-    correct_movement(
+    await correct_movement(
         conn,
         dinner["id"],
         changes={"amount_paise": 225_000},
@@ -690,13 +722,15 @@ def seed_demo(
     )
 
     cash_balance = next(
-        account["balance_paise"] for account in list_accounts(conn) if account["id"] == cash
+        account["balance_paise"] for account in await list_accounts(conn) if account["id"] == cash
     )
-    set_statement_balance(
+    await set_statement_balance(
         conn,
         hdfc,
         balance_paise=next(
-            account["balance_paise"] for account in list_accounts(conn) if account["id"] == hdfc
+            account["balance_paise"]
+            for account in await list_accounts(conn)
+            if account["id"] == hdfc
         ),
         as_of=today,
         actor="system",
@@ -704,25 +738,27 @@ def seed_demo(
 
     coverage = {"months": [], "gap": None, "imports": 0}
     if statement_coverage:
-        coverage = _seed_statement_coverage(
+        coverage = await _seed_statement_coverage(
             conn,
-            list_accounts(conn),
+            await list_accounts(conn),
             today,
             leave_gap=coverage_gap,
         )
 
     return {
         "today": today.isoformat(),
-        "accounts": len(list_accounts(conn, include_system=True)),
-        "categories": len(ensure_default_categories(conn)),
-        "schedules": conn.execute("SELECT count(*) AS n FROM schedules").fetchone()["n"],
-        "goals": conn.execute("SELECT count(*) AS n FROM goals").fetchone()["n"],
-        "movements": conn.execute("SELECT count(*) AS n FROM movements").fetchone()["n"],
+        "accounts": len(await list_accounts(conn, include_system=True)),
+        "categories": len(await ensure_default_categories(conn)),
+        "schedules": (await conn.fetchrow("SELECT count(*) AS n FROM schedules"))["n"],
+        "goals": (await conn.fetchrow("SELECT count(*) AS n FROM goals"))["n"],
+        "movements": (await conn.fetchrow("SELECT count(*) AS n FROM movements"))["n"],
         "imports": coverage["imports"],
         "statement_coverage": coverage,
-        "people": conn.execute(
-            "SELECT count(*) AS n FROM payees WHERE kind IN ('person', 'organization')"
-        ).fetchone()["n"],
+        "people": (
+            await conn.fetchrow(
+                "SELECT count(*) AS n FROM payees WHERE kind IN ('person', 'organization')"
+            )
+        )["n"],
         "cash_balance_paise": cash_balance,
         "salary_schedule_id": salary,
         "epf_account_id": epf,
@@ -734,11 +770,11 @@ def seed_demo(
     }
 
 
-def update_account_emi(conn: psycopg.Connection, loan_account_id: str, schedule_id: str) -> None:
+async def update_account_emi(conn: Connection, loan_account_id: str, schedule_id: str) -> None:
     """Point the loan at its EMI schedule. A small helper so the demo stays readable."""
     from fin_agent.ledger.accounts import update_account
 
-    update_account(conn, loan_account_id, emi_schedule_id=schedule_id, actor="system")
+    await update_account(conn, loan_account_id, emi_schedule_id=schedule_id, actor="system")
 
 
 __all__ = ["DEMO_SETTINGS", "DemoSeedError", "seed_demo"]

@@ -16,9 +16,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
 from pywebpush import WebPushException, webpush
+
+from fin_agent.db.conn import Connection
 
 logger = logging.getLogger("fin_agent.notifications")
 
@@ -41,13 +41,13 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def ensure_vapid_keys(
-    conn: psycopg.Connection, *, subject: str = "mailto:fin-agent@localhost"
+async def ensure_vapid_keys(
+    conn: Connection, *, subject: str = "mailto:fin-agent@localhost"
 ) -> dict[str, Any]:
     """Generate the instance's VAPID key pair once, on first run."""
-    row = conn.execute("SELECT * FROM vapid_keys WHERE id = 1").fetchone()
+    row = await conn.fetchrow("SELECT * FROM vapid_keys WHERE id = 1")
     if row is not None:
-        return dict(row)
+        return row
 
     from cryptography.hazmat.primitives import serialization
     from py_vapid import Vapid02
@@ -60,25 +60,27 @@ def ensure_vapid_keys(
     )
     public_key = base64.urlsafe_b64encode(public_point).decode("ascii").rstrip("=")
     private_key = vault.private_pem().decode("ascii")
-    conn.execute(
+    await conn.execute(
         """
         INSERT INTO vapid_keys (id, public_key, private_key, subject)
-        VALUES (1, %s, %s, %s)
+        VALUES (1, $1, $2, $3)
         ON CONFLICT (id) DO NOTHING
         """,
-        (public_key, private_key, subject),
+        public_key,
+        private_key,
+        subject,
     )
-    row = conn.execute("SELECT * FROM vapid_keys WHERE id = 1").fetchone()
-    return dict(row)
+    row = await conn.fetchrow("SELECT * FROM vapid_keys WHERE id = 1")
+    return row
 
 
-def public_push_key(conn: psycopg.Connection) -> dict[str, Any]:
-    row = ensure_vapid_keys(conn)
+async def public_push_key(conn: Connection) -> dict[str, Any]:
+    row = await ensure_vapid_keys(conn)
     return {"public_key": row["public_key"], "subject": row["subject"]}
 
 
-def subscribe(
-    conn: psycopg.Connection,
+async def subscribe(
+    conn: Connection,
     *,
     endpoint: str,
     p256dh: str,
@@ -88,28 +90,30 @@ def subscribe(
         raise ValueError("A push endpoint must be HTTPS")
     if not p256dh or not auth:
         raise ValueError("A push subscription needs p256dh and auth keys")
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO push_subscriptions (endpoint, p256dh, auth)
-        VALUES (%s, %s, %s)
+        VALUES ($1, $2, $3)
         ON CONFLICT (endpoint) DO UPDATE
         SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth, last_used_at = now()
         RETURNING id, endpoint, created_at, last_used_at
         """,
-        (endpoint, p256dh, auth),
-    ).fetchone()
-    return dict(row)
+        endpoint,
+        p256dh,
+        auth,
+    )
+    return row
 
 
-def unsubscribe(conn: psycopg.Connection, *, endpoint: str) -> bool:
-    row = conn.execute(
-        "DELETE FROM push_subscriptions WHERE endpoint = %s RETURNING id", (endpoint,)
-    ).fetchone()
+async def unsubscribe(conn: Connection, *, endpoint: str) -> bool:
+    row = await conn.fetchrow(
+        "DELETE FROM push_subscriptions WHERE endpoint = $1 RETURNING id", endpoint
+    )
     return row is not None
 
 
-def create_notification(
-    conn: psycopg.Connection,
+async def create_notification(
+    conn: Connection,
     *,
     kind: str,
     title: str,
@@ -119,38 +123,41 @@ def create_notification(
 ) -> dict[str, Any] | None:
     """Insert one inbox item. A duplicate key returns `None` instead of a second item."""
     if dedupe_key:
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO notifications (kind, title, body, data, dedupe_key)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (dedupe_key) DO NOTHING
             RETURNING *
             """,
-            (kind, title, body, Jsonb(data or {}), dedupe_key),
-        ).fetchone()
+            kind,
+            title,
+            body,
+            data or {},
+            dedupe_key,
+        )
     else:
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO notifications (kind, title, body, data)
-            VALUES (%s, %s, %s, %s)
+            VALUES ($1, $2, $3, $4)
             RETURNING *
             """,
-            (kind, title, body, Jsonb(data or {})),
-        ).fetchone()
-    return dict(row) if row is not None else None
+            kind,
+            title,
+            body,
+            data or {},
+        )
+    return row
 
 
-def list_notifications(conn: psycopg.Connection, *, limit: int = 50) -> dict[str, Any]:
+async def list_notifications(conn: Connection, *, limit: int = 50) -> dict[str, Any]:
     limit = max(1, min(limit, 200))
-    rows = list(
-        conn.execute(
-            "SELECT * FROM notifications ORDER BY created_at DESC, id DESC LIMIT %s",
-            (limit,),
-        ).fetchall()
+    rows = await conn.fetch(
+        "SELECT * FROM notifications ORDER BY created_at DESC, id DESC LIMIT $1",
+        limit,
     )
-    unread = conn.execute(
-        "SELECT count(*) AS n FROM notifications WHERE read_at IS NULL"
-    ).fetchone()["n"]
+    unread = await conn.fetchval("SELECT count(*) FROM notifications WHERE read_at IS NULL")
     return {
         "notifications": [_payload(row) for row in rows],
         "unread_count": int(unread),
@@ -170,40 +177,38 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def mark_read(conn: psycopg.Connection, notification_id: str) -> dict[str, Any] | None:
-    row = conn.execute(
+async def mark_read(conn: Connection, notification_id: str) -> dict[str, Any] | None:
+    row = await conn.fetchrow(
         """
         UPDATE notifications
         SET read_at = coalesce(read_at, now())
-        WHERE id = %s
+        WHERE id = $1
         RETURNING *
         """,
-        (notification_id,),
-    ).fetchone()
+        notification_id,
+    )
     return _payload(row) if row is not None else None
 
 
-def mark_all_read(conn: psycopg.Connection) -> int:
-    row = conn.execute(
-        "UPDATE notifications SET read_at = now() WHERE read_at IS NULL RETURNING id"
-    ).fetchall()
-    return len(row)
+async def mark_all_read(conn: Connection) -> int:
+    status = await conn.execute("UPDATE notifications SET read_at = now() WHERE read_at IS NULL")
+    return int(status.split()[-1])
 
 
 def push_body(kind: str) -> str:
     return PUSH_BODIES.get(kind, DEFAULT_PUSH_BODY)
 
 
-def _push(
-    conn: psycopg.Connection,
+async def _push(
+    conn: Connection,
     *,
     kind: str,
     url: str = "/",
 ) -> int:
     """Send one generic ping to every subscription, dropping endpoints that are gone."""
     # TODO(L6): live browser-vendor push delivery is untested on this host; tests mock webpush.
-    keys = ensure_vapid_keys(conn)
-    subscriptions = list(conn.execute("SELECT * FROM push_subscriptions").fetchall())
+    keys = await ensure_vapid_keys(conn)
+    subscriptions = await conn.fetch("SELECT * FROM push_subscriptions")
     if not subscriptions:
         return 0
     payload = json.dumps(
@@ -223,15 +228,17 @@ def _push(
                 vapid_claims={"sub": keys["subject"]},
                 timeout=10,
             )
-            conn.execute(
-                "UPDATE push_subscriptions SET last_used_at = now() WHERE id = %s",
-                (subscription["id"],),
+            await conn.execute(
+                "UPDATE push_subscriptions SET last_used_at = now() WHERE id = $1",
+                subscription["id"],
             )
             sent += 1
         except WebPushException as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status in {404, 410}:
-                conn.execute("DELETE FROM push_subscriptions WHERE id = %s", (subscription["id"],))
+                await conn.execute(
+                    "DELETE FROM push_subscriptions WHERE id = $1", subscription["id"]
+                )
             else:
                 logger.warning("push to %s failed (%s)", subscription["id"], type(exc).__name__)
         except Exception:  # noqa: BLE001 - a push failure must never fail the job or write
@@ -239,10 +246,10 @@ def _push(
     return sent
 
 
-def send_push_for_kind(conn: psycopg.Connection, kind: str, *, url: str = "/") -> int:
+async def send_push_for_kind(conn: Connection, kind: str, *, url: str = "/") -> int:
     """Public entry point for a handler after it commits its notification."""
     try:
-        return _push(conn, kind=kind, url=url)
+        return await _push(conn, kind=kind, url=url)
     except Exception:  # noqa: BLE001 - push is best effort
         logger.exception("push delivery for %s failed", kind)
         return 0

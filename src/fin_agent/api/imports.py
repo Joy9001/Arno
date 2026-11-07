@@ -102,25 +102,22 @@ async def upload_attachment(
     else:
         raise HTTPException(status_code=422, detail="Unknown upload purpose.")
     digest = hashlib.sha256(data).hexdigest()
-    attachment_id = new_id(conn, "att")
-    row = conn.execute(
+    attachment_id = await new_id(conn, "att")
+    row = await conn.fetchrow(
         """
         INSERT INTO attachments
             (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, kind, filename, content_type, size_bytes, sha256, created_at
         """,
-        (
-            attachment_id,
-            stored_kind,
-            (file.filename or selected)[:255],
-            content_type,
-            len(data),
-            digest,
-            data,
-        ),
-    ).fetchone()
-    conn.commit()
+        attachment_id,
+        stored_kind,
+        (file.filename or selected)[:255],
+        content_type,
+        len(data),
+        digest,
+        data,
+    )
     payload = dict(row)
     payload["detected_kind"] = kind
     payload["created_at"] = row["created_at"].isoformat()
@@ -128,113 +125,117 @@ async def upload_attachment(
 
 
 @router.post("/imports", status_code=status.HTTP_202_ACCEPTED)
-def start_import(body: StartImport, conn: Database) -> JSONResponse:
+async def start_import(body: StartImport, conn: Database) -> JSONResponse:
     try:
-        row = create_import(conn, attachment_id=body.attachment_id, account_id=body.account_id)
+        row = await create_import(
+            conn, attachment_id=body.attachment_id, account_id=body.account_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(status_code=202, content=import_payload(conn, row["id"]))
+    return JSONResponse(status_code=202, content=await import_payload(conn, row["id"]))
 
 
 @router.get("/imports")
-def imports_list(conn: Database, limit: int = 50) -> dict[str, Any]:
-    return {"items": list_imports(conn, limit=min(max(limit, 1), 200))}
+async def imports_list(conn: Database, limit: int = 50) -> dict[str, Any]:
+    return {"items": await list_imports(conn, limit=min(max(limit, 1), 200))}
 
 
 @router.get("/imports/{import_id}")
-def import_detail(import_id: str, conn: Database) -> dict[str, Any]:
+async def import_detail(import_id: str, conn: Database) -> dict[str, Any]:
     try:
-        return import_payload(conn, import_id)
+        return await import_payload(conn, import_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/imports/{import_id}/password", status_code=status.HTTP_202_ACCEPTED)
-def import_password(import_id: str, body: PasswordIn, conn: Database) -> JSONResponse:
-    row = conn.execute("SELECT status FROM imports WHERE id = %s", (import_id,)).fetchone()
+async def import_password(import_id: str, body: PasswordIn, conn: Database) -> JSONResponse:
+    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such import")
     if row["status"] not in ("needs_password", "needs_input", "failed"):
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
-    retry_with_password(conn, import_id=import_id, password=body.password)
-    return JSONResponse(status_code=202, content=import_payload(conn, import_id))
+    await retry_with_password(conn, import_id=import_id, password=body.password)
+    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
 
 
 @router.post("/imports/{import_id}/account", status_code=status.HTTP_202_ACCEPTED)
-def import_account(import_id: str, body: AccountIn, conn: Database) -> JSONResponse:
-    row = conn.execute("SELECT status FROM imports WHERE id = %s", (import_id,)).fetchone()
+async def import_account(import_id: str, body: AccountIn, conn: Database) -> JSONResponse:
+    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such import")
     if row["status"] not in ("needs_input", "failed"):
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
     try:
-        retry_with_account(conn, import_id=import_id, account_id=body.account_id)
+        await retry_with_account(conn, import_id=import_id, account_id=body.account_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(status_code=202, content=import_payload(conn, import_id))
+    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
 
 
 @router.post("/imports/{import_id}/opening", status_code=status.HTTP_202_ACCEPTED)
-def import_opening(import_id: str, body: OpeningIn, conn: Database) -> JSONResponse:
-    row = conn.execute("SELECT status FROM imports WHERE id = %s", (import_id,)).fetchone()
+async def import_opening(import_id: str, body: OpeningIn, conn: Database) -> JSONResponse:
+    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such import")
     if row["status"] not in ("needs_input", "failed", "review"):
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
     try:
-        retry_with_opening(conn, import_id=import_id, opening_paise=body.opening_paise)
+        await retry_with_opening(conn, import_id=import_id, opening_paise=body.opening_paise)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return JSONResponse(status_code=202, content=import_payload(conn, import_id))
+    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
 
 
 @router.post("/imports/{import_id}/commit")
-def import_commit(import_id: str, conn: Database) -> dict[str, Any]:
+async def import_commit(import_id: str, conn: Database) -> dict[str, Any]:
     try:
-        result = commit_import(conn, import_id)
+        result = await commit_import(conn, import_id)
     except ConflictLedgerError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     except InvalidLedgerError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
-    payload = import_payload(conn, import_id)
+    payload = await import_payload(conn, import_id)
     payload["commit"] = result
     return payload
 
 
 @router.post("/imports/{import_id}/reject")
-def import_reject(import_id: str, conn: Database, reason: str | None = None) -> dict[str, Any]:
-    row = conn.execute("SELECT status FROM imports WHERE id = %s", (import_id,)).fetchone()
+async def import_reject(
+    import_id: str, conn: Database, reason: str | None = None
+) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such import")
     if row["status"] == "committed":
         raise HTTPException(
             status_code=409, detail="Undo a committed import from the Imports screen."
         )
-    reject_import(conn, import_id, reason)
-    return import_payload(conn, import_id)
+    await reject_import(conn, import_id, reason)
+    return await import_payload(conn, import_id)
 
 
 @router.post("/imports/{import_id}/undo")
-def import_undo(import_id: str, conn: Database) -> dict[str, Any]:
+async def import_undo(import_id: str, conn: Database) -> dict[str, Any]:
     try:
-        result = undo_import(conn, import_id)
+        result = await undo_import(conn, import_id)
     except ConflictLedgerError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     except InvalidLedgerError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
-    payload = import_payload(conn, import_id)
+    payload = await import_payload(conn, import_id)
     payload["undo"] = result
     return payload
 
 
 @router.patch("/imports/{import_id}/lines/{line_id}")
-def resolve_import_line(
+async def resolve_import_line(
     import_id: str, line_id: str, body: ResolveLine, conn: Database
 ) -> dict[str, Any]:
     from fin_agent.importers.reconcile import resolve_line
 
     try:
-        resolve_line(
+        await resolve_line(
             conn,
             import_id=import_id,
             line_id=line_id,
@@ -246,7 +247,7 @@ def resolve_import_line(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return import_payload(conn, import_id)
+    return await import_payload(conn, import_id)
 
 
 @router.get("/imports/{import_id}/password")

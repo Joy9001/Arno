@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pydantic_ai.models.test import TestModel
 from typer.testing import CliRunner
 
@@ -17,26 +19,26 @@ class _SpyStore:
         self.closed = True
 
 
-def test_cli_chat_runs_one_turn_and_saves_it(monkeypatch, demo_ledger):
+async def test_cli_chat_runs_one_turn_and_saves_it(monkeypatch, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Hello from the CLI.")
     store = _SpyStore()
     monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: store)
     monkeypatch.setattr("fin_agent.cli.build_agent", lambda **_kwargs: build_agent(model=model))
     runner = CliRunner()
-    result = runner.invoke(cli_app, ["chat", "--message", "hi there"])
+    result = await asyncio.to_thread(runner.invoke, cli_app, ["chat", "--message", "hi there"])
     assert result.exit_code == 0, result.output
     assert "Hello from the CLI." in result.output
     assert store.closed
-    row = demo_ledger.execute(
-        "SELECT count(*) AS n FROM messages WHERE role = 'assistant'"
-    ).fetchone()
-    assert row["n"] >= 1
+    served = await demo_ledger.fetchval("SELECT count(*) FROM messages WHERE role = 'assistant'")
+    assert served >= 1
 
 
-def test_cli_export_writes_a_json_file(tmp_path, demo_ledger):
+async def test_cli_export_writes_a_json_file(tmp_path, demo_ledger):
     runner = CliRunner()
     out = tmp_path / "export.json"
-    result = runner.invoke(cli_app, ["export", "--format", "json", "--out", str(out)])
+    result = await asyncio.to_thread(
+        runner.invoke, cli_app, ["export", "--format", "json", "--out", str(out)]
+    )
     assert result.exit_code == 0, result.output
     assert out.exists()
     assert "accounts" in out.read_text(encoding="utf-8")

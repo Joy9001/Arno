@@ -398,7 +398,7 @@ def test_computed_tables_reject_non_finite_numbers(value):
 
 
 @pytest.mark.parametrize("computed", [False, True])
-def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
+async def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
     code = (
         "spending = await summarize_spending(group_by='category', period='2026-10')\n"
         "result_id = spending['ui_results'][0]['id']\n"
@@ -429,7 +429,7 @@ def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
     agent = build_agent()
     deps = AgentDeps(conversation_id="cnv_test")
     with agent.override(model=FunctionModel(script)):
-        result = agent.run_sync("show me", deps=deps)
+        result = await agent.run("show me", deps=deps)
 
     cards = cards_from_messages(result.all_messages())
     answer = next((card for card in cards if card.data.get("card") == "answer"), None)
@@ -442,12 +442,12 @@ def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
     assert answer.data["results"][0]["kind"] == ("table" if computed else "spending")
     assert answer.data["results"][0]["table"]["rows"]
 
-    thread = create_thread(demo_ledger, title="composed")
-    history, _ = ensure_history(demo_ledger, thread)
-    record_user_message(
+    thread = await create_thread(demo_ledger, title="composed")
+    history, _ = await ensure_history(demo_ledger, thread)
+    await record_user_message(
         demo_ledger, thread_id=thread["id"], client_id="client-composed", text="show me"
     )
-    saved = save_records(
+    saved = await save_records(
         demo_ledger,
         thread_id=thread["id"],
         run_id="run_composed",
@@ -456,10 +456,10 @@ def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
         turn_messages=result.all_messages(),
         ending="complete",
     )
-    row = demo_ledger.execute(
-        "SELECT content FROM messages WHERE id = %s",
-        (saved["messages"][-1],),
-    ).fetchone()
+    row = await demo_ledger.fetchrow(
+        "SELECT content FROM messages WHERE id = $1",
+        saved["messages"][-1],
+    )
     stored = row["content"]
     stored_answer = next(
         part

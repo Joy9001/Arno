@@ -25,7 +25,6 @@ from fastapi import (
     UploadFile,
     status,
 )
-from psycopg.types.json import Jsonb
 
 from fin_agent.agent import history as history_mod
 from fin_agent.api.deps import Database, PreparationDep, current_session
@@ -83,25 +82,25 @@ def _audio_media_type(data: bytes, declared: str | None) -> str:
     return "application/octet-stream"
 
 
-def _ensure_thread(conn, thread_id: str | None, title: str) -> dict[str, Any]:
+async def _ensure_thread(conn, thread_id: str | None, title: str) -> dict[str, Any]:
     if not thread_id or len(thread_id) > 100:
         raise HTTPException(
             status_code=422,
             detail="A capture needs the thread it belongs to.",
         )
-    thread = history_mod.get_thread(conn, thread_id)
+    thread = await history_mod.get_thread(conn, thread_id)
     if thread is None:
-        thread = history_mod.create_thread(conn, title=title, thread_id=thread_id)
+        thread = await history_mod.create_thread(conn, title=title, thread_id=thread_id)
     return thread
 
 
-def _optional_thread(conn, thread_id: str | None, title: str) -> dict[str, Any] | None:
+async def _optional_thread(conn, thread_id: str | None, title: str) -> dict[str, Any] | None:
     if not thread_id or len(thread_id) > 100:
         return None
-    return _ensure_thread(conn, thread_id, title)
+    return await _ensure_thread(conn, thread_id, title)
 
 
-def _save_attachment(
+async def _save_attachment(
     conn,
     *,
     data: bytes,
@@ -119,29 +118,25 @@ def _save_attachment(
             status_code=422,
             detail="The capture is empty.",
         )
-    attachment_id = new_id(conn, "att")
-    return dict(
-        conn.execute(
-            """
-            INSERT INTO attachments
-                (id, kind, filename, content_type, size_bytes, sha256, data)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING *
-            """,
-            (
-                attachment_id,
-                kind,
-                (filename or kind)[:255],
-                content_type,
-                len(data),
-                hashlib.sha256(data).hexdigest(),
-                data,
-            ),
-        ).fetchone()
+    attachment_id = await new_id(conn, "att")
+    return await conn.fetchrow(
+        """
+        INSERT INTO attachments
+            (id, kind, filename, content_type, size_bytes, sha256, data)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+        """,
+        attachment_id,
+        kind,
+        (filename or kind)[:255],
+        content_type,
+        len(data),
+        hashlib.sha256(data).hexdigest(),
+        data,
     )
 
 
-def _save_card(
+async def _save_card(
     conn,
     *,
     thread_id: str,
@@ -154,17 +149,20 @@ def _save_card(
         "role": "assistant",
         "parts": [{"type": "data-card", "id": client_id, "data": card}],
     }
-    conn.execute(
+    await conn.execute(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-        VALUES (%s, %s, 'assistant', %s, %s)
+        VALUES ($1, $2, 'assistant', $3, $4)
         ON CONFLICT (client_id) DO NOTHING
         """,
-        (thread_id, client_id, Jsonb(content), body_text),
+        thread_id,
+        client_id,
+        content,
+        body_text,
     )
 
 
-def _failure(
+async def _failure(
     conn,
     *,
     thread: dict[str, Any] | None,
@@ -182,14 +180,13 @@ def _failure(
         "note": note,
     }
     if persist and thread is not None:
-        _save_card(
+        await _save_card(
             conn,
             thread_id=str(thread["id"]),
             client_id=f"capfail_{attachment_id}",
             card=card,
             body_text=note,
         )
-    conn.commit()
     return {
         "status": "failed",
         "attachment_id": attachment_id,
@@ -225,7 +222,7 @@ async def _transcribe_saved(
     thread: dict[str, Any] | None,
     with_payee_context: bool,
 ) -> dict[str, Any]:
-    prompt = payee_names_prompt(conn) if with_payee_context else None
+    prompt = await payee_names_prompt(conn) if with_payee_context else None
     try:
         transcript = await transcribe_audio(
             bytes(row["data"]),
@@ -234,7 +231,7 @@ async def _transcribe_saved(
             prompt=prompt,
         )
     except TranscriptionError as exc:
-        return _failure(
+        return await _failure(
             conn,
             thread=thread,
             attachment_id=str(row["id"]),
@@ -276,7 +273,7 @@ async def log_photo(
     record_history: bool = True,
 ) -> dict[str, Any]:
     if thread.get("run_started_at") is not None:
-        return _failure(
+        return await _failure(
             conn,
             thread=thread,
             attachment_id=str(row["id"]),
@@ -292,7 +289,7 @@ async def log_photo(
         )
     except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the retry card
         logger.warning("photo extraction failed: %s", type(exc).__name__)
-        return _failure(
+        return await _failure(
             conn,
             thread=thread,
             attachment_id=str(row["id"]),
@@ -304,7 +301,7 @@ async def log_photo(
     merchant = (extracted.merchant or "").strip()
     amount_paise = extracted.amount_paise
     if not merchant or not amount_paise:
-        return _failure(
+        return await _failure(
             conn,
             thread=thread,
             attachment_id=str(row["id"]),
@@ -319,16 +316,16 @@ async def log_photo(
     method = extracted.method or "unknown"
     upi_ref = _clean_upi_ref(extracted.upi_ref)
 
-    payee = write_tools.resolve_payee(
+    payee = await write_tools.resolve_payee(
         conn,
         merchant,
         kind="merchant",
         outside_text=True,
     )
     try:
-        account_id = write_tools.default_account_for_payee(conn, str(payee["id"]))
+        account_id = await write_tools.default_account_for_payee(conn, str(payee["id"]))
     except write_tools.ToolInputError as exc:
-        return _failure(
+        return await _failure(
             conn,
             thread=thread,
             attachment_id=str(row["id"]),
@@ -337,7 +334,7 @@ async def log_photo(
             persist=record_history,
         )
 
-    result = movements_mod.record_expense(
+    result = await movements_mod.record_expense(
         conn,
         account_id=account_id,
         amount_paise=amount_paise,
@@ -355,7 +352,7 @@ async def log_photo(
 
     # This updates model context only, not the UI messages table. The agent must
     # see the extracted facts and know the movement has already been logged.
-    history_mod.append_outside_entry(
+    await history_mod.append_outside_entry(
         conn,
         thread,
         _photo_history_text(
@@ -383,14 +380,13 @@ async def log_photo(
         "summary": f"{money(amount_paise)['text']} to {merchant}",
     }
     if record_history:
-        _save_card(
+        await _save_card(
             conn,
             thread_id=str(thread["id"]),
             client_id=f"cap_{row['id']}",
             card=card,
             body_text=str(card["summary"]),
         )
-    conn.commit()
     return {
         "status": "logged",
         "attachment_id": str(row["id"]),
@@ -413,15 +409,14 @@ async def post_transcribe(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="That file is not an audio recording.",
         )
-    thread = _optional_thread(conn, thread_id, "Voice note")
-    row = _save_attachment(
+    thread = await _optional_thread(conn, thread_id, "Voice note")
+    row = await _save_attachment(
         conn,
         data=data,
         kind="audio",
         filename=file.filename or "voice.webm",
         content_type=content_type,
     )
-    conn.commit()
     return await _transcribe_saved(
         conn,
         row,
@@ -437,16 +432,16 @@ async def retry_transcribe(
     thread_id: Annotated[str | None, Query()] = None,
     payee_context: Annotated[bool | None, Query()] = None,
 ) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM attachments WHERE id = %s AND kind = 'audio'",
-        (attachment_id,),
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT * FROM attachments WHERE id = $1 AND kind = 'audio'",
+        attachment_id,
+    )
     if row is None or row["data"] is None or row["purged_at"] is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No such voice note.",
         )
-    thread = _optional_thread(conn, thread_id, "Voice note")
+    thread = await _optional_thread(conn, thread_id, "Voice note")
     return await _transcribe_saved(
         conn,
         dict(row),
@@ -469,15 +464,14 @@ async def post_photo(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Use a PNG, JPEG, WebP, or GIF image.",
         )
-    thread = _ensure_thread(conn, thread_id, "Photo")
-    row = _save_attachment(
+    thread = await _ensure_thread(conn, thread_id, "Photo")
+    row = await _save_attachment(
         conn,
         data=data,
         kind="photo",
         filename=file.filename or "photo",
         content_type=media_type,
     )
-    conn.commit()
     return await log_photo(conn, thread, row)
 
 
@@ -488,30 +482,30 @@ async def retry_photo(
     attachment_id: str,
     preparation: PreparationDep,
 ) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM attachments WHERE id = %s AND kind = 'photo'",
-        (attachment_id,),
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT * FROM attachments WHERE id = $1 AND kind = 'photo'",
+        attachment_id,
+    )
     if row is None or row["data"] is None or row["purged_at"] is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No such photo.",
         )
-    thread = _ensure_thread(conn, thread_id, "Photo")
+    thread = await _ensure_thread(conn, thread_id, "Photo")
     return await log_photo(conn, thread, dict(row))
 
 
 @router.get("/attachments/{attachment_id}")
-def get_attachment(conn: Database, attachment_id: str) -> Response:
+async def get_attachment(conn: Database, attachment_id: str) -> Response:
     """Serve a photo or voice note back to the same origin, under `img-src 'self'`."""
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         SELECT filename, content_type, data, purged_at
         FROM attachments
-        WHERE id = %s AND kind IN ('photo', 'audio')
+        WHERE id = $1 AND kind IN ('photo', 'audio')
         """,
-        (attachment_id,),
-    ).fetchone()
+        attachment_id,
+    )
     if row is None or row["data"] is None or row["purged_at"] is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

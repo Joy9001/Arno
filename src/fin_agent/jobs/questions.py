@@ -7,12 +7,9 @@ The answer is written into the inbox, keyed by the question and its scheduled pe
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
-
-import psycopg
 
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS
@@ -20,7 +17,7 @@ from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import build_snapshot_history
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.config import get_settings
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.jobs.schedules import INDIA, period_for
 from fin_agent.notifications import create_notification, send_push_for_kind
 from fin_agent.scheduled_questions import DEFAULT_SPEND_LIMIT_USD
@@ -39,7 +36,7 @@ def spend_budget(question: dict[str, Any]) -> Decimal:
 
 
 async def answer_question(
-    conn: psycopg.Connection,
+    conn: Connection,
     question: dict[str, Any],
     *,
     agent: Any,
@@ -48,9 +45,7 @@ async def answer_question(
     # TODO(L6): a real scheduled-question run against the configured CHAT endpoint is still
     # pending; tests use a scripted model and prove the read-only/ceiling wiring.
     prompt = str(question["prompt"])
-    history, outside = build_snapshot_history(conn)
-    # The model call must not run inside a database transaction.
-    conn.commit()
+    history, outside = await build_snapshot_history(conn)
     deps = AgentDeps(
         conversation_id="",
         flagged=outside,
@@ -80,14 +75,14 @@ async def answer_question(
     return answer or "The question ran, but the model returned no answer."
 
 
-def record_answer(
-    conn: psycopg.Connection,
+async def record_answer(
+    conn: Connection,
     *,
     question: dict[str, Any],
     answer: str,
     period: str,
 ) -> dict[str, Any] | None:
-    row = create_notification(
+    row = await create_notification(
         conn,
         kind="scheduled_question",
         title=str(question["prompt"])[:200],
@@ -100,24 +95,24 @@ def record_answer(
         },
         dedupe_key=f"scheduled_question:{question['id']}:{period}",
     )
-    conn.execute(
-        "UPDATE scheduled_questions SET last_run_at = now(), updated_at = now() WHERE id = %s",
-        (question["id"],),
+    await conn.execute(
+        "UPDATE scheduled_questions SET last_run_at = now(), updated_at = now() WHERE id = $1",
+        question["id"],
     )
     return row
 
 
 async def run_scheduled_question(
-    conn: psycopg.Connection,
+    conn: Connection,
     *,
     question_id: str,
     period: str | None = None,
     agent: Any = None,
     spend_store: Any = None,
 ) -> dict[str, Any]:
-    question = conn.execute(
-        "SELECT * FROM scheduled_questions WHERE id = %s AND active", (question_id,)
-    ).fetchone()
+    question = await conn.fetchrow(
+        "SELECT * FROM scheduled_questions WHERE id = $1 AND active", question_id
+    )
     if question is None:
         return {"skipped": "inactive or missing"}
     period = period or period_for(
@@ -132,7 +127,7 @@ async def run_scheduled_question(
             question_budget_usd=spend_budget(dict(question)),
         )
     answer = await answer_question(conn, dict(question), agent=agent)
-    row = record_answer(conn, question=dict(question), answer=answer, period=period)
+    row = await record_answer(conn, question=dict(question), answer=answer, period=period)
     return {
         "notification_id": row["id"] if row else None,
         "period": period,
@@ -149,17 +144,15 @@ async def handle_scheduled_question(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         if store is None:
             raise RuntimeError("the spend store is unavailable; refusing an uncapped model run")
-        with closing(connect()) as conn:
+        async with connect() as conn:
             result = await run_scheduled_question(
                 conn,
                 question_id=question_id,
                 period=payload.get("period"),
                 spend_store=store,
             )
-            conn.commit()
             if result.get("notification_id"):
-                send_push_for_kind(conn, "scheduled_question")
-                conn.commit()
+                await send_push_for_kind(conn, "scheduled_question")
             return result
     finally:
         if pool is not None:

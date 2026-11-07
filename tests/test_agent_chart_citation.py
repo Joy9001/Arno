@@ -20,7 +20,7 @@ from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
 
 
-def test_a_run_code_chart_carries_its_script_and_calculation_time(demo_ledger):
+async def test_a_run_code_chart_carries_its_script_and_calculation_time(demo_ledger):
     code = (
         'result = await show_chart(type="bar", title="Spend", as_of="2026-10-31", '
         'series=[{"name": "Food", "points": [{"x": "Oct", "y": 45000}]}])\n'
@@ -34,7 +34,7 @@ def test_a_run_code_chart_carries_its_script_and_calculation_time(demo_ledger):
 
     agent = build_agent()
     with agent.override(model=FunctionModel(script)):
-        result = agent.run_sync("show me", deps=AgentDeps(conversation_id="cnv_test"))
+        result = await agent.run("show me", deps=AgentDeps(conversation_id="cnv_test"))
 
     for cards in (
         cards_from_messages(result.all_messages()),

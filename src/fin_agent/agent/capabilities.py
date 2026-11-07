@@ -7,7 +7,6 @@ behavior are measured from traces at L2.
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from decimal import Decimal
 from typing import Any
 
@@ -164,21 +163,23 @@ def spend_limits(store: Any, *, budgets: list[Budget] | None = None) -> SpendLim
     return SpendLimits(budgets=budgets or [shared_daily_budget()], store=store)
 
 
-def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
+async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
     """Today's date and how many writes landed since the pinned snapshot."""
     day = ledger_today().isoformat()
     if ctx.deps is None or not getattr(ctx.deps, "conversation_id", None):
         return f"Today is {day}."
-    with closing(connect()) as conn:
-        row = conn.execute(
-            "SELECT snapshot_at FROM conversations WHERE id = %s", (ctx.deps.conversation_id,)
-        ).fetchone()
+    async with connect() as conn:
+        row = await conn.fetchrow(
+            "SELECT snapshot_at FROM conversations WHERE id = $1", ctx.deps.conversation_id
+        )
         if row is None or row["snapshot_at"] is None:
             return f"Today is {day}."
-        written = conn.execute(
-            "SELECT count(*) AS n FROM audit_log WHERE created_at > %s",
-            (row["snapshot_at"],),
-        ).fetchone()["n"]
+        written = (
+            await conn.fetchrow(
+                "SELECT count(*) AS n FROM audit_log WHERE created_at > $1",
+                row["snapshot_at"],
+            )
+        )["n"]
     if written:
         return (
             f"Today is {day}. Since your snapshot: {written} "

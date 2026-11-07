@@ -11,11 +11,9 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
 from fin_agent.agent.cards import cards_from_messages
 from fin_agent.agent.redaction import redact_text
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
@@ -37,23 +35,24 @@ def _load(data: Any) -> list[Any]:
     return ModelMessagesTypeAdapter.validate_python(data)
 
 
-def create_thread(
-    conn: psycopg.Connection, *, title: str | None = None, thread_id: str | None = None
+async def create_thread(
+    conn: Connection, *, title: str | None = None, thread_id: str | None = None
 ) -> dict[str, Any]:
     if thread_id:
-        row = conn.execute(
-            "INSERT INTO conversations (id, title) VALUES (%s, %s) RETURNING *",
-            (thread_id, title),
-        ).fetchone()
+        row = await conn.fetchrow(
+            "INSERT INTO conversations (id, title) VALUES ($1, $2) RETURNING *",
+            thread_id,
+            title,
+        )
     else:
-        row = conn.execute(
-            "INSERT INTO conversations (title) VALUES (%s) RETURNING *", (title,)
-        ).fetchone()
+        row = await conn.fetchrow(
+            "INSERT INTO conversations (title) VALUES ($1) RETURNING *", title
+        )
     return row
 
 
-def get_thread(conn: psycopg.Connection, thread_id: str) -> dict[str, Any] | None:
-    return conn.execute("SELECT * FROM conversations WHERE id = %s", (thread_id,)).fetchone()
+async def get_thread(conn: Connection, thread_id: str) -> dict[str, Any] | None:
+    return await conn.fetchrow("SELECT * FROM conversations WHERE id = $1", thread_id)
 
 
 def title_for(text: str) -> str:
@@ -61,8 +60,8 @@ def title_for(text: str) -> str:
     return cleaned[:80] or "New chat"
 
 
-def snapshot_payload(conn: psycopg.Connection) -> tuple[str, bool]:
-    payload = read_tools.get_financial_context(conn)
+async def snapshot_payload(conn: Connection) -> tuple[str, bool]:
+    payload = await read_tools.get_financial_context(conn)
     outside = bool(payload.pop("outside_text", False))
     return json.dumps(payload, ensure_ascii=False, default=str), outside
 
@@ -73,10 +72,10 @@ def _pin(content: str) -> Any:
     return pin(content)
 
 
-def build_snapshot_history(conn: psycopg.Connection) -> tuple[list[Any], bool]:
+async def build_snapshot_history(conn: Connection) -> tuple[list[Any], bool]:
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart
 
-    content, outside = snapshot_payload(conn)
+    content, outside = await snapshot_payload(conn)
     history = [
         ModelRequest(parts=[_pin(content)]),
         ModelResponse(parts=[TextPart(SNAPSHOT_REPLY)]),
@@ -84,28 +83,30 @@ def build_snapshot_history(conn: psycopg.Connection) -> tuple[list[Any], bool]:
     return history, outside
 
 
-def ensure_history(conn: psycopg.Connection, thread: dict[str, Any]) -> tuple[list[Any], bool]:
+async def ensure_history(conn: Connection, thread: dict[str, Any]) -> tuple[list[Any], bool]:
     """Load the thread's history, creating the pinned snapshot exchange when it has none."""
     history = _load(thread.get("model_history"))
     outside = False
     if not history:
-        history, outside = build_snapshot_history(conn)
-        row = conn.execute(
+        history, outside = await build_snapshot_history(conn)
+        row = await conn.fetchrow(
             """
             UPDATE conversations
-            SET model_history = %s, snapshot_at = now(), updated_at = now(),
-                outside_text_at = CASE WHEN %s THEN coalesce(outside_text_at, now())
+            SET model_history = $1, snapshot_at = now(), updated_at = now(),
+                outside_text_at = CASE WHEN $2 THEN coalesce(outside_text_at, now())
                                        ELSE outside_text_at END
-            WHERE id = %s RETURNING *
+            WHERE id = $3 RETURNING *
             """,
-            (Jsonb(_dump(history)), outside, thread["id"]),
-        ).fetchone()
+            _dump(history),
+            outside,
+            thread["id"],
+        )
         thread.update(row)
     return history, outside
 
 
-def refresh_snapshot(
-    conn: psycopg.Connection,
+async def refresh_snapshot(
+    conn: Connection,
     thread: dict[str, Any],
     history: list[Any],
     *,
@@ -125,13 +126,13 @@ def refresh_snapshot(
     age = (datetime.now(UTC) - snapshot_at).total_seconds()
     if age < cache_ttl_seconds:
         return history, False
-    changed = conn.execute(
-        "SELECT 1 FROM audit_log WHERE created_at > %s LIMIT 1", (snapshot_at,)
-    ).fetchone()
+    changed = await conn.fetchrow(
+        "SELECT 1 FROM audit_log WHERE created_at > $1 LIMIT 1", snapshot_at
+    )
     if changed is None:
         return history, False
 
-    content, outside = snapshot_payload(conn)
+    content, outside = await snapshot_payload(conn)
     from pydantic_ai.messages import ModelResponse, TextPart
 
     replacement = [
@@ -144,16 +145,18 @@ def refresh_snapshot(
         if rest and isinstance(rest[0], ModelResponse) and _is_snapshot_reply(rest[0]):
             rest = rest[1:]
     history = replacement + rest
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         UPDATE conversations
-        SET model_history = %s, snapshot_at = now(), updated_at = now(),
-            outside_text_at = CASE WHEN %s THEN coalesce(outside_text_at, now())
+        SET model_history = $1, snapshot_at = now(), updated_at = now(),
+            outside_text_at = CASE WHEN $2 THEN coalesce(outside_text_at, now())
                                    ELSE outside_text_at END
-        WHERE id = %s RETURNING *
+        WHERE id = $3 RETURNING *
         """,
-        (Jsonb(_dump(history)), outside, thread["id"]),
-    ).fetchone()
+        _dump(history),
+        outside,
+        thread["id"],
+    )
     thread.update(row)
     return history, outside
 
@@ -168,8 +171,8 @@ def _is_snapshot_reply(message: Any) -> bool:
     )
 
 
-def append_outside_entry(
-    conn: psycopg.Connection,
+async def append_outside_entry(
+    conn: Connection,
     thread: dict[str, Any],
     marked_text: str,
     *,
@@ -183,28 +186,29 @@ def append_outside_entry(
     """
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-    history, _ = ensure_history(conn, thread)
+    history, _ = await ensure_history(conn, thread)
     history = [
         *history,
         ModelRequest(parts=[UserPromptPart(content=marked_text)]),
         ModelResponse(parts=[TextPart(reply)]),
     ]
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         UPDATE conversations
-        SET model_history = %s,
+        SET model_history = $1,
             outside_text_at = coalesce(outside_text_at, now()),
             updated_at = now()
-        WHERE id = %s RETURNING *
+        WHERE id = $2 RETURNING *
         """,
-        (Jsonb(_dump(history)), thread["id"]),
-    ).fetchone()
+        _dump(history),
+        thread["id"],
+    )
     thread.update(row)
     return history
 
 
-def record_user_message(
-    conn: psycopg.Connection,
+async def record_user_message(
+    conn: Connection,
     *,
     thread_id: str,
     client_id: str,
@@ -249,28 +253,30 @@ def record_user_message(
                 "quote": {"text": quote["text"], "messageId": quote["messageId"]},
             }
         }
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-        VALUES (%s, %s, 'user', %s, %s)
+        VALUES ($1, $2, 'user', $3, $4)
         ON CONFLICT (client_id) DO NOTHING
         RETURNING *
         """,
-        (thread_id, client_id, Jsonb(content), safe),
-    ).fetchone()
-    return (
-        row or conn.execute("SELECT * FROM messages WHERE client_id = %s", (client_id,)).fetchone()
+        thread_id,
+        client_id,
+        content,
+        safe,
     )
+    return row or await conn.fetchrow("SELECT * FROM messages WHERE client_id = $1", client_id)
 
 
-def mark_run_started(conn: psycopg.Connection, thread_id: str, run_id: str) -> None:
-    conn.execute(
+async def mark_run_started(conn: Connection, thread_id: str, run_id: str) -> None:
+    await conn.execute(
         """
         UPDATE conversations
-        SET run_started_at = now(), active_run_id = %s, updated_at = now()
-        WHERE id = %s
+        SET run_started_at = now(), active_run_id = $1, updated_at = now()
+        WHERE id = $2
         """,
-        (run_id, thread_id),
+        run_id,
+        thread_id,
     )
 
 
@@ -283,8 +289,8 @@ def _body_text(message: dict[str, Any]) -> str:
     ).strip()
 
 
-def save_records(
-    conn: psycopg.Connection,
+async def save_records(
+    conn: Connection,
     *,
     thread_id: str,
     run_id: str,
@@ -312,10 +318,11 @@ def save_records(
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
     ui = ui_messages(turn_messages)
 
-    stored = conn.execute(
-        "SELECT content, body_text FROM messages WHERE client_id = %s AND conversation_id = %s",
-        (ui_message_id, thread_id),
-    ).fetchone()
+    stored = await conn.fetchrow(
+        "SELECT content, body_text FROM messages WHERE client_id = $1 AND conversation_id = $2",
+        ui_message_id,
+        thread_id,
+    )
     stored_content = (stored["content"] if stored is not None else None) or {}
     attachments = [
         part
@@ -350,7 +357,7 @@ def save_records(
     )
     if last_assistant is None and (save_note or extra_cards or ending in {"failed", "cancelled"}):
         last_assistant = {
-            "id": new_id(conn, "msg"),
+            "id": await new_id(conn, "msg"),
             "role": "assistant",
             "parts": [],
         }
@@ -403,65 +410,65 @@ def save_records(
     for message in ui:
         client_id = str(message.get("id") or "")
         if not client_id:
-            client_id = new_id(conn, "msg")
+            client_id = await new_id(conn, "msg")
             message["id"] = client_id
         role = str(message.get("role") or "assistant")
         body = _body_text(message)
         if role == "user":
-            conn.execute(
+            await conn.execute(
                 """
-                UPDATE messages SET content = %s, body_text = %s
-                WHERE client_id = %s AND conversation_id = %s
+                UPDATE messages SET content = $1, body_text = $2
+                WHERE client_id = $3 AND conversation_id = $4
                 """,
-                (Jsonb(message), body, client_id, thread_id),
+                message,
+                body,
+                client_id,
+                thread_id,
             )
             continue
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO messages
                 (conversation_id, client_id, role, content, body_text, run_id, trace_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (client_id) DO NOTHING
             RETURNING id
             """,
-            (
-                thread_id,
-                client_id,
-                role,
-                Jsonb(message),
-                body,
-                run_id,
-                trace_id if message is last_assistant else None,
-            ),
-        ).fetchone()
+            thread_id,
+            client_id,
+            role,
+            message,
+            body,
+            run_id,
+            trace_id if message is last_assistant else None,
+        )
         if row:
             inserted.append(str(row["id"]))
 
-    history_json = Jsonb(_dump(history_json_messages))
-    conn.execute(
+    await conn.execute(
         """
         UPDATE conversations
-        SET model_history = %s,
+        SET model_history = $1,
             run_started_at = NULL,
             active_run_id = NULL,
             updated_at = now(),
-            title = coalesce(title, %s)
-        WHERE id = %s
+            title = coalesce(title, $2)
+        WHERE id = $3
         """,
-        (history_json, title, thread_id),
+        _dump(history_json_messages),
+        title,
+        thread_id,
     )
     return {"messages": inserted, "ui": ui}
 
 
-def recover_crashed_runs(conn: psycopg.Connection) -> list[dict[str, Any]]:
+async def recover_crashed_runs(conn: Connection) -> list[dict[str, Any]]:
     """At boot, a thread still marked running crashed; tell the user whether a write landed."""
-    rows = list(
-        conn.execute(
-            """
-            SELECT id, run_started_at FROM conversations
-            WHERE run_started_at IS NOT NULL OR active_run_id IS NOT NULL
-            """
-        ).fetchall()
+    rows = await conn.fetch(
+        """
+        SELECT id, run_started_at FROM conversations
+        WHERE run_started_at IS NOT NULL OR active_run_id IS NOT NULL
+        """
     )
     recovered: list[dict[str, Any]] = []
     for row in rows:
@@ -469,35 +476,40 @@ def recover_crashed_runs(conn: psycopg.Connection) -> list[dict[str, Any]]:
         writes = 0
         if started is not None:
             writes = int(
-                conn.execute(
-                    "SELECT count(*) AS n FROM audit_log WHERE created_at >= %s", (started,)
-                ).fetchone()["n"]
+                (
+                    await conn.fetchrow(
+                        "SELECT count(*) AS n FROM audit_log WHERE created_at >= $1", started
+                    )
+                )["n"]
             )
         note = "The last turn was interrupted by a restart. " + (
             f"{writes} write(s) landed and are in the ledger."
             if writes
             else "No write from that turn landed."
         )
-        client_id = new_id(conn, "msg")
+        client_id = await new_id(conn, "msg")
         content = {
             "id": client_id,
             "role": "assistant",
             "parts": [{"type": "data-ending", "data": {"note": note}}],
         }
-        conn.execute(
+        await conn.execute(
             """
             INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-            VALUES (%s, %s, 'assistant', %s, %s)
+            VALUES ($1, $2, 'assistant', $3, $4)
             """,
-            (row["id"], client_id, Jsonb(content), note),
+            row["id"],
+            client_id,
+            content,
+            note,
         )
-        conn.execute(
+        await conn.execute(
             """
             UPDATE conversations
             SET run_started_at = NULL, active_run_id = NULL, updated_at = now()
-            WHERE id = %s
+            WHERE id = $1
             """,
-            (row["id"],),
+            row["id"],
         )
         recovered.append({"thread_id": row["id"], "writes": writes})
     return recovered

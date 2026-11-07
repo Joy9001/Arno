@@ -14,9 +14,8 @@ import io
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-
 from fin_agent.agent.parse_run import ParseResult
+from fin_agent.db.conn import Connection
 from fin_agent.importers.commit import commit_import
 from fin_agent.importers.periods import ledger_opening
 from fin_agent.importers.pipeline import _run_import, create_import
@@ -121,7 +120,7 @@ def synthetic_statement_csv(
 
 
 async def seed_committed_statement(
-    conn: psycopg.Connection,
+    conn: Connection,
     *,
     account_id: str,
     narration: str,
@@ -137,9 +136,7 @@ async def seed_committed_statement(
     The account's ledger opening is used for the printed opening, so the balance check passes
     without special-casing the fixture. Returns the import, line, movement, and payee IDs.
     """
-    account = conn.execute(
-        "SELECT * FROM accounts WHERE id = %s AND active", (account_id,)
-    ).fetchone()
+    account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1 AND active", account_id)
     if account is None:
         raise ValueError(f"No active account {account_id}")
 
@@ -149,7 +146,7 @@ async def seed_committed_statement(
     if not period_start <= day <= period_end:
         raise ValueError("The statement day must fall inside its period")
 
-    opening = ledger_opening(conn, account_id, period_start)
+    opening = await ledger_opening(conn, account_id, period_start)
     opening_paise = int(opening["paise"]) if opening else 0
     payload = synthetic_statement_csv(
         narration=narration,
@@ -161,21 +158,18 @@ async def seed_committed_statement(
         debit=debit,
     )
 
-    attachment_id = new_id(conn, "att")
-    conn.execute(
+    attachment_id = await new_id(conn, "att")
+    await conn.execute(
         """
         INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, 'statement', 'synthetic-statement.csv', 'text/csv', %s, %s, %s)
+        VALUES ($1, 'statement', 'synthetic-statement.csv', 'text/csv', $2, $3, $4)
         """,
-        (
-            attachment_id,
-            len(payload),
-            hashlib.sha256(payload).hexdigest(),
-            payload,
-        ),
+        attachment_id,
+        len(payload),
+        hashlib.sha256(payload).hexdigest(),
+        payload,
     )
-    conn.commit()
-    import_row = create_import(conn, attachment_id=attachment_id, account_id=account_id)
+    import_row = await create_import(conn, attachment_id=attachment_id, account_id=account_id)
 
     async def _parser(doc: Any, context: Any, *, account_name: str | None = None) -> ParseResult:
         del doc, context, account_name
@@ -187,29 +181,28 @@ async def seed_committed_statement(
 
     await _run_import(import_row["id"], parser_runner=_parser)
 
-    current = conn.execute("SELECT * FROM imports WHERE id = %s", (import_row["id"],)).fetchone()
+    current = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_row["id"])
     if current is None or current["status"] != "review":
         reason = current["reason"] if current is not None else "the import disappeared"
         raise RuntimeError(f"Synthetic import did not reach review: {reason}")
 
-    committed = commit_import(conn, import_row["id"], categorize=categorize)
-    line = conn.execute(
-        "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY id LIMIT 1",
-        (import_row["id"],),
-    ).fetchone()
+    committed = await commit_import(conn, import_row["id"], categorize=categorize)
+    line = await conn.fetchrow(
+        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY id LIMIT 1",
+        import_row["id"],
+    )
     if line is None:
         raise RuntimeError("The synthetic import has no statement line")
-    payee = conn.execute(
+    payee = await conn.fetchrow(
         """
         SELECT p.*
         FROM transfer_labels tl
         JOIN payees p ON p.id = tl.payee_id
-        WHERE tl.movement_id = %s
+        WHERE tl.movement_id = $1
         LIMIT 1
         """,
-        (line["movement_id"],),
-    ).fetchone()
-    conn.commit()
+        line["movement_id"],
+    )
     return {
         "import_id": str(import_row["id"]),
         "line": dict(line),
@@ -220,7 +213,7 @@ async def seed_committed_statement(
 
 
 async def seed_injection_statement(
-    conn: psycopg.Connection,
+    conn: Connection,
     *,
     account_id: str,
     narration: str,

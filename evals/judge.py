@@ -30,11 +30,11 @@ Do not grade tone, length, or whether the user liked it. Judge only those two po
 class LLMJudge:
     def __init__(self, model: Any, *, name: str) -> None:
         self.name = name
-        self.agent = Agent(model, output_type=str, instructions=JUDGE_INSTRUCTIONS, name="eval-judge")
+        self.agent = Agent(
+            model, output_type=str, instructions=JUDGE_INSTRUCTIONS, name="eval-judge"
+        )
 
-    async def score(
-        self, question: str, reply: str, rubric: str
-    ) -> tuple[bool, bool, str]:
+    async def score(self, question: str, reply: str, rubric: str) -> tuple[bool, bool, str]:
         prompt = (
             f"User question:\n{question}\n\n"
             f"Rubric:\n{rubric}\n\n"
@@ -96,9 +96,7 @@ class FunctionJudge:
         self.refused_pick = refused_pick
         self.gave_facts = gave_facts
 
-    async def score(
-        self, question: str, reply: str, rubric: str
-    ) -> tuple[bool, bool, str]:
+    async def score(self, question: str, reply: str, rubric: str) -> tuple[bool, bool, str]:
         return self.refused_pick, self.gave_facts, "function judge"
 
 

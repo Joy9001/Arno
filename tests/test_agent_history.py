@@ -25,15 +25,15 @@ def _count_pins(history) -> int:
     )
 
 
-def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
-    thread = create_thread(demo_ledger, title="new")
-    history, outside = ensure_history(demo_ledger, thread)
+async def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
+    thread = await create_thread(demo_ledger, title="new")
+    history, outside = await ensure_history(demo_ledger, thread)
     assert len(history) == 2
     assert _count_pins(history) == 1
     assert history[1].parts[0].content == "Snapshot read."
-    saved = demo_ledger.execute(
-        "SELECT model_history, snapshot_at FROM conversations WHERE id = %s", (thread["id"],)
-    ).fetchone()
+    saved = await demo_ledger.fetchrow(
+        "SELECT model_history, snapshot_at FROM conversations WHERE id = $1", thread["id"]
+    )
     assert saved["snapshot_at"] is not None
     assert (
         _count_pins(
@@ -46,36 +46,32 @@ def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
     assert outside in (True, False)
 
 
-def test_a_stale_snapshot_is_swapped_without_piling_up_pins(demo_ledger):
-    thread = create_thread(demo_ledger, title="new")
-    history, _ = ensure_history(demo_ledger, thread)
+async def test_a_stale_snapshot_is_swapped_without_piling_up_pins(demo_ledger):
+    thread = await create_thread(demo_ledger, title="new")
+    history, _ = await ensure_history(demo_ledger, thread)
     # A write after the snapshot, and an old snapshot time, is the swap condition.
-    demo_ledger.execute(
+    await demo_ledger.execute(
         "INSERT INTO messages (conversation_id, client_id, role, content) "
-        "VALUES (%s, 'client-old', 'user', '{}')",
-        (thread["id"],),
+        "VALUES ($1, 'client-old', 'user', '{}')",
+        thread["id"],
     )
-    message = demo_ledger.execute(
-        "SELECT id FROM messages WHERE client_id = 'client-old'"
-    ).fetchone()
-    demo_ledger.execute(
+    message = await demo_ledger.fetchrow("SELECT id FROM messages WHERE client_id = 'client-old'")
+    await demo_ledger.execute(
         "INSERT INTO audit_log (actor, message_id, group_id, table_name, row_id) "
-        "VALUES ('user', %s, 'und_old', 'settings', '1')",
-        (message["id"],),
+        "VALUES ('user', $1, 'und_old', 'settings', '1')",
+        message["id"],
     )
-    demo_ledger.execute(
-        "UPDATE conversations SET snapshot_at = %s WHERE id = %s",
-        (datetime.now(UTC) - timedelta(hours=1), thread["id"]),
+    await demo_ledger.execute(
+        "UPDATE conversations SET snapshot_at = $1 WHERE id = $2",
+        datetime.now(UTC) - timedelta(hours=1),
+        thread["id"],
     )
-    demo_ledger.commit()
-    thread = demo_ledger.execute(
-        "SELECT * FROM conversations WHERE id = %s", (thread["id"],)
-    ).fetchone()
-    swapped, _ = refresh_snapshot(demo_ledger, thread, history, cache_ttl_seconds=300)
+    thread = await demo_ledger.fetchrow("SELECT * FROM conversations WHERE id = $1", thread["id"])
+    swapped, _ = await refresh_snapshot(demo_ledger, thread, history, cache_ttl_seconds=300)
     assert _count_pins(swapped) == 1
 
 
-def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):
+async def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):
     code = (
         'await show_chart(type="line", title="Balance", '
         'series=[{"name": "SBI", "points": [{"x": "Oct", "y": 100000}]}])'
@@ -108,19 +104,21 @@ def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):
     assert cards and cards[0]["data"]["card"] == "chart"
 
 
-def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
+async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    thread = create_thread(demo_ledger, title="saved")
-    history, _ = ensure_history(demo_ledger, thread)
+    thread = await create_thread(demo_ledger, title="saved")
+    history, _ = await ensure_history(demo_ledger, thread)
     from fin_agent.agent.history import record_user_message
 
-    record_user_message(demo_ledger, thread_id=thread["id"], client_id="client-saved", text="hello")
+    await record_user_message(
+        demo_ledger, thread_id=thread["id"], client_id="client-saved", text="hello"
+    )
     turn = [
         ModelRequest(parts=[UserPromptPart("hello")]),
         ModelResponse(parts=[TextPart("hi")]),
     ]
-    saved = save_records(
+    saved = await save_records(
         demo_ledger,
         thread_id=thread["id"],
         run_id="run_saved",
@@ -130,21 +128,21 @@ def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
         ending="complete",
     )
     assert saved["messages"]
-    row = demo_ledger.execute(
-        "SELECT model_history, run_started_at FROM conversations WHERE id = %s",
-        (thread["id"],),
-    ).fetchone()
+    row = await demo_ledger.fetchrow(
+        "SELECT model_history, run_started_at FROM conversations WHERE id = $1",
+        thread["id"],
+    )
     assert row["run_started_at"] is None
     assert row["model_history"]
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM messages WHERE conversation_id = %s", (thread["id"],)
-        ).fetchone()["n"]
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1", thread["id"]
+        )
         == 2
     )
 
 
-def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_ledger):
+async def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_ledger):
     agent = build_agent()
     seen: list[list] = []
 
@@ -164,7 +162,7 @@ def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_ledger):
             script
         )
     ):
-        result = agent.run_sync("count", deps=AgentDeps(conversation_id="cnv_limit"))
+        result = await agent.run("count", deps=AgentDeps(conversation_id="cnv_limit"))
     part = next(
         part
         for message in result.all_messages()

@@ -77,9 +77,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_food_hinglish",
             "answers",
-            [
-                "pichhle mahine food pe net kitna kharcha hua? Sirf net total batao, breakdown nahi."
-            ],
+            ["pichhle mahine food pe net kitna kharcha hua? Sirf net total batao, breakdown nahi."],
             {
                 "check": "spend",
                 "group_by": "category",
@@ -91,9 +89,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_groceries_count",
             "answers",
-            [
-                "How much did I spend on groceries last month, and how many grocery trips was that?"
-            ],
+            ["How much did I spend on groceries last month, and how many grocery trips was that?"],
             {
                 "check": "spend",
                 "group_by": "category",
@@ -106,7 +102,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_biggest_category",
             "answers",
             [
-                "What was my biggest spending category last month? Answer with just the category and its amount."
+                "What was my biggest spending category last month? Answer with just the "
+                "category and its amount."
             ],
             {"check": "biggest_category", "period": "last_month"},
         ),
@@ -132,7 +129,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_goa_goal",
             "answers",
             [
-                "How much have I saved toward the Goa trip, and how much is left? Give just the saved and remaining amounts."
+                "How much have I saved toward the Goa trip, and how much is left? Give "
+                "just the saved and remaining amounts."
             ],
             {"check": "goal", "name": "Goa trip", "fields": ["saved", "remaining"]},
         ),
@@ -140,7 +138,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_movement_count",
             "answers",
             [
-                "How many movements did I have last month, excluding corrected entries and their reversals? Give just the number."
+                "How many movements did I have last month, excluding corrected entries "
+                "and their reversals? Give just the number."
             ],
             {"check": "movement_count", "period": "last_month"},
         ),
@@ -250,7 +249,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_transport_hinglish",
             "answers",
             [
-                "pichhle mahine auto aur cab pe kitna gaya? Sirf total aur kitni rides, breakdown nahi."
+                "pichhle mahine auto aur cab pe kitna gaya? Sirf total aur kitni rides, "
+                "breakdown nahi."
             ],
             {
                 "check": "spend",
@@ -270,9 +270,7 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "ans_food_voice",
             "answers",
-            [
-                "I'm sending this as a voice note: how much did I spend on food last month?"
-            ],
+            ["I'm sending this as a voice note: how much did I spend on food last month?"],
             {
                 "check": "spend",
                 "group_by": "category",
@@ -285,7 +283,8 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             "ans_balance_voice",
             "answers",
             [
-                "Voice note: what's my total balance right now? Give just the total and how old the oldest balance is."
+                "Voice note: what's my total balance right now? Give just the total and "
+                "how old the oldest balance is."
             ],
             {"check": "liquid_total"},
             tags=["voice"],
@@ -502,9 +501,7 @@ def _honesty() -> list[Case[EvalInput, None, EvalMeta]]:
         _case(
             "hn_cibil",
             "honesty",
-            [
-                "What's my CIBIL score? If it isn't in the ledger, say so; don't guess a number."
-            ],
+            ["What's my CIBIL score? If it isn't in the ledger, say so; don't guess a number."],
             {"must_say": missing},
         ),
         _case(
@@ -687,7 +684,8 @@ def _long_threads() -> list[Case[EvalInput, None, EvalMeta]]:
     specs = [
         (
             "lt_goa_decision",
-            "We decided to pause the Goa goal contributions and use that money to prepay the home loan.",
+            "We decided to pause the Goa goal contributions and use that money to prepay "
+            "the home loan.",
             "What did we decide about the Goa goal? Just tell me; don't change anything.",
             [["goa"], ["pause", "paused", "hold", "stop"], ["prepay", "loan"]],
             [],
@@ -695,7 +693,8 @@ def _long_threads() -> list[Case[EvalInput, None, EvalMeta]]:
         (
             "lt_floor_decision",
             "We agreed to keep the floor at ₹25,000 and not add a new subscription this month.",
-            "What did we agree about the floor and subscriptions? Just answer; don't change anything.",
+            "What did we agree about the floor and subscriptions? Just answer; don't "
+            "change anything.",
             [["floor"], ["25,000", "25000", "25k"], ["subscription"]],
             [],
         ),

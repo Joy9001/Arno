@@ -5,6 +5,7 @@ Admin commands never go over HTTP. Anyone with a shell on the host already has t
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sys
@@ -72,18 +73,20 @@ def _echo_enrollment(text: str) -> None:
         typer.echo(text)
 
 
+async def _migrate(settings) -> list[str]:
+    async with connect(settings.database_url) as conn:
+        await dump_before_migrating(conn, settings)
+        applied = await run_migrations(conn)
+        await set_agent_ro_password(conn, settings.agent_ro_password)
+        await set_backup_password(conn, settings.backup_password)
+    return applied
+
+
 @app.command()
 def migrate() -> None:
     """Apply any pending SQL migrations."""
     settings = _settings()
-    conn = connect(settings.database_url)
-    try:
-        dump_before_migrating(conn, settings)
-        applied = run_migrations(conn)
-        set_agent_ro_password(conn, settings.agent_ro_password)
-        set_backup_password(conn, settings.backup_password)
-    finally:
-        conn.close()
+    applied = asyncio.run(_migrate(settings))
     if applied:
         typer.echo(f"applied migrations {', '.join(str(v) for v in applied)}")
     else:
@@ -115,18 +118,21 @@ def setup() -> None:
     setup_token()
 
 
+async def _setup_token(settings) -> Any:
+    async with connect(settings.database_url) as conn:
+        if not await setup_required(conn):
+            return None
+        return await issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+
+
 @app.command("setup-token")
 def setup_token() -> None:
     """Issue a fresh first-run enrollment link (rotates the previous one)."""
     settings = _settings()
-    conn = connect(settings.database_url)
-    try:
-        if not setup_required(conn):
-            typer.echo("Setup is complete; use Settings → Passkeys to add a device.")
-            raise typer.Exit(code=0)
-        issued = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-    finally:
-        conn.close()
+    issued = asyncio.run(_setup_token(settings))
+    if issued is None:
+        typer.echo("Setup is complete; use Settings → Passkeys to add a device.")
+        raise typer.Exit(code=0)
     _echo_enrollment(
         enrollment_message(
             settings.rp_origin,
@@ -136,22 +142,23 @@ def setup_token() -> None:
     )
 
 
-@passkeys_app.command("list")
-def passkeys_list() -> None:
-    """List registered passkeys."""
-    settings = _settings()
-    conn = connect(settings.database_url)
-    try:
-        rows = conn.execute(
+async def _passkeys_list(settings) -> list[dict[str, Any]]:
+    async with connect(settings.database_url) as conn:
+        return await conn.fetch(
             """
             SELECT c.id, c.name, c.created_at, c.last_used_at, u.display_name
             FROM webauthn_credentials c
             JOIN users u ON u.id = c.user_id
             ORDER BY c.created_at
             """
-        ).fetchall()
-    finally:
-        conn.close()
+        )
+
+
+@passkeys_app.command("list")
+def passkeys_list() -> None:
+    """List registered passkeys."""
+    settings = _settings()
+    rows = asyncio.run(_passkeys_list(settings))
     if not rows:
         typer.echo("No passkeys are registered.")
         return
@@ -160,22 +167,25 @@ def passkeys_list() -> None:
         typer.echo(f"{row['id']}  {row['name']}  created {row['created_at']}  last used {used}")
 
 
+async def _passkeys_reset(settings) -> tuple[int, int, Any]:
+    async with connect(settings.database_url) as conn:
+        async with conn.transaction():
+            status_str = await conn.execute("DELETE FROM webauthn_credentials")
+            deleted = int(status_str.split()[-1])
+            await conn.execute("DELETE FROM webauthn_challenges")
+        revoked = await revoke_all_sessions(conn)
+        if await setup_required(conn):
+            issued = await issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
+        else:
+            issued = None
+    return deleted, revoked, issued
+
+
 @passkeys_app.command("reset")
 def passkeys_reset() -> None:
     """Delete every passkey and session, then reopen setup with a fresh enrollment link."""
     settings = _settings()
-    conn = connect(settings.database_url)
-    try:
-        with conn.transaction():
-            deleted = conn.execute("DELETE FROM webauthn_credentials").rowcount
-            conn.execute("DELETE FROM webauthn_challenges")
-        revoked = revoke_all_sessions(conn)
-        if setup_required(conn):
-            issued = issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-        else:
-            issued = None
-    finally:
-        conn.close()
+    deleted, revoked, issued = asyncio.run(_passkeys_reset(settings))
 
     typer.echo(f"Deleted {deleted} passkey(s) and revoked {revoked} session(s).")
     if issued:
@@ -200,28 +210,25 @@ def chat(
     settings = _settings()
     configure_logging()
     bootstrap_observability()
-    _run_chat_command(settings, thread_id, message)
+    asyncio.run(_run_chat_command(settings, thread_id, message))
 
 
-def _run_chat_command(settings, thread_id: str | None, message: str | None) -> None:
+async def _run_chat_command(settings, thread_id: str | None, message: str | None) -> None:
     from fin_agent.agent.spend import SharedSpendStore
 
     spend_store = SharedSpendStore()
     try:
         agent = build_agent(spend_store=spend_store)
-        conn = connect(settings.database_url)
-        try:
-            thread = get_thread(conn, thread_id) if thread_id else None
+        async with connect(settings.database_url) as conn:
+            thread = await get_thread(conn, thread_id) if thread_id else None
             if thread is None:
-                thread = create_thread(conn, title=title_for(message or "Terminal chat"))
-                conn.commit()
+                thread = await create_thread(conn, title=title_for(message or "Terminal chat"))
             thread_id = str(thread["id"])
-            history, _outside = ensure_history(conn, thread)
-            history, _swap = refresh_snapshot(conn, thread, history)
-            conn.commit()
+            history, _outside = await ensure_history(conn, thread)
+            history, _swap = await refresh_snapshot(conn, thread, history)
 
             if message is not None:
-                _run_cli_turn(conn, agent, thread, history, message)
+                await _run_cli_turn(conn, agent, thread, history, message)
                 return
 
             typer.echo(f"Fin-Agent chat ({thread_id}). Ctrl-D to leave.")
@@ -233,24 +240,21 @@ def _run_chat_command(settings, thread_id: str | None, message: str | None) -> N
                     return
                 if not text.strip():
                     continue
-                history = _run_cli_turn(conn, agent, thread, history, text)
-        finally:
-            conn.close()
+                history = await _run_cli_turn(conn, agent, thread, history, text)
     finally:
         spend_store.close()
 
 
-def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
+async def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
     from fin_agent.agent.deps import AgentDeps
     from fin_agent.agent.number_check import check_messages
 
     message_id = f"cli_{uuid.uuid4().hex}"
     run_id = f"run_{uuid.uuid4().hex}"
-    user_row = record_user_message(
+    user_row = await record_user_message(
         conn, thread_id=str(thread["id"]), client_id=message_id, text=text
     )
-    mark_run_started(conn, str(thread["id"]), run_id)
-    conn.commit()
+    await mark_run_started(conn, str(thread["id"]), run_id)
     deps = AgentDeps(
         conversation_id=str(thread["id"]),
         message_id=str(user_row["id"]),
@@ -258,12 +262,12 @@ def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
         flagged=thread.get("outside_text_at") is not None,
         user_texts=(text,),
     )
-    result = agent.run_sync(text, message_history=history, deps=deps)
+    result = await agent.run(text, message_history=history, deps=deps)
     turn_messages = result.all_messages()[len(history) :]
     reply = str(result.output)
     flags = check_messages(reply, turn_messages, kinds=("money", "percent"))
-    with conn.transaction():
-        save_records(
+    async with conn.transaction():
+        await save_records(
             conn,
             thread_id=str(thread["id"]),
             run_id=run_id,
@@ -388,6 +392,13 @@ def eval_command(
         raise typer.Exit(code=1)
 
 
+async def _run_backtest(settings, *, source: str, runs: int) -> Any:
+    from fin_agent.engine.backtest import backtest as run_backtest
+
+    async with connect(settings.database_url) as conn:
+        return await run_backtest(conn, source=source, runs=runs)
+
+
 @app.command("backtest")
 def backtest_command(
     source: str = typer.Option("auto", help="auto, db, or synthetic."),
@@ -397,18 +408,14 @@ def backtest_command(
     ),
 ) -> None:
     """Run project() as of each month's first day and compare with the balance 30 days later."""
-    from fin_agent.engine.backtest import backtest as run_backtest
     from fin_agent.engine.backtest import format_report, publish_report
 
     settings = _settings()
-    conn = connect(settings.database_url)
     try:
-        result = run_backtest(conn, source=source, runs=runs)
+        result = asyncio.run(_run_backtest(settings, source=source, runs=runs))
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
-    finally:
-        conn.close()
     typer.echo(format_report(result))
     if publish:
         publish_report(result, REPO_ROOT / "README.md")
@@ -437,6 +444,18 @@ def hackerrank_command(
         raise typer.Exit(code=3)
 
 
+async def _export(settings, *, format: str) -> Any:
+    async with connect(settings.database_url) as conn:
+        if format == "json":
+            payload = await ledger_export.export_json(conn)
+            return __import__("json").dumps(payload, indent=2, ensure_ascii=False, default=str)
+        if format == "csv":
+            return await ledger_export.export_csv_zip(conn)
+        if format == "sql":
+            return ledger_export.export_pg_dump(settings.database_url)
+        raise typer.BadParameter("format is json, csv, or sql")
+
+
 @app.command("export")
 def export_command(
     format: str = typer.Option("json", help="json, csv, or sql."),
@@ -446,19 +465,7 @@ def export_command(
 ) -> None:
     """Export the whole ledger as JSON, a CSV zip, or a pg_dump."""
     settings = _settings()
-    conn = connect(settings.database_url)
-    try:
-        if format == "json":
-            payload = ledger_export.export_json(conn)
-            data = __import__("json").dumps(payload, indent=2, ensure_ascii=False, default=str)
-        elif format == "csv":
-            data = ledger_export.export_csv_zip(conn)
-        elif format == "sql":
-            data = ledger_export.export_pg_dump(settings.database_url)
-        else:
-            raise typer.BadParameter("format is json, csv, or sql")
-    finally:
-        conn.close()
+    data = asyncio.run(_export(settings, format=format))
     if out is None:
         if isinstance(data, bytes):
             sys.stdout.buffer.write(data)
@@ -467,6 +474,34 @@ def export_command(
     else:
         out.write_bytes(data) if isinstance(data, bytes) else out.write_text(data, encoding="utf-8")
         typer.echo(f"wrote {out}")
+
+
+async def _restore(
+    *,
+    from_dir: Path | None,
+    repository: str | None,
+    target_dsn: str,
+    snapshot: str,
+    force: bool,
+    require_manifest: bool,
+) -> Any:
+    from fin_agent.backup_restore import restore_from_directory, restore_from_restic
+
+    if from_dir is not None:
+        return await restore_from_directory(
+            from_dir,
+            target_dsn,
+            force=force,
+            require_manifest=require_manifest,
+        )
+    return await restore_from_restic(
+        repository=repository,
+        password=os.environ.get("RESTIC_PASSWORD", ""),
+        target_dsn=target_dsn,
+        snapshot=snapshot,
+        force=force,
+        require_manifest=require_manifest,
+    )
 
 
 @app.command("restore")
@@ -500,33 +535,27 @@ def restore_command(
     With `--repository`, restic is used directly. With `--from-dir`, point at files extracted by
     `restic restore`. The restic password always comes from RESTIC_PASSWORD.
     """
-    from fin_agent.backup_restore import RestoreError, restore_from_directory, restore_from_restic
+    from fin_agent.backup_restore import RestoreError
 
     settings = _settings()
     target_dsn = target or settings.database_url
+    if from_dir is None and not repository:
+        typer.echo(
+            "error: pass --repository, set RESTIC_REPOSITORY, or use --from-dir",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     try:
-        if from_dir is not None:
-            report = restore_from_directory(
-                from_dir,
-                target_dsn,
-                force=force,
-                require_manifest=not allow_no_manifest,
-            )
-        else:
-            if not repository:
-                typer.echo(
-                    "error: pass --repository, set RESTIC_REPOSITORY, or use --from-dir",
-                    err=True,
-                )
-                raise typer.Exit(code=2)
-            report = restore_from_restic(
+        report = asyncio.run(
+            _restore(
+                from_dir=from_dir,
                 repository=repository,
-                password=os.environ.get("RESTIC_PASSWORD", ""),
                 target_dsn=target_dsn,
                 snapshot=snapshot,
                 force=force,
                 require_manifest=not allow_no_manifest,
             )
+        )
     except RestoreError as exc:
         typer.echo(f"restore failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -598,6 +627,27 @@ def import_spike(
         typer.echo(f"wrote {target}")
 
 
+async def _demo_seed(
+    settings,
+    *,
+    anchor: date | None,
+    reset: bool,
+    statement_coverage: bool,
+    coverage_gap: bool,
+) -> dict[str, Any]:
+    async with connect(settings.database_url) as conn:
+        await run_migrations(conn)
+        await set_agent_ro_password(conn, settings.agent_ro_password)
+        await set_backup_password(conn, settings.backup_password)
+        return await seed_demo(
+            conn,
+            today=anchor,
+            reset=reset,
+            statement_coverage=statement_coverage,
+            coverage_gap=coverage_gap,
+        )
+
+
 @demo_app.command("seed")
 def demo_seed(
     today: str | None = typer.Option(None, help="Anchor date (YYYY-MM-DD). Defaults to today."),
@@ -625,20 +675,15 @@ def demo_seed(
         and not typer.confirm("This clears the L1 tables in the current database. Continue?")
     ):
         raise typer.Exit(code=1)
-    conn = connect(settings.database_url)
-    try:
-        run_migrations(conn)
-        set_agent_ro_password(conn, settings.agent_ro_password)
-        set_backup_password(conn, settings.backup_password)
-        summary = seed_demo(
-            conn,
-            today=anchor,
+    summary = asyncio.run(
+        _demo_seed(
+            settings,
+            anchor=anchor,
             reset=reset,
             statement_coverage=statement_coverage,
             coverage_gap=coverage_gap,
         )
-    finally:
-        conn.close()
+    )
     typer.echo(
         "Seeded demo persona: "
         f"{summary['accounts']} accounts, {summary['categories']} categories, "
@@ -646,6 +691,18 @@ def demo_seed(
         f"{summary['movements']} movements, {summary['imports']} imports, "
         f"{summary['people']} people (today={summary['today']})."
     )
+
+
+async def _demo_template(
+    settings, *, target: str, anchor: date | None, coverage_gap: bool
+) -> tuple[str, dict[str, Any]]:
+    async with connect(settings.database_url) as conn:
+        await run_migrations(conn)
+        summary = await seed_demo(conn, today=anchor, reset=True, coverage_gap=coverage_gap)
+        row = await conn.fetchrow("SELECT current_database() AS name")
+        source = str(row["name"]) if row else ""
+    await clone_database(settings.database_url, source=source, target=target)
+    return source, summary
 
 
 @demo_app.command("template")
@@ -664,14 +721,9 @@ def demo_template(
     settings = _settings()
     if not force and not typer.confirm("This reseeds and clones the current database. Continue?"):
         raise typer.Exit(code=1)
-    conn = connect(settings.database_url)
-    try:
-        run_migrations(conn)
-        summary = seed_demo(conn, today=anchor, reset=True, coverage_gap=coverage_gap)
-        source = conn.info.dbname
-    finally:
-        conn.close()
-    clone_database(settings.database_url, source=source, target=target)
+    source, summary = asyncio.run(
+        _demo_template(settings, target=target, anchor=anchor, coverage_gap=coverage_gap)
+    )
     typer.echo(
         f"Seeded {source} ({summary['movements']} movements, {summary['imports']} imports) "
         f"and created template {target}. Clone a trial with "

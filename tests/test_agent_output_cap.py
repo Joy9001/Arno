@@ -34,7 +34,11 @@ def _turn() -> turns.ChatTurn:
 
 async def test_the_output_cap_note_is_saved_and_streamed_once(monkeypatch):
     saved: dict = {}
-    monkeypatch.setattr(turns, "save_records", lambda conn, **values: saved.update(values))
+
+    async def fake_save(conn, **values):
+        saved.update(values)
+
+    monkeypatch.setattr(turns, "save_records", fake_save)
     manager = _manager()
     turn = _turn()
 
@@ -64,7 +68,10 @@ async def test_the_output_cap_note_is_saved_and_streamed_once(monkeypatch):
 
 
 async def test_a_complete_reply_without_a_note_does_not_emit_one(monkeypatch):
-    monkeypatch.setattr(turns, "save_records", lambda conn, **values: None)
+    async def fake_save(conn, **values):
+        del conn, values
+
+    monkeypatch.setattr(turns, "save_records", fake_save)
     manager = _manager()
     turn = _turn()
 

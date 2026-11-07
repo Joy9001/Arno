@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import closing
 from decimal import Decimal
 from typing import Any
 
@@ -26,10 +25,10 @@ Scheduled question
 """
 
 
-def _categories() -> list[str]:
+async def _categories() -> list[str]:
     try:
-        with closing(connect()) as conn:
-            rows = conn.execute("SELECT name FROM categories WHERE active ORDER BY name").fetchall()
+        async with connect() as conn:
+            rows = await conn.fetch("SELECT name FROM categories WHERE active ORDER BY name")
         categories = [str(row["name"]) for row in rows]
     except Exception:  # noqa: BLE001 - a missing database must not lose the prompt
         categories = []
@@ -49,8 +48,8 @@ def _categories() -> list[str]:
     return categories
 
 
-def _instructions(ctx: Any, *, read_only: bool = False) -> str:
-    text = render_instructions(_categories())
+async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
+    text = render_instructions(await _categories())
     imports = getattr(getattr(ctx, "deps", None), "statement_imports", ())
     if imports:
         text += """
@@ -94,11 +93,15 @@ def build_agent(
         toolsets = [build_read_toolset()]
     else:
         toolsets = [build_read_toolset(), build_write_toolset()]
+
+    async def instructions_fn(ctx: Any) -> str:
+        return await _instructions(ctx, read_only=read_only)
+
     return Agent(
         primary,
         deps_type=AgentDeps,
         output_type=[str, DeferredToolRequests],
-        instructions=lambda ctx: _instructions(ctx, read_only=read_only),
+        instructions=instructions_fn,
         toolsets=toolsets,
         name=name or ("fin-agent-scheduled-question" if read_only else "fin-agent"),
         capabilities=build_capabilities(

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import hashlib
 
-import psycopg
 from fastapi.testclient import TestClient
-from psycopg.rows import dict_row
 
 from fin_agent.api.app import create_app
 from fin_agent.auth.setup import issue_setup_token
+from fin_agent.db.conn import connect
 from tests.software_authenticator import SoftwareAuthenticator
 
 
@@ -37,12 +36,12 @@ def _login(client: TestClient, authenticator: SoftwareAuthenticator):
     )
 
 
-def _issue_token(dsn: str) -> str:
-    with psycopg.connect(dsn, row_factory=dict_row) as conn:
-        return issue_setup_token(conn, ttl_hours=1).token
+async def _issue_token(dsn: str) -> str:
+    async with connect(dsn) as conn:
+        return (await issue_setup_token(conn, ttl_hours=1)).token
 
 
-def test_first_run_setup_then_passkey_login(client, setup_token, settings):
+async def test_first_run_setup_then_passkey_login(client, setup_token, settings):
     state = client.get("/api/auth/state").json()
     assert state["setup_required"] is True
     assert state["authenticated"] is False
@@ -72,7 +71,7 @@ def test_first_run_setup_then_passkey_login(client, setup_token, settings):
     assert client.get("/api/auth/session").json()["user"]["display_name"] == "You"
 
 
-def test_setup_token_is_consumed_by_setup(client, setup_token, settings):
+async def test_setup_token_is_consumed_by_setup(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
@@ -87,7 +86,7 @@ def test_login_before_setup_is_a_conflict(client):
     assert "Setup is not complete" in response.json()["detail"]
 
 
-def test_login_challenge_cannot_be_replayed(client, setup_token, settings):
+async def test_login_challenge_cannot_be_replayed(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
@@ -101,7 +100,7 @@ def test_login_challenge_cannot_be_replayed(client, setup_token, settings):
     assert replay.status_code == 401
 
 
-def test_unregistered_passkey_is_refused(client, setup_token, settings):
+async def test_unregistered_passkey_is_refused(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
@@ -115,25 +114,24 @@ def test_unregistered_passkey_is_refused(client, setup_token, settings):
     assert response.status_code == 401
 
 
-def test_sign_counter_regression_is_refused(client, setup_token, settings, db):
+async def test_sign_counter_regression_is_refused(client, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
     assert _login(client, authenticator)[0].status_code == 200
 
-    db.execute("UPDATE webauthn_credentials SET sign_count = 999")
-    db.commit()
+    await db.execute("UPDATE webauthn_credentials SET sign_count = 999")
 
     refused, _, _ = _login(client, authenticator)
     assert refused.status_code == 401
 
-    stored = db.execute("SELECT sign_count FROM webauthn_credentials").fetchone()["sign_count"]
+    stored = (await db.fetchrow("SELECT sign_count FROM webauthn_credentials"))["sign_count"]
     assert stored == 999
 
 
-def test_session_cookie_is_httponly_secure_and_samesite_strict(secure_settings):
+async def test_session_cookie_is_httponly_secure_and_samesite_strict(secure_settings):
     app = create_app(secure_settings)
     with TestClient(app) as client:
-        token = _issue_token(secure_settings.database_url)
+        token = await _issue_token(secure_settings.database_url)
         authenticator = SoftwareAuthenticator(secure_settings.rp_id, secure_settings.rp_origin)
         response = _complete_setup(client, token, authenticator)
 
@@ -144,19 +142,19 @@ def test_session_cookie_is_httponly_secure_and_samesite_strict(secure_settings):
     assert "path=/" in cookie
 
 
-def test_only_the_session_hash_is_stored(client, setup_token, settings, db):
+async def test_only_the_session_hash_is_stored(client, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
     token = client.cookies["fin_agent_session"]
-    row = db.execute("SELECT token_hash FROM sessions").fetchone()
+    row = await db.fetchrow("SELECT token_hash FROM sessions")
 
     assert row["token_hash"] == hashlib.sha256(token.encode()).digest()
     assert token.encode() != row["token_hash"]
 
 
-def test_setup_token_can_be_reissued_while_setup_is_open(client, settings):
-    with psycopg.connect(client.app.state.settings.database_url, row_factory=dict_row) as conn:
-        token = issue_setup_token(conn, ttl_hours=1).token
+async def test_setup_token_can_be_reissued_while_setup_is_open(client, settings):
+    async with connect(client.app.state.settings.database_url) as conn:
+        token = (await issue_setup_token(conn, ttl_hours=1)).token
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, token, authenticator).status_code == 200

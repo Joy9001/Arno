@@ -11,37 +11,34 @@ import zipfile
 from datetime import UTC, datetime
 from typing import Any
 
-import psycopg
-from psycopg import sql
-from psycopg.conninfo import conninfo_to_dict
-
+from fin_agent.db.conn import Connection, conninfo_to_dict, quote_ident
 from fin_agent.ledger.audit import jsonable
 from fin_agent.ledger.errors import UnavailableLedgerError
 
 
-def table_names(conn: psycopg.Connection) -> list[str]:
-    rows = conn.execute(
+async def table_names(conn: Connection) -> list[str]:
+    rows = await conn.fetch(
         """
         SELECT table_name
         FROM information_schema.tables
         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
         ORDER BY table_name
         """
-    ).fetchall()
+    )
     return [str(row["table_name"]) for row in rows]
 
 
-def _rows(conn: psycopg.Connection, table: str) -> tuple[list[str], list[dict[str, Any]]]:
-    cursor = conn.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))
-    columns = [column.name for column in (cursor.description or ())]
-    rows = [dict(row) for row in cursor.fetchall()]
+async def _rows(conn: Connection, table: str) -> tuple[list[str], list[dict[str, Any]]]:
+    stmt = await conn.prepare(f"SELECT * FROM {quote_ident(table)}")
+    columns = [attr.name for attr in stmt.get_attributes()]
+    rows = [dict(row) for row in await stmt.fetch()]
     return columns, rows
 
 
-def export_json(conn: psycopg.Connection) -> dict[str, Any]:
+async def export_json(conn: Connection) -> dict[str, Any]:
     tables: dict[str, list[dict[str, Any]]] = {}
-    for table in table_names(conn):
-        _, rows = _rows(conn, table)
+    for table in await table_names(conn):
+        _, rows = await _rows(conn, table)
         tables[table] = [jsonable(row) for row in rows]
     return {
         "format": "fin-agent-export",
@@ -51,11 +48,11 @@ def export_json(conn: psycopg.Connection) -> dict[str, Any]:
     }
 
 
-def export_csv_zip(conn: psycopg.Connection) -> bytes:
+async def export_csv_zip(conn: Connection) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for table in table_names(conn):
-            columns, rows = _rows(conn, table)
+        for table in await table_names(conn):
+            columns, rows = await _rows(conn, table)
             text = io.StringIO()
             writer = csv.DictWriter(
                 text, fieldnames=columns, extrasaction="ignore", lineterminator="\n"

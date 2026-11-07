@@ -25,7 +25,7 @@ question about it — including whether you can afford something, and what it wo
   (BSD-3-Clause, © 2021 Scoville). License texts are in
   [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and ship in the image. No endorsement is
   implied.
-- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, psycopg 3, Vite and React,
+- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, `asyncpg`, Vite and React,
   Tailscale, `python-dateutil` and `holidays` for schedules, and restic for encrypted off-site
   backups. Statement readers use `pypdfium2` (BSD-3-Clause or Apache-2.0), `python-calamine`
   (MIT), `msoffcrypto-tool` (MIT), `python-docx` (MIT), `striprtf` (BSD-3-Clause), and

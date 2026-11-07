@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import psycopg
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -25,6 +24,7 @@ from webauthn.helpers.structs import (
 )
 
 from fin_agent.auth.setup import ADD_DEVICE, FIRST_RUN, consume_setup_token, setup_required
+from fin_agent.db.conn import Connection
 
 CHALLENGE_TTL = timedelta(minutes=5)
 VALID_TRANSPORTS = {"usb", "nfc", "ble", "internal", "hybrid", "smart-card"}
@@ -48,8 +48,8 @@ def b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + padding)
 
 
-def _insert_challenge(
-    conn: psycopg.Connection,
+async def _insert_challenge(
+    conn: Connection,
     *,
     kind: str,
     challenge: bytes,
@@ -57,40 +57,37 @@ def _insert_challenge(
     user_id: str | None,
     setup_token_id: str | None = None,
 ) -> str:
-    conn.execute("DELETE FROM webauthn_challenges WHERE expires_at < now()")
-    row = conn.execute(
+    await conn.execute("DELETE FROM webauthn_challenges WHERE expires_at < now()")
+    row = await conn.fetchrow(
         """
         INSERT INTO webauthn_challenges (
             kind, challenge, user_handle, user_id, setup_token_id, expires_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
         """,
-        (
-            kind,
-            challenge,
-            user_handle,
-            user_id,
-            setup_token_id,
-            datetime.now(UTC) + CHALLENGE_TTL,
-        ),
-    ).fetchone()
-    conn.commit()
+        kind,
+        challenge,
+        user_handle,
+        user_id,
+        setup_token_id,
+        datetime.now(UTC) + CHALLENGE_TTL,
+    )
     return row["id"]
 
 
-def _pop_challenge(conn: psycopg.Connection, challenge_id: str, kind: str) -> Challenge:
+async def _pop_challenge(conn: Connection, challenge_id: str, kind: str) -> Challenge:
     """Consume a challenge exactly once. A failed verification burns it too."""
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         UPDATE webauthn_challenges
         SET consumed_at = now()
-        WHERE id = %s AND kind = %s AND consumed_at IS NULL AND expires_at > now()
+        WHERE id = $1 AND kind = $2 AND consumed_at IS NULL AND expires_at > now()
         RETURNING id, challenge, user_handle, user_id, setup_token_id
         """,
-        (challenge_id, kind),
-    ).fetchone()
-    conn.commit()
+        challenge_id,
+        kind,
+    )
     if row is None:
         raise PasskeyError("This sign-in attempt expired. Start again.")
     return Challenge(
@@ -102,8 +99,8 @@ def _pop_challenge(conn: psycopg.Connection, challenge_id: str, kind: str) -> Ch
     )
 
 
-def begin_registration(
-    conn: psycopg.Connection,
+async def begin_registration(
+    conn: Connection,
     *,
     rp_id: str,
     rp_name: str,
@@ -127,7 +124,7 @@ def begin_registration(
             for credential_id in exclude_credential_ids
         ],
     )
-    challenge_id = _insert_challenge(
+    challenge_id = await _insert_challenge(
         conn,
         kind="setup",
         challenge=options.challenge,
@@ -138,30 +135,30 @@ def begin_registration(
     return challenge_id, json.loads(options_to_json(options))
 
 
-def finish_registration(
-    conn: psycopg.Connection,
+async def finish_registration(
+    conn: Connection,
     *,
     rp_id: str,
     rp_origin: str,
     challenge_id: str,
     credential: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
-    challenge = _pop_challenge(conn, challenge_id, "setup")
+    challenge = await _pop_challenge(conn, challenge_id, "setup")
     if challenge.user_handle is None or challenge.setup_token_id is None:
         raise PasskeyError("This enrollment link expired. Start again.")
 
-    token = conn.execute(
+    token = await conn.fetchrow(
         """
         SELECT id, kind, user_id
         FROM setup_tokens
-        WHERE id = %s AND consumed_at IS NULL AND expires_at > now()
+        WHERE id = $1 AND consumed_at IS NULL AND expires_at > now()
         """,
-        (challenge.setup_token_id,),
-    ).fetchone()
+        challenge.setup_token_id,
+    )
     if token is None:
         raise PasskeyError("This enrollment link expired or was already used.")
 
-    setup_open = setup_required(conn)
+    setup_open = await setup_required(conn)
     if token["kind"] == FIRST_RUN:
         if not setup_open:
             raise PasskeyError(
@@ -189,35 +186,36 @@ def finish_registration(
     except Exception as exc:  # noqa: BLE001 - the library raises several types
         raise PasskeyError("That passkey could not be verified. Try again.") from exc
 
-    if challenge.user_id is None:
-        user = conn.execute(
-            """
-            INSERT INTO users (webauthn_user_handle, display_name)
-            VALUES (%s, %s)
-            RETURNING id, display_name
-            """,
-            (challenge.user_handle, "You"),
-        ).fetchone()
-    else:
-        user = conn.execute(
-            "SELECT id, display_name FROM users WHERE id = %s",
-            (challenge.user_id,),
-        ).fetchone()
-        if user is None:
-            raise PasskeyError("The user for this passkey no longer exists.")
-
     transports = credential.get("response", {}).get("transports") or []
     transports = [t for t in transports if t in VALID_TRANSPORTS]
     aaguid = str(verified.aaguid) if verified.aaguid else None
 
-    conn.execute(
-        """
-        INSERT INTO webauthn_credentials (
-            user_id, credential_id, public_key, sign_count, transports, aaguid, name
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
+    async with conn.transaction():
+        if challenge.user_id is None:
+            user = await conn.fetchrow(
+                """
+                INSERT INTO users (webauthn_user_handle, display_name)
+                VALUES ($1, $2)
+                RETURNING id, display_name
+                """,
+                challenge.user_handle,
+                "You",
+            )
+        else:
+            user = await conn.fetchrow(
+                "SELECT id, display_name FROM users WHERE id = $1",
+                challenge.user_id,
+            )
+            if user is None:
+                raise PasskeyError("The user for this passkey no longer exists.")
+
+        await conn.execute(
+            """
+            INSERT INTO webauthn_credentials (
+                user_id, credential_id, public_key, sign_count, transports, aaguid, name
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """,
             user["id"],
             verified.credential_id,
             verified.credential_public_key,
@@ -225,15 +223,13 @@ def finish_registration(
             transports,
             aaguid,
             "Passkey",
-        ),
-    )
-    consume_setup_token(conn, token["id"])
-    conn.commit()
-    return dict(user), token["kind"]
+        )
+        await consume_setup_token(conn, token["id"])
+    return user, token["kind"]
 
 
-def begin_authentication(
-    conn: psycopg.Connection,
+async def begin_authentication(
+    conn: Connection,
     *,
     rp_id: str,
     user_id: str,
@@ -247,7 +243,7 @@ def begin_authentication(
         ],
         user_verification=UserVerificationRequirement.REQUIRED,
     )
-    challenge_id = _insert_challenge(
+    challenge_id = await _insert_challenge(
         conn,
         kind=kind,
         challenge=options.challenge,
@@ -257,8 +253,8 @@ def begin_authentication(
     return challenge_id, json.loads(options_to_json(options))
 
 
-def finish_authentication(
-    conn: psycopg.Connection,
+async def finish_authentication(
+    conn: Connection,
     *,
     rp_id: str,
     rp_origin: str,
@@ -266,7 +262,7 @@ def finish_authentication(
     credential: dict[str, Any],
     kind: str = "login",
 ) -> dict[str, Any]:
-    challenge = _pop_challenge(conn, challenge_id, kind)
+    challenge = await _pop_challenge(conn, challenge_id, kind)
     if challenge.user_id is None:
         raise PasskeyError("This sign-in attempt expired. Start again.")
 
@@ -278,14 +274,15 @@ def finish_authentication(
     except ValueError as exc:
         raise PasskeyError("That passkey response was incomplete.") from exc
 
-    stored = conn.execute(
+    stored = await conn.fetchrow(
         """
         SELECT id, public_key, sign_count
         FROM webauthn_credentials
-        WHERE user_id = %s AND credential_id = %s
+        WHERE user_id = $1 AND credential_id = $2
         """,
-        (challenge.user_id, credential_id),
-    ).fetchone()
+        challenge.user_id,
+        credential_id,
+    )
     if stored is None:
         raise PasskeyError("That passkey is not registered on this instance.")
 
@@ -311,22 +308,22 @@ def finish_authentication(
     ):
         raise PasskeyError("That passkey's counter went backwards; it may be cloned.")
 
-    conn.execute(
+    await conn.execute(
         """
         UPDATE webauthn_credentials
-        SET sign_count = %s, last_used_at = now()
-        WHERE id = %s
+        SET sign_count = $1, last_used_at = now()
+        WHERE id = $2
         """,
-        (verified.new_sign_count, stored["id"]),
+        verified.new_sign_count,
+        stored["id"],
     )
-    user = conn.execute(
-        "SELECT id, display_name FROM users WHERE id = %s",
-        (challenge.user_id,),
-    ).fetchone()
-    conn.commit()
+    user = await conn.fetchrow(
+        "SELECT id, display_name FROM users WHERE id = $1",
+        challenge.user_id,
+    )
     if user is None:
         raise PasskeyError("The user for this passkey no longer exists.")
-    return dict(user)
+    return user
 
 
 def new_user_handle() -> bytes:

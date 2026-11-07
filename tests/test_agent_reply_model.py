@@ -44,7 +44,9 @@ def _part(thread: dict, type_name: str) -> dict:
     )
 
 
-def test_a_primary_reply_labels_the_actual_model_live_and_after_reload(authed_client, demo_ledger):
+async def test_a_primary_reply_labels_the_actual_model_live_and_after_reload(
+    authed_client, demo_ledger
+):
     agent = build_agent(model=_reply_model("primary-model"))
     authed_client.app.state.agent = agent
     authed_client.app.state.turns.agent = agent
@@ -58,7 +60,7 @@ def test_a_primary_reply_labels_the_actual_model_live_and_after_reload(authed_cl
     assert part["data"] == {"model": "primary-model", "fallback": False}
 
 
-def test_a_fallback_reply_labels_the_backup_and_says_it_fell_back(authed_client, demo_ledger):
+async def test_a_fallback_reply_labels_the_backup_and_says_it_fell_back(authed_client, demo_ledger):
     def failing(messages, info) -> ModelResponse:
         raise ModelAPIError("primary", "provider is down")
 

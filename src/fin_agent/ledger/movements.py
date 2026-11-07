@@ -10,8 +10,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import WriteGroup, group_for_row, write_group
 from fin_agent.ledger.categories import (
     _apply_payee_correction_in_group,
@@ -32,17 +31,16 @@ CORRECTABLE_SCOPES = ("this", "future", "all")
 _LEDGER_CHANGE_KINDS = ("expense", "income", "transfer", "refund", "settlement")
 
 
-def _movement_row(conn: psycopg.Connection, movement_id: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM movements WHERE id = %s", (movement_id,)).fetchone()
+async def _movement_row(conn: Connection, movement_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
     if row is None:
         raise NotFoundLedgerError(f"No movement {movement_id}")
     return row
 
 
-def _transfer_rows(conn: psycopg.Connection, movement_id: str) -> list[dict[str, Any]]:
-    return list(
-        conn.execute(
-            """
+async def _transfer_rows(conn: Connection, movement_id: str) -> list[dict[str, Any]]:
+    return await conn.fetch(
+        """
             SELECT
                 t.id,
                 t.from_account_id AS from_ledger_id,
@@ -67,11 +65,10 @@ def _transfer_rows(conn: psycopg.Connection, movement_id: str) -> list[dict[str,
             LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
             LEFT JOIN categories c ON c.id = tl.category_id
             LEFT JOIN payees p ON p.id = tl.payee_id
-            WHERE t.metadata ->> 'movement_id' = %s
+            WHERE t.metadata ->> 'movement_id' = $1
             ORDER BY t.id
             """,
-            (movement_id,),
-        ).fetchall()
+        movement_id,
     )
 
 
@@ -94,7 +91,7 @@ def _transfer_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _reversal_state(conn: psycopg.Connection, movement_ids: list[str]) -> dict[str, dict[str, Any]]:
+async def _reversal_state(conn: Connection, movement_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Whether each movement is effectively reversed, following undo-of-undo chains.
 
     A movement is reversed when its reversal is active. Reversing that reversal makes the original
@@ -102,24 +99,22 @@ def _reversal_state(conn: psycopg.Connection, movement_ids: list[str]) -> dict[s
     """
     if not movement_ids:
         return {}
-    rows = list(
-        conn.execute(
-            """
-            WITH RECURSIVE descendants AS (
-                SELECT m.id AS root, m.id AS node, 0 AS depth
-                FROM movements m
-                WHERE m.id = ANY(%s::text[])
-                UNION ALL
-                SELECT d.root, child.id, d.depth + 1
-                FROM descendants d
-                JOIN movements child ON child.reverses_id = d.node
-            )
-            SELECT d.root, d.node, d.depth,
-                   (SELECT count(*) FROM movements x WHERE x.reverses_id = d.node) AS child_count
+    rows = await conn.fetch(
+        """
+        WITH RECURSIVE descendants AS (
+            SELECT m.id AS root, m.id AS node, 0 AS depth
+            FROM movements m
+            WHERE m.id = ANY($1::text[])
+            UNION ALL
+            SELECT d.root, child.id, d.depth + 1
             FROM descendants d
-            """,
-            (movement_ids,),
-        ).fetchall()
+            JOIN movements child ON child.reverses_id = d.node
+        )
+        SELECT d.root, d.node, d.depth,
+               (SELECT count(*) FROM movements x WHERE x.reverses_id = d.node) AS child_count
+        FROM descendants d
+        """,
+        movement_ids,
     )
     by_root: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -139,7 +134,7 @@ def _reversal_state(conn: psycopg.Connection, movement_ids: list[str]) -> dict[s
     return result
 
 
-def _effectively_reversed_ids(conn: psycopg.Connection) -> list[str]:
+async def _effectively_reversed_ids(conn: Connection) -> list[str]:
     """Movements hidden from activity because a reversal still cancels them.
 
     An undo-of-undo restores the original, so parity of the reversal chain decides. Only
@@ -147,34 +142,32 @@ def _effectively_reversed_ids(conn: psycopg.Connection) -> list[str]:
     """
     roots = [
         str(row["id"])
-        for row in conn.execute(
+        for row in await conn.fetch(
             "SELECT DISTINCT reverses_id AS id FROM movements WHERE reverses_id IS NOT NULL"
-        ).fetchall()
+        )
     ]
-    states = _reversal_state(conn, roots)
+    states = await _reversal_state(conn, roots)
     return [root for root in roots if states[root]["reversed"]]
 
 
-def movement_payload(
-    conn: psycopg.Connection,
+async def movement_payload(
+    conn: Connection,
     movement: dict[str, Any],
     *,
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     movement_id = str(movement["id"])
-    transfers = _transfer_rows(conn, movement_id)
-    captures = list(
-        conn.execute(
-            """
-            SELECT kind, ref, upi_ref, confidence
-            FROM captures
-            WHERE movement_id = %s
-            ORDER BY id
-            """,
-            (movement_id,),
-        ).fetchall()
+    transfers = await _transfer_rows(conn, movement_id)
+    captures = await conn.fetch(
+        """
+        SELECT kind, ref, upi_ref, confidence
+        FROM captures
+        WHERE movement_id = $1
+        ORDER BY id
+        """,
+        movement_id,
     )
-    state = state or _reversal_state(conn, [movement_id])[movement_id]
+    state = state or (await _reversal_state(conn, [movement_id]))[movement_id]
     category = next(
         (row["category_name"] for row in transfers if row["category_name"] is not None), None
     )
@@ -192,22 +185,22 @@ def movement_payload(
         "payee_name": payee,
         "transfers": [_transfer_payload(row) for row in transfers],
         "evidence": [row["kind"] for row in captures],
-        "undo_id": group_for_row(conn, "movements", movement_id),
+        "undo_id": await group_for_row(conn, "movements", movement_id),
     }
 
 
-def get_movement(conn: psycopg.Connection, movement_id: str) -> dict[str, Any]:
-    return movement_payload(conn, _movement_row(conn, movement_id))
+async def get_movement(conn: Connection, movement_id: str) -> dict[str, Any]:
+    return await movement_payload(conn, await _movement_row(conn, movement_id))
 
 
-def _finish_movement(
-    conn: psycopg.Connection,
+async def _finish_movement(
+    conn: Connection,
     group: WriteGroup,
     record: MovementRecord,
     *,
     status: str = "recorded",
 ) -> dict[str, Any]:
-    payload = movement_payload(conn, record.movement)
+    payload = await movement_payload(conn, record.movement)
     undo_id = group.group_id if group.entries else payload["undo_id"]
     return payload | {"status": status, "undo_id": undo_id}
 
@@ -219,8 +212,8 @@ def _movement_date(value: date | None) -> date:
     return value
 
 
-def _resolve_label_category(
-    conn: psycopg.Connection,
+async def _resolve_label_category(
+    conn: Connection,
     group: WriteGroup,
     *,
     payee_id: str | None,
@@ -228,18 +221,18 @@ def _resolve_label_category(
     category_guess_id: str | None,
 ) -> dict[str, Any]:
     if payee_id:
-        get_payee(conn, payee_id)
-    resolution = resolve_category(conn, payee_id=payee_id, category_id=category_id)
+        await get_payee(conn, payee_id)
+    resolution = await resolve_category(conn, payee_id=payee_id, category_id=category_id)
     if resolution["category_id"] is None and category_guess_id:
-        guessed = resolve_category(conn, category_id=category_guess_id)
+        guessed = await resolve_category(conn, category_id=category_guess_id)
         resolution = {
             **resolution,
             "category_id": guessed["category_id"],
             "source": "guess",
         }
         if payee_id:
-            payee = get_payee(conn, payee_id)
-            _upsert_rule_in_group(
+            payee = await get_payee(conn, payee_id)
+            await _upsert_rule_in_group(
                 conn,
                 group,
                 merchant_pattern=payee["display_name"],
@@ -249,8 +242,8 @@ def _resolve_label_category(
     return resolution
 
 
-def record_expense(
-    conn: psycopg.Connection,
+async def record_expense(
+    conn: Connection,
     *,
     account_id: str,
     amount_paise: int,
@@ -268,12 +261,12 @@ def record_expense(
     if amount_paise <= 0:
         raise InvalidLedgerError("An expense must be positive")
     when = _movement_date(date)
-    account = resolve_account(conn, account_id)
+    account = await resolve_account(conn, account_id)
     if account["kind"] in {"spending", "income", "equity"}:
         raise InvalidLedgerError("An expense comes from a real account, not a system account")
-    spending = system_account(conn, "spending")
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        resolution = _resolve_label_category(
+    spending = await system_account(conn, "spending")
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        resolution = await _resolve_label_category(
             conn,
             group,
             payee_id=payee_id,
@@ -288,7 +281,7 @@ def record_expense(
             payee_id=payee_id,
             note=note,
         )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -298,21 +291,22 @@ def record_expense(
             idempotency_key=idempotency_key,
             capture=capture,
         )
-    return _finish_movement(conn, group, record) | {"category_source": resolution["source"]}
+    finished = await _finish_movement(conn, group, record)
+    return finished | {"category_source": resolution["source"]}
 
 
-def _validated_label(
-    conn: psycopg.Connection, category_id: str | None, payee_id: str | None
+async def _validated_label(
+    conn: Connection, category_id: str | None, payee_id: str | None
 ) -> tuple[str | None, str | None]:
     if category_id:
-        category_id = resolve_category(conn, category_id=category_id)["category_id"]
+        category_id = (await resolve_category(conn, category_id=category_id))["category_id"]
     if payee_id:
-        get_payee(conn, payee_id)
+        await get_payee(conn, payee_id)
     return category_id, payee_id
 
 
-def record_income(
-    conn: psycopg.Connection,
+async def record_income(
+    conn: Connection,
     *,
     account_id: str,
     amount_paise: int,
@@ -328,10 +322,10 @@ def record_income(
     if amount_paise <= 0:
         raise InvalidLedgerError("Income must be positive")
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    _validated_label(conn, None, payee_id)
-    income = system_account(conn, "income")
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    await resolve_account(conn, account_id)
+    await _validated_label(conn, None, payee_id)
+    income = await system_account(conn, "income")
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         transfer = TransferSpec(
             from_account_id=income["id"],
             to_account_id=account_id,
@@ -339,7 +333,7 @@ def record_income(
             payee_id=payee_id,
             note=note,
         )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -349,11 +343,11 @@ def record_income(
             idempotency_key=idempotency_key,
             capture=capture,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_transfer(
-    conn: psycopg.Connection,
+async def record_transfer(
+    conn: Connection,
     *,
     from_account_id: str,
     to_account_id: str,
@@ -370,10 +364,10 @@ def record_transfer(
     if amount_paise <= 0:
         raise InvalidLedgerError("A transfer must be positive")
     when = _movement_date(date)
-    resolve_account(conn, from_account_id)
-    resolve_account(conn, to_account_id)
-    category_id, payee_id = _validated_label(conn, category_id, payee_id)
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    await resolve_account(conn, from_account_id)
+    await resolve_account(conn, to_account_id)
+    category_id, payee_id = await _validated_label(conn, category_id, payee_id)
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         transfer = TransferSpec(
             from_account_id=from_account_id,
             to_account_id=to_account_id,
@@ -382,7 +376,7 @@ def record_transfer(
             payee_id=payee_id,
             note=note,
         )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -391,11 +385,11 @@ def record_transfer(
             transfers=[transfer],
             idempotency_key=idempotency_key,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_split(
-    conn: psycopg.Connection,
+async def record_split(
+    conn: Connection,
     *,
     account_id: str,
     my_share_paise: int,
@@ -422,11 +416,11 @@ def record_split(
     if calculated <= 0:
         raise InvalidLedgerError("A split must move money")
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    spending = system_account(conn, "spending")
+    await resolve_account(conn, account_id)
+    spending = await system_account(conn, "spending")
 
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        resolution = _resolve_label_category(
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        resolution = await _resolve_label_category(
             conn,
             group,
             payee_id=payee_id,
@@ -450,10 +444,10 @@ def record_split(
             amount = int(person["amount_paise"])
             if amount <= 0:
                 raise InvalidLedgerError("A split share must be positive")
-            payee = get_payee(conn, person_id)
+            payee = await get_payee(conn, person_id)
             if payee["kind"] != "person":
                 raise InvalidLedgerError("A split share goes to a person payee")
-            person_account = ensure_person_account(conn, person_id, group)
+            person_account = await ensure_person_account(conn, person_id, group)
             expected = person.get("expected_date")
             transfers.append(
                 TransferSpec(
@@ -465,7 +459,7 @@ def record_split(
                     note=note,
                 )
             )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -475,11 +469,11 @@ def record_split(
             idempotency_key=idempotency_key,
             capture=capture,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_lending(
-    conn: psycopg.Connection,
+async def record_lending(
+    conn: Connection,
     *,
     account_id: str,
     payee_id: str,
@@ -498,9 +492,9 @@ def record_lending(
     if direction not in {"i_lent", "i_borrowed"}:
         raise InvalidLedgerError("direction is i_lent or i_borrowed")
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        person_account = ensure_person_account(conn, payee_id, group)
+    await resolve_account(conn, account_id)
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        person_account = await ensure_person_account(conn, payee_id, group)
         if direction == "i_lent":
             transfer = TransferSpec(
                 from_account_id=account_id,
@@ -521,7 +515,7 @@ def record_lending(
                 note=note,
             )
             text = description or "Borrowed money"
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -530,11 +524,11 @@ def record_lending(
             transfers=[transfer],
             idempotency_key=idempotency_key,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_settlement(
-    conn: psycopg.Connection,
+async def record_settlement(
+    conn: Connection,
     *,
     account_id: str,
     payee_id: str,
@@ -553,9 +547,9 @@ def record_settlement(
     if direction not in {"they_paid", "i_paid"}:
         raise InvalidLedgerError("direction is they_paid or i_paid")
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        person_account = ensure_person_account(conn, payee_id, group)
+    await resolve_account(conn, account_id)
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        person_account = await ensure_person_account(conn, payee_id, group)
         if direction == "they_paid":
             transfer = TransferSpec(
                 from_account_id=person_account["id"],
@@ -576,7 +570,7 @@ def record_settlement(
                 note=note,
             )
             text = description or "Settlement paid"
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -585,11 +579,11 @@ def record_settlement(
             transfers=[transfer],
             idempotency_key=idempotency_key,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_refund(
-    conn: psycopg.Connection,
+async def record_refund(
+    conn: Connection,
     *,
     account_id: str,
     amount_paise: int,
@@ -605,10 +599,10 @@ def record_refund(
     if amount_paise <= 0:
         raise InvalidLedgerError("A refund must be positive")
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    category_id, payee_id = _validated_label(conn, category_id, payee_id)
-    spending = system_account(conn, "spending")
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    await resolve_account(conn, account_id)
+    category_id, payee_id = await _validated_label(conn, category_id, payee_id)
+    spending = await system_account(conn, "spending")
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         transfer = TransferSpec(
             from_account_id=spending["id"],
             to_account_id=account_id,
@@ -617,7 +611,7 @@ def record_refund(
             payee_id=payee_id,
             note=note,
         )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -626,11 +620,11 @@ def record_refund(
             transfers=[transfer],
             idempotency_key=idempotency_key,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_loan_payment(
-    conn: psycopg.Connection,
+async def record_loan_payment(
+    conn: Connection,
     *,
     account_id: str,
     loan_account_id: str,
@@ -663,17 +657,17 @@ def record_loan_payment(
         raise InvalidLedgerError("A loan payment needs principal or interest")
 
     when = _movement_date(date)
-    resolve_account(conn, account_id)
-    loan = resolve_account(conn, loan_account_id)
+    await resolve_account(conn, account_id)
+    loan = await resolve_account(conn, loan_account_id)
     if loan["kind"] != "loan":
         raise InvalidLedgerError("The destination account is not a loan")
-    spending = system_account(conn, "spending")
+    spending = await system_account(conn, "spending")
     if interest_paise and interest_category_id is None:
-        row = conn.execute(
+        row = await conn.fetchrow(
             "SELECT id FROM categories WHERE name = 'Loan Interest' AND active"
-        ).fetchone()
+        )
         interest_category_id = row["id"] if row else None
-    interest_category_id, _ = _validated_label(conn, interest_category_id, None)
+    interest_category_id, _ = await _validated_label(conn, interest_category_id, None)
 
     transfers: list[TransferSpec] = []
     if principal_paise:
@@ -695,8 +689,8 @@ def record_loan_payment(
                 note=note,
             )
         )
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        record = create_movement_in_group(
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        record = await create_movement_in_group(
             conn,
             group,
             date=when,
@@ -705,11 +699,11 @@ def record_loan_payment(
             transfers=transfers,
             idempotency_key=idempotency_key,
         )
-    return _finish_movement(conn, group, record)
+    return await _finish_movement(conn, group, record)
 
 
-def record_goal_contribution(
-    conn: psycopg.Connection,
+async def record_goal_contribution(
+    conn: Connection,
     *,
     account_id: str,
     goal_account_id: str,
@@ -721,13 +715,13 @@ def record_goal_contribution(
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    goal = get_account_row(conn, goal_account_id)
+    goal = await get_account_row(conn, goal_account_id)
     if goal["kind"] != "goal":
         raise InvalidLedgerError("A goal contribution goes into a goal account")
-    row = conn.execute(
+    row = await conn.fetchrow(
         "SELECT id FROM categories WHERE name = 'Savings & Investments' AND active"
-    ).fetchone()
-    return record_transfer(
+    )
+    return await record_transfer(
         conn,
         from_account_id=account_id,
         to_account_id=goal_account_id,
@@ -742,7 +736,7 @@ def record_goal_contribution(
     )
 
 
-def reverse_movement(
+async def reverse_movement(
     group: WriteGroup,
     movement_id: str,
     *,
@@ -751,11 +745,11 @@ def reverse_movement(
 ) -> MovementRecord:
     """Append the opposite transfer batch in one movement."""
     conn = group.conn
-    movement = _movement_row(conn, movement_id)
+    movement = await _movement_row(conn, movement_id)
     if movement["kind"] == "reversal":
         # Reversing a reversal is how undo-of-undo works; it is allowed and nets back.
         pass
-    transfers = _transfer_rows(conn, movement_id)
+    transfers = await _transfer_rows(conn, movement_id)
     if not transfers:
         raise InvalidLedgerError(f"Movement {movement_id} has no transfers")
     opposite: list[TransferSpec] = []
@@ -771,7 +765,7 @@ def reverse_movement(
                 note=note if note is not None else row["note"],
             )
         )
-    return create_movement_in_group(
+    return await create_movement_in_group(
         conn,
         group,
         date=date or movement["date"],
@@ -782,8 +776,8 @@ def reverse_movement(
     )
 
 
-def _update_labels(
-    conn: psycopg.Connection,
+async def _update_labels(
+    conn: Connection,
     group: WriteGroup,
     movement_id: str,
     values: dict[str, Any],
@@ -791,58 +785,57 @@ def _update_labels(
     updates = {key: value for key, value in values.items() if value is not None}
     if not updates:
         return 0
-    labels = list(
-        conn.execute(
-            "SELECT * FROM transfer_labels WHERE movement_id = %s ORDER BY transfer_id",
-            (movement_id,),
-        ).fetchall()
+    labels = await conn.fetch(
+        "SELECT * FROM transfer_labels WHERE movement_id = $1 ORDER BY transfer_id",
+        movement_id,
     )
     if not labels:
-        transfer = conn.execute(
+        transfer = await conn.fetchrow(
             """
             SELECT id FROM pgledger_transfers
-            WHERE metadata ->> 'movement_id' = %s ORDER BY id LIMIT 1
+            WHERE metadata ->> 'movement_id' = $1 ORDER BY id LIMIT 1
             """,
-            (movement_id,),
-        ).fetchone()
+            movement_id,
+        )
         if transfer is None:
             raise InvalidLedgerError("That movement has no transfer to label")
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO transfer_labels
                 (transfer_id, movement_id, category_id, payee_id, expected_date, note)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
             """,
-            (
-                transfer["id"],
-                movement_id,
-                updates.get("category_id"),
-                updates.get("payee_id"),
-                updates.get("expected_date"),
-                updates.get("note"),
-            ),
-        ).fetchone()
+            transfer["id"],
+            movement_id,
+            updates.get("category_id"),
+            updates.get("payee_id"),
+            updates.get("expected_date"),
+            updates.get("note"),
+        )
         group.record_created("transfer_labels", row)
         return 1
 
     changed = 0
     for label in labels:
         columns = list(updates)
-        after = conn.execute(
+        assignments = ", ".join(
+            f"{column} = ${index}" for index, column in enumerate(columns, start=1)
+        )
+        after = await conn.fetchrow(
             f"""
             UPDATE transfer_labels
-            SET {", ".join(f"{column} = %s" for column in columns)}, updated_at = now()
-            WHERE transfer_id = %s RETURNING *
+            SET {assignments}, updated_at = now()
+            WHERE transfer_id = ${len(columns) + 1} RETURNING *
             """,
-            (*[updates[column] for column in columns], label["transfer_id"]),
-        ).fetchone()
+            *[updates[column] for column in columns],
+            label["transfer_id"],
+        )
         group.record_updated("transfer_labels", label["transfer_id"], label, after)
         changed += 1
     return changed
 
 
 def _corrected_transfer_specs(
-    conn: psycopg.Connection,
     movement: dict[str, Any],
     transfers: list[dict[str, Any]],
     *,
@@ -923,8 +916,8 @@ def _corrected_transfer_specs(
     raise InvalidLedgerError(f"Amount and account corrections are not supported for {kind}")
 
 
-def correct_movement(
-    conn: psycopg.Connection,
+async def correct_movement(
+    conn: Connection,
     movement_id: str,
     *,
     changes: dict[str, Any],
@@ -934,14 +927,14 @@ def correct_movement(
 ) -> dict[str, Any]:
     if scope not in CORRECTABLE_SCOPES:
         raise InvalidLedgerError("scope is this, future, or all")
-    movement = _movement_row(conn, movement_id)
+    movement = await _movement_row(conn, movement_id)
     if movement["kind"] == "reversal":
         raise InvalidLedgerError("A reversal is not edited")
-    state = _reversal_state(conn, [movement_id])[movement_id]
+    state = (await _reversal_state(conn, [movement_id]))[movement_id]
     if state["reversed"]:
         raise ConflictLedgerError("That movement has already been reversed")
 
-    transfers = _transfer_rows(conn, movement_id)
+    transfers = await _transfer_rows(conn, movement_id)
     existing_labels = next(
         (
             {
@@ -964,9 +957,9 @@ def correct_movement(
     category_id = merged_labels["category_id"]
     payee_id = merged_labels["payee_id"]
     if category_id:
-        category_id = resolve_category(conn, category_id=category_id)["category_id"]
+        category_id = (await resolve_category(conn, category_id=category_id))["category_id"]
     if payee_id:
-        get_payee(conn, payee_id)
+        await get_payee(conn, payee_id)
     if scope != "this" and (category_id is None or payee_id is None):
         raise InvalidLedgerError("A future or all correction needs both a payee and a category")
 
@@ -980,35 +973,37 @@ def correct_movement(
         if changes.get(key) is not None
     }
 
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         if label_only:
             if changes.get("date") is not None:
                 before = movement
-                after = conn.execute(
-                    "UPDATE movements SET date = %s WHERE id = %s RETURNING *",
-                    (changes["date"], movement_id),
-                ).fetchone()
+                after = await conn.fetchrow(
+                    "UPDATE movements SET date = $1 WHERE id = $2 RETURNING *",
+                    changes["date"],
+                    movement_id,
+                )
                 group.record_updated("movements", movement_id, before, after)
             rows_changed = (
-                _update_labels(conn, group, movement_id, label_changes) if label_changes else 0
+                await _update_labels(conn, group, movement_id, label_changes)
+                if label_changes
+                else 0
             )
             result_movement_id = movement_id
             reversal_id = None
         else:
-            reversal = reverse_movement(group, movement_id)
+            reversal = await reverse_movement(group, movement_id)
             reversal_id = reversal.id
             if changes.get("delete"):
                 result_movement_id = reversal.id
             else:
                 corrected = _corrected_transfer_specs(
-                    conn,
                     movement,
                     transfers,
                     amount_paise=changes.get("amount_paise"),
                     account_id=changes.get("account_id"),
                     labels=merged_labels,
                 )
-                record = create_movement_in_group(
+                record = await create_movement_in_group(
                     conn,
                     group,
                     date=changes.get("date") or movement["date"],
@@ -1020,7 +1015,7 @@ def correct_movement(
             rows_changed = 1
 
         if scope != "this":
-            correction = _apply_payee_correction_in_group(
+            correction = await _apply_payee_correction_in_group(
                 conn,
                 group,
                 payee_id=payee_id,
@@ -1031,7 +1026,7 @@ def correct_movement(
         else:
             correction = {"rule": None, "rows_changed": 0}
 
-    payload = movement_payload(conn, _movement_row(conn, result_movement_id))
+    payload = await movement_payload(conn, await _movement_row(conn, result_movement_id))
     return {
         "status": "corrected" if not changes.get("delete") else "deleted",
         "movement_id": result_movement_id,
@@ -1043,8 +1038,8 @@ def correct_movement(
     }
 
 
-def list_movements(
-    conn: psycopg.Connection,
+async def list_movements(
+    conn: Connection,
     *,
     start: date | None = None,
     end: date | None = None,
@@ -1061,45 +1056,45 @@ def list_movements(
     clauses: list[str] = []
     params: list[Any] = []
     if start is not None:
-        clauses.append("m.date >= %s")
         params.append(start)
+        clauses.append(f"m.date >= ${len(params)}")
     if end is not None:
-        clauses.append("m.date <= %s")
         params.append(end)
+        clauses.append(f"m.date <= ${len(params)}")
     if kind is not None:
-        clauses.append("m.kind = %s")
         params.append(kind)
+        clauses.append(f"m.kind = ${len(params)}")
     if account_id is not None:
+        params.extend([account_id, account_id])
         clauses.append(
-            """
+            f"""
             EXISTS (
                 SELECT 1 FROM pgledger_transfers tx
                 JOIN accounts fa ON fa.ledger_account_id = tx.from_account_id
                 JOIN accounts ta ON ta.ledger_account_id = tx.to_account_id
                 WHERE tx.metadata ->> 'movement_id' = m.id
-                  AND (fa.id = %s OR ta.id = %s)
+                  AND (fa.id = ${len(params) - 1} OR ta.id = ${len(params)})
             )
             """
         )
-        params.extend([account_id, account_id])
     if category_id is not None or payee_id is not None:
         label_clauses = ["tl.movement_id = m.id"]
         if category_id is not None:
-            label_clauses.append("tl.category_id = %s")
             params.append(category_id)
+            label_clauses.append(f"tl.category_id = ${len(params)}")
         if payee_id is not None:
-            label_clauses.append("tl.payee_id = %s")
             params.append(payee_id)
+            label_clauses.append(f"tl.payee_id = ${len(params)}")
         clauses.append(
             f"EXISTS (SELECT 1 FROM transfer_labels tl WHERE {' AND '.join(label_clauses)})"
         )
     if not include_reversed:
         # In SQL, not after LIMIT, so a page is never short and total_count agrees.
         clauses.append("m.kind <> 'reversal'")
-        hidden = _effectively_reversed_ids(conn)
+        hidden = await _effectively_reversed_ids(conn)
         if hidden:
-            clauses.append("NOT (m.id = ANY(%s))")
             params.append(hidden)
+            clauses.append(f"NOT (m.id = ANY(${len(params)}))")
 
     cursor_key: tuple[date, str] | None = None
     if cursor:
@@ -1110,37 +1105,37 @@ def list_movements(
             raise InvalidLedgerError("Invalid cursor") from exc
 
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    total = int(
-        conn.execute(
-            f"SELECT count(*) AS n FROM movements m {where}",  # noqa: S608
-            params,
-        ).fetchone()["n"]
+    total_row = await conn.fetchrow(
+        f"SELECT count(*) AS n FROM movements m {where}",  # noqa: S608
+        *params,
     )
+    total = int(total_row["n"]) if total_row is not None else 0
 
     page_where = where
-    page_params = params
+    page_params = list(params)
     if cursor_key is not None:
-        page_where = f"WHERE {' AND '.join([*clauses, '(m.date, m.id) < (%s, %s)'])}"
-        page_params = [*params, *cursor_key]
-    rows = list(
-        conn.execute(
-            f"""
-            SELECT m.* FROM movements m {page_where}
-            ORDER BY m.date DESC, m.id DESC
-            LIMIT %s
-            """,  # noqa: S608
-            (*page_params, limit + 1),
-        ).fetchall()
+        page_params.extend(cursor_key)
+        cursor_clause = f"(m.date, m.id) < (${len(page_params) - 1}, ${len(page_params)})"
+        page_where = f"WHERE {' AND '.join([*clauses, cursor_clause])}"
+    page_params.append(limit + 1)
+    rows = await conn.fetch(
+        f"""
+        SELECT m.* FROM movements m {page_where}
+        ORDER BY m.date DESC, m.id DESC
+        LIMIT ${len(page_params)}
+        """,  # noqa: S608
+        *page_params,
     )
     has_more = len(rows) > limit
     rows = rows[:limit]
-    states = _reversal_state(conn, [str(row["id"]) for row in rows])
+    states = await _reversal_state(conn, [str(row["id"]) for row in rows])
     next_cursor = None
     if has_more and rows:
         last = rows[-1]
         next_cursor = f"{last['date'].isoformat()}|{last['id']}"
+    items = [await movement_payload(conn, row, state=states[str(row["id"])]) for row in rows]
     return {
-        "items": [movement_payload(conn, row, state=states[str(row["id"])]) for row in rows],
+        "items": items,
         "total_count": total,
         "next_cursor": next_cursor,
         "as_of": today().isoformat(),

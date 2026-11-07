@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 
 SYSTEM_KINDS = ("spending", "income", "equity")
@@ -33,31 +32,31 @@ def today() -> date:
     return datetime.now(ZoneInfo("Asia/Kolkata")).date()
 
 
-def get_account_row(conn: psycopg.Connection, account_id: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM accounts WHERE id = %s", (account_id,)).fetchone()
+async def get_account_row(conn: Connection, account_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
     if row is None:
         raise NotFoundLedgerError(f"No account {account_id}")
     return row
 
 
-def require_active_account(conn: psycopg.Connection, account_id: str) -> dict[str, Any]:
-    row = get_account_row(conn, account_id)
+async def require_active_account(conn: Connection, account_id: str) -> dict[str, Any]:
+    row = await get_account_row(conn, account_id)
     if not row["active"]:
         raise InvalidLedgerError(f"Account {row['name']} is archived")
     return row
 
 
-def resolve_account(conn: psycopg.Connection, account_id: str | None) -> dict[str, Any]:
+async def resolve_account(conn: Connection, account_id: str | None) -> dict[str, Any]:
     if not account_id:
         raise InvalidLedgerError("An account is required")
-    return require_active_account(conn, account_id)
+    return await require_active_account(conn, account_id)
 
 
-def system_account(conn: psycopg.Connection, kind: str) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM accounts WHERE kind = %s AND active ORDER BY created_at LIMIT 1",
-        (kind,),
-    ).fetchone()
+async def system_account(conn: Connection, kind: str) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "SELECT * FROM accounts WHERE kind = $1 AND active ORDER BY created_at LIMIT 1",
+        kind,
+    )
     if row is None:
         raise InvalidLedgerError(
             f"The {kind} system account is missing. Start the API or run the migration bootstrap."
@@ -65,24 +64,25 @@ def system_account(conn: psycopg.Connection, kind: str) -> dict[str, Any]:
     return row
 
 
-def ledger_balance(conn: psycopg.Connection, ledger_account_id: str) -> int:
-    row = conn.execute(
-        "SELECT coalesce(balance, 0)::bigint AS balance FROM pgledger_accounts WHERE id = %s",
-        (ledger_account_id,),
-    ).fetchone()
+async def ledger_balance(conn: Connection, ledger_account_id: str) -> int:
+    row = await conn.fetchrow(
+        "SELECT coalesce(balance, 0)::bigint AS balance FROM pgledger_accounts WHERE id = $1",
+        ledger_account_id,
+    )
     return int(row["balance"]) if row else 0
 
 
-def balance_as_of(conn: psycopg.Connection, ledger_account_id: str) -> date | None:
-    row = conn.execute(
+async def balance_as_of(conn: Connection, ledger_account_id: str) -> date | None:
+    row = await conn.fetchrow(
         """
         SELECT max(m.date) AS as_of
         FROM pgledger_transfers t
         LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE t.from_account_id = %s OR t.to_account_id = %s
+        WHERE t.from_account_id = $1 OR t.to_account_id = $2
         """,
-        (ledger_account_id, ledger_account_id),
-    ).fetchone()
+        ledger_account_id,
+        ledger_account_id,
+    )
     return row["as_of"] if row else None
 
 
@@ -100,9 +100,9 @@ def has_known_balance(account: dict[str, Any]) -> bool:
     )
 
 
-def account_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, Any]:
-    balance = ledger_balance(conn, row["ledger_account_id"])
-    as_of = balance_as_of(conn, row["ledger_account_id"])
+async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
+    balance = await ledger_balance(conn, row["ledger_account_id"])
+    as_of = await balance_as_of(conn, row["ledger_account_id"])
     statement_as_of = row["statement_balance_as_of"]
     payload: dict[str, Any] = {
         "id": row["id"],
@@ -141,8 +141,8 @@ def account_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, 
     return payload
 
 
-def list_account_rows(
-    conn: psycopg.Connection, *, include_system: bool = False, include_inactive: bool = False
+async def list_account_rows(
+    conn: Connection, *, include_system: bool = False, include_inactive: bool = False
 ) -> list[dict[str, Any]]:
     clauses: list[str] = []
     if not include_system:
@@ -150,8 +150,4 @@ def list_account_rows(
     if not include_inactive:
         clauses.append("active")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return list(
-        conn.execute(
-            f"SELECT * FROM accounts {where} ORDER BY kind, name, created_at"  # noqa: S608
-        ).fetchall()
-    )
+    return await conn.fetch(f"SELECT * FROM accounts {where} ORDER BY kind, name, created_at")

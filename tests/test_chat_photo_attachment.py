@@ -120,7 +120,7 @@ def _capture_cards(thread: dict) -> list[dict]:
     return [card for card in _cards(thread) if card["data"].get("card") == "capture"]
 
 
-def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger, monkeypatch):
+async def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger, monkeypatch):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
     photo = _upload_photo(authed_client)
     body = _body("client_photo_only", photos=[photo])
@@ -141,9 +141,9 @@ def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger, monke
     assert replay.status_code == 200
     assert sum(event["type"] == "data-card" for event in _events(replay)) == 1
 
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
-    assert demo_ledger.execute("SELECT count(*) AS n FROM attachments").fetchone()["n"] == 1
-    assert demo_ledger.execute("SELECT count(*) AS n FROM messages").fetchone()["n"] == 2
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM attachments") == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 2
 
     thread = authed_client.get("/api/threads/thread_photo/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
@@ -155,19 +155,19 @@ def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger, monke
     assert cards[0]["data"]["attachment_id"] == photo["id"]
     assert cards[0]["data"]["url"] == f"/api/attachments/{photo['id']}"
     assert "The user shared a receipt" in str(
-        demo_ledger.execute(
+        await demo_ledger.fetchrow(
             "SELECT model_history FROM conversations WHERE id = 'thread_photo'"
-        ).fetchone()
+        )
     )
-    assert (
-        demo_ledger.execute(
-            "SELECT outside_text_at FROM conversations WHERE id = 'thread_photo'"
-        ).fetchone()["outside_text_at"]
-        is not None
+    outside = await demo_ledger.fetchrow(
+        "SELECT outside_text_at FROM conversations WHERE id = 'thread_photo'"
     )
+    assert outside["outside_text_at"] is not None
 
 
-def test_image_and_text_keeps_caption_and_single_receipt(authed_client, demo_ledger, monkeypatch):
+async def test_image_and_text_keeps_caption_and_single_receipt(
+    authed_client, demo_ledger, monkeypatch
+):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
     photo = _upload_photo(authed_client)
     body = _body("client_photo_text", text="Log this Swiggy receipt", photos=[photo])
@@ -180,10 +180,10 @@ def test_image_and_text_keeps_caption_and_single_receipt(authed_client, demo_led
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert user["parts"][0] == {"type": "text", "text": "Log this Swiggy receipt"}
     assert len(_capture_cards(thread)) == 1
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
 
 
-def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_ledger, monkeypatch):
+async def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_ledger, monkeypatch):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
     statement = authed_client.post(
         "/api/attachments",
@@ -204,13 +204,13 @@ def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_ledger, m
 
     assert response.status_code == 200, response.text
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM imports WHERE attachment_id = %s",
-            (statement.json()["id"],),
-        ).fetchone()["n"]
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM imports WHERE attachment_id = $1",
+            statement.json()["id"],
+        )
         == 1
     )
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
     thread = authed_client.get("/api/threads/thread_photo/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert [part["type"] for part in user["parts"]] == [
@@ -220,16 +220,16 @@ def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_ledger, m
     ]
     cards = _cards(thread)
     assert sorted(card["data"]["card"] for card in cards) == ["capture", "import"]
-    assert (
-        demo_ledger.execute(
-            "SELECT committed_at FROM imports WHERE attachment_id = %s",
-            (statement.json()["id"],),
-        ).fetchone()["committed_at"]
-        is None
+    imported = await demo_ledger.fetchrow(
+        "SELECT committed_at FROM imports WHERE attachment_id = $1",
+        statement.json()["id"],
     )
+    assert imported["committed_at"] is None
 
 
-def test_a_missing_photo_ref_is_refused_before_any_capture(authed_client, demo_ledger, monkeypatch):
+async def test_a_missing_photo_ref_is_refused_before_any_capture(
+    authed_client, demo_ledger, monkeypatch
+):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
     body = _body(
         "client_photo_missing",
@@ -242,11 +242,11 @@ def test_a_missing_photo_ref_is_refused_before_any_capture(authed_client, demo_l
 
     assert response.status_code == 422
     assert "no longer available" in response.json()["detail"]
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 0
-    assert demo_ledger.execute("SELECT count(*) AS n FROM messages").fetchone()["n"] == 0
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
+    assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 0
 
 
-def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
+async def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
     authed_client, demo_ledger, monkeypatch
 ):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _failed_extraction)
@@ -262,22 +262,20 @@ def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
     assert len(cards) == 1
     assert cards[0]["data"]["card"] == "capture-retry"
     assert cards[0]["data"]["kind"] == "photo"
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 0
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
 
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
     retried = authed_client.post(f"/api/chat/thread_photo/photo/{photo['id']}")
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "logged"
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM attachments WHERE id = %s", (photo["id"],)
-        ).fetchone()["n"]
+        await demo_ledger.fetchval("SELECT count(*) FROM attachments WHERE id = $1", photo["id"])
         == 1
     )
 
 
-def test_photo_upload_refuses_a_non_image_and_the_size_limit(authed_client, monkeypatch):
+async def test_photo_upload_refuses_a_non_image_and_the_size_limit(authed_client, monkeypatch):
     refused = _upload(authed_client, name="notes.txt", data=b"hello")
     assert refused.status_code == 415
     assert "PNG, JPEG" in refused.json()["detail"]
@@ -287,7 +285,7 @@ def test_photo_upload_refuses_a_non_image_and_the_size_limit(authed_client, monk
     assert oversized.status_code == 413
 
 
-def test_legacy_statement_upload_still_accepts_html(authed_client):
+async def test_legacy_statement_upload_still_accepts_html(authed_client):
     files = {
         "file": (
             "statement.html",
@@ -333,13 +331,13 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
             assert blocked.status_code == 409
             assert "still being prepared" in blocked.json()["detail"]
             assert (
-                demo_ledger.execute(
-                    "SELECT count(*) AS n FROM messages WHERE client_id = %s",
-                    ("client_prepare_second",),
-                ).fetchone()["n"]
+                await demo_ledger.fetchval(
+                    "SELECT count(*) FROM messages WHERE client_id = $1",
+                    "client_prepare_second",
+                )
                 == 0
             )
-            assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 0
+            assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
 
             other = await client.post(
                 "/api/chat",
@@ -354,16 +352,16 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
 
         assert response.status_code == 200, response.text
         assert sum(event["type"] == "finish" for event in _events(response)) == 1
-        assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
-        assert demo_ledger.execute("SELECT count(*) AS n FROM messages").fetchone()["n"] == 4
-        history = demo_ledger.execute(
+        assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
+        assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 4
+        history = await demo_ledger.fetchval(
             "SELECT model_history FROM conversations WHERE id = 'thread_prepare'"
-        ).fetchone()["model_history"]
+        )
         assert str(history).count("The user shared a receipt") == 1
-        row = demo_ledger.execute(
+        row = await demo_ledger.fetchrow(
             "SELECT run_started_at, active_run_id, outside_text_at FROM conversations "
             "WHERE id = 'thread_prepare'"
-        ).fetchone()
+        )
         assert row["run_started_at"] is None
         assert row["active_run_id"] is None
         assert row["outside_text_at"] is not None
@@ -391,21 +389,22 @@ async def test_a_replay_during_streaming_is_not_blocked(app, demo_ledger, monkey
             assert sum(event["type"] == "start" for event in _events(replay)) == 1
         await _until(lambda: app.state.turns.get("thread_stream_replay") is None)
 
-    assert demo_ledger.execute("SELECT count(*) AS n FROM messages").fetchone()["n"] == 2
+    assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 2
 
 
 async def test_stop_after_a_photo_send_keeps_one_receipt(app, demo_ledger, monkeypatch):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
 
-    attachment_id = new_id(demo_ledger, "att")
-    demo_ledger.execute(
+    attachment_id = await new_id(demo_ledger, "att")
+    await demo_ledger.execute(
         """
         INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, 'photo', 'receipt.png', 'image/png', %s, 'photo-stop', %s)
+        VALUES ($1, 'photo', 'receipt.png', 'image/png', $2, 'photo-stop', $3)
         """,
-        (attachment_id, len(PNG), PNG),
+        attachment_id,
+        len(PNG),
+        PNG,
     )
-    demo_ledger.commit()
     body = _body(
         "client_photo_stop",
         text="Log this receipt",
@@ -426,5 +425,5 @@ async def test_stop_after_a_photo_send_keeps_one_receipt(app, demo_ledger, monke
         await _until(lambda: app.state.turns.get("thread_photo") is None)
         thread = (await client.get("/api/threads/thread_photo/messages")).json()
 
-    assert demo_ledger.execute("SELECT count(*) AS n FROM captures").fetchone()["n"] == 1
+    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
     assert len(_capture_cards(thread)) == 1

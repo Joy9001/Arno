@@ -8,14 +8,11 @@ number is `None` rather than zero, and source IDs travel beside the values they 
 from __future__ import annotations
 
 import calendar
-import threading
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-import psycopg
-
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.engine.money import money
 from fin_agent.ledger import accounts as accounts_mod
 from fin_agent.ledger import categories as categories_mod
@@ -39,8 +36,8 @@ def _month_keys(start: date, end: date) -> list[str]:
     return keys
 
 
-def coverage(
-    conn: psycopg.Connection,
+async def coverage(
+    conn: Connection,
     *,
     account_id: str | None,
     start: date,
@@ -50,20 +47,18 @@ def coverage(
     params: list[Any] = [start, end]
     account_clause = ""
     if account_id is not None:
-        account_clause = "AND account_id = %s"
+        account_clause = f"AND account_id = ${len(params) + 1}"
         params.append(account_id)
-    rows = list(
-        conn.execute(
-            f"""
-            SELECT account_id, period_start, period_end
-            FROM imports
-            WHERE status = 'committed'
-              AND period_start IS NOT NULL AND period_end IS NOT NULL
-              AND period_end >= %s AND period_start <= %s
-              {account_clause}
-            """,  # noqa: S608
-            params,
-        ).fetchall()
+    rows = await conn.fetch(
+        f"""
+        SELECT account_id, period_start, period_end
+        FROM imports
+        WHERE status = 'committed'
+          AND period_start IS NOT NULL AND period_end IS NOT NULL
+          AND period_end >= $1 AND period_start <= $2
+          {account_clause}
+        """,  # noqa: S608
+        *params,
     )
     gaps: list[str] = []
     intervals = sorted(
@@ -102,24 +97,24 @@ def coverage(
     }
 
 
-def _account_coverage(
-    conn: psycopg.Connection, account_id: str, start: date, end: date
+async def _account_coverage(
+    conn: Connection, account_id: str, start: date, end: date
 ) -> dict[str, Any]:
-    return coverage(conn, account_id=account_id, start=start, end=end)
+    return await coverage(conn, account_id=account_id, start=start, end=end)
 
 
-def _payee_is_outside(conn: psycopg.Connection, payee_id: str | None) -> bool:
+async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
     if not payee_id:
         return False
-    row = conn.execute("SELECT outside_text FROM payees WHERE id = %s", (payee_id,)).fetchone()
+    row = await conn.fetchrow("SELECT outside_text FROM payees WHERE id = $1", payee_id)
     return bool(row and row["outside_text"])
 
 
-def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
+async def get_financial_context(conn: Connection) -> dict[str, Any]:
     """One comprehensive snapshot: settings, balances, the next 30 days, goals, owed, setup gaps."""
     day = ledger_today()
-    settings = settings_mod.read_settings(conn)
-    account_rows = accounts_mod.list_accounts(conn)
+    settings = await settings_mod.read_settings(conn)
+    account_rows = await accounts_mod.list_accounts(conn)
     outside = False
     accounts: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -127,7 +122,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         known = has_known_balance(row)
         as_of = (row["balance_as_of"] or row["statement_balance_as_of"]) if known else None
         balance = money(row["balance_paise"]) if known else None
-        coverage_row = _account_coverage(conn, row["id"], day - timedelta(days=366), day)
+        coverage_row = await _account_coverage(conn, row["id"], day - timedelta(days=366), day)
         age = row["statement_age_days"]
         if age is not None and age > 30:
             warnings.append(f"{row['name']} balance is {age} days old")
@@ -172,15 +167,15 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
         else None
     )
 
-    upcoming_rows = schedules_mod.upcoming(conn, days=30, start=day)["events"]
+    upcoming_rows = (await schedules_mod.upcoming(conn, days=30, start=day))["events"]
     upcoming: list[dict[str, Any]] = []
     for event in upcoming_rows:
         name = event["name"]
         schedule_id = event["schedule_id"]
         if schedule_id:
-            schedule = conn.execute(
-                "SELECT outside_text FROM schedules WHERE id = %s", (schedule_id,)
-            ).fetchone()
+            schedule = await conn.fetchrow(
+                "SELECT outside_text FROM schedules WHERE id = $1", schedule_id
+            )
             if schedule and schedule["outside_text"]:
                 name = mark(name) or name
                 outside = True
@@ -196,7 +191,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
             }
         )
 
-    goal_rows = goals_mod.list_goals(conn)
+    goal_rows = await goals_mod.list_goals(conn)
     goals = [
         {
             "id": row["id"],
@@ -212,7 +207,7 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
     ]
 
     schedules: list[dict[str, Any]] = []
-    for row in schedules_mod.list_schedules(conn):
+    for row in await schedules_mod.list_schedules(conn):
         name = row["name"]
         if row["outside_text"]:
             name = mark(name) or name
@@ -231,16 +226,14 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
             }
         )
 
-    owed_rows = list(
-        conn.execute(
-            """
-            SELECT v.payee_id, v.display_name, v.balance_paise, v.direction,
-                   v.next_expected_date, p.outside_text
-            FROM v_owed v
-            JOIN payees p ON p.id = v.payee_id
-            ORDER BY v.display_name
-            """
-        ).fetchall()
+    owed_rows = await conn.fetch(
+        """
+        SELECT v.payee_id, v.display_name, v.balance_paise, v.direction,
+               v.next_expected_date, p.outside_text
+        FROM v_owed v
+        JOIN payees p ON p.id = v.payee_id
+        ORDER BY v.display_name
+        """
     )
     owed: list[dict[str, Any]] = []
     for row in owed_rows:
@@ -264,22 +257,27 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
 
     preferences = [
         {"id": row["id"], "text": row["body"]}
-        for row in conn.execute(
+        for row in await conn.fetch(
             """
             SELECT id, body FROM preferences
             WHERE active AND deleted_at IS NULL
             ORDER BY created_at
             """
-        ).fetchall()
+        )
     ]
 
-    income_count = conn.execute(
-        "SELECT count(*) AS n FROM schedules WHERE active AND kind LIKE 'income%'"
-    ).fetchone()["n"]
-    obligation_count = conn.execute(
-        "SELECT count(*) AS n FROM schedules WHERE active AND kind IN ('obligation', 'instalment')"
-    ).fetchone()["n"]
-    baseline_count = conn.execute("SELECT count(*) AS n FROM baselines").fetchone()["n"]
+    income_count = (
+        await conn.fetchrow(
+            "SELECT count(*) AS n FROM schedules WHERE active AND kind LIKE 'income%'"
+        )
+    )["n"]
+    obligation_count = (
+        await conn.fetchrow(
+            "SELECT count(*) AS n FROM schedules "
+            "WHERE active AND kind IN ('obligation', 'instalment')"
+        )
+    )["n"]
+    baseline_count = (await conn.fetchrow("SELECT count(*) AS n FROM baselines"))["n"]
     setup_gaps: list[str] = []
     if not account_rows:
         setup_gaps.append("no accounts added")
@@ -323,26 +321,27 @@ def get_financial_context(conn: psycopg.Connection) -> dict[str, Any]:
     }
 
 
-def _resolve_named(conn: psycopg.Connection, table: str, value: str | None) -> str | None:
+async def _resolve_named(conn: Connection, table: str, value: str | None) -> str | None:
     if value is None:
         return None
     if table == "accounts":
-        row = conn.execute(
-            "SELECT id FROM accounts WHERE lower(name) = lower(%s) AND active LIMIT 1", (value,)
-        ).fetchone()
+        row = await conn.fetchrow(
+            "SELECT id FROM accounts WHERE lower(name) = lower($1) AND active LIMIT 1", value
+        )
     elif table == "categories":
-        row = conn.execute(
-            "SELECT id FROM categories WHERE lower(name) = lower(%s) AND active LIMIT 1",
-            (value,),
-        ).fetchone()
+        row = await conn.fetchrow(
+            "SELECT id FROM categories WHERE lower(name) = lower($1) AND active LIMIT 1",
+            value,
+        )
     elif table == "payees":
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
-            SELECT id FROM payees WHERE active AND (lower(display_name) = lower(%s) OR upi_id = %s)
+            SELECT id FROM payees WHERE active AND (lower(display_name) = lower($1) OR upi_id = $2)
             ORDER BY display_name LIMIT 1
             """,
-            (value, value),
-        ).fetchone()
+            value,
+            value,
+        )
     else:  # pragma: no cover - internal misuse
         raise ValueError(table)
     if row is None:
@@ -376,21 +375,21 @@ def _check_filters(filters: dict[str, Any], allowed: frozenset[str], period_hint
         )
 
 
-def _reversed_ids(conn: psycopg.Connection) -> list[str]:
+async def _reversed_ids(conn: Connection) -> list[str]:
     """Movements a live reversal cancels. A corrected entry and its reversal are bookkeeping, not
     activity, so lists and counts leave both out. Few exist, so one pass covers the ledger."""
     ids = [
         str(row["id"])
-        for row in conn.execute(
+        for row in await conn.fetch(
             "SELECT DISTINCT reverses_id AS id FROM movements WHERE reverses_id IS NOT NULL"
-        ).fetchall()
+        )
     ]
-    states = movements_mod._reversal_state(conn, ids)  # noqa: SLF001
+    states = await movements_mod._reversal_state(conn, ids)  # noqa: SLF001
     return [movement_id for movement_id in ids if states[movement_id]["reversed"]]
 
 
-def query_movements(
-    conn: psycopg.Connection,
+async def query_movements(
+    conn: Connection,
     *,
     filters: dict[str, Any] | None = None,
     limit: int = 50,
@@ -407,58 +406,59 @@ def query_movements(
     start = end = None
     if filters.get("period"):
         start, end = resolve_period(filters["period"], day)
-    account_id = _resolve_named(conn, "accounts", filters.get("account"))
-    category_id = _resolve_named(conn, "categories", filters.get("category"))
-    payee_id = _resolve_named(conn, "payees", filters.get("payee"))
+    account_id = await _resolve_named(conn, "accounts", filters.get("account"))
+    category_id = await _resolve_named(conn, "categories", filters.get("category"))
+    payee_id = await _resolve_named(conn, "payees", filters.get("payee"))
 
     clauses: list[str] = []
     params: list[Any] = []
     if start is not None:
-        clauses.append("m.date >= %s")
         params.append(start)
+        clauses.append(f"m.date >= ${len(params)}")
     if end is not None:
-        clauses.append("m.date <= %s")
         params.append(end)
+        clauses.append(f"m.date <= ${len(params)}")
     if filters.get("kind"):
-        clauses.append("m.kind = %s")
         params.append(filters["kind"])
+        clauses.append(f"m.kind = ${len(params)}")
     if account_id:
+        params.extend([account_id, account_id])
         clauses.append(
-            """
+            f"""
             EXISTS (
                 SELECT 1 FROM pgledger_transfers t
                 JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
                 JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
                 WHERE t.metadata ->> 'movement_id' = m.id
-                  AND (fa.id = %s OR ta.id = %s)
+                  AND (fa.id = ${len(params) - 1} OR ta.id = ${len(params)})
             )
             """
         )
-        params.extend([account_id, account_id])
     if category_id or payee_id or filters.get("text"):
         label_clauses = ["tl.movement_id = m.id"]
         if category_id:
-            label_clauses.append("tl.category_id = %s")
             params.append(category_id)
+            label_clauses.append(f"tl.category_id = ${len(params)}")
         if payee_id:
-            label_clauses.append("tl.payee_id = %s")
             params.append(payee_id)
+            label_clauses.append(f"tl.payee_id = ${len(params)}")
         if filters.get("text"):
-            text_clause = "(tl.note ILIKE %s OR m.description ILIKE %s)"
             pattern = f"%{filters['text']}%"
-            label_clauses.append(text_clause)
             params.extend([pattern, pattern])
+            label_clauses.append(
+                f"(tl.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})"
+            )
         clauses.append(
             f"EXISTS (SELECT 1 FROM transfer_labels tl WHERE {' AND '.join(label_clauses)})"
         )
     if filters.get("min_paise") is not None or filters.get("max_paise") is not None:
         inner: list[str] = []
         if filters.get("min_paise") is not None:
-            inner.append("amount >= %s")
             params.append(filters["min_paise"])
+            inner.append(f"amount >= ${len(params)}")
         if filters.get("max_paise") is not None:
-            inner.append("amount <= %s")
             params.append(filters["max_paise"])
+            inner.append(f"amount <= ${len(params)}")
         clauses.append(
             "EXISTS (SELECT 1 FROM pgledger_transfers t WHERE t.metadata ->> 'movement_id' = m.id "
             f"AND {' AND '.join(inner)})"
@@ -466,45 +466,52 @@ def query_movements(
     if cursor:
         try:
             cursor_date, cursor_id = cursor.split("|", 1)
-            clauses.append("(m.date, m.id) < (%s, %s)")
             params.extend([date.fromisoformat(cursor_date), cursor_id])
         except (ValueError, TypeError) as exc:
             raise ValueError("Invalid cursor") from exc
+        clauses.append(f"(m.date, m.id) < (${len(params) - 1}, ${len(params)})")
     if not filters.get("include_reversed"):
         # In SQL, not after LIMIT, so total_count, the page, and next_cursor agree.
         clauses.append("m.kind <> 'reversal'")
-        hidden = _reversed_ids(conn)
+        hidden = await _reversed_ids(conn)
         if hidden:
-            clauses.append("NOT (m.id = ANY(%s))")
             params.append(hidden)
+            clauses.append(f"NOT (m.id = ANY(${len(params)}))")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     total = int(
-        conn.execute(
-            f"SELECT count(*) AS n FROM movements m {where}",  # noqa: S608
-            params,
-        ).fetchone()["n"]
+        (
+            await conn.fetchrow(
+                f"SELECT count(*) AS n FROM movements m {where}",  # noqa: S608
+                *params,
+            )
+        )["n"]
     )
-    rows = list(
-        conn.execute(
-            f"""
-            SELECT m.* FROM movements m {where}
-            ORDER BY m.date DESC, m.id DESC
-            LIMIT %s
-            """,  # noqa: S608
-            (*params, limit + 1),
-        ).fetchall()
+    params.append(limit + 1)
+    rows = await conn.fetch(
+        f"""
+        SELECT m.* FROM movements m {where}
+        ORDER BY m.date DESC, m.id DESC
+        LIMIT ${len(params)}
+        """,  # noqa: S608
+        *params,
     )
-    states = movements_mod._reversal_state(conn, [str(row["id"]) for row in rows])  # noqa: SLF001
+    states = await movements_mod._reversal_state(  # noqa: SLF001
+        conn, [str(row["id"]) for row in rows]
+    )
     has_more = len(rows) > limit
     visible = rows[:limit]
 
     outside = False
     items: list[dict[str, Any]] = []
     for row in visible:
-        payload = movements_mod.movement_payload(conn, row, state=states[str(row["id"])])
+        payload = await movements_mod.movement_payload(conn, row, state=states[str(row["id"])])
+        is_outside = [
+            await _payee_is_outside(conn, transfer.get("payee_id"))
+            for transfer in payload["transfers"]
+        ]
         transfers: list[dict[str, Any]] = []
-        for transfer in payload["transfers"]:
-            if _payee_is_outside(conn, transfer.get("payee_id")):
+        for transfer, hidden_text in zip(payload["transfers"], is_outside, strict=False):
+            if hidden_text:
                 transfer["payee_name"] = mark(transfer["payee_name"])
                 outside = True
             transfers.append(
@@ -515,9 +522,7 @@ def query_movements(
                     "amount": money(int(transfer["amount_paise"])),
                 }
             )
-        if any(
-            _payee_is_outside(conn, transfer.get("payee_id")) for transfer in payload["transfers"]
-        ):
+        if any(is_outside):
             payload["description"] = mark(payload["description"])
         items.append(
             {
@@ -540,7 +545,7 @@ def query_movements(
         "rows": items,
         "total_count": total,
         "next_cursor": f"{last['date'].isoformat()}|{last['id']}" if has_more and last else None,
-        "coverage": coverage(
+        "coverage": await coverage(
             conn,
             account_id=account_id,
             start=start or day - timedelta(days=366),
@@ -550,8 +555,8 @@ def query_movements(
     }
 
 
-def summarize_spending(
-    conn: psycopg.Connection,
+async def summarize_spending(
+    conn: Connection,
     *,
     group_by: str = "category",
     period: str = "this_month",
@@ -568,9 +573,9 @@ def summarize_spending(
     )
     day = ledger_today()
     start, end = resolve_period(period, day)
-    account_id = _resolve_named(conn, "accounts", filters.get("account"))
-    category_id = _resolve_named(conn, "categories", filters.get("category"))
-    payee_id = _resolve_named(conn, "payees", filters.get("payee"))
+    account_id = await _resolve_named(conn, "accounts", filters.get("account"))
+    category_id = await _resolve_named(conn, "categories", filters.get("category"))
+    payee_id = await _resolve_named(conn, "payees", filters.get("payee"))
 
     key_sql = {
         "category": "coalesce(c.name, 'Uncategorized')",
@@ -585,58 +590,56 @@ def summarize_spending(
 
     # The sum keeps every row, since a reversal nets its original to zero; the count leaves the
     # pair out, so three grocery trips with one corrected entry count as three, not five.
-    params: list[Any] = [_reversed_ids(conn), start, end]
+    params: list[Any] = [await _reversed_ids(conn), start, end]
     clauses = [
         "t.metadata ->> 'movement_id' = m.id",
         "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
-        "m.date BETWEEN %s AND %s",
+        "m.date BETWEEN $2 AND $3",
     ]
     if account_id:
-        clauses.append("(fa.id = %s OR ta.id = %s)")
         params.extend([account_id, account_id])
+        clauses.append(f"(fa.id = ${len(params) - 1} OR ta.id = ${len(params)})")
     if category_id:
-        clauses.append("tl.category_id = %s")
         params.append(category_id)
+        clauses.append(f"tl.category_id = ${len(params)}")
     if payee_id:
-        clauses.append("tl.payee_id = %s")
         params.append(payee_id)
+        clauses.append(f"tl.payee_id = ${len(params)}")
     if filters.get("text"):
-        clauses.append("(tl.note ILIKE %s OR m.description ILIKE %s)")
         pattern = f"%{filters['text']}%"
         params.extend([pattern, pattern])
+        clauses.append(f"(tl.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})")
 
-    rows = list(
-        conn.execute(
-            f"""
-            SELECT {key_sql} AS key,
-                   sum(
-                       CASE WHEN t.to_account_id = sp.ledger_account_id
-                            THEN t.amount ELSE -t.amount END
-                   )::bigint AS amount_paise,
-                   count(DISTINCT m.id) FILTER (
-                       WHERE m.kind <> 'reversal' AND NOT (m.id = ANY(%s))
-                   )::bigint AS n,
-                   (array_agg(tl.payee_id) FILTER (WHERE tl.payee_id IS NOT NULL))[1] AS payee_id
-            FROM pgledger_transfers t
-            JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-            JOIN accounts sp ON sp.kind = 'spending'
-            LEFT JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-            LEFT JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-            LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
-            LEFT JOIN categories c ON c.id = tl.category_id
-            LEFT JOIN payees p ON p.id = tl.payee_id
-            WHERE {" AND ".join(clauses)}
-            GROUP BY 1
-            ORDER BY 2 DESC, 1
-            """,  # noqa: S608
-            params,
-        ).fetchall()
+    rows = await conn.fetch(
+        f"""
+        SELECT {key_sql} AS key,
+               sum(
+                   CASE WHEN t.to_account_id = sp.ledger_account_id
+                        THEN t.amount ELSE -t.amount END
+               )::bigint AS amount_paise,
+               count(DISTINCT m.id) FILTER (
+                   WHERE m.kind <> 'reversal' AND NOT (m.id = ANY($1))
+               )::bigint AS n,
+               (array_agg(tl.payee_id) FILTER (WHERE tl.payee_id IS NOT NULL))[1] AS payee_id
+        FROM pgledger_transfers t
+        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN accounts sp ON sp.kind = 'spending'
+        LEFT JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
+        LEFT JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
+        LEFT JOIN categories c ON c.id = tl.category_id
+        LEFT JOIN payees p ON p.id = tl.payee_id
+        WHERE {" AND ".join(clauses)}
+        GROUP BY 1
+        ORDER BY 2 DESC, 1
+        """,  # noqa: S608
+        *params,
     )
     outside = False
     groups: list[dict[str, Any]] = []
     for row in rows:
         key = row["key"]
-        if group_by == "payee" and _payee_is_outside(conn, row.get("payee_id")):
+        if group_by == "payee" and await _payee_is_outside(conn, row.get("payee_id")):
             key = mark(key)
             outside = True
         groups.append(
@@ -646,7 +649,7 @@ def summarize_spending(
                 "count": int(row["n"]),
             }
         )
-    cov = coverage(conn, account_id=account_id, start=start, end=end)
+    cov = await coverage(conn, account_id=account_id, start=start, end=end)
     total_paise = sum(int(row["amount_paise"]) for row in rows)
     total = money(total_paise) if rows or cov["complete"] else None
     return {
@@ -658,45 +661,39 @@ def summarize_spending(
     }
 
 
-def run_query(sql: str, *, deadline_seconds: float = 2.0) -> dict[str, Any]:
+async def run_query(sql: str, *, deadline_seconds: float = 2.0) -> dict[str, Any]:
     """Run one read-only statement as `agent_ro`, always rolled back, always marked."""
     text = sql.strip().rstrip(";").strip()
     if not text:
         raise ValueError("No SQL was given")
-    conn = connect(role="agent_ro")
-    timer = threading.Timer(deadline_seconds, conn.cancel)
-    timer.daemon = True
-    timer.start()
-    try:
-        conn.execute("SET LOCAL statement_timeout = '2s'")
-        with conn.cursor() as cursor:
-            cursor.execute(text, prepare=True)
-            if cursor.description is None:
+    async with connect(role="agent_ro") as conn:
+        tx = conn.transaction(readonly=True)
+        await tx.start()
+        try:
+            await conn.execute("SET LOCAL statement_timeout = '2s'")
+            stmt = await conn.prepare(text, timeout=deadline_seconds)
+            attributes = stmt.get_attributes()
+            if not attributes:
                 raise ValueError("run_query needs a statement that returns rows")
-            columns = [column.name for column in cursor.description]
-            raw_rows = cursor.fetchmany(1001)
-        truncated = len(raw_rows) > 1000
-        rows = raw_rows[:1000]
-        converted: list[list[Any]] = []
-        for row in rows:
-            if isinstance(row, dict):
-                values_in = [row.get(column) for column in columns]
-            else:
-                values_in = list(row)
-            values: list[Any] = []
-            for value in values_in:
-                if isinstance(value, Decimal):
-                    value = int(value) if value == value.to_integral_value() else float(value)
-                elif isinstance(value, (date, datetime)):
-                    value = value.isoformat()
-                elif isinstance(value, str):
-                    value = mark(value)
-                values.append(value)
-            converted.append(values)
-    finally:
-        timer.cancel()
-        conn.rollback()
-        conn.close()
+            columns = [attr.name for attr in attributes]
+            cursor = await stmt.cursor()
+            records = await cursor.fetch(1001, timeout=deadline_seconds)
+        finally:
+            await tx.rollback()
+    truncated = len(records) > 1000
+    converted: list[list[Any]] = []
+    for record in records[:1000]:
+        values_in = list(record)
+        values: list[Any] = []
+        for value in values_in:
+            if isinstance(value, Decimal):
+                value = int(value) if value == value.to_integral_value() else float(value)
+            elif isinstance(value, (date, datetime)):
+                value = value.isoformat()
+            elif isinstance(value, str):
+                value = mark(value)
+            values.append(value)
+        converted.append(values)
     return {
         "columns": columns,
         "rows": converted,
@@ -707,24 +704,21 @@ def run_query(sql: str, *, deadline_seconds: float = 2.0) -> dict[str, Any]:
     }
 
 
-def active_preferences(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    return [
-        dict(row)
-        for row in conn.execute(
-            """
-            SELECT id, body, created_by, active, created_at, updated_at
-            FROM preferences WHERE deleted_at IS NULL ORDER BY created_at
-            """
-        ).fetchall()
-    ]
+async def active_preferences(conn: Connection) -> list[dict[str, Any]]:
+    return await conn.fetch(
+        """
+        SELECT id, body, created_by, active, created_at, updated_at
+        FROM preferences WHERE deleted_at IS NULL ORDER BY created_at
+        """
+    )
 
 
-def list_categories(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    return [dict(row) for row in categories_mod.list_categories(conn)]
+async def list_categories(conn: Connection) -> list[dict[str, Any]]:
+    return await categories_mod.list_categories(conn)
 
 
-def list_payees(conn: psycopg.Connection) -> list[dict[str, Any]]:
-    return [dict(row) for row in payees_mod.list_payees(conn)]
+async def list_payees(conn: Connection) -> list[dict[str, Any]]:
+    return await payees_mod.list_payees(conn)
 
 
 __all__ = [

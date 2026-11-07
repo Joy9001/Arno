@@ -5,8 +5,8 @@ from __future__ import annotations
 from fin_agent.tools import write as write_tools
 
 
-def _expense(conn, *, description="Card undo lunch"):
-    return write_tools.record_movement(
+async def _expense(conn, *, description="Card undo lunch"):
+    return await write_tools.record_movement(
         conn,
         {
             "kind": "expense",
@@ -22,16 +22,16 @@ def _expense(conn, *, description="Card undo lunch"):
     )
 
 
-def test_a_movement_card_carries_the_result_undo_id(demo_ledger):
-    result = _expense(demo_ledger)
+async def test_a_movement_card_carries_the_result_undo_id(demo_ledger):
+    result = await _expense(demo_ledger)
 
     assert result["status"] == "recorded"
     assert result["undo_id"]
     assert result["card"]["undo_id"] == result["undo_id"]
 
 
-def test_a_setup_card_carries_the_result_undo_id_and_a_no_op_has_none(demo_ledger):
-    added = write_tools.update_setup_item(
+async def test_a_setup_card_carries_the_result_undo_id_and_a_no_op_has_none(demo_ledger):
+    added = await write_tools.update_setup_item(
         demo_ledger,
         entity="account",
         action="add",
@@ -41,7 +41,7 @@ def test_a_setup_card_carries_the_result_undo_id_and_a_no_op_has_none(demo_ledge
     assert added["card"]["undo_id"] == added["undo_id"]
     assert added["card"]["undo_id"]
 
-    unchanged = write_tools.update_setup_item(
+    unchanged = await write_tools.update_setup_item(
         demo_ledger,
         entity="account",
         action="update",
@@ -52,8 +52,8 @@ def test_a_setup_card_carries_the_result_undo_id_and_a_no_op_has_none(demo_ledge
     assert unchanged["card"].get("undo_id") is None
 
 
-def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_ledger):
-    created = write_tools.preference(
+async def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_ledger):
+    created = await write_tools.preference(
         demo_ledger,
         action="remember",
         text="Use UPI first",
@@ -63,7 +63,7 @@ def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_ledger
     assert created["card"]["undo_id"] == created["undo_id"]
     assert created["card"]["undo_id"]
 
-    repeated = write_tools.preference(
+    repeated = await write_tools.preference(
         demo_ledger,
         action="remember",
         text="Use UPI first",
@@ -74,10 +74,10 @@ def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_ledger
     assert repeated["card"].get("undo_id") is None
 
 
-def test_a_correction_card_carries_its_undo_id_but_a_no_op_does_not(demo_ledger):
-    movement = _expense(demo_ledger)
+async def test_a_correction_card_carries_its_undo_id_but_a_no_op_does_not(demo_ledger):
+    movement = await _expense(demo_ledger)
 
-    corrected = write_tools.correct_movement(
+    corrected = await write_tools.correct_movement(
         demo_ledger,
         movement_id=movement["movement_id"],
         changes={"category": "Groceries"},
@@ -86,7 +86,7 @@ def test_a_correction_card_carries_its_undo_id_but_a_no_op_does_not(demo_ledger)
     assert corrected["card"]["undo_id"] == corrected["undo_id"]
     assert corrected["card"]["undo_id"]
 
-    unchanged = write_tools.correct_movement(
+    unchanged = await write_tools.correct_movement(
         demo_ledger,
         movement_id=movement["movement_id"],
         changes={},

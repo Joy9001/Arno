@@ -7,21 +7,20 @@ import json
 from fin_agent.notifications import create_notification, send_push_for_kind
 
 
-def test_unread_badge_and_mark_read(authed_client, db):
-    first = create_notification(
+async def test_unread_badge_and_mark_read(authed_client, db):
+    first = await create_notification(
         db,
         kind="reminder",
         title="Rent is due tomorrow",
         body="₹25,000 is due.",
         dedupe_key="reminder:sch_1:2026-11-04",
     )
-    create_notification(
+    await create_notification(
         db,
         kind="risk_warning",
         title="Your projection is riskier",
         body="The floor probability fell.",
     )
-    db.commit()
 
     listed = authed_client.get("/api/notifications")
     assert listed.status_code == 200
@@ -38,8 +37,8 @@ def test_unread_badge_and_mark_read(authed_client, db):
     assert authed_client.get("/api/notifications").json()["unread_count"] == 0
 
 
-def test_a_notification_opens_a_new_chat_and_preserves_outside_text(authed_client, db):
-    row = create_notification(
+async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(authed_client, db):
+    row = await create_notification(
         db,
         kind="new_subscription",
         title="New recurring charge: Netflix",
@@ -52,7 +51,6 @@ def test_a_notification_opens_a_new_chat_and_preserves_outside_text(authed_clien
         },
         dedupe_key="pattern:new:netflix:30:2026-10-01",
     )
-    db.commit()
 
     opened = authed_client.post(f"/api/notifications/{row['id']}/chat")
     assert opened.status_code == 200, opened.text
@@ -61,24 +59,19 @@ def test_a_notification_opens_a_new_chat_and_preserves_outside_text(authed_clien
     assert body["outside_text"] is True
     assert "<outside>Netflix</outside>" in body["message"]
 
-    thread = db.execute(
-        "SELECT * FROM conversations WHERE id = %s", (body["thread_id"],)
-    ).fetchone()
+    thread = await db.fetchrow("SELECT * FROM conversations WHERE id = $1", body["thread_id"])
     assert thread["outside_text_at"] is not None
-    message = db.execute(
-        "SELECT * FROM messages WHERE conversation_id = %s ORDER BY created_at",
-        (body["thread_id"],),
-    ).fetchone()
+    message = await db.fetchrow(
+        "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at",
+        body["thread_id"],
+    )
     assert "<outside>Netflix</outside>" in message["body_text"]
     assert (
-        db.execute("SELECT read_at FROM notifications WHERE id = %s", (row["id"],)).fetchone()[
-            "read_at"
-        ]
-        is not None
-    )
+        await db.fetchval("SELECT read_at FROM notifications WHERE id = $1", row["id"])
+    ) is not None
 
 
-def test_push_subscription_and_a_contentless_ping(authed_client, db, monkeypatch):
+async def test_push_subscription_and_a_contentless_ping(authed_client, db, monkeypatch):
     key = authed_client.get("/api/push/key")
     assert key.status_code == 200
     assert len(key.json()["public_key"]) > 20
@@ -100,8 +93,7 @@ def test_push_subscription_and_a_contentless_ping(authed_client, db, monkeypatch
         return "ok"
 
     monkeypatch.setattr("fin_agent.notifications.webpush", fake_webpush)
-    send_push_for_kind(db, "weekly_briefing")
-    db.commit()
+    await send_push_for_kind(db, "weekly_briefing")
     assert len(sent) == 1
     payload = json.loads(sent[0]["data"])
     assert payload["body"] == "Your weekly briefing is ready"
@@ -118,7 +110,7 @@ def test_push_subscription_and_a_contentless_ping(authed_client, db, monkeypatch
     assert removed.json()["removed"] is True
 
 
-def test_settings_scheduled_questions_and_job_status_round_trip(authed_client):
+async def test_settings_scheduled_questions_and_job_status_round_trip(authed_client):
     patched = authed_client.patch(
         "/api/settings",
         json={

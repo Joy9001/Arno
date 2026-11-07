@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 
 from typer.testing import CliRunner
@@ -12,26 +13,23 @@ from tests.test_auth import _complete_setup
 TOKEN_RE = re.compile(r"/setup#t=([A-Za-z0-9_\-]+)")
 
 
-def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
+async def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
     client, setup_token, settings, db
 ):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
-    result = CliRunner().invoke(cli_app, ["passkeys", "reset"])
+    result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["passkeys", "reset"])
 
     assert result.exit_code == 0, result.output
     assert "Deleted 1 passkey(s) and revoked 1 session(s)." in result.output
     assert "/setup#t=" in result.output
     assert "Setup token (paste fallback):" in result.output
 
-    assert setup_required(db)
-    assert db.execute("SELECT count(*) AS n FROM users").fetchone()["n"] == 1
-    assert db.execute("SELECT count(*) AS n FROM webauthn_credentials").fetchone()["n"] == 0
-    assert (
-        db.execute("SELECT count(*) AS n FROM sessions WHERE revoked_at IS NULL").fetchone()["n"]
-        == 0
-    )
+    assert await setup_required(db)
+    assert await db.fetchval("SELECT count(*) FROM users") == 1
+    assert await db.fetchval("SELECT count(*) FROM webauthn_credentials") == 0
+    assert await db.fetchval("SELECT count(*) FROM sessions WHERE revoked_at IS NULL") == 0
 
     token = TOKEN_RE.search(result.output).group(1)
     replacement = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
@@ -61,11 +59,11 @@ def test_migrate_reports_already_up_to_date(client):
     assert result.output.strip() == "already up to date"
 
 
-def test_setup_token_command_refuses_when_setup_is_complete(client, setup_token, settings):
+async def test_setup_token_command_refuses_when_setup_is_complete(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
-    result = CliRunner().invoke(cli_app, ["setup-token"])
+    result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["setup-token"])
 
     assert result.exit_code == 0
     assert "use Settings" in result.output

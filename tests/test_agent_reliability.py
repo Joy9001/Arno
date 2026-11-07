@@ -88,7 +88,7 @@ def test_the_cli_connection_is_replaced_across_loops_and_closed_explicitly(monke
     assert second.terminated == 1
 
 
-def test_the_backup_model_takes_over_without_sticking(demo_ledger):
+async def test_the_backup_model_takes_over_without_sticking(demo_ledger):
     def failing(messages, info: AgentInfo) -> ModelResponse:
         raise ModelAPIError("primary", "provider is down")
 
@@ -96,7 +96,7 @@ def test_the_backup_model_takes_over_without_sticking(demo_ledger):
         return ModelResponse(parts=[TextPart("from the backup")])
 
     agent = build_agent(model=FunctionModel(failing), backup=FunctionModel(backup))
-    result = agent.run_sync("hi")
+    result = await agent.run("hi")
     assert result.output == "from the backup"
 
 
@@ -130,7 +130,7 @@ def test_the_turn_ceilings_are_wide_but_finite():
     assert RUN_MODEL_SETTINGS["request_timeout"] == 180
 
 
-def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_client, demo_ledger):
+async def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_client, demo_ledger):
     def failing(messages, info: AgentInfo) -> ModelResponse:
         raise ModelAPIError("primary", "provider is down")
 
@@ -154,5 +154,5 @@ def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_client, dem
     thread = authed_client.get("/api/threads/thread-backup/messages").json()
     parts = [part for message in thread["messages"] for part in message.get("parts", [])]
     assert any(part.get("type") == "data-model-badge" for part in parts)
-    row = demo_ledger.execute("SELECT last_model_error_type FROM settings WHERE id = 1").fetchone()
+    row = await demo_ledger.fetchrow("SELECT last_model_error_type FROM settings WHERE id = 1")
     assert row["last_model_error_type"]

@@ -8,13 +8,10 @@ inside the lead window does not repeat it.
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger.common import today as ledger_today
@@ -31,18 +28,18 @@ def _when_text(days: int) -> str:
     return f"in {days} days"
 
 
-def send_reminders(
-    conn: psycopg.Connection,
+async def send_reminders(
+    conn: Connection,
     *,
     as_of: date | None = None,
     lead_days: int | None = None,
 ) -> list[dict[str, Any]]:
     day = as_of or ledger_today()
     if lead_days is None:
-        row = conn.execute("SELECT reminder_lead_days FROM settings WHERE id = 1").fetchone()
+        row = await conn.fetchrow("SELECT reminder_lead_days FROM settings WHERE id = 1")
         lead_days = int(row["reminder_lead_days"]) if row else 3
     lead_days = max(0, min(int(lead_days), 30))
-    events = schedules_mod.upcoming(conn, days=lead_days, start=day)["events"]
+    events = (await schedules_mod.upcoming(conn, days=lead_days, start=day))["events"]
     created: list[dict[str, Any]] = []
     for event in events:
         if event["kind"] not in {"obligation", "instalment", "card_due"}:
@@ -55,10 +52,10 @@ def send_reminders(
         key = f"reminder:{source_id}:{event['date']}"
         outside = False
         if event["schedule_id"]:
-            schedule = conn.execute(
-                "SELECT outside_text FROM schedules WHERE id = %s",
-                (event["schedule_id"],),
-            ).fetchone()
+            schedule = await conn.fetchrow(
+                "SELECT outside_text FROM schedules WHERE id = $1",
+                event["schedule_id"],
+            )
             outside = bool(schedule and schedule["outside_text"])
         days = (due - day).days
         title = f"{event['name']} is due {_when_text(days)}"
@@ -67,7 +64,7 @@ def send_reminders(
             if amount_paise is not None
             else f"Due {event['date']}. The amount is unknown."
         )
-        row = create_notification(
+        row = await create_notification(
             conn,
             kind="reminder",
             title=title,
@@ -87,14 +84,12 @@ def send_reminders(
     return created
 
 
-def handle_reminders(payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_reminders(payload: dict[str, Any]) -> dict[str, Any]:
     del payload
-    with closing(connect()) as conn:
-        rows = send_reminders(conn)
-        conn.commit()
+    async with connect() as conn:
+        rows = await send_reminders(conn)
         if rows:
-            send_push_for_kind(conn, "reminder")
-            conn.commit()
+            await send_push_for_kind(conn, "reminder")
         return {"created": len(rows), "ids": [row["id"] for row in rows]}
 
 

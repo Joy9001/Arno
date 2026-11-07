@@ -60,16 +60,17 @@ def stt_stub():
         server.server_close()
 
 
-def _audio_attachment(conn) -> str:
-    attachment_id = new_id(conn, "att")
-    conn.execute(
+async def _audio_attachment(conn) -> str:
+    attachment_id = await new_id(conn, "att")
+    await conn.execute(
         """
         INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, 'audio', 'voice.webm', 'audio/webm', %s, 'hash', %s)
+        VALUES ($1, 'audio', 'voice.webm', 'audio/webm', $2, 'hash', $3)
         """,
-        (attachment_id, len(WEBM), WEBM),
+        attachment_id,
+        len(WEBM),
+        WEBM,
     )
-    conn.commit()
     return attachment_id
 
 
@@ -81,7 +82,7 @@ def _has_tool_return(messages, name: str) -> bool:
     return False
 
 
-def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
+async def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
     authed_client, ledger, monkeypatch
 ):
     monkeypatch.setenv("STT_BASE_URL", "http://127.0.0.1:9/v1")
@@ -98,19 +99,18 @@ def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
     assert payload["card"]["card"] == "capture-retry"
     assert payload["card"]["kind"] == "voice"
 
-    ledger.commit()
-    row = ledger.execute(
-        "SELECT kind, content_type, data FROM attachments WHERE id = %s",
-        (payload["attachment_id"],),
-    ).fetchone()
+    row = await ledger.fetchrow(
+        "SELECT kind, content_type, data FROM attachments WHERE id = $1",
+        payload["attachment_id"],
+    )
     assert row["kind"] == "audio"
     assert row["content_type"] == "audio/webm"
     assert bytes(row["data"]) == WEBM
 
-    card = ledger.execute(
-        "SELECT content FROM messages WHERE client_id = %s",
-        (f"capfail_{payload['attachment_id']}",),
-    ).fetchone()
+    card = await ledger.fetchrow(
+        "SELECT content FROM messages WHERE client_id = $1",
+        f"capfail_{payload['attachment_id']}",
+    )
     assert card is not None
     assert card["content"]["parts"][0]["data"]["card"] == "capture-retry"
 
@@ -120,16 +120,15 @@ def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
     assert retry.status_code == 200
     assert retry.json()["status"] == "failed"
     assert retry.json()["attachment_id"] == payload["attachment_id"]
-    count = ledger.execute("SELECT count(*) AS n FROM attachments").fetchone()["n"]
+    count = await ledger.fetchval("SELECT count(*) FROM attachments")
     assert count == 1
 
 
-def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_prompt(
+async def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_prompt(
     authed_client, ledger, stt_stub, monkeypatch
 ):
     calls, port = stt_stub
-    payees_mod.create_payee(ledger, display_name="Swiggy", kind="merchant", actor="user")
-    ledger.commit()
+    await payees_mod.create_payee(ledger, display_name="Swiggy", kind="merchant", actor="user")
     monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
     monkeypatch.setenv("STT_MODEL", "stub-whisper")
     monkeypatch.setenv("STT_API_KEY", "secret")
@@ -176,10 +175,10 @@ def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_prompt
     assert b'name="language"' in calls[2]["body"]
 
 
-def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(
+async def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(
     authed_client, demo_ledger
 ):
-    attachment_id = _audio_attachment(demo_ledger)
+    attachment_id = await _audio_attachment(demo_ledger)
 
     def script(messages, _info):
         if not _has_tool_return(messages, "record_movement"):
@@ -218,13 +217,13 @@ def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(
         )
     assert response.status_code == 200, response.text
 
-    thread = demo_ledger.execute(
+    thread = await demo_ledger.fetchrow(
         "SELECT outside_text_at FROM conversations WHERE id = 'cnv_voice_chat'"
-    ).fetchone()
+    )
     assert thread["outside_text_at"] is None
-    capture = demo_ledger.execute(
-        "SELECT kind, ref FROM captures WHERE ref = %s", (attachment_id,)
-    ).fetchone()
+    capture = await demo_ledger.fetchrow(
+        "SELECT kind, ref FROM captures WHERE ref = $1", attachment_id
+    )
     assert capture is not None
     assert capture["kind"] == "voice"
 
@@ -243,7 +242,7 @@ async def _failed_extraction(*_args, **_kwargs) -> PaymentPhoto:
     raise RuntimeError("vision endpoint down")
 
 
-def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
+async def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
     authed_client, demo_ledger, monkeypatch
 ):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
@@ -262,39 +261,39 @@ def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
     assert card["url"] == f"/api/attachments/{payload['attachment_id']}"
     assert card["undo_id"]
 
-    attachment = demo_ledger.execute(
-        "SELECT kind, content_type, data FROM attachments WHERE id = %s",
-        (payload["attachment_id"],),
-    ).fetchone()
+    attachment = await demo_ledger.fetchrow(
+        "SELECT kind, content_type, data FROM attachments WHERE id = $1",
+        payload["attachment_id"],
+    )
     assert attachment["kind"] == "photo"
     assert attachment["content_type"] == "image/png"
     assert bytes(attachment["data"]) == PNG
 
-    movement = movements_mod.get_movement(demo_ledger, card["movement_id"])
+    movement = await movements_mod.get_movement(demo_ledger, card["movement_id"])
     assert movement["kind"] == "expense"
     assert movement["description"] == "Swiggy"
     assert movement["amount_paise"] == 45_000
 
-    capture = demo_ledger.execute(
-        "SELECT kind, ref, upi_ref FROM captures WHERE movement_id = %s",
-        (card["movement_id"],),
-    ).fetchone()
+    capture = await demo_ledger.fetchrow(
+        "SELECT kind, ref, upi_ref FROM captures WHERE movement_id = $1",
+        card["movement_id"],
+    )
     assert capture["kind"] == "photo"
     assert capture["ref"] == payload["attachment_id"]
     assert capture["upi_ref"] == "412345678901"
 
-    thread = demo_ledger.execute(
+    thread = await demo_ledger.fetchrow(
         "SELECT outside_text_at, model_history FROM conversations WHERE id = 'cnv_photo_1'"
-    ).fetchone()
+    )
     assert thread["outside_text_at"] is not None
     history_text = json.dumps(thread["model_history"])
     assert "<outside>Swiggy</outside>" in history_text
     assert "<outside>412345678901</outside>" in history_text
 
-    saved = demo_ledger.execute(
-        "SELECT role, content FROM messages WHERE client_id = %s",
-        (f"cap_{payload['attachment_id']}",),
-    ).fetchone()
+    saved = await demo_ledger.fetchrow(
+        "SELECT role, content FROM messages WHERE client_id = $1",
+        f"cap_{payload['attachment_id']}",
+    )
     assert saved["role"] == "assistant"
     assert saved["content"]["parts"][0]["data"]["card"] == "capture"
 
@@ -307,10 +306,10 @@ def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
 
     undone = authed_client.post(f"/api/undo/{card['undo_id']}")
     assert undone.status_code == 200, undone.text
-    assert movements_mod.get_movement(demo_ledger, card["movement_id"])["reversed"] is True
+    assert (await movements_mod.get_movement(demo_ledger, card["movement_id"]))["reversed"] is True
 
 
-def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
+async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     authed_client, demo_ledger, monkeypatch
 ):
     monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _failed_extraction)
@@ -324,15 +323,15 @@ def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     assert payload["card"]["card"] == "capture-retry"
     assert payload["card"]["kind"] == "photo"
 
-    attachment = demo_ledger.execute(
-        "SELECT kind, data FROM attachments WHERE id = %s", (payload["attachment_id"],)
-    ).fetchone()
+    attachment = await demo_ledger.fetchrow(
+        "SELECT kind, data FROM attachments WHERE id = $1", payload["attachment_id"]
+    )
     assert attachment["kind"] == "photo"
     assert bytes(attachment["data"]) == PNG
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM captures WHERE ref = %s", (payload["attachment_id"],)
-        ).fetchone()["n"]
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM captures WHERE ref = $1", payload["attachment_id"]
+        )
         == 0
     )
 
@@ -341,16 +340,16 @@ def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "logged"
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM attachments WHERE id = %s",
-            (payload["attachment_id"],),
-        ).fetchone()["n"]
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM attachments WHERE id = $1",
+            payload["attachment_id"],
+        )
         == 1
     )
     assert (
-        demo_ledger.execute(
-            "SELECT count(*) AS n FROM captures WHERE ref = %s", (payload["attachment_id"],)
-        ).fetchone()["n"]
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM captures WHERE ref = $1", payload["attachment_id"]
+        )
         == 1
     )
 
@@ -385,7 +384,7 @@ def test_capture_endpoints_and_attachments_require_a_session(client):
     )
 
 
-def test_photo_upload_rejects_a_file_that_is_not_an_image(authed_client):
+async def test_photo_upload_rejects_a_file_that_is_not_an_image(authed_client):
     response = authed_client.post(
         "/api/chat/cnv_photo_bad/photo",
         files={"file": ("notes.txt", b"hello", "text/plain")},

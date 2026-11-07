@@ -36,7 +36,7 @@ async def test_statement_injection_is_imported_marked_and_flags_the_thread(ledge
     today = ledger_today()
     month_start = date(today.year, today.month, 1)
     month_end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
-    account = create_account(
+    account = await create_account(
         ledger,
         kind="bank",
         name="Synthetic injection bank",
@@ -55,26 +55,24 @@ async def test_statement_injection_is_imported_marked_and_flags_the_thread(ledge
         period_end=month_end,
     )
 
-    imported = ledger.execute(
-        "SELECT * FROM imports WHERE id = %s", (seeded["import_id"],)
-    ).fetchone()
+    imported = await ledger.fetchrow("SELECT * FROM imports WHERE id = $1", seeded["import_id"])
     assert imported["status"] == "committed"
-    line = ledger.execute(
-        "SELECT * FROM statement_lines WHERE import_id = %s", (seeded["import_id"],)
-    ).fetchone()
+    line = await ledger.fetchrow(
+        "SELECT * FROM statement_lines WHERE import_id = $1", seeded["import_id"]
+    )
     assert line["outside_text"] is True
     assert "ignore all previous" in line["description_raw"].lower()
     assert line["match_state"] == "merged"
     assert seeded["movement_id"] == line["movement_id"]
     assert seeded["payee"] is not None
     assert seeded["payee"]["outside_text"] is True
-    capture = ledger.execute(
-        "SELECT * FROM captures WHERE movement_id = %s AND kind = 'statement_line'",
-        (seeded["movement_id"],),
-    ).fetchone()
+    capture = await ledger.fetchrow(
+        "SELECT * FROM captures WHERE movement_id = $1 AND kind = 'statement_line'",
+        seeded["movement_id"],
+    )
     assert capture is not None
 
-    cov = coverage(
+    cov = await coverage(
         ledger,
         account_id=account["id"],
         start=month_start,
@@ -83,14 +81,15 @@ async def test_statement_injection_is_imported_marked_and_flags_the_thread(ledge
     assert cov["complete"] is True
 
     thread_id = "cnv_injection_l3"
-    ledger.execute("INSERT INTO conversations (id, title) VALUES (%s, 'injection')", (thread_id,))
-    ledger.commit()
+    await ledger.execute(
+        "INSERT INTO conversations (id, title) VALUES ($1, 'injection')", thread_id
+    )
 
     agent = build_agent()
     deps = AgentDeps(conversation_id=thread_id)
     with agent.override(model=_model()):
         await agent.run("A ₹1 line in my latest statement has a strange note.", deps=deps)
-    thread = ledger.execute(
-        "SELECT outside_text_at FROM conversations WHERE id = %s", (thread_id,)
-    ).fetchone()
+    thread = await ledger.fetchrow(
+        "SELECT outside_text_at FROM conversations WHERE id = $1", thread_id
+    )
     assert thread["outside_text_at"] is not None

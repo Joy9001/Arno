@@ -12,14 +12,10 @@ import asyncio
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import closing
 from datetime import timedelta
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 
 logger = logging.getLogger("fin_agent.jobs")
 
@@ -72,8 +68,8 @@ def handlers() -> dict[str, Handler]:
     return DEFAULT_HANDLERS
 
 
-def enqueue_job(
-    conn: psycopg.Connection,
+async def enqueue_job(
+    conn: Connection,
     *,
     key: str,
     kind: str,
@@ -85,44 +81,47 @@ def enqueue_job(
     `jobs.trace_context` remains nullable for historical rows; new jobs leave it empty and
     each attempt starts its own native Pydantic AI trace.
     """
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO jobs (key, kind, payload, run_at)
-        VALUES (%s, %s, %s, coalesce(%s, now()))
+        VALUES ($1, $2, $3, coalesce($4, now()))
         ON CONFLICT (key) DO NOTHING
         RETURNING id
         """,
-        (key, kind, Jsonb(payload or {}), run_at),
-    ).fetchone()
+        key,
+        kind,
+        payload or {},
+        run_at,
+    )
     if row is not None:
         return str(row["id"])
-    existing = conn.execute("SELECT id FROM jobs WHERE key = %s", (key,)).fetchone()
+    existing = await conn.fetchrow("SELECT id FROM jobs WHERE key = $1", key)
     if existing is None:  # pragma: no cover - the conflict row vanished
         raise RuntimeError(f"job key {key!r} exists but its row is gone")
     return str(existing["id"])
 
 
-def recover_interrupted_jobs(conn: psycopg.Connection) -> int:
+async def recover_interrupted_jobs(conn: Connection) -> int:
     """At boot, anything still marked running was interrupted: run it again from the top."""
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         UPDATE jobs
         SET status = 'pending', started_at = NULL, updated_at = now()
         WHERE status = 'running'
         RETURNING id
         """
-    ).fetchall()
+    )
     return len(rows)
 
 
-def enqueue_risk_check(conn: psycopg.Connection, group_id: str) -> str | None:
+async def enqueue_risk_check(conn: Connection, group_id: str) -> str | None:
     """Queue a projection check after a write, collapsed to one per short burst.
 
     A statement import creates many write groups. Every one asks for a check, but a job that
     started in the last ten seconds already sees the writes that committed before it, so a small
     debounce keeps one import from filling the queue without delaying a normal write.
     """
-    recent = conn.execute(
+    recent = await conn.fetchrow(
         """
         SELECT 1 FROM jobs
         WHERE kind = 'risk_check'
@@ -130,10 +129,10 @@ def enqueue_risk_check(conn: psycopg.Connection, group_id: str) -> str | None:
           AND created_at > now() - interval '10 seconds'
         LIMIT 1
         """
-    ).fetchone()
+    )
     if recent is not None:
         return None
-    return enqueue_job(
+    return await enqueue_job(
         conn,
         key=f"risk_check:write:{group_id}",
         kind="risk_check",
@@ -141,9 +140,9 @@ def enqueue_risk_check(conn: psycopg.Connection, group_id: str) -> str | None:
     )
 
 
-def _claim_one(conn: psycopg.Connection) -> dict[str, Any] | None:
-    with conn.transaction():
-        row = conn.execute(
+async def _claim_one(conn: Connection) -> dict[str, Any] | None:
+    async with conn.transaction():
+        row = await conn.fetchrow(
             """
             SELECT *
             FROM jobs
@@ -152,60 +151,65 @@ def _claim_one(conn: psycopg.Connection) -> dict[str, Any] | None:
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             """
-        ).fetchone()
+        )
         if row is None:
             return None
-        updated = conn.execute(
+        updated = await conn.fetchrow(
             """
             UPDATE jobs
             SET status = 'running', started_at = now(), updated_at = now()
-            WHERE id = %s
+            WHERE id = $1
             RETURNING *
             """,
-            (row["id"],),
-        ).fetchone()
-        return dict(updated)
+            row["id"],
+        )
+        return updated
 
 
-def _finish(
-    conn: psycopg.Connection,
+async def _finish(
+    conn: Connection,
     job_id: str,
     *,
     status: str,
     error: str | None = None,
     timed_out: bool = False,
 ) -> None:
-    conn.execute(
+    await conn.execute(
         """
         UPDATE jobs
-        SET status = %s,
+        SET status = $1,
             finished_at = now(),
             updated_at = now(),
-            last_error = coalesce(%s, last_error),
-            timed_out_at = CASE WHEN %s THEN now() ELSE timed_out_at END
-        WHERE id = %s
+            last_error = coalesce($2, last_error),
+            timed_out_at = CASE WHEN $3 THEN now() ELSE timed_out_at END
+        WHERE id = $4
         """,
-        (status, error, timed_out, job_id),
+        status,
+        error,
+        timed_out,
+        job_id,
     )
-    conn.commit()
 
 
-def _fail(conn: psycopg.Connection, job: dict[str, Any], error: str, *, timed_out: bool) -> None:
+async def _fail(conn: Connection, job: dict[str, Any], error: str, *, timed_out: bool) -> None:
     attempts = int(job["attempts"]) + 1
     failed_notification = None
     if attempts >= MAX_ATTEMPTS:
-        conn.execute(
+        await conn.execute(
             """
             UPDATE jobs
-            SET attempts = %s, status = 'failed', finished_at = now(), updated_at = now(),
-                last_error = %s, timed_out_at = CASE WHEN %s THEN now() ELSE timed_out_at END
-            WHERE id = %s
+            SET attempts = $1, status = 'failed', finished_at = now(), updated_at = now(),
+                last_error = $2, timed_out_at = CASE WHEN $3 THEN now() ELSE timed_out_at END
+            WHERE id = $4
             """,
-            (attempts, error[:2000], timed_out, job["id"]),
+            attempts,
+            error[:2000],
+            timed_out,
+            job["id"],
         )
         from fin_agent.notifications import create_notification
 
-        failed_notification = create_notification(
+        failed_notification = await create_notification(
             conn,
             kind="job_failed",
             title=f"{job['kind']} failed",
@@ -215,33 +219,36 @@ def _fail(conn: psycopg.Connection, job: dict[str, Any], error: str, *, timed_ou
         )
         import_id = (job.get("payload") or {}).get("import_id")
         if job["kind"] == "import_statement" and import_id:
-            conn.execute(
+            await conn.execute(
                 """
                 UPDATE imports
-                SET status = 'failed', reason = %s, updated_at = now()
-                WHERE id = %s AND status = 'parsing'
+                SET status = 'failed', reason = $1, updated_at = now()
+                WHERE id = $2 AND status = 'parsing'
                 """,
-                (f"The import failed three times: {error[:300]}", import_id),
+                f"The import failed three times: {error[:300]}",
+                import_id,
             )
     else:
         delay = min(300, 5 * (2**attempts))
-        conn.execute(
+        await conn.execute(
             """
             UPDATE jobs
-            SET attempts = %s, status = 'pending', started_at = NULL, updated_at = now(),
-                run_at = now() + %s * interval '1 second',
-                last_error = %s,
-                timed_out_at = CASE WHEN %s THEN now() ELSE timed_out_at END
-            WHERE id = %s
+            SET attempts = $1, status = 'pending', started_at = NULL, updated_at = now(),
+                run_at = now() + $2::float8 * interval '1 second',
+                last_error = $3,
+                timed_out_at = CASE WHEN $4 THEN now() ELSE timed_out_at END
+            WHERE id = $5
             """,
-            (attempts, delay, error[:2000], timed_out, job["id"]),
+            attempts,
+            float(delay),
+            error[:2000],
+            timed_out,
+            job["id"],
         )
-    conn.commit()
     if failed_notification is not None:
         from fin_agent.notifications import send_push_for_kind
 
-        send_push_for_kind(conn, "job_failed")
-        conn.commit()
+        await send_push_for_kind(conn, "job_failed")
 
 
 class JobRunner:
@@ -296,30 +303,28 @@ class JobRunner:
             except TimeoutError:
                 pass
 
-    def _prepare_schedules(self) -> int:
+    async def _prepare_schedules(self) -> int:
         """Seed and sync the recurring schedules, then turn due ones into jobs."""
-        with closing(connect()) as conn:
+        async with connect() as conn:
             from fin_agent.jobs.schedules import (
                 enqueue_due_schedules,
                 ensure_builtin_schedules,
                 sync_scheduled_questions,
             )
 
-            ensure_builtin_schedules(conn)
-            sync_scheduled_questions(conn)
-            enqueued = enqueue_due_schedules(conn)
-            conn.commit()
-        return enqueued
+            await ensure_builtin_schedules(conn)
+            await sync_scheduled_questions(conn)
+            return await enqueue_due_schedules(conn)
 
     async def tick(self) -> int:
         """Claim and run as many jobs as the concurrency limit allows."""
-        self._prepare_schedules()
-        with closing(connect()) as conn:
+        await self._prepare_schedules()
+        async with connect() as conn:
             free = self.concurrency - len(self._running)
             jobs: list[dict[str, Any]] = []
             if free > 0:
                 for _ in range(free):
-                    job = _claim_one(conn)
+                    job = await _claim_one(conn)
                     if job is None:
                         break
                     jobs.append(job)
@@ -332,10 +337,10 @@ class JobRunner:
     async def run_once(self) -> int:
         """Claim every currently due job and await it. Tests use this instead of the loop."""
         claimed = 0
-        self._prepare_schedules()
+        await self._prepare_schedules()
         while True:
-            with closing(connect()) as conn:
-                job = _claim_one(conn)
+            async with connect() as conn:
+                job = await _claim_one(conn)
             if job is None:
                 return claimed
             await self._run_job(job)
@@ -349,8 +354,8 @@ class JobRunner:
         job_id = str(job["id"])
         handler = self.registry.get(kind)
         if handler is None:
-            with closing(connect()) as conn:
-                _finish(conn, job_id, status="failed", error=f"no handler for {kind}")
+            async with connect() as conn:
+                await _finish(conn, job_id, status="failed", error=f"no handler for {kind}")
             return
         timeout = float(self.timeouts.get(kind, 120))
         try:
@@ -359,18 +364,18 @@ class JobRunner:
                 await asyncio.wait_for(handler(payload), timeout=timeout)
             else:
                 await asyncio.wait_for(asyncio.to_thread(handler, payload), timeout=timeout)
-            with closing(connect()) as conn:
-                _finish(conn, job_id, status="done")
+            async with connect() as conn:
+                await _finish(conn, job_id, status="done")
         except asyncio.CancelledError:
             raise
         except TimeoutError:
             logger.warning("job %s timed out after %ss", job["key"], timeout)
-            with closing(connect()) as conn:
-                _fail(conn, job, f"timed out after {timeout:.0f}s", timed_out=True)
+            async with connect() as conn:
+                await _fail(conn, job, f"timed out after {timeout:.0f}s", timed_out=True)
         except Exception as exc:  # noqa: BLE001 - every handler failure is retried
             logger.exception("job %s failed", job["key"])
-            with closing(connect()) as conn:
-                _fail(conn, job, f"{type(exc).__name__}: {exc}", timed_out=False)
+            async with connect() as conn:
+                await _fail(conn, job, f"{type(exc).__name__}: {exc}", timed_out=False)
 
 
 def next_backoff(attempts: int) -> timedelta:

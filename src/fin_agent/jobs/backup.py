@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from datetime import datetime
 from typing import Any
 
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.ledger import settings as settings_mod
 from fin_agent.notifications import create_notification, send_push_for_kind
 
 logger = logging.getLogger("fin_agent.jobs.backup")
 
 
-def backup_alert(conn, *, now: datetime | None = None) -> dict[str, Any] | None:
-    status = settings_mod.backup_status(conn, now=now)
+async def backup_alert(conn: Connection, *, now: datetime | None = None) -> dict[str, Any] | None:
+    status = await settings_mod.backup_status(conn, now=now)
     if not status["overdue"]:
         return None
     last = status["last_success_at"] or "never"
@@ -28,7 +27,7 @@ def backup_alert(conn, *, now: datetime | None = None) -> dict[str, Any] | None:
             f"The last successful backup finished {hours} hours ago, past the 48-hour alert "
             "line. The sidecar keeps trying whenever it is due."
         )
-    return create_notification(
+    return await create_notification(
         conn,
         kind="backup_stale",
         title="Backups have stopped",
@@ -43,14 +42,12 @@ def backup_alert(conn, *, now: datetime | None = None) -> dict[str, Any] | None:
     )
 
 
-def handle_backup_check(payload: dict[str, Any]) -> dict[str, Any]:
+async def handle_backup_check(payload: dict[str, Any]) -> dict[str, Any]:
     del payload
-    with closing(connect()) as conn:
-        with conn.transaction():
-            row = backup_alert(conn)
+    async with connect() as conn:
+        row = await backup_alert(conn)
         if row is not None:
-            send_push_for_kind(conn, "backup_stale")
-            conn.commit()
+            await send_push_for_kind(conn, "backup_stale")
         return {"alert_id": row["id"] if row else None}
 
 

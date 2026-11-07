@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from contextlib import closing
 from dataclasses import replace
 from typing import Any
 
@@ -110,17 +109,17 @@ def _statement_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return []
 
 
-def _validated_statements(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+async def _validated_statements(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
     if not refs:
         return []
     ids = [ref["attachment_id"] for ref in refs]
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT id, filename FROM attachments
-        WHERE id = ANY(%s) AND kind = 'statement' AND data IS NOT NULL
+        WHERE id = ANY($1) AND kind = 'statement' AND data IS NOT NULL
         """,
-        (ids,),
-    ).fetchall()
+        ids,
+    )
     found = {str(row["id"]): str(row["filename"] or "statement") for row in rows}
     missing = [attachment_id for attachment_id in ids if attachment_id not in found]
     if missing:
@@ -163,17 +162,17 @@ def _photo_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return []
 
 
-def _validated_photos(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+async def _validated_photos(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
     if not refs:
         return []
     ids = [ref["attachment_id"] for ref in refs]
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT id, filename FROM attachments
-        WHERE id = ANY(%s) AND kind = 'photo' AND data IS NOT NULL AND purged_at IS NULL
+        WHERE id = ANY($1) AND kind = 'photo' AND data IS NOT NULL AND purged_at IS NULL
         """,
-        (ids,),
-    ).fetchall()
+        ids,
+    )
     found = {str(row["id"]): str(row["filename"] or "photo") for row in rows}
     missing = [attachment_id for attachment_id in ids if attachment_id not in found]
     if missing:
@@ -229,27 +228,23 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         elif photo_refs:
             text = "Log the attached receipt or payment photo."
 
-    with closing(connect()) as conn:
+    async with connect() as conn:
         thread = None
         if thread_id:
-            thread = history_mod.get_thread(conn, thread_id)
+            thread = await history_mod.get_thread(conn, thread_id)
             if thread is None:
                 # AI SDK always sends a chat id, including for a new chat, so the server creates
                 # the row under it rather than asking the client for a second ID.
                 if len(thread_id) > 100:
                     raise HTTPException(status_code=422, detail="That chat ID is too long.")
-                thread = history_mod.create_thread(
+                thread = await history_mod.create_thread(
                     conn, title=history_mod.title_for(text), thread_id=thread_id
                 )
-                conn.commit()
         else:
-            thread = history_mod.create_thread(conn, title=history_mod.title_for(text))
+            thread = await history_mod.create_thread(conn, title=history_mod.title_for(text))
             thread_id = str(thread["id"])
-            conn.commit()
 
-        existing = conn.execute(
-            "SELECT * FROM messages WHERE client_id = %s", (message_id,)
-        ).fetchone()
+        existing = await conn.fetchrow("SELECT * FROM messages WHERE client_id = $1", message_id)
         if existing is not None and not approval_turn:
             # A message ID starts one turn, ever. During it, reattach; after it, replay the
             # saved reply instead of redoing the write.
@@ -259,14 +254,14 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                     turn.follow(0),
                     thread_id=str(existing["conversation_id"]),
                 )
-            saved = conn.execute(
+            saved = await conn.fetchrow(
                 """
                 SELECT content FROM messages
-                WHERE conversation_id = %s AND role = 'assistant' AND run_id IS NOT NULL
+                WHERE conversation_id = $1 AND role = 'assistant' AND run_id IS NOT NULL
                 ORDER BY created_at DESC, id DESC LIMIT 1
                 """,
-                (str(existing["conversation_id"]),),
-            ).fetchone()
+                str(existing["conversation_id"]),
+            )
             if saved is None:
                 raise HTTPException(
                     status_code=409,
@@ -290,20 +285,20 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
 
         try:
             if quote is not None:
-                quote = resolve_quote(conn, thread_id, quote)
+                quote = await resolve_quote(conn, thread_id, quote)
         except QuoteError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         # Validate every ref before any import or capture starts, so a stale file cannot
         # leave a partial turn. The pipeline itself dedupes by file hash, and each photo
         # capture keeps its own idempotency key, so a resend cannot write twice.
-        statements = _validated_statements(conn, statement_refs)
-        photos = _validated_photos(conn, photo_refs)
+        statements = await _validated_statements(conn, statement_refs)
+        photos = await _validated_photos(conn, photo_refs)
         initial_cards: list[dict[str, Any]] = []
         statement_imports: list[tuple[str, str]] = []
         for statement in statements:
             try:
-                receipt = write_tools.import_document(
+                receipt = await write_tools.import_document(
                     conn,
                     attachment_id=statement["attachment_id"],
                     message_id=None,
@@ -314,10 +309,10 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
             statement_imports.append((str(receipt["import_id"]), str(receipt["status"])))
 
         for photo in photos:
-            row = conn.execute(
-                "SELECT * FROM attachments WHERE id = %s AND kind = 'photo'",
-                (photo["attachment_id"],),
-            ).fetchone()
+            row = await conn.fetchrow(
+                "SELECT * FROM attachments WHERE id = $1 AND kind = 'photo'",
+                photo["attachment_id"],
+            )
             if row is None:
                 raise HTTPException(
                     status_code=422,
@@ -326,21 +321,21 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
             result = await log_photo(conn, thread, dict(row), record_history=False)
             initial_cards.append(result["card"])
 
-        history, outside = history_mod.ensure_history(conn, thread)
+        history, outside = await history_mod.ensure_history(conn, thread)
         ttl = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))
-        history, outside_swap = history_mod.refresh_snapshot(
+        history, outside_swap = await history_mod.refresh_snapshot(
             conn, thread, history, cache_ttl_seconds=ttl
         )
         if approval_turn:
-            user_row = conn.execute(
-                "SELECT id, body_text FROM messages WHERE conversation_id = %s "
+            user_row = await conn.fetchrow(
+                "SELECT id, body_text FROM messages WHERE conversation_id = $1 "
                 "AND role = 'user' ORDER BY created_at DESC, id DESC LIMIT 1",
-                (thread_id,),
-            ).fetchone()
+                thread_id,
+            )
             user_server_id = str(user_row["id"]) if user_row else None
             text = str(user_row["body_text"] or "") if user_row else ""
         else:
-            history_mod.record_user_message(
+            await history_mod.record_user_message(
                 conn,
                 thread_id=thread_id,
                 client_id=message_id,
@@ -349,31 +344,30 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 photos=photos,
                 quote=quote,
             )
-            user_row = conn.execute(
-                "SELECT id FROM messages WHERE client_id = %s", (message_id,)
-            ).fetchone()
+            user_row = await conn.fetchrow(
+                "SELECT id FROM messages WHERE client_id = $1", message_id
+            )
             user_server_id = str(user_row["id"]) if user_row else None
         title = thread.get("title")
         run_id = f"run_{uuid.uuid4().hex}"
-        history_mod.mark_run_started(conn, thread_id, run_id)
+        await history_mod.mark_run_started(conn, thread_id, run_id)
         capture_ref = None
         capture_kind = "chat"
         voice_attachment_id = body.get("voice_attachment_id")
         if isinstance(voice_attachment_id, str) and voice_attachment_id:
-            voice_row = conn.execute(
+            voice_row = await conn.fetchrow(
                 """
                 SELECT id FROM attachments
-                WHERE id = %s AND kind = 'audio' AND data IS NOT NULL
+                WHERE id = $1 AND kind = 'audio' AND data IS NOT NULL
                 """,
-                (voice_attachment_id,),
-            ).fetchone()
+                voice_attachment_id,
+            )
             if voice_row is not None:
                 capture_ref = str(voice_row["id"])
                 capture_kind = "voice"
         if capture_ref is None and photos:
             capture_ref = photos[0]["attachment_id"]
             capture_kind = "photo"
-        conn.commit()
         flagged = thread.get("outside_text_at") is not None or outside or outside_swap
 
     from pydantic_ai.ui.vercel_ai import VercelAIAdapter
@@ -436,46 +430,43 @@ async def post_chat_stop(request: Request, thread_id: str) -> dict[str, Any]:
 
 
 @router.get("/threads")
-def list_threads(
+async def list_threads(
     conn: Database,
     q: str | None = Query(default=None, max_length=200),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> dict[str, Any]:
     if q:
-        rows = list(
-            conn.execute(
-                """
-                SELECT c.id, c.title, c.updated_at, c.outside_text_at, c.run_started_at,
-                       max(m.created_at) AS last_message_at,
-                       count(m.id) AS message_count,
-                       max(ts_headline('simple', coalesce(m.body_text, ''),
-                                       websearch_to_tsquery('simple', %s))) AS snippet
-                FROM conversations c
-                JOIN messages m ON m.conversation_id = c.id
-                WHERE m.search @@ websearch_to_tsquery('simple', %s)
-                GROUP BY c.id
-                ORDER BY max(m.created_at) DESC
-                LIMIT %s
-                """,
-                (q, q, limit),
-            ).fetchall()
+        rows = await conn.fetch(
+            """
+            SELECT c.id, c.title, c.updated_at, c.outside_text_at, c.run_started_at,
+                   max(m.created_at) AS last_message_at,
+                   count(m.id) AS message_count,
+                   max(ts_headline('simple', coalesce(m.body_text, ''),
+                                   websearch_to_tsquery('simple', $1))) AS snippet
+            FROM conversations c
+            JOIN messages m ON m.conversation_id = c.id
+            WHERE m.search @@ websearch_to_tsquery('simple', $1)
+            GROUP BY c.id
+            ORDER BY max(m.created_at) DESC
+            LIMIT $2
+            """,
+            q,
+            limit,
         )
     else:
-        rows = list(
-            conn.execute(
-                """
-                SELECT c.id, c.title, c.updated_at, c.outside_text_at, c.run_started_at,
-                       max(m.created_at) AS last_message_at,
-                       count(m.id) AS message_count,
-                       NULL::text AS snippet
-                FROM conversations c
-                LEFT JOIN messages m ON m.conversation_id = c.id
-                GROUP BY c.id
-                ORDER BY coalesce(max(m.created_at), c.updated_at) DESC
-                LIMIT %s
-                """,
-                (limit,),
-            ).fetchall()
+        rows = await conn.fetch(
+            """
+            SELECT c.id, c.title, c.updated_at, c.outside_text_at, c.run_started_at,
+                   max(m.created_at) AS last_message_at,
+                   count(m.id) AS message_count,
+                   NULL::text AS snippet
+            FROM conversations c
+            LEFT JOIN messages m ON m.conversation_id = c.id
+            GROUP BY c.id
+            ORDER BY coalesce(max(m.created_at), c.updated_at) DESC
+            LIMIT $1
+            """,
+            limit,
         )
     return {
         "threads": [
@@ -569,18 +560,16 @@ def _merge_saved_state(
 
 
 @router.get("/threads/{thread_id}/messages")
-def get_thread_messages(request: Request, conn: Database, thread_id: str) -> dict[str, Any]:
-    thread = history_mod.get_thread(conn, thread_id)
+async def get_thread_messages(request: Request, conn: Database, thread_id: str) -> dict[str, Any]:
+    thread = await history_mod.get_thread(conn, thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail="That thread does not exist.")
-    rows = list(
-        conn.execute(
-            """
-            SELECT id, client_id, role, content, created_at, trace_id, flagged_at
-            FROM messages WHERE conversation_id = %s ORDER BY created_at, id
-            """,
-            (thread_id,),
-        ).fetchall()
+    rows = await conn.fetch(
+        """
+        SELECT id, client_id, role, content, created_at, trace_id, flagged_at
+        FROM messages WHERE conversation_id = $1 ORDER BY created_at, id
+        """,
+        thread_id,
     )
     messages = []
     for row in rows:
@@ -617,26 +606,25 @@ def get_thread_messages(request: Request, conn: Database, thread_id: str) -> dic
 
 
 @router.patch("/threads/{thread_id}")
-def rename_thread(conn: Database, thread_id: str, body: ThreadRename) -> dict[str, Any]:
-    row = conn.execute(
-        "UPDATE conversations SET title = %s, updated_at = now() WHERE id = %s RETURNING id, title",
-        (body.title.strip(), thread_id),
-    ).fetchone()
+async def rename_thread(conn: Database, thread_id: str, body: ThreadRename) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "UPDATE conversations SET title = $1, updated_at = now() WHERE id = $2 RETURNING id, title",
+        body.title.strip(),
+        thread_id,
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="That thread does not exist.")
-    conn.commit()
     return {"id": row["id"], "title": row["title"]}
 
 
 @router.post("/messages/{message_id}/flag")
-def flag_message(conn: Database, message_id: str) -> dict[str, Any]:
-    row = conn.execute(
-        "UPDATE messages SET flagged_at = now() WHERE id = %s RETURNING id, trace_id, flagged_at",
-        (message_id,),
-    ).fetchone()
+async def flag_message(conn: Database, message_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "UPDATE messages SET flagged_at = now() WHERE id = $1 RETURNING id, trace_id, flagged_at",
+        message_id,
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="That message does not exist.")
-    conn.commit()
     return {
         "id": row["id"],
         "trace_id": row["trace_id"],
@@ -645,40 +633,44 @@ def flag_message(conn: Database, message_id: str) -> dict[str, Any]:
 
 
 @router.get("/preferences")
-def get_preferences(conn: Database) -> dict[str, Any]:
+async def get_preferences(conn: Database) -> dict[str, Any]:
     return {
-        "preferences": read_tools.active_preferences(conn),
+        "preferences": await read_tools.active_preferences(conn),
         "as_of": ledger_today().isoformat(),
     }
 
 
 @router.patch("/preferences/{preference_id}")
-def patch_preference(conn: Database, preference_id: str, body: PreferenceUpdate) -> dict[str, Any]:
-    row = conn.execute(
-        "SELECT * FROM preferences WHERE id = %s AND deleted_at IS NULL", (preference_id,)
-    ).fetchone()
+async def patch_preference(
+    conn: Database, preference_id: str, body: PreferenceUpdate
+) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="That preference does not exist.")
-    with conn.transaction():
-        after = conn.execute(
-            "UPDATE preferences SET active = %s, updated_at = now() WHERE id = %s RETURNING *",
-            (body.active, preference_id),
-        ).fetchone()
-        conn.execute(
+    async with conn.transaction():
+        after = await conn.fetchrow(
+            "UPDATE preferences SET active = $1, updated_at = now() WHERE id = $2 RETURNING *",
+            body.active,
+            preference_id,
+        )
+        await conn.execute(
             """
             INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
-            VALUES ('user', pgledger_generate_id('und'), 'preferences', %s, %s, %s)
+            VALUES ('user', pgledger_generate_id('und'), 'preferences', $1, $2, $3)
             """,
-            (preference_id, json.dumps(row, default=str), json.dumps(after, default=str)),
+            preference_id,
+            json.dumps(row, default=str),
+            json.dumps(after, default=str),
         )
-    conn.commit()
     return dict(after)
 
 
 @router.delete("/preferences/{preference_id}")
-def delete_preference(conn: Database, preference_id: str) -> dict[str, Any]:
+async def delete_preference(conn: Database, preference_id: str) -> dict[str, Any]:
     try:
-        return write_tools.delete_preference_for_good(conn, preference_id)
+        return await write_tools.delete_preference_for_good(conn, preference_id)
     except write_tools.ToolInputError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

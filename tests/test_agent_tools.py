@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import psycopg
+import asyncpg
 import pytest
 from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -16,17 +16,17 @@ from fin_agent.tools import read as read_tools
 from fin_agent.tools import write as write_tools
 
 
-def _thread(conn, thread_id="cnv_test", message_id="msg_test"):
-    conn.execute("INSERT INTO conversations (id, title) VALUES (%s, 'test')", (thread_id,))
-    conn.execute(
+async def _thread(conn, thread_id="cnv_test", message_id="msg_test"):
+    await conn.execute("INSERT INTO conversations (id, title) VALUES ($1, 'test')", thread_id)
+    await conn.execute(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-        VALUES (%s, %s, 'user', '{}'::jsonb, 'test')
+        VALUES ($1, $2, 'user', '{}'::jsonb, 'test')
         """,
-        (thread_id, message_id),
+        thread_id,
+        message_id,
     )
-    row = conn.execute("SELECT id FROM messages WHERE client_id = %s", (message_id,)).fetchone()
-    conn.commit()
+    row = await conn.fetchrow("SELECT id FROM messages WHERE client_id = $1", message_id)
     return thread_id, str(row["id"])
 
 
@@ -43,14 +43,14 @@ def _model(*responses):
     return FunctionModel(script)
 
 
-def run_agent(agent, prompt, deps):
-    return agent.run_sync(prompt, deps=deps)
+async def run_agent(agent, prompt, deps):
+    return await agent.run(prompt, deps=deps)
 
 
-def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
+async def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
     from fin_agent.ledger.accounts import create_account
 
-    context = read_tools.get_financial_context(demo_ledger)
+    context = await read_tools.get_financial_context(demo_ledger)
     assert context["today"]
     assert context["accounts"]
     assert all("as_of" in account for account in context["accounts"])
@@ -60,23 +60,23 @@ def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
     assert context["liquid_total"]["paise"] > 0
     assert isinstance(context["setup_gaps"], list)
 
-    create_account(demo_ledger, kind="bank", name="Empty bank")
-    context = read_tools.get_financial_context(demo_ledger)
+    await create_account(demo_ledger, kind="bank", name="Empty bank")
+    context = await read_tools.get_financial_context(demo_ledger)
     empty = next(account for account in context["accounts"] if account["name"] == "Empty bank")
     assert empty["balance"] is None
     assert context["liquid_total"] is None
     assert "Empty bank has no stated balance" in context["warnings"]
 
 
-def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
+async def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
     from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
     from fin_agent.ledger.common import today as ledger_today
     from fin_agent.ledger.movements import record_expense
 
-    account = create_account(ledger, kind="bank", name="SBI Savings")
-    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+    account = await create_account(ledger, kind="bank", name="SBI Savings")
+    await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
 
-    context = read_tools.get_financial_context(ledger)
+    context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["accounts"] if item["id"] == account["id"])
     assert row["known"] is False
     assert row["balance"] is None
@@ -85,22 +85,22 @@ def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
     assert "SBI Savings has no stated balance" in context["warnings"]
     assert "an account has no stated balance" in context["setup_gaps"]
     # The ledger net change is still auditable even though it is not a known bank balance.
-    assert get_account(ledger, account["id"])["balance_paise"] == -25_000
+    assert (await get_account(ledger, account["id"]))["balance_paise"] == -25_000
 
-    set_statement_balance(ledger, account["id"], balance_paise=10_000, as_of=ledger_today())
-    context = read_tools.get_financial_context(ledger)
+    await set_statement_balance(ledger, account["id"], balance_paise=10_000, as_of=ledger_today())
+    context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["accounts"] if item["id"] == account["id"])
     assert row["known"] is True
     assert row["balance"] == {"paise": 10_000, "text": "₹100"}
     assert context["liquid_total"] == {"paise": 10_000, "text": "₹100"}
 
 
-def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledger):
+async def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledger):
     from fin_agent.ledger.accounts import create_account
     from fin_agent.ledger.common import today as ledger_today
     from fin_agent.ledger.movements import record_expense
 
-    card = create_account(
+    card = await create_account(
         ledger,
         kind="card",
         name="Slice card",
@@ -108,9 +108,11 @@ def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledg
         statement_day=5,
         due_day=25,
     )
-    record_expense(ledger, account_id=card["id"], amount_paise=3_000_000, description="Headphones")
+    await record_expense(
+        ledger, account_id=card["id"], amount_paise=3_000_000, description="Headphones"
+    )
 
-    context = read_tools.get_financial_context(ledger)
+    context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["accounts"] if item["id"] == card["id"])
     assert row["known"] is False
     assert row["balance"] is None
@@ -122,18 +124,18 @@ def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledg
 
     from fin_agent.ledger.accounts import set_statement_balance
 
-    set_statement_balance(ledger, card["id"], balance_paise=-3_000_000, as_of=ledger_today())
-    context = read_tools.get_financial_context(ledger)
+    await set_statement_balance(ledger, card["id"], balance_paise=-3_000_000, as_of=ledger_today())
+    context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["accounts"] if item["id"] == card["id"])
     assert row["known"] is True
     assert row["outstanding"] == {"paise": 3_000_000, "text": "₹30,000"}
     assert row["available_credit"] == {"paise": 7_000_000, "text": "₹70,000"}
 
 
-def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
+async def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
     from fin_agent.ledger.accounts import create_account
 
-    card = create_account(
+    card = await create_account(
         ledger,
         kind="card",
         name="Zero card",
@@ -143,7 +145,7 @@ def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
         due_day=25,
     )
 
-    context = read_tools.get_financial_context(ledger)
+    context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["accounts"] if item["id"] == card["id"])
     assert row["known"] is True
     assert row["outstanding"] == {"paise": 0, "text": "₹0"}
@@ -157,30 +159,30 @@ def test_unknown_balance_is_null_not_zero():
     assert money(0) == {"paise": 0, "text": "₹0"}
 
 
-def test_a_period_with_no_rows_and_no_statement_is_unknown(demo_ledger):
-    result = read_tools.summarize_spending(demo_ledger, group_by="none", period="2000-01")
+async def test_a_period_with_no_rows_and_no_statement_is_unknown(demo_ledger):
+    result = await read_tools.summarize_spending(demo_ledger, group_by="none", period="2000-01")
     assert result["total"] is None
     assert result["coverage"]["complete"] is False
     assert result["coverage"]["gaps"]
 
 
-def test_run_query_is_read_only_and_marks_every_text(db):
-    result = read_tools.run_query("SELECT 'hello' AS greeting, 45000 AS amount_paise")
+async def test_run_query_is_read_only_and_marks_every_text():
+    result = await read_tools.run_query("SELECT 'hello' AS greeting, 45000 AS amount_paise")
     assert result["columns"] == ["greeting", "amount_paise"]
     assert result["rows"] == [["<outside>hello</outside>", 45000]]
     assert result["outside_text"] is True
-    with pytest.raises(psycopg.Error):
-        read_tools.run_query("UPDATE accounts SET name = 'hacked'")
-    with pytest.raises(psycopg.Error):
-        read_tools.run_query("SELECT 1; SELECT 2")
+    with pytest.raises((ValueError, asyncpg.PostgresError)):
+        await read_tools.run_query("UPDATE accounts SET name = 'hacked'")
+    with pytest.raises((ValueError, asyncpg.PostgresError)):
+        await read_tools.run_query("SELECT 1; SELECT 2")
 
 
-def test_run_query_has_a_two_second_timeout(db):
-    with pytest.raises(psycopg.errors.QueryCanceled):
-        read_tools.run_query("SELECT pg_sleep(3)")
+async def test_run_query_has_a_two_second_timeout():
+    with pytest.raises((asyncpg.QueryCanceledError, TimeoutError)):
+        await read_tools.run_query("SELECT pg_sleep(3)")
 
 
-def test_run_code_chart_becomes_a_card(demo_ledger):
+async def test_run_code_chart_becomes_a_card(demo_ledger):
     agent = build_agent()
     code = (
         'result = await show_chart(type="bar", title="Spend", '
@@ -193,14 +195,14 @@ def test_run_code_chart_becomes_a_card(demo_ledger):
     )
     deps = AgentDeps(conversation_id="cnv_test")
     with agent.override(model=model):
-        result = run_agent(agent, "show me", deps)
+        result = await run_agent(agent, "show me", deps)
     cards = cards_from_messages(result.all_messages())
     assert cards and cards[0].data["card"] == "chart"
     assert cards[0].data["series"][0]["name"] == "Food"
 
 
-def test_record_movement_returns_a_undo_card(demo_ledger):
-    thread_id, message_id = _thread(demo_ledger)
+async def test_record_movement_returns_a_undo_card(demo_ledger):
+    thread_id, message_id = await _thread(demo_ledger)
     agent = build_agent()
     movement = {
         "kind": "expense",
@@ -215,7 +217,7 @@ def test_record_movement_returns_a_undo_card(demo_ledger):
     )
     deps = AgentDeps(conversation_id=thread_id, message_id=message_id)
     with agent.override(model=model):
-        result = run_agent(agent, "spent 450 on swiggy", deps)
+        result = await run_agent(agent, "spent 450 on swiggy", deps)
     assert result.output == "Logged ₹450."
     part = next(
         part
@@ -233,8 +235,8 @@ def test_record_movement_returns_a_undo_card(demo_ledger):
     assert card.data["title"] == "Logged"
 
 
-def test_correct_movement_learns_a_user_rule(demo_ledger):
-    movement = write_tools.record_movement(
+async def test_correct_movement_learns_a_user_rule(demo_ledger):
+    movement = await write_tools.record_movement(
         demo_ledger,
         {
             "kind": "expense",
@@ -246,8 +248,8 @@ def test_correct_movement_learns_a_user_rule(demo_ledger):
         message_id=None,
         conversation_id=None,
     )
-    category = demo_ledger.execute("SELECT id FROM categories WHERE name = 'Groceries'").fetchone()
-    result = write_tools.correct_movement(
+    category = await demo_ledger.fetchrow("SELECT id FROM categories WHERE name = 'Groceries'")
+    result = await write_tools.correct_movement(
         demo_ledger,
         movement_id=movement["movement_id"],
         changes={"category": "Groceries"},
@@ -255,15 +257,15 @@ def test_correct_movement_learns_a_user_rule(demo_ledger):
         message_id=None,
     )
     assert result["rows_changed"] >= 1
-    rule = demo_ledger.execute(
+    rule = await demo_ledger.fetchrow(
         "SELECT * FROM category_rules WHERE merchant_pattern = 'swiggy'"
-    ).fetchone()
+    )
     assert rule["source"] == "user"
     assert rule["category_id"] == category["id"]
 
 
-def test_preference_remember_and_forget(demo_ledger):
-    remembered = write_tools.preference(
+async def test_preference_remember_and_forget(demo_ledger):
+    remembered = await write_tools.preference(
         demo_ledger,
         action="remember",
         text="Mom's transfer is not discretionary",
@@ -272,7 +274,7 @@ def test_preference_remember_and_forget(demo_ledger):
     )
     assert remembered["status"] == "remembered"
     assert remembered["card"]["card"] == "preference"
-    forgotten = write_tools.preference(
+    forgotten = await write_tools.preference(
         demo_ledger,
         action="forget",
         text=None,
@@ -282,8 +284,8 @@ def test_preference_remember_and_forget(demo_ledger):
     assert forgotten["status"] == "forgotten"
 
 
-def test_flagged_thread_asks_before_a_preference(demo_ledger):
-    thread_id, message_id = _thread(demo_ledger, "cnv_flagged", "msg_flagged")
+async def test_flagged_thread_asks_before_a_preference(demo_ledger):
+    thread_id, message_id = await _thread(demo_ledger, "cnv_flagged", "msg_flagged")
     agent = build_agent()
     model = _model(
         ModelResponse(
@@ -294,16 +296,16 @@ def test_flagged_thread_asks_before_a_preference(demo_ledger):
     )
     deps = AgentDeps(conversation_id=thread_id, message_id=message_id, flagged=True)
     with agent.override(model=model):
-        result = run_agent(agent, "a note from a stranger", deps)
+        result = await run_agent(agent, "a note from a stranger", deps)
     assert isinstance(result.output, DeferredToolRequests)
-    with demo_ledger.transaction():
-        assert demo_ledger.execute("SELECT count(*) AS n FROM preferences").fetchone()["n"] == 0
+    async with demo_ledger.transaction():
+        assert await demo_ledger.fetchval("SELECT count(*) FROM preferences") == 0
 
 
-def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, demo_ledger):
-    thread_id, message_id = _thread(demo_ledger, "cnv_error", "msg_error")
+async def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, demo_ledger):
+    thread_id, message_id = await _thread(demo_ledger, "cnv_error", "msg_error")
 
-    def blow_up(*args, **kwargs):
+    async def blow_up(*args, **kwargs):
         raise RuntimeError("db down at 10.0.0.5:5432")
 
     monkeypatch.setattr(write_tools, "record_movement", blow_up)
@@ -321,7 +323,7 @@ def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, d
     )
     deps = AgentDeps(conversation_id=thread_id, message_id=message_id)
     with agent.override(model=model):
-        result = run_agent(agent, "log 10", deps)
+        result = await run_agent(agent, "log 10", deps)
     assert result.output == "I couldn't log that."
     returns = [
         part
@@ -333,7 +335,7 @@ def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, d
     assert any("failed" in str(part.content).lower() for part in returns)
 
 
-def test_nested_read_results_are_not_truncated_inside_a_script(demo_ledger):
+async def test_nested_read_results_are_not_truncated_inside_a_script(demo_ledger):
     agent = build_agent()
     code = (
         'rows = await run_query(sql="SELECT generate_series(1, 900) AS n")\n'
@@ -345,7 +347,9 @@ def test_nested_read_results_are_not_truncated_inside_a_script(demo_ledger):
         ModelResponse(parts=[TextPart("done")]),
     )
     with agent.override(model=model):
-        result = run_agent(agent, "check the nested list", AgentDeps(conversation_id="cnv_nested"))
+        result = await run_agent(
+            agent, "check the nested list", AgentDeps(conversation_id="cnv_nested")
+        )
     part = next(
         part
         for message in result.all_messages()
@@ -357,15 +361,15 @@ def test_nested_read_results_are_not_truncated_inside_a_script(demo_ledger):
     assert "list" in str(part.content)
 
 
-def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
-    floor = write_tools.update_setup_item(
+async def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
+    floor = await write_tools.update_setup_item(
         demo_ledger,
         entity="settings",
         action="update",
         data={"floor_rupees": 20_000},
         message_id=None,
     )
-    baseline = write_tools.update_setup_item(
+    baseline = await write_tools.update_setup_item(
         demo_ledger,
         entity="baseline",
         action="add",
@@ -375,14 +379,14 @@ def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
     assert floor["status"] == "saved"
     assert "20,000" in floor["summary"]
     assert baseline["status"] == "saved"
-    row = demo_ledger.execute(
+    row = await demo_ledger.fetchrow(
         "SELECT amount_per_day_paise FROM baselines b JOIN categories c ON c.id = b.category_id "
         "WHERE c.name = 'Food & Dining'"
-    ).fetchone()
+    )
     assert row["amount_per_day_paise"] == 30_000
 
 
-def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):
+async def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):
     # The tool's own return is asserted: this test once passed while every named loan failed.
     agent = build_agent()
     model = _model(
@@ -397,7 +401,9 @@ def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):
         ModelResponse(parts=[TextPart("The EMI is in the tool result.")]),
     )
     with agent.override(model=model):
-        result = run_agent(agent, "what is my home loan EMI", AgentDeps(conversation_id="cnv_x"))
+        result = await run_agent(
+            agent, "what is my home loan EMI", AgentDeps(conversation_id="cnv_x")
+        )
     returns = [
         part.content
         for message in result.all_messages()
@@ -407,24 +413,24 @@ def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):
     assert {"paise": 3_150_000, "text": "₹31,500"} in returns
 
 
-def test_read_filters_reject_unknown_keys(demo_ledger):
+async def test_read_filters_reject_unknown_keys(demo_ledger):
     # A dropped `categories` filter once answered "food last month" with the whole month.
     with pytest.raises(ValueError, match="Unknown filter 'categories'"):
-        read_tools.summarize_spending(
+        await read_tools.summarize_spending(
             demo_ledger,
             group_by="none",
             period="2026-10",
             filters={"categories": ["Food & Dining"]},
         )
     with pytest.raises(ValueError, match="The period is its own argument"):
-        read_tools.summarize_spending(
+        await read_tools.summarize_spending(
             demo_ledger, group_by="none", period="2026-10", filters={"period": "2026-09"}
         )
     with pytest.raises(ValueError, match=r"YYYY-MM-DD\.\.YYYY-MM-DD"):
-        read_tools.query_movements(demo_ledger, filters={"date_from": "2026-10-01"})
+        await read_tools.query_movements(demo_ledger, filters={"date_from": "2026-10-01"})
 
 
-def test_a_script_sees_the_typed_filters_and_a_wrong_key_fails(demo_ledger):
+async def test_a_script_sees_the_typed_filters_and_a_wrong_key_fails(demo_ledger):
     seen: dict[str, str] = {}
     code = (
         "r = await summarize_spending(group_by='none', period='2026-10', "
@@ -439,7 +445,7 @@ def test_a_script_sees_the_typed_filters_and_a_wrong_key_fails(demo_ledger):
 
     agent = build_agent()
     with agent.override(model=FunctionModel(script)):
-        result = run_agent(agent, "food last month?", AgentDeps(conversation_id="cnv_x"))
+        result = await run_agent(agent, "food last month?", AgentDeps(conversation_id="cnv_x"))
     for field in ("class MovementFilters", "include_reversed", "class Prepay", "at_emi"):
         assert field in seen["catalog"]
     feedback = " ".join(
@@ -452,18 +458,20 @@ def test_a_script_sees_the_typed_filters_and_a_wrong_key_fails(demo_ledger):
     assert "60,999" not in feedback
 
 
-def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
-    groceries = read_tools.summarize_spending(
+async def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
+    groceries = await read_tools.summarize_spending(
         demo_ledger, group_by="category", period="2026-10", filters={"category": "Groceries"}
     )
     assert groceries["total"]["paise"] == 650_000  # the sum is unchanged
     assert groceries["groups"][0]["count"] == 3  # three trips, not five rows
-    raw = demo_ledger.execute(
-        "SELECT count(*) AS n FROM movements WHERE date BETWEEN '2026-10-01' AND '2026-10-31'"
-    ).fetchone()["n"]
-    october = read_tools.query_movements(demo_ledger, filters={"period": "2026-10"}, limit=200)
+    raw = await demo_ledger.fetchval(
+        "SELECT count(*) FROM movements WHERE date BETWEEN '2026-10-01' AND '2026-10-31'"
+    )
+    october = await read_tools.query_movements(
+        demo_ledger, filters={"period": "2026-10"}, limit=200
+    )
     assert october["total_count"] == len(october["rows"]) == raw - 2
-    everything = read_tools.query_movements(
+    everything = await read_tools.query_movements(
         demo_ledger, filters={"period": "2026-10", "include_reversed": True}, limit=200
     )
     assert everything["total_count"] == len(everything["rows"]) == raw
@@ -471,7 +479,7 @@ def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
     seen: list[str] = []
     cursor = None
     while True:
-        page = read_tools.query_movements(
+        page = await read_tools.query_movements(
             demo_ledger, filters={"period": "2026-10"}, limit=5, cursor=cursor
         )
         assert len(page["rows"]) <= 5
@@ -482,10 +490,10 @@ def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
     assert len(seen) == len(set(seen)) == october["total_count"]
 
 
-def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger):
+async def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger):
     from fin_agent.ledger.accounts import loan_terms
 
-    terms = loan_terms(demo_ledger, "Home loan")
+    terms = await loan_terms(demo_ledger, "Home loan")
     assert terms["emi_paise"] == 3_150_000
     now = amortize_fn(**terms, prepay={"amount_paise": 5_000_000})
     later = amortize_fn(**terms, prepay={"amount_paise": 5_000_000, "at_emi": 13})

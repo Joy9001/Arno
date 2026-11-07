@@ -2,30 +2,28 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
-from contextlib import closing
+from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-import psycopg
 from fastapi import Depends, HTTPException, Request, status
 
 from fin_agent.agent.turns import Preparation, PreparationBusy
 from fin_agent.auth.sessions import COOKIE_NAME, is_fresh, session_from_token
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 
 
-def db() -> Iterator[psycopg.Connection]:
+async def db() -> AsyncIterator[Connection]:
     """One connection per request. Session state lives in Postgres, not in the pool."""
-    with closing(connect()) as conn:
+    async with connect() as conn:
         yield conn
 
 
-Database = Annotated[psycopg.Connection, Depends(db)]
+Database = Annotated[Connection, Depends(db)]
 
 
-def current_session(request: Request, conn: Database) -> dict[str, Any]:
+async def current_session(request: Request, conn: Database) -> dict[str, Any]:
     token = request.cookies.get(COOKIE_NAME, "")
-    session = session_from_token(conn, token)
+    session = await session_from_token(conn, token)
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

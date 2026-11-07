@@ -33,7 +33,7 @@ def test_mark_caps_and_strips_invisibles():
     assert len(marked) <= 200 + len("<outside>") + len("</outside>")
 
 
-def test_chat_stores_the_redacted_user_text(authed_client, demo_ledger):
+async def test_chat_stores_the_redacted_user_text(authed_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Noted.")
     body = {
         "id": "thread-redact-1",
@@ -59,7 +59,7 @@ def test_chat_stores_the_redacted_user_text(authed_client, demo_ledger):
     assert "ramesh@okaxis" in user_text
 
 
-def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
+async def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         if not any(
             getattr(part, "tool_name", None) == "run_code"
@@ -96,8 +96,8 @@ def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
     assert thread["thread"]["flagged"] is True
 
 
-def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger):
-    model = TestModel(call_tools=[], custom_output_text="You spent ₹12,000 on food.")
+async def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger):
+    model = TestModel(call_tools=[], custom_output_text="You spent ₹11,000 on food.")
     body = {
         "id": "thread-check-1",
         "trigger": "submit-message",
@@ -114,7 +114,7 @@ def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger):
     thread = authed_client.get(f"/api/threads/{response.headers['x-thread-id']}/messages").json()
     parts = thread["messages"][-1]["parts"]
     flags = [part for part in parts if part.get("type") == "data-number-flags"]
-    assert flags and "₹12,000" in flags[0]["data"]["amounts"]
+    assert flags and "₹11,000" in flags[0]["data"]["amounts"]
 
 
 def test_redaction_through_the_input_guardrail_drops_the_card():

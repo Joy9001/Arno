@@ -32,13 +32,13 @@ def test_synthetic_backtest_reports_error_and_band_calibration():
     assert "P10-P90" in report
 
 
-def test_db_backtest_refuses_without_a_twelve_month_backfill(demo_ledger):
+async def test_db_backtest_refuses_without_a_twelve_month_backfill(demo_ledger):
     with pytest.raises(ValueError, match="12 months"):
-        backtest.backtest(demo_ledger, source="db", runs=20)
+        await backtest.backtest(demo_ledger, source="db", runs=20)
 
 
-def test_auto_backtest_falls_back_to_synthetic_when_the_ledger_is_short(demo_ledger):
-    result = backtest.backtest(demo_ledger, source="auto", runs=50)
+async def test_auto_backtest_falls_back_to_synthetic_when_the_ledger_is_short(demo_ledger):
+    result = await backtest.backtest(demo_ledger, source="auto", runs=50)
     assert result["source"] == "synthetic 12-month history"
     assert result["months"] == 12
 

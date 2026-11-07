@@ -9,8 +9,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.accounts import _create_account_in_group
 from fin_agent.ledger.audit import write_group
 from fin_agent.ledger.common import ledger_balance, today
@@ -19,16 +18,16 @@ from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 GOAL_STATUSES = ("active", "achieved", "paused", "abandoned")
 
 
-def _goal_row(conn: psycopg.Connection, goal_id: str) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM goals WHERE id = %s", (goal_id,)).fetchone()
+async def _goal_row(conn: Connection, goal_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM goals WHERE id = $1", goal_id)
     if row is None:
         raise NotFoundLedgerError(f"No goal {goal_id}")
     return row
 
 
-def goal_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, Any]:
-    account = conn.execute("SELECT * FROM accounts WHERE id = %s", (row["account_id"],)).fetchone()
-    saved = ledger_balance(conn, account["ledger_account_id"]) if account else 0
+async def goal_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
+    account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
+    saved = await ledger_balance(conn, account["ledger_account_id"]) if account else 0
     target = int(row["target_paise"])
     return {
         "id": row["id"],
@@ -46,8 +45,8 @@ def goal_payload(conn: psycopg.Connection, row: dict[str, Any]) -> dict[str, Any
     }
 
 
-def create_goal(
-    conn: psycopg.Connection,
+async def create_goal(
+    conn: Connection,
     *,
     name: str,
     target_paise: int,
@@ -64,56 +63,55 @@ def create_goal(
     if not 1 <= priority <= 5:
         raise InvalidLedgerError("Goal priority is 1 to 5")
     if contribution_schedule_id is not None:
-        schedule = conn.execute(
-            "SELECT * FROM schedules WHERE id = %s", (contribution_schedule_id,)
-        ).fetchone()
+        schedule = await conn.fetchrow(
+            "SELECT * FROM schedules WHERE id = $1", contribution_schedule_id
+        )
         if schedule is None:
             raise NotFoundLedgerError(f"No schedule {contribution_schedule_id}")
         if schedule["kind"] != "goal_contribution":
             raise InvalidLedgerError("A goal contribution schedule has kind goal_contribution")
 
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        account = _create_account_in_group(
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        account = await _create_account_in_group(
             conn,
             group,
             kind="goal",
             name=f"{name.strip()} goal",
             liquid=False,
         )
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             INSERT INTO goals
                 (name, target_paise, deadline, priority, account_id, contribution_schedule_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             """,
-            (
-                name.strip(),
-                target_paise,
-                deadline,
-                priority,
-                account["id"],
-                contribution_schedule_id,
-            ),
-        ).fetchone()
+            name.strip(),
+            target_paise,
+            deadline,
+            priority,
+            account["id"],
+            contribution_schedule_id,
+        )
         group.record_created("goals", row)
-    return goal_payload(conn, row) | {"undo_id": group.group_id}
+    payload = await goal_payload(conn, row)
+    return payload | {"undo_id": group.group_id}
 
 
-def list_goals(conn: psycopg.Connection, *, include_archived: bool = False) -> list[dict[str, Any]]:
+async def list_goals(conn: Connection, *, include_archived: bool = False) -> list[dict[str, Any]]:
     where = "" if include_archived else "WHERE status <> 'abandoned'"
-    rows = conn.execute(
+    rows = await conn.fetch(
         f"SELECT * FROM goals {where} ORDER BY priority, deadline NULLS LAST, name"  # noqa: S608
-    ).fetchall()
-    return [goal_payload(conn, row) for row in rows]
+    )
+    return [await goal_payload(conn, row) for row in rows]
 
 
-def get_goal(conn: psycopg.Connection, goal_id: str) -> dict[str, Any]:
-    return goal_payload(conn, _goal_row(conn, goal_id))
+async def get_goal(conn: Connection, goal_id: str) -> dict[str, Any]:
+    return await goal_payload(conn, await _goal_row(conn, goal_id))
 
 
-def update_goal(
-    conn: psycopg.Connection,
+async def update_goal(
+    conn: Connection,
     goal_id: str,
     *,
     name: str | None = None,
@@ -125,7 +123,7 @@ def update_goal(
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    before = _goal_row(conn, goal_id)
+    before = await _goal_row(conn, goal_id)
     if status is not None and status not in GOAL_STATUSES:
         raise InvalidLedgerError(f"Unknown goal status {status}")
     if target_paise is not None and target_paise <= 0:
@@ -133,9 +131,9 @@ def update_goal(
     if priority is not None and not 1 <= priority <= 5:
         raise InvalidLedgerError("Goal priority is 1 to 5")
     if contribution_schedule_id is not None:
-        row = conn.execute(
-            "SELECT kind FROM schedules WHERE id = %s", (contribution_schedule_id,)
-        ).fetchone()
+        row = await conn.fetchrow(
+            "SELECT kind FROM schedules WHERE id = $1", contribution_schedule_id
+        )
         if row is None:
             raise NotFoundLedgerError(f"No schedule {contribution_schedule_id}")
         if row["kind"] != "goal_contribution":
@@ -152,30 +150,34 @@ def update_goal(
         if value is not None:
             updates[key] = value
     if not updates:
-        return goal_payload(conn, before) | {"undo_id": None}
+        payload = await goal_payload(conn, before)
+        return payload | {"undo_id": None}
     columns = list(updates)
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = conn.execute(
+    assignments = ", ".join(f"{column} = ${index}" for index, column in enumerate(columns, start=1))
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        after = await conn.fetchrow(
             f"""
-            UPDATE goals SET {", ".join(f"{column} = %s" for column in columns)},
+            UPDATE goals SET {assignments},
                 updated_at = now()
-            WHERE id = %s RETURNING *
+            WHERE id = ${len(columns) + 1} RETURNING *
             """,
-            (*[updates[column] for column in columns], goal_id),
-        ).fetchone()
+            *[updates[column] for column in columns],
+            goal_id,
+        )
         group.record_updated("goals", goal_id, before, after)
-    return goal_payload(conn, after) | {"undo_id": group.group_id}
+    payload = await goal_payload(conn, after)
+    return payload | {"undo_id": group.group_id}
 
 
-def archive_goal(
-    conn: psycopg.Connection,
+async def archive_goal(
+    conn: Connection,
     goal_id: str,
     *,
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    return update_goal(conn, goal_id, status="abandoned", actor=actor, message_id=message_id)
+    return await update_goal(conn, goal_id, status="abandoned", actor=actor, message_id=message_id)
 
 
-def goals_summary(conn: psycopg.Connection) -> dict[str, Any]:
-    return {"goals": list_goals(conn), "as_of": today().isoformat()}
+async def goals_summary(conn: Connection) -> dict[str, Any]:
+    return {"goals": await list_goals(conn), "as_of": today().isoformat()}

@@ -11,10 +11,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
 from fin_agent import scheduled_questions as questions_mod
+from fin_agent.db.conn import Connection, quote_ident
 from fin_agent.engine.money import money
 from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import accounts as accounts_mod
@@ -54,41 +52,39 @@ def _date(value: Any) -> date | None:
         raise ToolInputError(f"{value!r} is not an ISO date") from exc
 
 
-def resolve_account_id(conn: psycopg.Connection, name: str | None) -> str:
+async def resolve_account_id(conn: Connection, name: str | None) -> str:
     if not name:
         raise ToolInputError("which account?")
-    row = conn.execute(
-        "SELECT id, name FROM accounts WHERE active AND lower(name) = lower(%s) LIMIT 1", (name,)
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT id, name FROM accounts WHERE active AND lower(name) = lower($1) LIMIT 1", name
+    )
     if row is None:
-        row = conn.execute(
-            "SELECT id, name FROM accounts WHERE id = %s AND active", (name,)
-        ).fetchone()
+        row = await conn.fetchrow("SELECT id, name FROM accounts WHERE id = $1 AND active", name)
     if row is None:
-        rows = conn.execute(
+        rows = await conn.fetch(
             "SELECT name FROM accounts WHERE active AND kind NOT IN "
             "('spending','income','equity','person','goal') ORDER BY name"
-        ).fetchall()
+        )
         names = ", ".join(row["name"] for row in rows)
         raise ToolInputError(f"No account named {name!r}. Accounts: {names}")
     return str(row["id"])
 
 
-def _resolve_category_id(conn: psycopg.Connection, name: str | None) -> str | None:
+async def _resolve_category_id(conn: Connection, name: str | None) -> str | None:
     if not name:
         return None
-    row = conn.execute(
-        "SELECT id FROM categories WHERE active AND lower(name) = lower(%s) LIMIT 1", (name,)
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT id FROM categories WHERE active AND lower(name) = lower($1) LIMIT 1", name
+    )
     if row is None:
-        rows = conn.execute("SELECT name FROM categories WHERE active ORDER BY name").fetchall()
+        rows = await conn.fetch("SELECT name FROM categories WHERE active ORDER BY name")
         names = ", ".join(row["name"] for row in rows)
         raise ToolInputError(f"No category named {name!r}. Categories: {names}")
     return str(row["id"])
 
 
-def resolve_payee(
-    conn: psycopg.Connection,
+async def resolve_payee(
+    conn: Connection,
     name: str,
     *,
     kind: str = "merchant",
@@ -100,22 +96,22 @@ def resolve_payee(
         raise ToolInputError("a payee is required")
     name = name.strip()
     if upi_id:
-        row = conn.execute(
-            "SELECT * FROM payees WHERE active AND upi_id = %s ORDER BY display_name LIMIT 1",
-            (upi_id,),
-        ).fetchone()
+        row = await conn.fetchrow(
+            "SELECT * FROM payees WHERE active AND upi_id = $1 ORDER BY display_name LIMIT 1",
+            upi_id,
+        )
     else:
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             SELECT * FROM payees
-            WHERE active AND lower(display_name) = lower(%s)
+            WHERE active AND lower(display_name) = lower($1)
             ORDER BY display_name LIMIT 1
             """,
-            (name,),
-        ).fetchone()
+            name,
+        )
     if row is not None:
         return row
-    return payees_mod.create_payee(
+    return await payees_mod.create_payee(
         conn,
         display_name=name,
         kind=kind,
@@ -126,37 +122,35 @@ def resolve_payee(
     )
 
 
-def _usual_account(conn: psycopg.Connection, payee_id: str) -> str | None:
-    row = conn.execute(
+async def _usual_account(conn: Connection, payee_id: str) -> str | None:
+    row = await conn.fetchrow(
         """
         SELECT fa.id, count(*) AS n
         FROM pgledger_transfers t
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN transfer_labels tl ON tl.transfer_id = t.id
         JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE tl.payee_id = %s AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
+        WHERE tl.payee_id = $1 AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
         GROUP BY fa.id
         ORDER BY n DESC, fa.name
         LIMIT 1
         """,
-        (payee_id,),
-    ).fetchone()
+        payee_id,
+    )
     return str(row["id"]) if row else None
 
 
-def _default_account(conn: psycopg.Connection, payee_id: str | None) -> str:
+async def _default_account(conn: Connection, payee_id: str | None) -> str:
     if payee_id:
-        usual = _usual_account(conn, payee_id)
+        usual = await _usual_account(conn, payee_id)
         if usual:
             return usual
-    rows = conn.execute(
-        "SELECT id, name FROM accounts WHERE active AND liquid ORDER BY name"
-    ).fetchall()
+    rows = await conn.fetch("SELECT id, name FROM accounts WHERE active AND liquid ORDER BY name")
     if len(rows) == 1:
         return str(rows[0]["id"])
     if not rows:
         raise ToolInputError("which account? No liquid account exists yet.")
-    everyday = _everyday_account(conn)
+    everyday = await _everyday_account(conn)
     if everyday:
         return everyday
     raise ToolInputError(
@@ -164,9 +158,9 @@ def _default_account(conn: psycopg.Connection, payee_id: str | None) -> str:
     )
 
 
-def _everyday_account(conn: psycopg.Connection) -> str | None:
+async def _everyday_account(conn: Connection) -> str | None:
     """The liquid account the user moves money from most, for a payee with no history."""
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         SELECT fa.id, count(*) AS n
         FROM pgledger_transfers t
@@ -177,24 +171,24 @@ def _everyday_account(conn: psycopg.Connection) -> str | None:
         ORDER BY n DESC, fa.name
         LIMIT 1
         """
-    ).fetchone()
+    )
     return str(row["id"]) if row else None
 
 
-def default_account_for_payee(conn: psycopg.Connection, payee_id: str | None) -> str:
+async def default_account_for_payee(conn: Connection, payee_id: str | None) -> str:
     """The account a capture should use: usual for this payee, else the everyday liquid one."""
-    return _default_account(conn, payee_id)
+    return await _default_account(conn, payee_id)
 
 
-def _possible_duplicate(
-    conn: psycopg.Connection,
+async def _possible_duplicate(
+    conn: Connection,
     *,
     account_id: str,
     amount_paise: int,
     payee_id: str | None,
     exclude_key: str | None,
 ) -> dict[str, Any] | None:
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         SELECT m.id, m.date, m.description
         FROM movements m
@@ -203,15 +197,18 @@ def _possible_duplicate(
         JOIN transfer_labels tl ON tl.transfer_id = t.id
         JOIN captures c ON c.movement_id = m.id AND c.kind = 'chat'
         WHERE m.kind = 'expense'
-          AND (m.idempotency_key IS NULL OR m.idempotency_key <> %s)
-          AND fa.id = %s
-          AND t.amount = %s
-          AND tl.payee_id IS NOT DISTINCT FROM %s
+          AND (m.idempotency_key IS NULL OR m.idempotency_key <> $1)
+          AND fa.id = $2
+          AND t.amount = $3
+          AND tl.payee_id IS NOT DISTINCT FROM $4
           AND m.created_at > now() - interval '10 minutes'
         ORDER BY m.created_at DESC LIMIT 1
         """,
-        (exclude_key, account_id, amount_paise, payee_id),
-    ).fetchone()
+        exclude_key,
+        account_id,
+        amount_paise,
+        payee_id,
+    )
     if row is None:
         return None
     return {
@@ -228,11 +225,11 @@ def _card(kind: str, **values: Any) -> dict[str, Any]:
     return {"card": kind, **values}
 
 
-def _audited_undo_id(conn: psycopg.Connection, undo_id: str | None) -> str | None:
+async def _audited_undo_id(conn: Connection, undo_id: str | None) -> str | None:
     """Only an audit group with a real change gets an undo button."""
     if not undo_id:
         return None
-    row = conn.execute("SELECT 1 FROM audit_log WHERE group_id = %s LIMIT 1", (undo_id,)).fetchone()
+    row = await conn.fetchrow("SELECT 1 FROM audit_log WHERE group_id = $1 LIMIT 1", undo_id)
     return undo_id if row else None
 
 
@@ -254,8 +251,8 @@ def _movement_summary(result: dict[str, Any], amount_paise: int) -> str:
     return str(result.get("description") or "Recorded")
 
 
-def record_movement(
-    conn: psycopg.Connection,
+async def record_movement(
+    conn: Connection,
     movement: dict[str, Any],
     *,
     message_id: str | None,
@@ -285,7 +282,7 @@ def record_movement(
 
     payee = None
     if payee_name:
-        payee = resolve_payee(
+        payee = await resolve_payee(
             conn,
             str(payee_name),
             kind="person" if kind in {"split", "settlement"} else "merchant",
@@ -297,12 +294,12 @@ def record_movement(
     if kind == "expense":
         amount = _rupees(movement.get("amount_rupees"))
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
         if not not_duplicate:
-            duplicate = _possible_duplicate(
+            duplicate = await _possible_duplicate(
                 conn,
                 account_id=account_id,
                 amount_paise=amount,
@@ -311,14 +308,14 @@ def record_movement(
             )
             if duplicate:
                 return duplicate
-        result = movements_mod.record_expense(
+        result = await movements_mod.record_expense(
             conn,
             account_id=account_id,
             amount_paise=amount,
             description=description,
             payee_id=payee_id,
-            category_id=_resolve_category_id(conn, movement.get("category")),
-            category_guess_id=_resolve_category_id(conn, movement.get("category_guess")),
+            category_id=await _resolve_category_id(conn, movement.get("category")),
+            category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
             date=when,
             note=note,
             idempotency_key=idempotency_key,
@@ -348,11 +345,11 @@ def record_movement(
     if kind == "income":
         amount = _rupees(movement.get("amount_rupees"))
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
-        result = movements_mod.record_income(
+        result = await movements_mod.record_income(
             conn,
             account_id=account_id,
             amount_paise=amount,
@@ -383,10 +380,10 @@ def record_movement(
 
     if kind == "transfer":
         amount = _rupees(movement.get("amount_rupees"))
-        result = movements_mod.record_transfer(
+        result = await movements_mod.record_transfer(
             conn,
-            from_account_id=resolve_account_id(conn, movement.get("from_account")),
-            to_account_id=resolve_account_id(conn, movement.get("to_account")),
+            from_account_id=await resolve_account_id(conn, movement.get("from_account")),
+            to_account_id=await resolve_account_id(conn, movement.get("to_account")),
             amount_paise=amount,
             description=description,
             date=when,
@@ -424,7 +421,7 @@ def record_movement(
                 name, amount, expected = str(person), 0, None
             if not name or not amount:
                 raise ToolInputError("a split names each person and their share")
-            other = resolve_payee(
+            other = await resolve_payee(
                 conn,
                 str(name),
                 kind="person",
@@ -436,11 +433,11 @@ def record_movement(
         if not people:
             raise ToolInputError("a split needs at least one person")
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
-        result = movements_mod.record_split(
+        result = await movements_mod.record_split(
             conn,
             account_id=account_id,
             my_share_paise=my_share,
@@ -448,8 +445,8 @@ def record_movement(
             total_paise=total,
             description=description,
             payee_id=payee_id,
-            category_id=_resolve_category_id(conn, movement.get("category")),
-            category_guess_id=_resolve_category_id(conn, movement.get("category_guess")),
+            category_id=await _resolve_category_id(conn, movement.get("category")),
+            category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
             date=when,
             note=note,
             idempotency_key=idempotency_key,
@@ -475,11 +472,11 @@ def record_movement(
 
     if kind == "loan":
         amount = _rupees(movement.get("amount_rupees"))
-        loan_id = resolve_account_id(conn, movement.get("loan"))
-        loan = conn.execute("SELECT * FROM accounts WHERE id = %s", (loan_id,)).fetchone()
+        loan_id = await resolve_account_id(conn, movement.get("loan"))
+        loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
         if loan is None or loan["kind"] != "loan":
             raise ToolInputError("a loan payment names a loan account")
-        outstanding = max(ledger_balance(conn, loan["ledger_account_id"]), 0)
+        outstanding = max(await ledger_balance(conn, loan["ledger_account_id"]), 0)
         principal = amount
         interest = 0
         if loan["rate_bps"]:
@@ -488,11 +485,11 @@ def record_movement(
             interest = min(interest, amount - 1) if amount > 1 else 0
             principal = amount - interest
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
-        result = movements_mod.record_loan_payment(
+        result = await movements_mod.record_loan_payment(
             conn,
             account_id=account_id,
             loan_account_id=loan_id,
@@ -525,17 +522,17 @@ def record_movement(
     if kind == "refund":
         amount = _rupees(movement.get("amount_rupees"))
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
-        result = movements_mod.record_refund(
+        result = await movements_mod.record_refund(
             conn,
             account_id=account_id,
             amount_paise=amount,
             description=description,
             payee_id=payee_id,
-            category_id=_resolve_category_id(conn, movement.get("category")),
+            category_id=await _resolve_category_id(conn, movement.get("category")),
             date=when,
             note=note,
             idempotency_key=idempotency_key,
@@ -563,11 +560,11 @@ def record_movement(
         if payee is None:
             raise ToolInputError("a settlement names a person")
         account_id = (
-            resolve_account_id(conn, movement.get("account"))
+            await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
-            else _default_account(conn, payee_id)
+            else await _default_account(conn, payee_id)
         )
-        result = movements_mod.record_settlement(
+        result = await movements_mod.record_settlement(
             conn,
             account_id=account_id,
             payee_id=payee_id,
@@ -600,8 +597,8 @@ def record_movement(
     raise ToolInputError(f"unknown movement kind {kind!r}")
 
 
-def correct_movement(
-    conn: psycopg.Connection,
+async def correct_movement(
+    conn: Connection,
     *,
     movement_id: str,
     changes: dict[str, Any],
@@ -613,9 +610,9 @@ def correct_movement(
         if value is None:
             continue
         if key == "category":
-            mapped["category_id"] = _resolve_category_id(conn, value)
+            mapped["category_id"] = await _resolve_category_id(conn, value)
         elif key == "account":
-            mapped["account_id"] = resolve_account_id(conn, value)
+            mapped["account_id"] = await resolve_account_id(conn, value)
         elif key == "amount_rupees":
             mapped["amount_paise"] = _rupees(value)
         elif key == "expected_date":
@@ -623,10 +620,10 @@ def correct_movement(
         elif key == "date":
             mapped["date"] = _date(value)
         elif key == "payee":
-            mapped["payee_id"] = resolve_payee(conn, str(value))["id"]
+            mapped["payee_id"] = (await resolve_payee(conn, str(value)))["id"]
         else:
             mapped[key] = value
-    result = movements_mod.correct_movement(
+    result = await movements_mod.correct_movement(
         conn,
         movement_id,
         changes=mapped,
@@ -640,7 +637,7 @@ def correct_movement(
         + " → "
         + str(result["movement"].get("category_name"))
     )
-    undo_id = _audited_undo_id(conn, result["undo_id"])
+    undo_id = await _audited_undo_id(conn, result["undo_id"])
     return {
         "status": result["status"],
         "undo_id": result["undo_id"],
@@ -659,26 +656,27 @@ def correct_movement(
     }
 
 
-def _find_one(
-    conn: psycopg.Connection, table: str, name: str | None, key: str | None
+async def _find_one(
+    conn: Connection, table: str, name: str | None, key: str | None
 ) -> dict[str, Any]:
     if key:
-        row = conn.execute(f"SELECT * FROM {table} WHERE id = %s", (key,)).fetchone()  # noqa: S608
+        row = await conn.fetchrow(f"SELECT * FROM {quote_ident(table)} WHERE id = $1", key)
         if row:
             return row
     if not name:
         raise ToolInputError(f"{table[:-1]} needs a name or id")
-    row = conn.execute(
-        f"SELECT * FROM {table} WHERE lower(name) = lower(%s) ORDER BY created_at LIMIT 1",  # noqa: S608
-        (name,),
-    ).fetchone()
+    row = await conn.fetchrow(
+        f"SELECT * FROM {quote_ident(table)} WHERE lower(name) = lower($1) "
+        "ORDER BY created_at LIMIT 1",
+        name,
+    )
     if row is None:
         raise ToolInputError(f"No {table[:-1]} named {name!r}")
     return row
 
 
-def update_setup_item(
-    conn: psycopg.Connection,
+async def update_setup_item(
+    conn: Connection,
     *,
     entity: str,
     action: str,
@@ -691,53 +689,63 @@ def update_setup_item(
 
     if entity == "account":
         if action == "add":
-            result = accounts_mod.create_account(
+            result = await accounts_mod.create_account(
                 conn,
                 kind=data.get("kind") or "bank",
                 name=data["name"],
                 institution=data.get("institution"),
                 last4=data.get("last4"),
-                opening_balance_paise=_rupees(data["opening_balance_rupees"])
-                if data.get("opening_balance_rupees") is not None
-                else None,
+                opening_balance_paise=(
+                    _rupees(data["opening_balance_rupees"])
+                    if data.get("opening_balance_rupees") is not None
+                    else None
+                ),
                 opening_balance_as_of=_date(data.get("as_of")),
                 liquid=data.get("liquid"),
-                credit_limit_paise=_rupees(data["credit_limit_rupees"])
-                if data.get("credit_limit_rupees") is not None
-                else None,
+                credit_limit_paise=(
+                    _rupees(data["credit_limit_rupees"])
+                    if data.get("credit_limit_rupees") is not None
+                    else None
+                ),
                 statement_day=data.get("statement_day"),
                 due_day=data.get("due_day"),
-                rate_bps=int(Decimal(str(data["rate_percent"])) * 100)
-                if data.get("rate_percent") is not None
-                else None,
+                rate_bps=(
+                    int(Decimal(str(data["rate_percent"])) * 100)
+                    if data.get("rate_percent") is not None
+                    else None
+                ),
                 tenure_months=data.get("tenure_months"),
                 actor="agent",
                 message_id=message_id,
             )
             summary = f"Added account {data['name']}"
         else:
-            row = _find_one(conn, "accounts", data.get("name"), data.get("id"))
+            row = await _find_one(conn, "accounts", data.get("name"), data.get("id"))
             if action == "archive":
-                result = accounts_mod.archive_account(
+                result = await accounts_mod.archive_account(
                     conn, row["id"], actor="agent", message_id=message_id
                 )
                 summary = f"Archived account {row['name']}"
             else:
-                result = accounts_mod.update_account(
+                result = await accounts_mod.update_account(
                     conn,
                     row["id"],
                     name=data.get("new_name"),
                     institution=data.get("institution"),
                     last4=data.get("last4"),
                     liquid=data.get("liquid"),
-                    credit_limit_paise=_rupees(data["credit_limit_rupees"])
-                    if data.get("credit_limit_rupees") is not None
-                    else None,
+                    credit_limit_paise=(
+                        _rupees(data["credit_limit_rupees"])
+                        if data.get("credit_limit_rupees") is not None
+                        else None
+                    ),
                     statement_day=data.get("statement_day"),
                     due_day=data.get("due_day"),
-                    rate_bps=int(Decimal(str(data["rate_percent"])) * 100)
-                    if data.get("rate_percent") is not None
-                    else None,
+                    rate_bps=(
+                        int(Decimal(str(data["rate_percent"])) * 100)
+                        if data.get("rate_percent") is not None
+                        else None
+                    ),
                     tenure_months=data.get("tenure_months"),
                     active=data.get("active"),
                     actor="agent",
@@ -755,8 +763,8 @@ def update_setup_item(
         }
 
     if entity == "balance":
-        account_id = resolve_account_id(conn, data.get("account"))
-        result = accounts_mod.set_statement_balance(
+        account_id = await resolve_account_id(conn, data.get("account"))
+        result = await accounts_mod.set_statement_balance(
             conn,
             account_id,
             balance_paise=_rupees(data.get("balance_rupees"), "balance_rupees"),
@@ -782,20 +790,22 @@ def update_setup_item(
 
     if entity == "schedule":
         if action == "add":
-            result = schedules_mod.create_schedule(
+            result = await schedules_mod.create_schedule(
                 conn,
                 kind=data.get("kind") or "obligation",
                 name=data["name"],
                 rule=data["rule"],
                 starts=_date(data.get("starts")) or ledger_today(),
-                amount_paise=_rupees(data["amount_rupees"])
-                if data.get("amount_rupees") is not None
-                else None,
+                amount_paise=(
+                    _rupees(data["amount_rupees"])
+                    if data.get("amount_rupees") is not None
+                    else None
+                ),
                 subtype=data.get("subtype"),
-                account_id=resolve_account_id(conn, data["account"])
-                if data.get("account")
-                else None,
-                category_id=_resolve_category_id(conn, data.get("category")),
+                account_id=(
+                    await resolve_account_id(conn, data["account"]) if data.get("account") else None
+                ),
+                category_id=await _resolve_category_id(conn, data.get("category")),
                 confirmed=bool(data.get("confirmed", True)),
                 ends=_date(data.get("ends")),
                 holiday_adjust=data.get("holiday_adjust") or "none",
@@ -804,26 +814,30 @@ def update_setup_item(
             )
             summary = f"Added schedule {data['name']}"
         else:
-            row = _find_one(conn, "schedules", data.get("name"), data.get("id"))
+            row = await _find_one(conn, "schedules", data.get("name"), data.get("id"))
             if action == "archive":
-                result = schedules_mod.archive_schedule(
+                result = await schedules_mod.archive_schedule(
                     conn, row["id"], actor="agent", message_id=message_id
                 )
                 summary = f"Archived schedule {row['name']}"
             else:
-                result = schedules_mod.update_schedule(
+                result = await schedules_mod.update_schedule(
                     conn,
                     row["id"],
                     name=data.get("new_name"),
-                    amount_paise=_rupees(data["amount_rupees"])
-                    if data.get("amount_rupees") is not None
-                    else None,
+                    amount_paise=(
+                        _rupees(data["amount_rupees"])
+                        if data.get("amount_rupees") is not None
+                        else None
+                    ),
                     rule=data.get("rule"),
                     subtype=data.get("subtype"),
-                    account_id=resolve_account_id(conn, data["account"])
-                    if data.get("account")
-                    else None,
-                    category_id=_resolve_category_id(conn, data.get("category")),
+                    account_id=(
+                        await resolve_account_id(conn, data["account"])
+                        if data.get("account")
+                        else None
+                    ),
+                    category_id=await _resolve_category_id(conn, data.get("category")),
                     confirmed=data.get("confirmed"),
                     starts=_date(data.get("starts")),
                     ends=_date(data.get("ends")),
@@ -845,7 +859,7 @@ def update_setup_item(
 
     if entity == "goal":
         if action == "add":
-            result = goals_mod.create_goal(
+            result = await goals_mod.create_goal(
                 conn,
                 name=data["name"],
                 target_paise=_rupees(data.get("target_rupees"), "target_rupees"),
@@ -856,20 +870,22 @@ def update_setup_item(
             )
             summary = f"Added goal {data['name']}"
         else:
-            row = _find_one(conn, "goals", data.get("name"), data.get("id"))
+            row = await _find_one(conn, "goals", data.get("name"), data.get("id"))
             if action == "archive":
-                result = goals_mod.archive_goal(
+                result = await goals_mod.archive_goal(
                     conn, row["id"], actor="agent", message_id=message_id
                 )
                 summary = f"Archived goal {row['name']}"
             else:
-                result = goals_mod.update_goal(
+                result = await goals_mod.update_goal(
                     conn,
                     row["id"],
                     name=data.get("new_name"),
-                    target_paise=_rupees(data["target_rupees"])
-                    if data.get("target_rupees") is not None
-                    else None,
+                    target_paise=(
+                        _rupees(data["target_rupees"])
+                        if data.get("target_rupees") is not None
+                        else None
+                    ),
                     deadline=_date(data.get("deadline")),
                     priority=data.get("priority"),
                     status=data.get("status"),
@@ -889,7 +905,7 @@ def update_setup_item(
 
     if entity == "category":
         if action == "add":
-            result = categories_mod.create_category(
+            result = await categories_mod.create_category(
                 conn,
                 name=data["name"],
                 reducible=bool(data.get("reducible", False)),
@@ -898,13 +914,13 @@ def update_setup_item(
             )
             summary = f"Added category {data['name']}"
         else:
-            row = _find_one(conn, "categories", data.get("name"), data.get("id"))
+            row = await _find_one(conn, "categories", data.get("name"), data.get("id"))
             result = (
-                categories_mod.archive_category(
+                await categories_mod.archive_category(
                     conn, row["id"], actor="agent", message_id=message_id
                 )
                 if action == "archive"
-                else categories_mod.update_category(
+                else await categories_mod.update_category(
                     conn,
                     row["id"],
                     name=data.get("new_name"),
@@ -926,29 +942,33 @@ def update_setup_item(
 
     if entity == "payee":
         if action == "add":
-            result = payees_mod.create_payee(
+            result = await payees_mod.create_payee(
                 conn,
                 display_name=data["name"],
                 kind=data.get("kind") or "merchant",
                 upi_id=data.get("upi_id"),
-                default_category_id=_resolve_category_id(conn, data.get("default_category")),
+                default_category_id=await _resolve_category_id(conn, data.get("default_category")),
                 create_person_account=bool(data.get("create_person_account", False)),
                 actor="agent",
                 message_id=message_id,
             )
             summary = f"Added payee {data['name']}"
         else:
-            row = _find_one(conn, "payees", data.get("name"), data.get("id"))
+            row = await _find_one(conn, "payees", data.get("name"), data.get("id"))
             result = (
-                payees_mod.archive_payee(conn, row["id"], actor="agent", message_id=message_id)
+                await payees_mod.archive_payee(
+                    conn, row["id"], actor="agent", message_id=message_id
+                )
                 if action == "archive"
-                else payees_mod.update_payee(
+                else await payees_mod.update_payee(
                     conn,
                     row["id"],
                     display_name=data.get("new_name"),
                     kind=data.get("kind"),
                     upi_id=data.get("upi_id"),
-                    default_category_id=_resolve_category_id(conn, data.get("default_category")),
+                    default_category_id=await _resolve_category_id(
+                        conn, data.get("default_category")
+                    ),
                     active=data.get("active"),
                     actor="agent",
                     message_id=message_id,
@@ -969,7 +989,7 @@ def update_setup_item(
 
     if entity == "settings":
         floor = data.get("floor_rupees")
-        result = settings_mod.update_settings(
+        result = await settings_mod.update_settings(
             conn,
             floor_paise=_rupees(floor) if floor is not None else None,
             base_currency=data.get("base_currency"),
@@ -997,26 +1017,28 @@ def update_setup_item(
 
     if entity == "scheduled_question":
         if action == "archive":
-            row = conn.execute(
+            row = await conn.fetchrow(
                 "SELECT * FROM scheduled_questions "
-                "WHERE id = %s OR lower(prompt) = lower(%s) LIMIT 1",
-                (data.get("id"), data.get("prompt")),
-            ).fetchone()
+                "WHERE id = $1 OR lower(prompt) = lower($2) LIMIT 1",
+                data.get("id"),
+                data.get("prompt"),
+            )
             if row is None:
                 raise ToolInputError("No such scheduled question")
-            result = questions_mod.archive_question(
+            result = await questions_mod.archive_question(
                 conn, row["id"], actor="agent", message_id=message_id
             )
             summary = "Archived the scheduled question"
         elif action == "update":
-            row = conn.execute(
+            row = await conn.fetchrow(
                 "SELECT * FROM scheduled_questions "
-                "WHERE id = %s OR lower(prompt) = lower(%s) LIMIT 1",
-                (data.get("id"), data.get("prompt")),
-            ).fetchone()
+                "WHERE id = $1 OR lower(prompt) = lower($2) LIMIT 1",
+                data.get("id"),
+                data.get("prompt"),
+            )
             if row is None:
                 raise ToolInputError("No such scheduled question")
-            result = questions_mod.update_question(
+            result = await questions_mod.update_question(
                 conn,
                 row["id"],
                 prompt=data.get("prompt"),
@@ -1029,7 +1051,7 @@ def update_setup_item(
             summary = "Updated the scheduled question"
         else:
             try:
-                result = questions_mod.create_question(
+                result = await questions_mod.create_question(
                     conn,
                     prompt=data["prompt"],
                     rule=data["rule"],
@@ -1050,25 +1072,26 @@ def update_setup_item(
         }
 
     if entity == "baseline":
-        category_id = _resolve_category_id(conn, data.get("category"))
+        category_id = await _resolve_category_id(conn, data.get("category"))
         if category_id is None:
             raise ToolInputError("a baseline names a category")
         amount = _rupees(data.get("amount_per_day_rupees"), "amount_per_day_rupees")
-        with write_group(conn, actor="agent", message_id=message_id) as group:
-            before = conn.execute(
-                "SELECT * FROM baselines WHERE category_id = %s", (category_id,)
-            ).fetchone()
-            after = conn.execute(
+        async with write_group(conn, actor="agent", message_id=message_id) as group:
+            before = await conn.fetchrow(
+                "SELECT * FROM baselines WHERE category_id = $1", category_id
+            )
+            after = await conn.fetchrow(
                 """
                 INSERT INTO baselines (category_id, amount_per_day_paise, source, window_days)
-                VALUES (%s, %s, 'estimated', 30)
+                VALUES ($1, $2, 'estimated', 30)
                 ON CONFLICT (category_id) DO UPDATE
                     SET amount_per_day_paise = EXCLUDED.amount_per_day_paise,
                         source = 'estimated', updated_at = now()
                 RETURNING *
                 """,
-                (category_id, amount),
-            ).fetchone()
+                category_id,
+                amount,
+            )
             if before is None:
                 group.record_created("baselines", after)
             else:
@@ -1086,8 +1109,8 @@ def update_setup_item(
     raise ToolInputError(f"unknown setup entity {entity!r}")
 
 
-def preference(
-    conn: psycopg.Connection,
+async def preference(
+    conn: Connection,
     *,
     action: str,
     text: str | None,
@@ -1098,14 +1121,14 @@ def preference(
         if not text or not text.strip():
             raise ToolInputError("what should I remember?")
         text = text.strip()
-        existing = conn.execute(
+        existing = await conn.fetchrow(
             """
             SELECT * FROM preferences
-            WHERE active AND deleted_at IS NULL AND lower(body) = lower(%s)
+            WHERE active AND deleted_at IS NULL AND lower(body) = lower($1)
             ORDER BY created_at LIMIT 1
             """,
-            (text,),
-        ).fetchone()
+            text,
+        )
         if existing:
             return {
                 "status": "remembered",
@@ -1114,14 +1137,15 @@ def preference(
                 "text": existing["body"],
                 "card": _card("preference", title="Remembered", text=existing["body"]),
             }
-        with write_group(conn, actor="agent", message_id=message_id) as group:
-            row = conn.execute(
+        async with write_group(conn, actor="agent", message_id=message_id) as group:
+            row = await conn.fetchrow(
                 """
                 INSERT INTO preferences (body, created_by, source_message_id)
-                VALUES (%s, 'agent', %s) RETURNING *
+                VALUES ($1, 'agent', $2) RETURNING *
                 """,
-                (text, message_id),
-            ).fetchone()
+                text,
+                message_id,
+            )
             group.record_created("preferences", row)
         return {
             "status": "remembered",
@@ -1139,30 +1163,31 @@ def preference(
     if action == "forget":
         row = None
         if preference_id:
-            row = conn.execute(
-                "SELECT * FROM preferences WHERE id = %s AND deleted_at IS NULL", (preference_id,)
-            ).fetchone()
+            row = await conn.fetchrow(
+                "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL",
+                preference_id,
+            )
         if row is None and text:
-            row = conn.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT * FROM preferences
-                WHERE active AND deleted_at IS NULL AND lower(body) = lower(%s)
+                WHERE active AND deleted_at IS NULL AND lower(body) = lower($1)
                 ORDER BY created_at LIMIT 1
                 """,
-                (text.strip(),),
-            ).fetchone()
+                text.strip(),
+            )
         if row is None:
-            active = conn.execute(
+            active = await conn.fetch(
                 "SELECT id, body FROM preferences WHERE active AND deleted_at IS NULL"
-            ).fetchall()
+            )
             listed = "; ".join(f"{r['id']}: {r['body']}" for r in active) or "none"
             raise ToolInputError(f"No preference matched. Active preferences: {listed}")
-        with write_group(conn, actor="agent", message_id=message_id) as group:
-            after = conn.execute(
+        async with write_group(conn, actor="agent", message_id=message_id) as group:
+            after = await conn.fetchrow(
                 "UPDATE preferences SET active = false, updated_at = now() "
-                "WHERE id = %s RETURNING *",
-                (row["id"],),
-            ).fetchone()
+                "WHERE id = $1 RETURNING *",
+                row["id"],
+            )
             group.record_updated("preferences", row["id"], row, after)
         return {
             "status": "forgotten",
@@ -1180,8 +1205,8 @@ def preference(
     raise ToolInputError("action is remember or forget")
 
 
-def import_document(
-    conn: psycopg.Connection,
+async def import_document(
+    conn: Connection,
     *,
     attachment_id: str,
     message_id: str | None = None,
@@ -1191,10 +1216,10 @@ def import_document(
     from fin_agent.importers.pipeline import create_import, import_payload
 
     try:
-        row = create_import(conn, attachment_id=attachment_id)
+        row = await create_import(conn, attachment_id=attachment_id)
     except ValueError as exc:
         raise ToolInputError(str(exc)) from exc
-    payload = import_payload(conn, row["id"])
+    payload = await import_payload(conn, row["id"])
     return {
         "import_id": payload["import_id"],
         "status": payload["status"],
@@ -1215,8 +1240,8 @@ def import_document(
     }
 
 
-def undo(
-    conn: psycopg.Connection,
+async def undo(
+    conn: Connection,
     *,
     undo_id: str | None,
     conversation_id: str | None,
@@ -1224,60 +1249,62 @@ def undo(
 ) -> dict[str, Any]:
     if undo_id:
         try:
-            result = undo_group(conn, undo_id, actor="agent", message_id=message_id)
+            result = await undo_group(conn, undo_id, actor="agent", message_id=message_id)
         except Exception as exc:  # noqa: BLE001 - wrapper turns this into ModelRetry
             raise ToolInputError(str(exc)) from exc
     else:
         row = None
         if conversation_id:
-            row = conn.execute(
+            row = await conn.fetchrow(
                 """
                 SELECT a.group_id
                 FROM audit_log a
                 JOIN messages m ON m.id = a.message_id
-                WHERE m.conversation_id = %s AND a.undone_at IS NULL
+                WHERE m.conversation_id = $1 AND a.undone_at IS NULL
                 GROUP BY a.group_id
                 ORDER BY max(a.created_at) DESC
                 LIMIT 1
                 """,
-                (conversation_id,),
-            ).fetchone()
+                conversation_id,
+            )
         if row is None:
-            result = undo_latest(conn, actor="agent", message_id=message_id)
+            result = await undo_latest(conn, actor="agent", message_id=message_id)
         else:
-            result = undo_group(conn, str(row["group_id"]), actor="agent", message_id=message_id)
+            result = await undo_group(
+                conn, str(row["group_id"]), actor="agent", message_id=message_id
+            )
     return {
         **result,
         "card": _card("undo", title="Undone", summary=result.get("summary")),
     }
 
 
-def delete_preference_for_good(conn: psycopg.Connection, preference_id: str) -> dict[str, Any]:
+async def delete_preference_for_good(conn: Connection, preference_id: str) -> dict[str, Any]:
     """Settings-only delete: blank the body and every audit copy, then delete the row."""
-    row = conn.execute("SELECT * FROM preferences WHERE id = %s", (preference_id,)).fetchone()
+    row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
     if row is None:
         raise ToolInputError("No such preference")
-    with conn.transaction():
-        conn.execute(
+    async with conn.transaction():
+        await conn.execute(
             """
             UPDATE audit_log
             SET before = CASE WHEN before ? 'body'
                               THEN jsonb_set(before, '{body}', '\"\"') ELSE before END,
                 after = CASE WHEN after ? 'body'
                              THEN jsonb_set(after, '{body}', '\"\"') ELSE after END
-            WHERE table_name = 'preferences' AND row_id = %s
+            WHERE table_name = 'preferences' AND row_id = $1
             """,
-            (preference_id,),
+            preference_id,
         )
-        conn.execute("DELETE FROM preferences WHERE id = %s", (preference_id,))
-        conn.execute(
+        await conn.execute("DELETE FROM preferences WHERE id = $1", preference_id)
+        await conn.execute(
             """
             INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
-            VALUES ('user', pgledger_generate_id('und'), 'preferences', %s, %s, NULL)
+            VALUES ('user', pgledger_generate_id('und'), 'preferences', $1, $2, NULL)
             """,
-            (preference_id, Jsonb({"id": preference_id, "body": ""})),
+            preference_id,
+            {"id": preference_id, "body": ""},
         )
-    conn.commit()
     return {"status": "deleted", "id": preference_id}
 
 

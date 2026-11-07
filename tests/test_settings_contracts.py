@@ -8,7 +8,7 @@ session summary stay honest.
 from __future__ import annotations
 
 
-def test_session_exposes_only_safe_current_session_fields(authed_client):
+async def test_session_exposes_only_safe_current_session_fields(authed_client):
     response = authed_client.get("/api/auth/session")
     assert response.status_code == 200
     payload = response.json()
@@ -21,7 +21,9 @@ def test_session_exposes_only_safe_current_session_fields(authed_client):
     assert payload["session"]["fresh"] is True
 
 
-def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_reversible(authed_client):
+async def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_reversible(
+    authed_client,
+):
     created = authed_client.post(
         "/api/scheduled-questions",
         json={
@@ -67,7 +69,7 @@ def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_reversible(
     assert edited.json()["next_run_at"] is not None
 
 
-def test_category_rename_archive_and_restore_use_existing_patch_delete(authed_client):
+async def test_category_rename_archive_and_restore_use_existing_patch_delete(authed_client):
     tree = authed_client.get("/api/categories").json()
     category = next(item for item in tree["categories"] if item["active"])
     renamed_name = f"{category['name']} (renamed)"
@@ -90,7 +92,7 @@ def test_category_rename_archive_and_restore_use_existing_patch_delete(authed_cl
     assert restored.json()["active"] is True
 
 
-def test_rule_edit_upserts_one_rule_and_becomes_a_user_rule(authed_client):
+async def test_rule_edit_upserts_one_rule_and_becomes_a_user_rule(authed_client):
     categories = [
         item for item in authed_client.get("/api/categories").json()["categories"] if item["active"]
     ][:2]

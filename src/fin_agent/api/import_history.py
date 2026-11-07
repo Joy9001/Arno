@@ -10,8 +10,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-import psycopg
 from fastapi import HTTPException
+
+from fin_agent.db.conn import Connection
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
@@ -73,8 +74,8 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_import_history(
-    conn: psycopg.Connection,
+async def list_import_history(
+    conn: Connection,
     *,
     limit: int = DEFAULT_LIMIT,
     cursor: str | None = None,
@@ -85,18 +86,19 @@ def list_import_history(
     params: list[Any] = []
     if cursor:
         created_at, import_id = _decode_cursor(cursor)
-        where = "WHERE (i.created_at, i.id) < (%s, %s)"
+        where = "WHERE (i.created_at, i.id) < ($1, $2)"
         params.extend([created_at, import_id])
 
-    rows = conn.execute(
+    rows = await conn.fetch(
         f"""
         {_SELECT}
         {where}
         ORDER BY i.created_at DESC, i.id DESC
-        LIMIT %s
+        LIMIT ${len(params) + 1}
         """,  # noqa: S608 - `where` is a fixed fragment, never user text
-        (*params, limit + 1),
-    ).fetchall()
+        *params,
+        limit + 1,
+    )
     has_more = len(rows) > limit
     rows = rows[:limit]
     next_cursor = (

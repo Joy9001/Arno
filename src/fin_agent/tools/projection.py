@@ -10,8 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.engine.affordability import Hypothetical, afford
 from fin_agent.engine.money import money
 from fin_agent.engine.projection import (
@@ -32,53 +31,46 @@ from fin_agent.engine.projection import (
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger.common import has_known_balance
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.ledger.settings import read_settings
 from fin_agent.tools.mark import mark
 
 
-def _balance_at(conn: psycopg.Connection, ledger_account_id: str, as_of: date) -> int:
-    row = conn.execute(
+async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> int:
+    row = await conn.fetchrow(
         """
         SELECT coalesce(sum(e.amount), 0)::bigint AS balance_paise
         FROM pgledger_entries e
         JOIN pgledger_transfers t ON t.id = e.transfer_id
         LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE e.account_id = %s
-          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= %s
+        WHERE e.account_id = $1
+          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $2
         """,
-        (ledger_account_id, as_of),
-    ).fetchone()
+        ledger_account_id,
+        as_of,
+    )
     return int(row["balance_paise"]) if row else 0
 
 
-def _settings(conn: psycopg.Connection) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
-    return dict(row) if row is not None else {"floor_paise": None, "default_horizon_days": 90}
-
-
-def _horizon_for_loading(
-    conn: psycopg.Connection, as_of: date, ask_horizon_days: int | None
-) -> int:
-    rows = conn.execute(
+async def _horizon_for_loading(conn: Connection, as_of: date, ask_horizon_days: int | None) -> int:
+    rows = await conn.fetch(
         "SELECT deadline FROM goals WHERE status = 'active' AND deadline IS NOT NULL"
-    ).fetchall()
+    )
     furthest = max(((row["deadline"] - as_of).days for row in rows), default=0)
     return min(3_650, max(90, ask_horizon_days or 0, furthest))
 
 
-def _card_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
-    rows = list(
-        conn.execute(
-            """
-            SELECT * FROM accounts
-            WHERE kind = 'card' AND active
-            ORDER BY name
-            """
-        ).fetchall()
+async def _card_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
+    rows = await conn.fetch(
+        """
+        SELECT * FROM accounts
+        WHERE kind = 'card' AND active
+        ORDER BY name
+        """
     )
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        balance = _balance_at(conn, row["ledger_account_id"], as_of)
+        balance = await _balance_at(conn, row["ledger_account_id"], as_of)
         outstanding = max(-balance, 0)
         stated = row["statement_balance_as_of"]
         known = has_known_balance(row) and stated is not None and stated <= as_of
@@ -99,20 +91,18 @@ def _card_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, An
     return cards, gaps
 
 
-def _liquid_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
-    rows = list(
-        conn.execute(
-            """
-            SELECT * FROM accounts
-            WHERE liquid AND active
-            ORDER BY name
-            """
-        ).fetchall()
+async def _liquid_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
+    rows = await conn.fetch(
+        """
+        SELECT * FROM accounts
+        WHERE liquid AND active
+        ORDER BY name
+        """
     )
     accounts: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        balance = _balance_at(conn, row["ledger_account_id"], as_of)
+        balance = await _balance_at(conn, row["ledger_account_id"], as_of)
         stated = row["statement_balance_as_of"]
         known = has_known_balance(row) and stated is not None and stated <= as_of
         as_of_date = stated if known else None
@@ -136,18 +126,14 @@ def _liquid_rows(conn: psycopg.Connection, as_of: date) -> tuple[list[dict[str, 
     return accounts, gaps
 
 
-def _goals(conn: psycopg.Connection, as_of: date) -> list[dict[str, Any]]:
-    rows = list(
-        conn.execute(
-            "SELECT * FROM goals WHERE status = 'active' ORDER BY priority, deadline NULLS LAST"
-        ).fetchall()
+async def _goals(conn: Connection, as_of: date) -> list[dict[str, Any]]:
+    rows = await conn.fetch(
+        "SELECT * FROM goals WHERE status = 'active' ORDER BY priority, deadline NULLS LAST"
     )
     goals: list[dict[str, Any]] = []
     for row in rows:
-        account = conn.execute(
-            "SELECT * FROM accounts WHERE id = %s", (row["account_id"],)
-        ).fetchone()
-        saved = _balance_at(conn, account["ledger_account_id"], as_of) if account else 0
+        account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
+        saved = await _balance_at(conn, account["ledger_account_id"], as_of) if account else 0
         goals.append(
             {
                 **dict(row),
@@ -157,54 +143,52 @@ def _goals(conn: psycopg.Connection, as_of: date) -> list[dict[str, Any]]:
     return goals
 
 
-def _spend_categories(
-    conn: psycopg.Connection,
+async def _spend_categories(
+    conn: Connection,
     *,
     as_of: date,
     covered_category_ids: set[str],
 ) -> tuple[list[SpendCategory], list[dict[str, Any]], list[str]]:
     window_start = as_of - timedelta(days=HISTORY_DAYS)
     window_end = as_of - timedelta(days=1)
-    categories = list(
-        conn.execute("SELECT * FROM categories WHERE active ORDER BY name").fetchall()
-    )
-    baselines = {
-        row["category_id"]: row for row in conn.execute("SELECT * FROM baselines").fetchall()
-    }
-    spend_rows = conn.execute(
+    categories = await conn.fetch("SELECT * FROM categories WHERE active ORDER BY name")
+    baselines = {row["category_id"]: row for row in await conn.fetch("SELECT * FROM baselines")}
+    spend_rows = await conn.fetch(
         """
         SELECT tl.category_id, v.date, sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
-        WHERE v.date BETWEEN %s AND %s
+        WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND tl.category_id IS NOT NULL
         GROUP BY tl.category_id, v.date
         """,
-        (window_start, window_end),
-    ).fetchall()
+        window_start,
+        window_end,
+    )
     daily: dict[str, dict[date, int]] = {}
     for row in spend_rows:
         daily.setdefault(str(row["category_id"]), {})[row["date"]] = int(row["amount_paise"])
 
     gaps: list[str] = []
-    uncategorized = conn.execute(
+    uncategorized = await conn.fetchrow(
         """
         SELECT coalesce(sum(v.amount_paise), 0)::bigint AS amount_paise
         FROM v_spending v
-        WHERE v.date BETWEEN %s AND %s
+        WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND v.category_id IS NULL
         """,
-        (window_start, window_end),
-    ).fetchone()
+        window_start,
+        window_end,
+    )
     if uncategorized and int(uncategorized["amount_paise"]) > 0:
         gaps.append(
             "uncategorized spending is not simulated as variable spend; label those rows in the "
             "ledger"
         )
 
-    card_rows = conn.execute(
+    card_rows = await conn.fetch(
         """
         SELECT tl.category_id,
                CASE WHEN fa.kind = 'card' THEN fa.id ELSE ta.id END AS card_id,
@@ -214,14 +198,15 @@ def _spend_categories(
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
         JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
-        WHERE v.date BETWEEN %s AND %s
+        WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND tl.category_id IS NOT NULL
           AND (fa.kind = 'card' OR ta.kind = 'card')
         GROUP BY tl.category_id, 2
         """,
-        (window_start, window_end),
-    ).fetchall()
+        window_start,
+        window_end,
+    )
     card_choice: dict[str, tuple[str, int]] = {}
     card_counts: dict[str, int] = {}
     for row in card_rows:
@@ -305,10 +290,10 @@ def _spend_categories(
     return result, baseline_rows, gaps
 
 
-def _owed_events(
-    conn: psycopg.Connection, *, as_of: date, end: date
+async def _owed_events(
+    conn: Connection, *, as_of: date, end: date
 ) -> tuple[list[CashEvent], list[dict[str, Any]], list[str]]:
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT p.id AS payee_id, p.display_name, p.outside_text, tl.expected_date,
                t.amount::bigint AS amount_paise,
@@ -321,7 +306,7 @@ def _owed_events(
           AND (t.from_account_id = a.ledger_account_id OR t.to_account_id = a.ledger_account_id)
         ORDER BY tl.expected_date, p.display_name
         """
-    ).fetchall()
+    )
     events: list[CashEvent] = []
     sources: list[dict[str, Any]] = []
     gaps: list[str] = []
@@ -359,23 +344,23 @@ def _owed_events(
     return events, sources, gaps
 
 
-def load_inputs(
-    conn: psycopg.Connection,
+async def load_inputs(
+    conn: Connection,
     *,
     as_of: date | None = None,
     horizon_days: int | None = None,
 ) -> ProjectionInput:
     """Build the pure engine's inputs from the ledger as of ``as_of``."""
     as_of = as_of or ledger_today()
-    settings = _settings(conn)
+    settings = await read_settings(conn)
     floor = int(settings["floor_paise"] or 0)
-    end = as_of + timedelta(days=_horizon_for_loading(conn, as_of, horizon_days))
+    end = as_of + timedelta(days=await _horizon_for_loading(conn, as_of, horizon_days))
 
-    liquid_rows, gaps = _liquid_rows(conn, as_of)
-    card_rows, card_gaps = _card_rows(conn, as_of)
+    liquid_rows, gaps = await _liquid_rows(conn, as_of)
+    card_rows, card_gaps = await _card_rows(conn, as_of)
     gaps.extend(card_gaps)
 
-    goal_rows = _goals(conn, as_of)
+    goal_rows = await _goals(conn, as_of)
     goal_by_schedule = {
         row["contribution_schedule_id"]: row for row in goal_rows if row["contribution_schedule_id"]
     }
@@ -384,7 +369,7 @@ def load_inputs(
     events: list[CashEvent] = []
     schedule_sources: dict[str, dict[str, Any]] = {}
     covered_categories: set[str] = set()
-    for row in conn.execute("SELECT * FROM schedules WHERE active ORDER BY name").fetchall():
+    for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name"):
         if row["starts"] > end:
             continue
         if row["ends"] is not None and row["ends"] < as_of:
@@ -394,7 +379,7 @@ def load_inputs(
             continue
         if row["kind"] in {"obligation", "instalment"} and row["category_id"]:
             covered_categories.add(str(row["category_id"]))
-        occurrences = schedules_mod.expand_schedule(conn, row, as_of + timedelta(days=1), end)
+        occurrences = await schedules_mod.expand_schedule(conn, row, as_of + timedelta(days=1), end)
         if not occurrences:
             continue
         schedule_sources[str(row["id"])] = {
@@ -448,11 +433,11 @@ def load_inputs(
                         f"{row['name']} is not linked to a goal; it still leaves liquid cash"
                     )
 
-    owed_events, owed_sources, owed_gaps = _owed_events(conn, as_of=as_of, end=end)
+    owed_events, owed_sources, owed_gaps = await _owed_events(conn, as_of=as_of, end=end)
     events.extend(owed_events)
     gaps.extend(owed_gaps)
 
-    categories, baseline_rows, category_gaps = _spend_categories(
+    categories, baseline_rows, category_gaps = await _spend_categories(
         conn, as_of=as_of, covered_category_ids=covered_categories
     )
     gaps.extend(category_gaps)
@@ -599,8 +584,8 @@ def load_inputs(
         unique[(source["kind"], source["id"])] = source
     outside = any(
         row["outside_text"]
-        for row in conn.execute("SELECT outside_text FROM schedules WHERE active")
-    ) or any(row["outside_text"] for row in conn.execute("SELECT outside_text FROM payees"))
+        for row in await conn.fetch("SELECT outside_text FROM schedules WHERE active")
+    ) or any(row["outside_text"] for row in await conn.fetch("SELECT outside_text FROM payees"))
 
     return ProjectionInput(
         as_of=as_of,
@@ -648,8 +633,8 @@ def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical
     )
 
 
-def project(
-    conn: psycopg.Connection,
+async def project(
+    conn: Connection,
     *,
     horizon_days: int | None = None,
     hypothetical: dict[str, Any] | Hypothetical | None = None,
@@ -663,7 +648,7 @@ def project(
     if purchase is not None:
         needed = max(0, (purchase.date - (as_of or ledger_today())).days + 1)
         load_horizon = max(load_horizon or 0, needed)
-    inputs = load_inputs(conn, as_of=as_of, horizon_days=load_horizon)
+    inputs = await load_inputs(conn, as_of=as_of, horizon_days=load_horizon)
     if purchase is not None:
         return afford(inputs, purchase, runs=runs, seed=seed)
     return run_projection(inputs, runs=runs, seed=seed)

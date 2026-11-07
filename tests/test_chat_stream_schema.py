@@ -79,7 +79,7 @@ def _body(message_id: str) -> dict:
     }
 
 
-def test_a_run_code_query_card_streams_a_valid_client_chunk(authed_client, demo_ledger):
+async def test_a_run_code_query_card_streams_a_valid_client_chunk(authed_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         if not any(
             getattr(part, "tool_name", None) == "run_code"

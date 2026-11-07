@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import psycopg
-
 from fin_agent.agent.redaction import redact_text
+from fin_agent.db.conn import Connection
 
 MAX_QUOTE_CHARS = 4000
 MAX_QUOTE_MESSAGE_ID_CHARS = 100
@@ -65,20 +64,19 @@ def _source_has_text(content: Any) -> bool:
     )
 
 
-def resolve_quote(
-    conn: psycopg.Connection, thread_id: str, quote: dict[str, str]
-) -> dict[str, str]:
+async def resolve_quote(conn: Connection, thread_id: str, quote: dict[str, str]) -> dict[str, str]:
     """Bind a snapshot to a real text message in the same thread, then redact it."""
     message_id = quote["messageId"]
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         SELECT role, content FROM messages
-        WHERE conversation_id = %s AND (id = %s OR client_id = %s)
-        ORDER BY (id = %s) DESC
+        WHERE conversation_id = $1 AND (id = $2 OR client_id = $2)
+        ORDER BY (id = $2) DESC
         LIMIT 1
         """,
-        (thread_id, message_id, message_id, message_id),
-    ).fetchone()
+        thread_id,
+        message_id,
+    )
     if row is None or str(row["role"]) not in SOURCE_ROLES or not _source_has_text(row["content"]):
         raise QuoteError("The quoted message is no longer available. Select the text again.")
     safe = redact_text(quote["text"]).strip()

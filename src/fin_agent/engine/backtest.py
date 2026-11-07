@@ -15,8 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.engine.money import money
 from fin_agent.engine.projection import (
     DEFAULT_RUNS,
@@ -345,15 +344,15 @@ def backtest_synthetic(
     return _summarize(rows, "synthetic 12-month history")
 
 
-def backtest_db(
-    conn: psycopg.Connection, *, runs: int = DEFAULT_RUNS, seed: int = DEFAULT_SEED
+async def backtest_db(
+    conn: Connection, *, runs: int = DEFAULT_RUNS, seed: int = DEFAULT_SEED
 ) -> dict[str, Any]:
     from fin_agent.tools.projection import _balance_at
     from fin_agent.tools.projection import project as project_tool
 
-    bounds = conn.execute(
+    bounds = await conn.fetchrow(
         "SELECT min(date) AS first_day, max(date) AS last_day FROM movements"
-    ).fetchone()
+    )
     if not bounds or bounds["first_day"] is None:
         return _summarize([], "real backfill")
     first = bounds["first_day"]
@@ -365,28 +364,30 @@ def backtest_db(
             starts.append(cursor)
         cursor = _add_months(cursor, 1)
     starts = starts[-12:]
-    liquid = conn.execute(
+    liquid = await conn.fetch(
         """
         SELECT id, ledger_account_id FROM accounts
         WHERE liquid AND active ORDER BY name
         """
-    ).fetchall()
+    )
     rows: list[dict[str, Any]] = []
     for as_of in starts:
         try:
-            projected = project_tool(conn, as_of=as_of, horizon_days=90, runs=runs, seed=seed)
+            projected = await project_tool(conn, as_of=as_of, horizon_days=90, runs=runs, seed=seed)
         except ValueError:
             continue
         actual = sum(
-            _balance_at(conn, row["ledger_account_id"], as_of + timedelta(days=30))
-            for row in liquid
+            [
+                await _balance_at(conn, row["ledger_account_id"], as_of + timedelta(days=30))
+                for row in liquid
+            ]
         )
         rows.append(_row(as_of, projected, actual))
     return _summarize(rows, "real backfill")
 
 
-def backtest(
-    conn: psycopg.Connection | None = None,
+async def backtest(
+    conn: Connection | None = None,
     *,
     source: str = "auto",
     runs: int = DEFAULT_RUNS,
@@ -395,19 +396,19 @@ def backtest(
     if source not in {"auto", "db", "synthetic"}:
         raise ValueError("source is auto, db, or synthetic")
     if source in {"auto", "db"} and conn is not None:
-        months = conn.execute(
+        months = await conn.fetchrow(
             """
             SELECT count(DISTINCT date_trunc('month', date)) AS n
             FROM movements
             """
-        ).fetchone()
+        )
         enough = bool(months and int(months["n"]) >= 12)
         if source == "db" and not enough:
             raise ValueError(
                 "the ledger does not have 12 months of movements; run the 12-month backfill first"
             )
         if enough:
-            result = backtest_db(conn, runs=runs, seed=seed)
+            result = await backtest_db(conn, runs=runs, seed=seed)
             if result["months"]:
                 return result
     # TODO(L5): rerun against the real 12-month backfill when one is present. Until then the

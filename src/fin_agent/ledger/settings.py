@@ -6,8 +6,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import write_group
 from fin_agent.ledger.errors import InvalidLedgerError
 
@@ -15,11 +14,11 @@ BACKUP_DUE_AFTER = timedelta(hours=24)
 BACKUP_ALERT_AFTER = timedelta(hours=48)
 
 
-def read_settings(conn: psycopg.Connection) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+async def read_settings(conn: Connection) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
     if row is None:  # pragma: no cover - migration 0003 inserts it
         raise InvalidLedgerError("The settings row is missing")
-    user = conn.execute("SELECT id, display_name FROM users ORDER BY created_at LIMIT 1").fetchone()
+    user = await conn.fetchrow("SELECT id, display_name FROM users ORDER BY created_at LIMIT 1")
     return {
         "base_currency": row["base_currency"],
         "time_zone": row["time_zone"],
@@ -42,8 +41,8 @@ def read_settings(conn: psycopg.Connection) -> dict[str, Any]:
     }
 
 
-def update_settings(
-    conn: psycopg.Connection,
+async def update_settings(
+    conn: Connection,
     *,
     floor_paise: int | None = None,
     base_currency: str | None = None,
@@ -75,12 +74,12 @@ def update_settings(
             raise InvalidLedgerError(f"Unknown time zone: {time_zone}") from exc
     if notification_time is not None:
         try:
-            notification_time = time.fromisoformat(notification_time).isoformat()
+            notification_time = time.fromisoformat(notification_time)
         except ValueError as exc:
             raise InvalidLedgerError("The notification time is HH:MM") from exc
 
-    before = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
-    user_before = conn.execute("SELECT * FROM users ORDER BY created_at LIMIT 1").fetchone()
+    before = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
+    user_before = await conn.fetchrow("SELECT * FROM users ORDER BY created_at LIMIT 1")
     updates: dict[str, Any] = {}
     for key, value in {
         "floor_paise": floor_paise,
@@ -95,43 +94,49 @@ def update_settings(
             updates[key] = value
 
     if not updates and display_name is None:
-        return read_settings(conn) | {"undo_id": None}
+        settings = await read_settings(conn)
+        return settings | {"undo_id": None}
 
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         after = before
         if updates:
             columns = list(updates)
-            after = conn.execute(
+            assignments = ", ".join(
+                f"{column} = ${index}" for index, column in enumerate(columns, start=1)
+            )
+            after = await conn.fetchrow(
                 f"""
-                UPDATE settings SET {", ".join(f"{column} = %s" for column in columns)},
+                UPDATE settings SET {assignments},
                     updated_at = now()
                 WHERE id = 1 RETURNING *
                 """,
-                tuple(updates[column] for column in columns),
-            ).fetchone()
+                *[updates[column] for column in columns],
+            )
             group.record_updated("settings", "1", before, after)
         if display_name is not None:
             if user_before is None:
                 raise InvalidLedgerError("There is no user profile yet")
-            user_after = conn.execute(
-                "UPDATE users SET display_name = %s WHERE id = %s RETURNING *",
-                (display_name.strip(), user_before["id"]),
-            ).fetchone()
+            user_after = await conn.fetchrow(
+                "UPDATE users SET display_name = $1 WHERE id = $2 RETURNING *",
+                display_name.strip(),
+                user_before["id"],
+            )
             group.record_updated("users", user_before["id"], user_before, user_after)
-    return read_settings(conn) | {"undo_id": group.group_id}
+    settings = await read_settings(conn)
+    return settings | {"undo_id": group.group_id}
 
 
-def backup_status(conn: psycopg.Connection, *, now: datetime | None = None) -> dict[str, Any]:
+async def backup_status(conn: Connection, *, now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(UTC)
-    latest = conn.execute(
+    latest = await conn.fetchrow(
         "SELECT * FROM backup_runs ORDER BY created_at DESC, id DESC LIMIT 1"
-    ).fetchone()
-    success = conn.execute(
+    )
+    success = await conn.fetchrow(
         """
         SELECT * FROM backup_runs WHERE status = 'success'
         ORDER BY finished_at DESC, id DESC LIMIT 1
         """
-    ).fetchone()
+    )
     last_success_at = success["finished_at"] if success else None
     age_seconds = (
         int((now - last_success_at).total_seconds()) if last_success_at is not None else None

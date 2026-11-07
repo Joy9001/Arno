@@ -13,8 +13,8 @@ from fin_agent.ledger.movements import record_expense
 from fin_agent.ledger.schedules import create_schedule, upcoming
 
 
-def _category(conn, name: str) -> str:
-    return conn.execute("SELECT id FROM categories WHERE name = %s", (name,)).fetchone()["id"]
+async def _category(conn, name: str) -> str:
+    return (await conn.fetchrow("SELECT id FROM categories WHERE name = $1", name))["id"]
 
 
 def test_last_working_day_skips_the_weekend():
@@ -43,8 +43,8 @@ def test_monthly_last_weekday_expands_to_twelve_dates():
     assert all(day.weekday() < 5 for day in dates)
 
 
-def test_holiday_adjusted_bill_moves_to_the_next_working_day(ledger):
-    schedule = create_schedule(
+async def test_holiday_adjusted_bill_moves_to_the_next_working_day(ledger):
+    schedule = await create_schedule(
         ledger,
         kind="obligation",
         subtype="other",
@@ -66,9 +66,9 @@ def test_holiday_adjusted_bill_moves_to_the_next_working_day(ledger):
     assert dates == [date(2026, 1, 27), date(2026, 2, 26)]
 
 
-def test_instalment_plan_needs_a_count_or_until(ledger):
+async def test_instalment_plan_needs_a_count_or_until(ledger):
     with pytest.raises(InvalidLedgerError, match="COUNT or UNTIL"):
-        create_schedule(
+        await create_schedule(
             ledger,
             kind="instalment",
             name="No end",
@@ -78,8 +78,8 @@ def test_instalment_plan_needs_a_count_or_until(ledger):
         )
 
 
-def test_instalment_count_produces_three_occurrences(ledger):
-    schedule = create_schedule(
+async def test_instalment_count_produces_three_occurrences(ledger):
+    schedule = await create_schedule(
         ledger,
         kind="instalment",
         name="Phone on card",
@@ -97,9 +97,9 @@ def test_instalment_count_produces_three_occurrences(ledger):
     assert dates == [date(2026, 8, 5), date(2026, 9, 5), date(2026, 10, 5)]
 
 
-def test_variable_income_keeps_its_confirmed_flag(ledger):
-    bank = create_account(ledger, kind="bank", name="SBI", opening_balance_paise=0)
-    schedule = create_schedule(
+async def test_variable_income_keeps_its_confirmed_flag(ledger):
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=0)
+    schedule = await create_schedule(
         ledger,
         kind="income_variable",
         name="Freelance",
@@ -111,14 +111,14 @@ def test_variable_income_keeps_its_confirmed_flag(ledger):
     )
 
     assert schedule["confirmed"] is False
-    events = upcoming(ledger, days=45, start=date(2026, 11, 1))["events"]
+    events = (await upcoming(ledger, days=45, start=date(2026, 11, 1)))["events"]
     freelance = [event for event in events if event["schedule_id"] == schedule["id"]]
     assert freelance
     assert all(event["confirmed"] is False for event in freelance)
 
 
-def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
-    card = create_account(
+async def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
+    card = await create_account(
         ledger,
         kind="card",
         name="Slice card",
@@ -126,22 +126,22 @@ def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
         statement_day=5,
         due_day=25,
     )
-    food = _category(ledger, "Food & Dining")
-    record_expense(
+    food = await _category(ledger, "Food & Dining")
+    await record_expense(
         ledger, account_id=card["id"], amount_paise=300_000, description="Dinner", category_id=food
     )
 
-    events = upcoming(ledger, days=60, start=date(2026, 11, 1))["events"]
+    events = (await upcoming(ledger, days=60, start=date(2026, 11, 1)))["events"]
     dues = [event for event in events if event["kind"] == "card_due"]
     assert dues
     assert dues[0]["date"] == "2026-11-25"
     assert dues[0]["amount_paise"] == 300_000
 
 
-def test_family_transfer_is_an_obligation_subtype(ledger):
-    bank = create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
-    family = _category(ledger, "Family Transfer")
-    schedule = create_schedule(
+async def test_family_transfer_is_an_obligation_subtype(ledger):
+    bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
+    family = await _category(ledger, "Family Transfer")
+    schedule = await create_schedule(
         ledger,
         kind="obligation",
         subtype="family_transfer",

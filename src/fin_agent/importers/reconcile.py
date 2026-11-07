@@ -11,9 +11,7 @@ import hashlib
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
+from fin_agent.db.conn import Connection
 from fin_agent.importers.identifiers import find_upi_ref, scrub
 from fin_agent.ledger.audit import new_id
 
@@ -41,8 +39,8 @@ def credit_decision_required(line: dict[str, Any], account_kind: str | None) -> 
     return detail["credit_kind"] == "transfer" and not detail.get("credit_source_account_id")
 
 
-def insert_lines(
-    conn: psycopg.Connection,
+async def insert_lines(
+    conn: Connection,
     *,
     import_id: str,
     account: dict[str, Any],
@@ -58,6 +56,9 @@ def insert_lines(
         raw = str(row.get("description") or "")
         safe_raw, hashes = scrub(raw, own_last4=own_last4)
         upi_ref = row.get("upi_ref") or find_upi_ref(raw)
+        day = row["date"]
+        if not isinstance(day, date):
+            day = date.fromisoformat(str(day))
         digest = content_hash(str(row["date"]), amount, safe_raw or "")
         # A statement can contain two identical lines. Reimports keep order, so a per-import
         # ordinal keeps them distinct without breaking the cross-import dedupe key.
@@ -65,59 +66,58 @@ def insert_lines(
         seen[digest] = occurrence + 1
         if occurrence:
             digest = content_hash(str(row["date"]), amount, f"{safe_raw or ''}#{occurrence}")
-        row_id = new_id(conn, "stl")
+        row_id = await new_id(conn, "stl")
         detail = {"identifier_hashes": sorted(hashes)}
         counterparty = str(row.get("counterparty") or "").strip()[:120]
         if counterparty:
             detail["counterparty"] = counterparty
-        created = conn.execute(
+        created = await conn.fetchrow(
             """
             INSERT INTO statement_lines
                 (id, import_id, date, description_raw, amount_paise, debit_paise,
                  credit_paise, balance_paise, upi_ref, content_hash, match_state,
                  outside_text, match_detail)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'new', true, %s)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', true, $11)
             ON CONFLICT (import_id, content_hash) DO NOTHING
             RETURNING *
             """,
-            (
-                row_id,
-                import_id,
-                row["date"],
-                safe_raw or "",
-                amount,
-                debit,
-                credit,
-                row.get("balance"),
-                upi_ref,
-                digest,
-                Jsonb(detail),
-            ),
-        ).fetchone()
+            row_id,
+            import_id,
+            day,
+            safe_raw or "",
+            amount,
+            debit,
+            credit,
+            row.get("balance"),
+            upi_ref,
+            digest,
+            detail,
+        )
         if created is not None:
             inserted.append(dict(created))
     return inserted
 
 
-def _duplicate_exists(conn: psycopg.Connection, line: dict[str, Any]) -> bool:
-    row = conn.execute(
+async def _duplicate_exists(conn: Connection, line: dict[str, Any]) -> bool:
+    row = await conn.fetchrow(
         """
         SELECT 1
         FROM statement_lines sl
         JOIN imports i ON i.id = sl.import_id
-        WHERE sl.content_hash = %s
-          AND sl.import_id <> %s
+        WHERE sl.content_hash = $1
+          AND sl.import_id <> $2
           AND i.status IN ('committed', 'review')
           AND sl.match_state NOT IN ('ignored')
         LIMIT 1
         """,
-        (line["content_hash"], line["import_id"]),
-    ).fetchone()
+        line["content_hash"],
+        line["import_id"],
+    )
     return row is not None
 
 
-def _candidates(
-    conn: psycopg.Connection,
+async def _candidates(
+    conn: Connection,
     *,
     line: dict[str, Any],
     account: dict[str, Any],
@@ -127,7 +127,7 @@ def _candidates(
     if not isinstance(day, date):
         day = date.fromisoformat(str(day))
     ledger_id = account["ledger_account_id"]
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT
             m.id,
@@ -136,8 +136,8 @@ def _candidates(
             m.kind,
             sum(
                 CASE
-                    WHEN t.from_account_id = %s THEN -t.amount
-                    WHEN t.to_account_id = %s THEN t.amount
+                    WHEN t.from_account_id = $1 THEN -t.amount
+                    WHEN t.to_account_id = $2 THEN t.amount
                     ELSE 0
                 END
             )::bigint AS net_paise
@@ -145,50 +145,48 @@ def _candidates(
         JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
         WHERE m.kind <> 'reversal'
           AND m.reverses_id IS NULL
-          AND m.date BETWEEN %s AND %s
-          AND (t.from_account_id = %s OR t.to_account_id = %s)
+          AND m.date BETWEEN $3 AND $4
+          AND (t.from_account_id = $5 OR t.to_account_id = $6)
           AND NOT EXISTS (
               SELECT 1 FROM statement_lines sl
               JOIN imports i ON i.id = sl.import_id
               WHERE sl.movement_id = m.id
-                AND sl.id <> %s
+                AND sl.id <> $7
                 AND sl.match_state IN ('certain', 'merged')
-                AND i.account_id = %s
+                AND i.account_id = $8
           )
         GROUP BY m.id, m.date, m.description, m.kind
         ORDER BY m.date, m.id
         """,
-        (
-            ledger_id,
-            ledger_id,
-            day - timedelta(days=3),
-            day + timedelta(days=3),
-            ledger_id,
-            ledger_id,
-            line["id"],
-            account["id"],
-        ),
-    ).fetchall()
+        ledger_id,
+        ledger_id,
+        day - timedelta(days=3),
+        day + timedelta(days=3),
+        ledger_id,
+        ledger_id,
+        line["id"],
+        account["id"],
+    )
     candidates: list[dict[str, Any]] = []
     for row in rows:
         if str(row["id"]) in used:
             continue
-        captures = conn.execute(
-            "SELECT upi_ref FROM captures WHERE movement_id = %s AND upi_ref IS NOT NULL",
-            (row["id"],),
-        ).fetchall()
+        captures = await conn.fetch(
+            "SELECT upi_ref FROM captures WHERE movement_id = $1 AND upi_ref IS NOT NULL",
+            row["id"],
+        )
         upi_refs = [str(capture["upi_ref"]) for capture in captures]
         payee_hashes = [
             str(payee["match_hash"])
-            for payee in conn.execute(
+            for payee in await conn.fetch(
                 """
                 SELECT DISTINCT p.match_hash
                 FROM transfer_labels tl
                 JOIN payees p ON p.id = tl.payee_id
-                WHERE tl.movement_id = %s AND p.match_hash IS NOT NULL
+                WHERE tl.movement_id = $1 AND p.match_hash IS NOT NULL
                 """,
-                (row["id"],),
-            ).fetchall()
+                row["id"],
+            )
         ]
         candidates.append(
             {
@@ -206,32 +204,29 @@ def _candidates(
     return candidates
 
 
-def reconcile(
-    conn: psycopg.Connection,
+async def reconcile(
+    conn: Connection,
     *,
     import_id: str,
     account: dict[str, Any],
     period: tuple[date, date] | None,
 ) -> dict[str, Any]:
-    lines = [
-        dict(row)
-        for row in conn.execute(
-            "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY date, id",
-            (import_id,),
-        ).fetchall()
-    ]
+    lines = await conn.fetch(
+        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
+        import_id,
+    )
     used: set[str] = set()
     counts = {"new": 0, "certain": 0, "ambiguous": 0, "ignored": 0}
     ambiguous: list[dict[str, Any]] = []
 
     for line in lines:
-        if _duplicate_exists(conn, line):
-            _set_match(
+        if await _duplicate_exists(conn, line):
+            await _set_match(
                 conn, line["id"], "ignored", None, {"reason": "content hash already imported"}
             )
             counts["ignored"] += 1
             continue
-        candidates = _candidates(conn, line=line, account=account, used=used)
+        candidates = await _candidates(conn, line=line, account=account, used=used)
         want_debit = int(line["amount_paise"]) < 0
         line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
         exact = [
@@ -282,10 +277,10 @@ def reconcile(
                 detail["candidates"] = close
         if chosen:
             used.add(chosen["movement_id"])
-            _set_match(conn, line["id"], state, chosen["movement_id"], detail)
+            await _set_match(conn, line["id"], state, chosen["movement_id"], detail)
             counts["certain"] += 1
         elif state == "ambiguous":
-            _set_match(conn, line["id"], state, None, detail)
+            await _set_match(conn, line["id"], state, None, detail)
             counts["ambiguous"] += 1
             ambiguous.append(
                 {
@@ -297,22 +292,19 @@ def reconcile(
                 }
             )
         else:
-            _set_match(conn, line["id"], "new", None, detail)
+            await _set_match(conn, line["id"], "new", None, detail)
             counts["new"] += 1
 
-    lines = [
-        dict(row)
-        for row in conn.execute(
-            "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY date, id",
-            (import_id,),
-        ).fetchall()
-    ]
+    lines = await conn.fetch(
+        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
+        import_id,
+    )
     matched_ids = {str(line["movement_id"]) for line in lines if line.get("movement_id")}
     for line in lines:
         for candidate in (line.get("match_detail") or {}).get("candidates") or []:
             if candidate.get("movement_id"):
                 matched_ids.add(str(candidate["movement_id"]))
-    logged_not_on_statement = _logged_not_on_statement(
+    logged_not_on_statement = await _logged_not_on_statement(
         conn,
         account=account,
         period=period,
@@ -325,34 +317,39 @@ def reconcile(
         "logged_not_on_statement": logged_not_on_statement,
         "period": [period[0].isoformat(), period[1].isoformat()] if period else None,
     }
-    conn.execute(
-        "UPDATE imports SET counts = %s, review = %s WHERE id = %s",
-        (Jsonb(counts), Jsonb(review), import_id),
+    await conn.execute(
+        "UPDATE imports SET counts = $1, review = $2 WHERE id = $3",
+        counts,
+        review,
+        import_id,
     )
     return review
 
 
-def _set_match(
-    conn: psycopg.Connection,
+async def _set_match(
+    conn: Connection,
     line_id: str,
     state: str,
     movement_id: str | None,
     detail: dict[str, Any],
 ) -> None:
-    conn.execute(
+    await conn.execute(
         """
         UPDATE statement_lines
-        SET match_state = %s, movement_id = %s,
-            match_detail = coalesce(match_detail, '{}'::jsonb) || %s,
+        SET match_state = $1, movement_id = $2,
+            match_detail = coalesce(match_detail, '{}'::jsonb) || $3::jsonb,
             updated_at = now()
-        WHERE id = %s
+        WHERE id = $4
         """,
-        (state, movement_id, Jsonb(detail), line_id),
+        state,
+        movement_id,
+        detail,
+        line_id,
     )
 
 
-def _logged_not_on_statement(
-    conn: psycopg.Connection,
+async def _logged_not_on_statement(
+    conn: Connection,
     *,
     account: dict[str, Any],
     period: tuple[date, date] | None,
@@ -361,7 +358,7 @@ def _logged_not_on_statement(
     if period is None:
         return []
     ledger_id = account["ledger_account_id"]
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT
             m.id,
@@ -369,8 +366,8 @@ def _logged_not_on_statement(
             m.description,
             abs(sum(
                 CASE
-                    WHEN t.from_account_id = %s THEN t.amount
-                    WHEN t.to_account_id = %s THEN -t.amount
+                    WHEN t.from_account_id = $1 THEN t.amount
+                    WHEN t.to_account_id = $2 THEN -t.amount
                     ELSE 0
                 END
             ))::bigint AS amount_paise
@@ -378,8 +375,8 @@ def _logged_not_on_statement(
         JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
         WHERE m.kind <> 'reversal'
           AND m.reverses_id IS NULL
-          AND m.date BETWEEN %s AND %s
-          AND (t.from_account_id = %s OR t.to_account_id = %s)
+          AND m.date BETWEEN $3 AND $4
+          AND (t.from_account_id = $5 OR t.to_account_id = $6)
           AND EXISTS (
               SELECT 1 FROM captures c
               WHERE c.movement_id = m.id AND c.kind IN ('chat', 'photo', 'voice')
@@ -391,8 +388,13 @@ def _logged_not_on_statement(
         GROUP BY m.id, m.date, m.description
         ORDER BY m.date, m.id
         """,
-        (ledger_id, ledger_id, period[0], period[1], ledger_id, ledger_id),
-    ).fetchall()
+        ledger_id,
+        ledger_id,
+        period[0],
+        period[1],
+        ledger_id,
+        ledger_id,
+    )
     return [
         {
             "movement_id": str(row["id"]),
@@ -405,8 +407,8 @@ def _logged_not_on_statement(
     ]
 
 
-def resolve_line(
-    conn: psycopg.Connection,
+async def resolve_line(
+    conn: Connection,
     *,
     import_id: str,
     line_id: str,
@@ -416,44 +418,43 @@ def resolve_line(
     category_id: str | None = None,
     source_account_id: str | None = None,
 ) -> dict[str, Any]:
-    line = conn.execute(
-        "SELECT * FROM statement_lines WHERE id = %s AND import_id = %s",
-        (line_id, import_id),
-    ).fetchone()
+    line = await conn.fetchrow(
+        "SELECT * FROM statement_lines WHERE id = $1 AND import_id = $2",
+        line_id,
+        import_id,
+    )
     if line is None:
         raise ValueError("No such statement line")
     if resolution == "ignore":
-        _set_match(conn, line_id, "ignored", None, {"resolved_by": "user"})
+        await _set_match(conn, line_id, "ignored", None, {"resolved_by": "user"})
     elif resolution == "new":
-        _set_match(conn, line_id, "new", None, {"resolved_by": "user"})
+        await _set_match(conn, line_id, "new", None, {"resolved_by": "user"})
     elif resolution == "merge":
         if not movement_id:
             raise ValueError("merge needs a movement_id")
-        candidate = conn.execute(
-            "SELECT id FROM movements WHERE id = %s", (movement_id,)
-        ).fetchone()
+        candidate = await conn.fetchrow("SELECT id FROM movements WHERE id = $1", movement_id)
         if candidate is None:
             raise ValueError("No such movement")
-        _set_match(conn, line_id, "certain", movement_id, {"resolved_by": "user"})
+        await _set_match(conn, line_id, "certain", movement_id, {"resolved_by": "user"})
     elif resolution == "confirm_transfer":
         if not (line["match_detail"] or {}).get("suggested_transfer_account_id"):
             raise ValueError("That line is not a suggested transfer")
-        _set_match(conn, line_id, "new", None, {"transfer_confirmed": True})
+        await _set_match(conn, line_id, "new", None, {"transfer_confirmed": True})
     elif resolution == "reject_transfer":
-        conn.execute(
+        await conn.execute(
             """
             UPDATE statement_lines
             SET match_state = 'new',
                 match_detail = (coalesce(match_detail, '{}'::jsonb)
                                 - 'suggested_transfer_account_id'),
                 updated_at = now()
-            WHERE id = %s
+            WHERE id = $1
             """,
-            (line_id,),
+            line_id,
         )
-        _set_match(conn, line_id, "new", None, {"transfer_rejected": True})
+        await _set_match(conn, line_id, "new", None, {"transfer_rejected": True})
     elif resolution == "classify_credit":
-        _classify_credit(
+        await _classify_credit(
             conn,
             import_id=import_id,
             line=line,
@@ -466,12 +467,11 @@ def resolve_line(
             "resolution is ignore, new, merge, confirm_transfer, reject_transfer, "
             "or classify_credit"
         )
-    conn.commit()
-    return dict(conn.execute("SELECT * FROM statement_lines WHERE id = %s", (line_id,)).fetchone())
+    return await conn.fetchrow("SELECT * FROM statement_lines WHERE id = $1", line_id)
 
 
-def _classify_credit(
-    conn: psycopg.Connection,
+async def _classify_credit(
+    conn: Connection,
     *,
     import_id: str,
     line: dict[str, Any],
@@ -483,13 +483,13 @@ def _classify_credit(
         raise ValueError("Only an unmatched new line can be classified")
     if int(line["amount_paise"]) <= 0:
         raise ValueError("Only a credit line can be classified")
-    account = conn.execute(
+    account = await conn.fetchrow(
         """
         SELECT a.id, a.kind FROM imports i JOIN accounts a ON a.id = i.account_id
-        WHERE i.id = %s
+        WHERE i.id = $1
         """,
-        (import_id,),
-    ).fetchone()
+        import_id,
+    )
     if account is None or account["kind"] != "card":
         raise ValueError("Only a card credit needs this classification")
     if credit_kind not in CREDIT_KINDS:
@@ -499,9 +499,9 @@ def _classify_credit(
         suggested = (line.get("match_detail") or {}).get("suggested_category") or {}
         chosen = str(category_id or suggested.get("category_id") or "").strip()
         if chosen:
-            category = conn.execute(
-                "SELECT id FROM categories WHERE id = %s AND active", (chosen,)
-            ).fetchone()
+            category = await conn.fetchrow(
+                "SELECT id FROM categories WHERE id = $1 AND active", chosen
+            )
             if category is None:
                 raise ValueError("No such category")
             changes["credit_category_id"] = str(category["id"])
@@ -511,26 +511,27 @@ def _classify_credit(
             raise ValueError("A card repayment needs the account that paid it")
         if source_id == str(account["id"]):
             raise ValueError("Choose the account that paid the card, not the card itself")
-        source = conn.execute(
+        source = await conn.fetchrow(
             """
             SELECT id FROM accounts
-            WHERE id = %s AND active AND kind IN ('bank', 'cash', 'wallet')
+            WHERE id = $1 AND active AND kind IN ('bank', 'cash', 'wallet')
             """,
-            (source_id,),
-        ).fetchone()
+            source_id,
+        )
         if source is None:
             raise ValueError("Choose an active bank, cash, or wallet account")
         changes["credit_source_account_id"] = str(source["id"])
-    conn.execute(
+    await conn.execute(
         """
         UPDATE statement_lines
         SET match_state = 'new', movement_id = NULL,
             match_detail = ((coalesce(match_detail, '{}'::jsonb)
-                            - 'credit_source_account_id' - 'credit_category_id') || %s),
+                            - 'credit_source_account_id' - 'credit_category_id') || $1::jsonb),
             updated_at = now()
-        WHERE id = %s
+        WHERE id = $2
         """,
-        (Jsonb(changes), line["id"]),
+        changes,
+        line["id"],
     )
 
 

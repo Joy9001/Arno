@@ -10,8 +10,8 @@ from fin_agent.ledger.accounts import create_account
 from fin_agent.tools.read import coverage
 
 
-def _account(conn, name: str) -> dict:
-    return create_account(
+async def _account(conn, name: str) -> dict:
+    return await create_account(
         conn,
         kind="bank",
         name=name,
@@ -35,7 +35,7 @@ async def _statement(conn, account_id: str, *, start: date, end: date) -> dict:
 
 
 async def test_a_committed_statement_covers_its_month_and_leaves_older_months_gaps(ledger):
-    account = _account(ledger, "Covered bank")
+    account = await _account(ledger, "Covered bank")
     await _statement(
         ledger,
         account["id"],
@@ -43,11 +43,13 @@ async def test_a_committed_statement_covers_its_month_and_leaves_older_months_ga
         end=date(2026, 6, 30),
     )
 
-    june = coverage(ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30))
+    june = await coverage(
+        ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30)
+    )
     assert june["complete"] is True
     assert june["gaps"] == []
 
-    may_june = coverage(
+    may_june = await coverage(
         ledger, account_id=account["id"], start=date(2026, 5, 1), end=date(2026, 6, 30)
     )
     assert may_june["complete"] is False
@@ -55,7 +57,7 @@ async def test_a_committed_statement_covers_its_month_and_leaves_older_months_ga
 
 
 async def test_a_partial_statement_does_not_make_the_rest_of_the_month_known(ledger):
-    account = _account(ledger, "Partial bank")
+    account = await _account(ledger, "Partial bank")
     await _statement(
         ledger,
         account["id"],
@@ -63,13 +65,15 @@ async def test_a_partial_statement_does_not_make_the_rest_of_the_month_known(led
         end=date(2026, 6, 5),
     )
 
-    june = coverage(ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30))
+    june = await coverage(
+        ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30)
+    )
     assert june["complete"] is False
     assert june["gaps"] == ["2026-06"]
 
 
 async def test_adjacent_statements_cover_a_month_together(ledger):
-    account = _account(ledger, "Split bank")
+    account = await _account(ledger, "Split bank")
     await _statement(
         ledger,
         account["id"],
@@ -83,13 +87,15 @@ async def test_adjacent_statements_cover_a_month_together(ledger):
         end=date(2026, 6, 30),
     )
 
-    june = coverage(ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30))
+    june = await coverage(
+        ledger, account_id=account["id"], start=date(2026, 6, 1), end=date(2026, 6, 30)
+    )
     assert june["complete"] is True
     assert june["gaps"] == []
 
 
 async def test_coverage_uses_the_actual_month_end(ledger):
-    account = _account(ledger, "Leap bank")
+    account = await _account(ledger, "Leap bank")
     last = date(2024, 2, calendar.monthrange(2024, 2)[1])
     assert last == date(2024, 2, 29)
     await _statement(
@@ -98,5 +104,5 @@ async def test_coverage_uses_the_actual_month_end(ledger):
         start=date(2024, 2, 1),
         end=last,
     )
-    february = coverage(ledger, account_id=account["id"], start=date(2024, 2, 1), end=last)
+    february = await coverage(ledger, account_id=account["id"], start=date(2024, 2, 1), end=last)
     assert february["complete"] is True

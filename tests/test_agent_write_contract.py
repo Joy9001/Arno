@@ -14,19 +14,19 @@ from fin_agent.agent.toolset import update_setup
 from fin_agent.agent.write_models import AccountSetup
 
 
-def _deps(conn, thread_id: str, message_id: str) -> AgentDeps:
-    conn.execute(
-        "INSERT INTO conversations (id, title) VALUES (%s, 'write contract test')",
-        (thread_id,),
+async def _deps(conn, thread_id: str, message_id: str) -> AgentDeps:
+    await conn.execute(
+        "INSERT INTO conversations (id, title) VALUES ($1, 'write contract test')",
+        thread_id,
     )
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
-        VALUES (%s, %s, 'user', '{}'::jsonb, 'test') RETURNING id
+        VALUES ($1, $2, 'user', '{}'::jsonb, 'test') RETURNING id
         """,
-        (thread_id, message_id),
-    ).fetchone()
-    conn.commit()
+        thread_id,
+        message_id,
+    )
     return AgentDeps(conversation_id=thread_id, message_id=str(row["id"]))
 
 
@@ -48,10 +48,10 @@ def _tool_return(messages, name: str) -> dict | None:
     return None
 
 
-def _run(script, prompt: str, deps: AgentDeps):
+async def _run(script, prompt: str, deps: AgentDeps):
     agent = build_agent()
     with agent.override(model=FunctionModel(script)):
-        return agent.run_sync(prompt, deps=deps, message_history=[])
+        return await agent.run(prompt, deps=deps, message_history=[])
 
 
 def _one_tool_script(tool_name: str, args: dict, answer: str = "Done."):
@@ -83,8 +83,8 @@ def test_card_create_requirements_are_in_the_model_visible_contract():
     assert "update changes only the fields" in tool_guidance
 
 
-def test_expense_uses_amount_rupees_and_payee(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_expense", "msg_wr_expense")
+async def test_expense_uses_amount_rupees_and_payee(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_expense", "msg_wr_expense")
     script = _expense_script(
         {
             "movement": {
@@ -96,9 +96,9 @@ def test_expense_uses_amount_rupees_and_payee(demo_ledger):
             }
         }
     )
-    result = _run(script, "I spent ₹450 on Swiggy yesterday.", deps)
+    result = await _run(script, "I spent ₹450 on Swiggy yesterday.", deps)
     assert result.output == "Logged."
-    row = demo_ledger.execute(
+    row = await demo_ledger.fetchrow(
         """
         SELECT m.id, m.kind, m.date, t.amount::bigint AS amount_paise,
                p.display_name AS payee, c.name AS category
@@ -112,7 +112,7 @@ def test_expense_uses_amount_rupees_and_payee(demo_ledger):
         WHERE m.kind = 'expense' AND ta.kind = 'spending'
         ORDER BY m.created_at DESC LIMIT 1
         """
-    ).fetchone()
+    )
     assert row["kind"] == "expense"
     assert row["amount_paise"] == 45000
     assert row["date"] == date(2026, 10, 31)
@@ -120,8 +120,8 @@ def test_expense_uses_amount_rupees_and_payee(demo_ledger):
     assert row["category"] == "Food & Dining"
 
 
-def test_hinglish_expense_uses_the_same_contract(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_hinglish", "msg_wr_hinglish")
+async def test_hinglish_expense_uses_the_same_contract(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_hinglish", "msg_wr_hinglish")
     script = _expense_script(
         {
             "movement": {
@@ -132,8 +132,8 @@ def test_hinglish_expense_uses_the_same_contract(demo_ledger):
             }
         }
     )
-    _run(script, "Auto bhaiya ko 150 diye abhi.", deps)
-    row = demo_ledger.execute(
+    await _run(script, "Auto bhaiya ko 150 diye abhi.", deps)
+    row = await demo_ledger.fetchrow(
         """
         SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
         FROM movements m
@@ -142,13 +142,13 @@ def test_hinglish_expense_uses_the_same_contract(demo_ledger):
         LEFT JOIN payees p ON p.id = l.payee_id
         WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
         """
-    ).fetchone()
+    )
     assert row["amount_paise"] == 15000
     assert row["payee"] == "Auto bhaiya"
 
 
-def test_correction_takes_amount_rupees(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_correction", "msg_wr_correction")
+async def test_correction_takes_amount_rupees(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_correction", "msg_wr_correction")
     state: dict[str, str] = {}
 
     def script(messages, info: AgentInfo) -> ModelResponse:
@@ -182,9 +182,9 @@ def test_correction_takes_amount_rupees(demo_ledger):
             )
         return ModelResponse(parts=[TextPart("Corrected.")])
 
-    result = _run(script, "Actually it was ₹480. Fix that.", deps)
+    result = await _run(script, "Actually it was ₹480. Fix that.", deps)
     assert result.output == "Corrected."
-    row = demo_ledger.execute(
+    row = await demo_ledger.fetchrow(
         """
         SELECT t.amount::bigint AS amount_paise
         FROM movements m
@@ -192,16 +192,14 @@ def test_correction_takes_amount_rupees(demo_ledger):
         WHERE m.kind = 'expense'
         ORDER BY m.created_at DESC LIMIT 1
         """
-    ).fetchone()
+    )
     assert row["amount_paise"] == 48000
-    reversal = demo_ledger.execute(
-        "SELECT count(*) AS n FROM movements WHERE kind = 'reversal'"
-    ).fetchone()
-    assert reversal["n"] >= 1
+    reversal = await demo_ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'reversal'")
+    assert reversal >= 1
 
 
-def test_split_takes_people_and_shares(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_split", "msg_wr_split")
+async def test_split_takes_people_and_shares(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_split", "msg_wr_split")
     script = _expense_script(
         {
             "movement": {
@@ -217,8 +215,8 @@ def test_split_takes_people_and_shares(demo_ledger):
             }
         }
     )
-    _run(script, "Split a ₹1,200 dinner with Ravi and Amit equally.", deps)
-    row = demo_ledger.execute(
+    await _run(script, "Split a ₹1,200 dinner with Ravi and Amit equally.", deps)
+    row = await demo_ledger.fetchrow(
         """
         SELECT m.kind, sum(t.amount)::bigint AS total
         FROM movements m
@@ -227,41 +225,41 @@ def test_split_takes_people_and_shares(demo_ledger):
         GROUP BY m.id, m.kind
         ORDER BY max(m.created_at) DESC LIMIT 1
         """
-    ).fetchone()
+    )
     assert row["kind"] == "split"
     assert row["total"] == 120000
-    people = demo_ledger.execute(
-        "SELECT count(*) AS n FROM payees WHERE display_name IN ('Ravi', 'Amit')"
-    ).fetchone()
-    assert people["n"] == 2
+    people = await demo_ledger.fetchval(
+        "SELECT count(*) FROM payees WHERE display_name IN ('Ravi', 'Amit')"
+    )
+    assert people == 2
 
 
-def test_preference_remembers_text(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_pref", "msg_wr_pref")
+async def test_preference_remembers_text(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_pref", "msg_wr_pref")
     script = _one_tool_script(
         "preference", {"action": "remember", "text": "Mom's monthly transfer is not discretionary"}
     )
-    _run(script, "Remember that Mom's monthly transfer isn't discretionary.", deps)
-    row = demo_ledger.execute(
+    await _run(script, "Remember that Mom's monthly transfer isn't discretionary.", deps)
+    row = await demo_ledger.fetchrow(
         "SELECT body, active FROM preferences ORDER BY created_at DESC LIMIT 1"
-    ).fetchone()
+    )
     assert row["body"] == "Mom's monthly transfer is not discretionary"
     assert row["active"] is True
 
 
-def test_floor_uses_settings_data(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_floor", "msg_wr_floor")
+async def test_floor_uses_settings_data(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_floor", "msg_wr_floor")
     script = _one_tool_script(
         "update_setup",
         {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}},
     )
-    _run(script, "Set my floor to ₹30,000.", deps)
-    row = demo_ledger.execute("SELECT floor_paise FROM settings WHERE id = 1").fetchone()
+    await _run(script, "Set my floor to ₹30,000.", deps)
+    row = await demo_ledger.fetchrow("SELECT floor_paise FROM settings WHERE id = 1")
     assert row["floor_paise"] == 3_000_000
 
 
-def test_schedule_uses_schedule_data(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_schedule", "msg_wr_schedule")
+async def test_schedule_uses_schedule_data(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_schedule", "msg_wr_schedule")
     script = _one_tool_script(
         "update_setup",
         {
@@ -277,16 +275,16 @@ def test_schedule_uses_schedule_data(demo_ledger):
             },
         },
     )
-    _run(script, "My rent is now ₹30,000 a month from the 5th.", deps)
-    row = demo_ledger.execute(
+    await _run(script, "My rent is now ₹30,000 a month from the 5th.", deps)
+    row = await demo_ledger.fetchrow(
         "SELECT name, amount_paise FROM schedules WHERE name = 'Rent contract test' AND active"
-    ).fetchone()
+    )
     assert row["name"] == "Rent contract test"
     assert row["amount_paise"] == 3_000_000
 
 
-def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
-    deps = _deps(demo_ledger, "cnv_wr_transfer", "msg_wr_transfer")
+async def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
+    deps = await _deps(demo_ledger, "cnv_wr_transfer", "msg_wr_transfer")
     script = _expense_script(
         {
             "movement": {
@@ -297,8 +295,8 @@ def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
             }
         }
     )
-    _run(script, "I paid ₹5,000 to my Slice card from HDFC.", deps)
-    row = demo_ledger.execute(
+    await _run(script, "I paid ₹5,000 to my Slice card from HDFC.", deps)
+    row = await demo_ledger.fetchrow(
         """
         SELECT fa.name AS from_name, ta.name AS to_name, t.amount::bigint AS amount_paise
         FROM movements m
@@ -307,7 +305,7 @@ def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
         WHERE m.kind = 'transfer' ORDER BY m.created_at DESC LIMIT 1
         """
-    ).fetchone()
+    )
     assert row["from_name"] == "HDFC Savings"
     assert row["to_name"] == "Slice card"
     assert row["amount_paise"] == 500_000

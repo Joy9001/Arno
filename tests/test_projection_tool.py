@@ -17,16 +17,16 @@ from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import projection as projection_tools
 
 
-def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
+async def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
     from evals.graders import grade_answers
     from evals.models import EvalOutput
 
-    base = projection_tools.project(demo_ledger)
+    base = await projection_tools.project(demo_ledger)
     reply = (
         f"{base['floor_probability'] * 100:.0f}% above the floor; the lowest median point is "
         f"₹{base['median_low']['paise'] / 100:,.0f}; a balance is 92 days old."
     )
-    checks = grade_answers(
+    checks = await grade_answers(
         demo_ledger,
         EvalOutput(reply=reply, started_at=datetime.now(UTC).isoformat()),
         {"check": "projection"},
@@ -35,7 +35,7 @@ def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
     assert next(check for check in checks if check.name == "median_low").passed
     assert next(check for check in checks if check.name == "data_quality_note").passed
 
-    purchase = projection_tools.project(
+    purchase = await projection_tools.project(
         demo_ledger,
         hypothetical={
             "amount_paise": 20_000_000,
@@ -51,7 +51,7 @@ def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
     affordability_reply = (
         f"{word}; {purchase['floor_probability'] * 100:.0f}% of futures stay above the floor."
     )
-    checks = grade_answers(
+    checks = await grade_answers(
         demo_ledger,
         EvalOutput(reply=affordability_reply, started_at=datetime.now(UTC).isoformat()),
         {
@@ -65,8 +65,8 @@ def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
     assert next(check for check in checks if check.name == "affordability_floor_probability").passed
 
 
-def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_ledger):
-    result = projection_tools.project(demo_ledger, as_of=date(2026, 11, 1), runs=100)
+async def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_ledger):
+    result = await projection_tools.project(demo_ledger, as_of=date(2026, 11, 1), runs=100)
     assert result["horizon_days"] >= 90
     assert len(result["curve"]) == result["horizon_days"] + 1
     assert 0.0 <= result["floor_probability"] <= 1.0
@@ -88,14 +88,14 @@ def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_ledger)
     assert card["source_ids"]["accounts"]
 
 
-def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger):
+async def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger):
     from fin_agent.ledger.accounts import create_account
     from fin_agent.ledger.movements import record_expense
 
-    account = create_account(ledger, kind="bank", name="SBI Savings")
-    record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
+    account = await create_account(ledger, kind="bank", name="SBI Savings")
+    await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
 
-    result = projection_tools.project(ledger, as_of=ledger_today(), runs=20)
+    result = await projection_tools.project(ledger, as_of=ledger_today(), runs=20)
 
     age = next(row for row in result["data_quality"]["balance_ages"] if row["id"] == account["id"])
     assert age["known"] is False
@@ -108,12 +108,12 @@ def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger)
     assert source["detail"] == "liquid · balance unknown"
 
 
-def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
+async def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
     from fin_agent.ledger.accounts import create_account
 
-    create_account(ledger, kind="bank", name="SBI Savings")
+    await create_account(ledger, kind="bank", name="SBI Savings")
 
-    result = projection_tools.project(
+    result = await projection_tools.project(
         ledger,
         as_of=date(2026, 11, 1),
         runs=20,
@@ -129,8 +129,8 @@ def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
     assert "verdict" not in projection_tools.summary(result)
 
 
-def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger):
-    result = projection_tools.project(
+async def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger):
+    result = await projection_tools.project(
         demo_ledger,
         as_of=date(2026, 11, 1),
         runs=100,
@@ -146,7 +146,7 @@ def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger
     assert result["verdict_reason"]
 
 
-def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledger):
+async def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledger):
     calls = {"n": 0}
 
     def script(messages, info: AgentInfo) -> ModelResponse:
@@ -161,7 +161,7 @@ def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledger):
         deps_type=AgentDeps,
         toolsets=[FunctionToolset(tools=[agent_tools.project])],
     )
-    result = agent.run_sync("project", deps=AgentDeps(conversation_id="cnv_test"))
+    result = await agent.run("project", deps=AgentDeps(conversation_id="cnv_test"))
     part = next(
         part
         for message in result.all_messages()
@@ -176,7 +176,7 @@ def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledger):
     assert "curve" not in part.content
 
 
-def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
+async def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
     code = (
         "result = await project(horizon_days=90)\n"
         'print(result["floor_probability"], result["source_ids"]["goals"])\n'
@@ -190,14 +190,14 @@ def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
     )
     agent = build_agent()
     with agent.override(model=model):
-        result = agent.run_sync("project", deps=AgentDeps(conversation_id="cnv_test"))
+        result = await agent.run("project", deps=AgentDeps(conversation_id="cnv_test"))
     cards = cards_from_messages(result.all_messages())
     projection = next(card for card in cards if card.data["card"] == "projection")
     assert projection.data["source_ids"]["accounts"]
     assert projection.data["curve"]
 
 
-def test_get_api_projection_returns_the_panel_payload(authed_client, demo_ledger):
+async def test_get_api_projection_returns_the_panel_payload(authed_client, demo_ledger):
     response = authed_client.get("/api/projection", params={"horizon_days": 90})
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -206,7 +206,7 @@ def test_get_api_projection_returns_the_panel_payload(authed_client, demo_ledger
     assert payload["data_quality"]["balance_ages"]
 
 
-def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger):
+async def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger):
     response = authed_client.get(
         "/api/projection",
         params={
@@ -221,7 +221,7 @@ def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger):
     assert "tradeoffs" in payload
 
 
-def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_client, demo_ledger):
+async def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_client, demo_ledger):
     response = authed_client.get(
         "/api/projection",
         params={
@@ -246,6 +246,6 @@ def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_client, d
     assert chosen.json()["hypothetical"]["emi_months"] == 6
 
 
-def test_get_api_projection_rejects_an_amount_without_a_date(authed_client):
+async def test_get_api_projection_rejects_an_amount_without_a_date(authed_client):
     response = authed_client.get("/api/projection", params={"amount_paise": 1000})
     assert response.status_code == 422

@@ -17,7 +17,6 @@ dependencies = [
     "pydantic-ai-harness[code-mode]>=0.64.0",
     "pydantic-evals>=2.64.0",
     "pypdfium2>=5.0.0",
-    "psycopg[binary,pool]>=3.2.0",
     "python-calamine>=0.5.0",
     "python-dateutil>=2.9.0",
     "python-docx>=1.2.0",

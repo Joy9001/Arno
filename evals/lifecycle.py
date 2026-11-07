@@ -34,7 +34,7 @@ DEFAULT_TEMPLATE = "fin_agent_eval_template"
 TRIAL_PREFIX = "fin_agent_eval_trial"
 
 
-def build_eval_template(
+async def build_eval_template(
     admin_dsn: str,
     *,
     template: str = DEFAULT_TEMPLATE,
@@ -49,30 +49,26 @@ def build_eval_template(
     of the persona's three covered months as a gap for honesty cases.
     """
     anchor = anchor or date.today()
-    create_database(admin_dsn, template)
+    await create_database(admin_dsn, template)
     dsn = database_dsn(admin_dsn, template)
-    conn = connect(dsn)
-    try:
-        run_migrations(conn)
-        set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
-        set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
-        seed_demo(
+    async with connect(dsn) as conn:
+        await run_migrations(conn)
+        await set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
+        await set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
+        await seed_demo(
             conn,
             today=anchor,
             reset=True,
             statement_coverage=statement_coverage,
             coverage_gap=coverage_gap,
         )
-        conn.commit()
-    finally:
-        conn.close()
     return template
 
 
 async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> None:
-    hdfc = conn.execute(
+    hdfc = await conn.fetchrow(
         "SELECT id FROM accounts WHERE kind = 'bank' AND active ORDER BY name LIMIT 1"
-    ).fetchone()
+    )
     if hdfc is None:
         raise RuntimeError("The demo template has no bank account")
     if spec.source == "statement":
@@ -87,14 +83,14 @@ async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> Non
             period_end=today,
         )
         return
-    payee = create_payee(
+    payee = await create_payee(
         conn,
         display_name=spec.text,
         kind="person",
         outside_text=True,
         actor="system",
     )
-    lending = record_lending(
+    lending = await record_lending(
         conn,
         account_id=str(hdfc["id"]),
         payee_id=str(payee["id"]),
@@ -106,14 +102,14 @@ async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> Non
     )
     movement_id = str(lending["id"])
     if spec.source == "photo":
-        conn.execute(
+        await conn.execute(
             """
             INSERT INTO captures (movement_id, kind, ref)
-            VALUES (%s, 'photo', %s)
+            VALUES ($1, 'photo', $2)
             """,
-            (movement_id, spec.note_id),
+            movement_id,
+            spec.note_id,
         )
-    conn.commit()
 
 
 class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
@@ -138,18 +134,15 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
     async def setup(self) -> None:
         suffix = uuid.uuid4().hex[:10]
         self.database = f"{self.trial_prefix}_{suffix}"
-        clone_database(
+        await clone_database(
             self.admin_dsn, source=self.template, target=self.database, terminate=False
         )
         self.dsn = database_dsn(self.admin_dsn, self.database)
         self._token = use_database_url(self.dsn)
         meta = self.case.metadata
         if meta is not None and meta.injection is not None:
-            conn = connect()
-            try:
+            async with connect() as conn:
                 await _seed_injection(conn, meta.injection, today=date.today())
-            finally:
-                conn.close()
 
     async def prepare_context(
         self, ctx: EvaluatorContext[EvalInput, EvalOutput, EvalMeta]
@@ -164,7 +157,7 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
             self._token = None
         if self.database:
             try:
-                drop_database(self.admin_dsn, self.database)
+                await drop_database(self.admin_dsn, self.database)
             except Exception:
                 # A failed trial must not hide the reason it failed behind a cleanup error.
                 pass

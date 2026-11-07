@@ -6,7 +6,6 @@ import hashlib
 from datetime import date
 
 import pytest
-from psycopg.types.json import Jsonb
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
@@ -36,21 +35,23 @@ def test_a_card_without_headers_gets_a_stable_layout_key():
     assert _account_fingerprint({**account, "last4": None}) is None
 
 
-def _attachment(conn, payload: bytes) -> str:
-    attachment_id = new_id(conn, "att")
-    conn.execute(
+async def _attachment(conn, payload: bytes) -> str:
+    attachment_id = await new_id(conn, "att")
+    await conn.execute(
         """
         INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES (%s, 'statement', 'sbi.csv', 'text/csv', %s, %s, %s)
+        VALUES ($1, 'statement', 'sbi.csv', 'text/csv', $2, $3, $4)
         """,
-        (attachment_id, len(payload), hashlib.sha256(payload).hexdigest(), payload),
+        attachment_id,
+        len(payload),
+        hashlib.sha256(payload).hexdigest(),
+        payload,
     )
-    conn.commit()
     return attachment_id
 
 
-def _account(conn) -> dict:
-    return create_account(
+async def _account(conn) -> dict:
+    return await create_account(
         conn,
         kind="bank",
         name="SBI savings",
@@ -61,162 +62,149 @@ def _account(conn) -> dict:
     )
 
 
-def _save_layout(conn, account: dict) -> None:
+async def _save_layout(conn, account: dict) -> None:
     payload = sbi_csv()
     fingerprint = detect_fingerprint(Doc(payload))
     assert fingerprint
-    conn.execute(
+    await conn.execute(
         """
         INSERT INTO statement_layouts
             (id, institution, fingerprint, parser, helper_version, last_used_at)
-        VALUES (%s, %s, %s, %s, '1', now())
+        VALUES ($1, $2, $3, $4, '1', now())
         """,
-        (new_id(conn, "lay"), "SBI", fingerprint, SBI_PARSER),
+        await new_id(conn, "lay"),
+        "SBI",
+        fingerprint,
+        SBI_PARSER,
     )
-    conn.commit()
 
 
 async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
-    account = _account(ledger)
-    _save_layout(ledger, account)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
-    job = ledger.execute("SELECT * FROM jobs WHERE key = %s", (f"import:{row['id']}",)).fetchone()
+    account = await _account(ledger)
+    await _save_layout(ledger, account)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    job = await ledger.fetchrow("SELECT * FROM jobs WHERE key = $1", f"import:{row['id']}")
     assert job is not None and job["status"] == "pending"
 
     await _run_import(row["id"])
 
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "review", detail
     assert detail["check"] == "VERIFIED"
     assert detail["counts"]["new"] == 3
     assert len(detail["lines"]) == 3
 
-    result = commit_import(ledger, row["id"], categorize=False)
+    result = await commit_import(ledger, row["id"], categorize=False)
     assert result["status"] == "committed"
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "committed"
     assert detail["parser_saved"] is True
 
-    attachment = ledger.execute(
-        "SELECT data, purged_at FROM attachments WHERE import_id = %s", (row["id"],)
-    ).fetchone()
+    attachment = await ledger.fetchrow(
+        "SELECT data, purged_at FROM attachments WHERE import_id = $1", row["id"]
+    )
     assert attachment["data"] is None and attachment["purged_at"] is not None
 
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
-    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 34402890
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 34402890
     assert account_row["statement_balance_paise"] == 34402890
     assert str(account_row["statement_balance_as_of"]) == "2026-04-30"
 
-    undo = undo_import(ledger, row["id"])
+    undo = await undo_import(ledger, row["id"])
     assert undo["status"] == "undone"
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     # Every imported movement was reversed; the opening balance remains.
-    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
+    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
     assert account_row["statement_balance_paise"] == 24567890
     assert str(account_row["statement_balance_as_of"]) == "2026-03-31"
 
 
 async def test_a_verified_import_anchors_an_unknown_account_and_undo_removes_it(ledger):
-    account = create_account(
+    account = await create_account(
         ledger, kind="bank", name="SBI savings", institution="SBI", last4="6789"
     )
-    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
-    _save_layout(ledger, account)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    assert (await account_summary(ledger))["cash_quality"]["status"] == "unknown"
+    await _save_layout(ledger, account)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     await _run_import(row["id"])
 
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
-    commit_import(ledger, row["id"], categorize=False)
-    assert account_summary(ledger)["cash_quality"]["status"] == "known"
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    await commit_import(ledger, row["id"], categorize=False)
+    assert (await account_summary(ledger))["cash_quality"]["status"] == "known"
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] == 34402890
     assert str(account_row["statement_balance_as_of"]) == "2026-04-30"
 
-    undo_import(ledger, row["id"])
+    await undo_import(ledger, row["id"])
 
-    assert account_summary(ledger)["cash_quality"]["status"] == "unknown"
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    assert (await account_summary(ledger))["cash_quality"]["status"] == "unknown"
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] is None
     assert account_row["statement_balance_as_of"] is None
 
 
 async def test_a_backdated_import_keeps_a_newer_statement_balance(ledger):
-    account = _account(ledger)
-    set_statement_balance(ledger, account["id"], balance_paise=30_000_000, as_of=date(2026, 5, 31))
-    _save_layout(ledger, account)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    account = await _account(ledger)
+    await set_statement_balance(
+        ledger, account["id"], balance_paise=30_000_000, as_of=date(2026, 5, 31)
+    )
+    await _save_layout(ledger, account)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     await _run_import(row["id"])
 
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
-    commit_import(ledger, row["id"], categorize=False)
+    await commit_import(ledger, row["id"], categorize=False)
 
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] == 30_000_000
     assert str(account_row["statement_balance_as_of"]) == "2026-05-31"
-    review = ledger.execute("SELECT review FROM imports WHERE id = %s", (row["id"],)).fetchone()[
+    review = (await ledger.fetchrow("SELECT review FROM imports WHERE id = $1", row["id"]))[
         "review"
     ]
     assert review["statement_updated"] is False
 
-    undo_import(ledger, row["id"])
+    await undo_import(ledger, row["id"])
 
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] == 30_000_000
     assert str(account_row["statement_balance_as_of"]) == "2026-05-31"
-    assert account_summary(ledger)["cash_quality"]["status"] == "known"
+    assert (await account_summary(ledger))["cash_quality"]["status"] == "known"
 
 
 async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger):
-    account = _account(ledger)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    account = await _account(ledger)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     async def fake_parse(doc, context, *, account_name=None):
         del doc, context, account_name
         return ParseResult(status="parser_submitted", script=SBI_PARSER)
 
     await _run_import(row["id"], parser_runner=fake_parse)
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "review", detail
     assert detail["parser_saved"] is False
-    assert ledger.execute("SELECT count(*) AS n FROM statement_layouts").fetchone()["n"] == 0
+    assert await ledger.fetchval("SELECT count(*) FROM statement_layouts") == 0
 
-    commit_import(ledger, row["id"], categorize=False)
-    assert ledger.execute("SELECT count(*) AS n FROM statement_layouts").fetchone()["n"] == 1
+    await commit_import(ledger, row["id"], categorize=False)
+    assert await ledger.fetchval("SELECT count(*) FROM statement_layouts") == 1
 
 
 async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
-    from psycopg.types.json import Jsonb
-
     from fin_agent.importers.checks import check_statement
-    from fin_agent.importers.reconcile import insert_lines, reconcile
     from fin_agent.ledger import movements as movements_mod
 
-    account = _account(ledger)
-    raw_account = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
-    category = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
-    movements_mod.record_expense(
+    account = await _account(ledger)
+    raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    category = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
+    await movements_mod.record_expense(
         ledger,
         account_id=account["id"],
         amount_paise=45000,
@@ -225,18 +213,18 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
         date=date(2026, 4, 1),
         capture={"kind": "chat", "ref": "msg_1", "upi_ref": "123456789012"},
     )
-    ledger.commit()
-    import_id = new_id(ledger, "imp")
-    ledger.execute(
+    import_id = await new_id(ledger, "imp")
+    await ledger.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, commit_groups)
-        VALUES (%s, 'hash-merge', 'review', %s, '2026-04-01', '2026-04-30',
+        VALUES ($1, 'hash-merge', 'review', $2, '2026-04-01', '2026-04-30',
                 24567890, 24522890, '[]'::jsonb)
         """,
-        (import_id, account["id"]),
+        import_id,
+        account["id"],
     )
-    insert_lines(
+    await insert_lines(
         ledger,
         import_id=import_id,
         account=raw_account,
@@ -267,49 +255,41 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
         period=("2026-04-01", "2026-04-30"),
         ledger_opening=24567890,
     )
-    ledger.execute(
-        "UPDATE imports SET check_result = %s WHERE id = %s",
-        (Jsonb(check), import_id),
+    await ledger.execute(
+        "UPDATE imports SET check_result = $1 WHERE id = $2",
+        check,
+        import_id,
     )
-    reconcile(
+    await reconcile(
         ledger,
         import_id=import_id,
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    line = ledger.execute(
-        "SELECT * FROM statement_lines WHERE import_id = %s", (import_id,)
-    ).fetchone()
+    line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
     assert line["match_state"] == "certain"
-    commit_import(ledger, import_id, categorize=False)
-    corrected = ledger.execute(
-        "SELECT * FROM movements WHERE id = %s", (line["movement_id"],)
-    ).fetchone()
+    await commit_import(ledger, import_id, categorize=False)
+    corrected = await ledger.fetchrow("SELECT * FROM movements WHERE id = $1", line["movement_id"])
     assert str(corrected["date"]) == "2026-04-03"
-    label = ledger.execute(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = %s",
-        (corrected["id"],),
-    ).fetchone()
+    label = await ledger.fetchrow(
+        "SELECT category_id FROM transfer_labels WHERE movement_id = $1",
+        corrected["id"],
+    )
     assert label["category_id"] == category["id"]
-    captures = ledger.execute(
-        "SELECT kind FROM captures WHERE movement_id = %s ORDER BY kind", (corrected["id"],)
-    ).fetchall()
+    captures = await ledger.fetch(
+        "SELECT kind FROM captures WHERE movement_id = $1 ORDER BY kind", corrected["id"]
+    )
     assert {row["kind"] for row in captures} == {"chat", "statement_line"}
 
 
 async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledger):
-    from psycopg.types.json import Jsonb
-
     from fin_agent.importers.checks import check_statement
-    from fin_agent.importers.reconcile import insert_lines, reconcile
     from fin_agent.ledger import movements as movements_mod
 
-    account = _account(ledger)
-    raw_account = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
+    account = await _account(ledger)
+    raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     # A logged row the statement doesn't contain: the closing balance must still win.
-    movements_mod.record_expense(
+    await movements_mod.record_expense(
         ledger,
         account_id=account["id"],
         amount_paise=5000,
@@ -317,18 +297,18 @@ async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledg
         date=date(2026, 4, 10),
         capture={"kind": "chat", "ref": "msg_extra"},
     )
-    ledger.commit()
-    import_id = new_id(ledger, "imp")
-    ledger.execute(
+    import_id = await new_id(ledger, "imp")
+    await ledger.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, commit_groups)
-        VALUES (%s, 'hash-adjust', 'review', %s, '2026-04-01', '2026-04-30',
+        VALUES ($1, 'hash-adjust', 'review', $2, '2026-04-01', '2026-04-30',
                 24567890, 24522890, '[]'::jsonb)
         """,
-        (import_id, account["id"]),
+        import_id,
+        account["id"],
     )
-    insert_lines(
+    await insert_lines(
         ledger,
         import_id=import_id,
         account=raw_account,
@@ -351,47 +331,47 @@ async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledg
         period=("2026-04-01", "2026-04-30"),
         ledger_opening=24567890,
     )
-    ledger.execute("UPDATE imports SET check_result = %s WHERE id = %s", (Jsonb(check), import_id))
-    reconcile(
+    await ledger.execute("UPDATE imports SET check_result = $1 WHERE id = $2", check, import_id)
+    await reconcile(
         ledger,
         import_id=import_id,
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    result = commit_import(ledger, import_id, categorize=False)
+    result = await commit_import(ledger, import_id, categorize=False)
     assert result["adjustment_paise"] == 5000
-    row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (account["id"],)).fetchone()
+    row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert row["statement_balance_paise"] == 24522890
-    adjustment = ledger.execute(
+    adjustment = await ledger.fetchrow(
         "SELECT * FROM movements WHERE kind = 'adjustment' ORDER BY created_at DESC"
-    ).fetchone()
+    )
     assert adjustment is not None
-    queued = ledger.execute(
-        "SELECT count(*) AS n FROM jobs WHERE kind = 'recompute_baselines' AND key LIKE %s",
-        (f"%import:{import_id}",),
-    ).fetchone()
-    assert queued["n"] == 1
+    queued = await ledger.fetchval(
+        "SELECT count(*) FROM jobs WHERE kind = 'recompute_baselines' AND key LIKE $1",
+        f"%import:{import_id}",
+    )
+    assert queued == 1
 
 
 async def test_a_non_statement_ends_with_a_plain_answer(ledger):
-    account = _account(ledger)
-    attachment_id = _attachment(ledger, b"Salary slip\nNet pay 1,00,000\n")
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    account = await _account(ledger)
+    attachment_id = await _attachment(ledger, b"Salary slip\nNet pay 1,00,000\n")
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     async def fake_parse(doc, context, *, account_name=None):
         del doc, context, account_name
         return ParseResult(status="not_a_statement", kind="payslip")
 
     await _run_import(row["id"], parser_runner=fake_parse)
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "not_a_statement"
     assert "payslip" in detail["reason"]
 
 
 async def test_a_failed_check_writes_no_rows(ledger):
-    account = _account(ledger)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    account = await _account(ledger)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     broken = SBI_PARSER.replace("'closing': closing", "'closing': 1")
 
@@ -400,11 +380,11 @@ async def test_a_failed_check_writes_no_rows(ledger):
         return ParseResult(status="parser_submitted", script=broken)
 
     await _run_import(row["id"], parser_runner=fake_parse)
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "failed"
     assert detail["lines"] == []
     with pytest.raises(InvalidLedgerError):
-        commit_import(ledger, row["id"], categorize=False)
+        await commit_import(ledger, row["id"], categorize=False)
 
 
 def _batch_model(calls: dict, answers: list[dict]) -> FunctionModel:
@@ -416,36 +396,36 @@ def _batch_model(calls: dict, answers: list[dict]) -> FunctionModel:
     return FunctionModel(respond)
 
 
-def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, dict]:
-    raw_account = conn.execute("SELECT * FROM accounts WHERE id = %s", (account["id"],)).fetchone()
-    import_id = new_id(conn, "imp")
-    conn.execute(
+async def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, dict]:
+    raw_account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    import_id = await new_id(conn, "imp")
+    await conn.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              commit_groups)
-        VALUES (%s, 'hash-categorize', 'review', %s, '2026-04-01', '2026-04-30', '[]'::jsonb)
+        VALUES ($1, 'hash-categorize', 'review', $2, '2026-04-01', '2026-04-30', '[]'::jsonb)
         """,
-        (import_id, account["id"]),
+        import_id,
+        account["id"],
     )
-    insert_lines(
+    await insert_lines(
         conn,
         import_id=import_id,
         account=raw_account,
         parsed_account={"rows": rows},
     )
-    reconcile(
+    await reconcile(
         conn,
         import_id=import_id,
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    conn.commit()
     return import_id, raw_account
 
 
 async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
-    account = _account(ledger)
-    import_id, raw_account = _review_import(
+    account = await _account(ledger)
+    import_id, raw_account = await _review_import(
         ledger,
         account,
         [
@@ -488,7 +468,6 @@ async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
             ],
         ),
     )
-    ledger.commit()
 
     assert calls["n"] == 1
     assert counts == {
@@ -498,24 +477,24 @@ async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
         "llm_calls": 1,
         "transfers": 0,
     }
-    lines = ledger.execute(
-        "SELECT match_detail FROM statement_lines WHERE import_id = %s ORDER BY date",
-        (import_id,),
-    ).fetchall()
+    lines = await ledger.fetch(
+        "SELECT match_detail FROM statement_lines WHERE import_id = $1 ORDER BY date",
+        import_id,
+    )
     assert [line["match_detail"]["suggested_category"]["category_name"] for line in lines] == [
         "Food & Dining",
         "Food & Dining",
         "Shopping",
     ]
-    rules = ledger.execute(
+    rules = await ledger.fetch(
         "SELECT merchant_pattern FROM category_rules WHERE source = 'llm' ORDER BY merchant_pattern"
-    ).fetchall()
+    )
     assert [row["merchant_pattern"] for row in rules] == ["amazon", "swiggy"]
 
 
 async def test_an_own_account_answer_is_a_transfer_and_saves_no_rule(ledger):
-    account = _account(ledger)
-    other = create_account(
+    account = await _account(ledger)
+    other = await create_account(
         ledger,
         kind="card",
         name="Slice card",
@@ -527,8 +506,7 @@ async def test_an_own_account_answer_is_a_transfer_and_saves_no_rule(ledger):
         statement_day=25,
         due_day=5,
     )
-    ledger.commit()
-    import_id, raw_account = _review_import(
+    import_id, raw_account = await _review_import(
         ledger,
         account,
         [
@@ -558,28 +536,29 @@ async def test_an_own_account_answer_is_a_transfer_and_saves_no_rule(ledger):
             ],
         ),
     )
-    ledger.commit()
 
     assert counts["transfers"] == 1
-    detail = ledger.execute(
-        "SELECT match_detail FROM statement_lines WHERE import_id = %s", (import_id,)
-    ).fetchone()["match_detail"]
+    detail = (
+        await ledger.fetchrow(
+            "SELECT match_detail FROM statement_lines WHERE import_id = $1", import_id
+        )
+    )["match_detail"]
     assert detail["suggested_transfer_account_id"] == other["id"]
     assert "suggested_category" not in detail
-    assert ledger.execute("SELECT count(*) AS n FROM category_rules").fetchone()["n"] == 0
+    assert await ledger.fetchval("SELECT count(*) FROM category_rules") == 0
 
 
 async def test_an_exact_rule_hit_skips_the_model(ledger):
-    account = _account(ledger)
-    category = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
-    ledger.execute(
+    account = await _account(ledger)
+    category = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
+    await ledger.execute(
         """
         INSERT INTO category_rules (merchant_pattern, category_id, source)
-        VALUES ('swiggy', %s, 'user')
+        VALUES ('swiggy', $1, 'user')
         """,
-        (category["id"],),
+        category["id"],
     )
-    import_id, raw_account = _review_import(
+    import_id, raw_account = await _review_import(
         ledger,
         account,
         [
@@ -599,28 +578,27 @@ async def test_an_exact_rule_hit_skips_the_model(ledger):
         raise AssertionError("the model must not be called for a rule hit")
 
     counts = await categorize_import(ledger, import_id, raw_account, model=FunctionModel(explode))
-    ledger.commit()
 
     assert counts["rule_hits"] == 1
     assert counts["llm_keys"] == 0
     assert counts["llm_calls"] == 0
-    line = ledger.execute(
-        "SELECT match_detail FROM statement_lines WHERE import_id = %s", (import_id,)
-    ).fetchone()
+    line = await ledger.fetchrow(
+        "SELECT match_detail FROM statement_lines WHERE import_id = $1", import_id
+    )
     assert line["match_detail"]["suggested_category"]["source"] == "rule"
 
 
 async def test_a_blocked_categorizer_still_reaches_review(ledger):
-    account = _account(ledger)
-    attachment_id = _attachment(ledger, sbi_csv())
-    row = create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    account = await _account(ledger)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
     async def fake_parse(doc, context, *, account_name=None):
         del doc, context, account_name
         return ParseResult(status="parser_submitted", script=SBI_PARSER)
 
     await _run_import(row["id"], parser_runner=fake_parse)
-    detail = import_payload(ledger, row["id"])
+    detail = await import_payload(ledger, row["id"])
 
     assert detail["status"] == "review"
     assert detail["lines"] != []
@@ -628,8 +606,8 @@ async def test_a_blocked_categorizer_still_reaches_review(ledger):
 
 
 async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatch):
-    account = _account(ledger)
-    other = create_account(
+    account = await _account(ledger)
+    other = await create_account(
         ledger,
         kind="bank",
         name="Axis savings",
@@ -638,12 +616,11 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
         opening_balance_paise=100000,
         opening_balance_as_of=date(2026, 3, 31),
     )
-    ledger.commit()
-    spending = system_account(ledger, "spending")
-    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
-    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
+    spending = await system_account(ledger, "spending")
+    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
 
-    import_id, raw_account = _review_import(
+    import_id, _raw_account = await _review_import(
         ledger,
         account,
         [
@@ -665,45 +642,39 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
             },
         ],
     )
-    lines = ledger.execute(
-        "SELECT id FROM statement_lines WHERE import_id = %s ORDER BY date", (import_id,)
-    ).fetchall()
-    ledger.execute(
+    lines = await ledger.fetch(
+        "SELECT id FROM statement_lines WHERE import_id = $1 ORDER BY date", import_id
+    )
+    await ledger.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
+        WHERE id = $2
         """,
-        (Jsonb({"suggested_transfer_account_id": other["id"]}), lines[0]["id"]),
+        {"suggested_transfer_account_id": other["id"]},
+        lines[0]["id"],
     )
-    ledger.execute(
+    await ledger.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
+        WHERE id = $2
         """,
-        (
-            Jsonb(
-                {
-                    "suggested_category": {
-                        "category_id": str(food["id"]),
-                        "category_name": "Food & Dining",
-                        "source": "llm",
-                    }
-                }
-            ),
-            lines[1]["id"],
-        ),
+        {
+            "suggested_category": {
+                "category_id": str(food["id"]),
+                "category_name": "Food & Dining",
+                "source": "llm",
+            }
+        },
+        lines[1]["id"],
     )
-    ledger.execute(
-        "UPDATE imports SET check_result = %s, review = %s WHERE id = %s",
-        (
-            Jsonb({"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0}),
-            Jsonb({"manual_opening_paise": 0}),
-            import_id,
-        ),
+    await ledger.execute(
+        "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
+        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0},
+        {"manual_opening_paise": 0},
+        import_id,
     )
-    ledger.commit()
 
     def no_model(*args, **kwargs):
         del args, kwargs
@@ -711,57 +682,55 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
 
     monkeypatch.setattr("fin_agent.importers.categorizer.Agent", no_model)
     with pytest.raises(ConflictLedgerError, match="Confirm every payment"):
-        commit_import(ledger, import_id, categorize=True)
+        await commit_import(ledger, import_id, categorize=True)
 
-    ledger.execute(
+    await ledger.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
+        WHERE id = $2
         """,
-        (Jsonb({"transfer_confirmed": True}), lines[0]["id"]),
+        {"transfer_confirmed": True},
+        lines[0]["id"],
     )
-    ledger.commit()
-    commit_import(ledger, import_id, categorize=True)
+    await commit_import(ledger, import_id, categorize=True)
 
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
-    other_after = ledger.execute("SELECT * FROM accounts WHERE id = %s", (other["id"],)).fetchone()
-    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890 - 45000 - 120000
-    assert ledger_balance(ledger, other_after["ledger_account_id"]) == 100000 + 45000
-    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 120000
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    other_after = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", other["id"])
+    assert (
+        await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890 - 45000 - 120000
+    )
+    assert await ledger_balance(ledger, other_after["ledger_account_id"]) == 100000 + 45000
+    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 120000
 
-    first = ledger.execute(
+    first = await ledger.fetchrow(
         """
         SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (lines[0]["id"],),
-    ).fetchone()
-    second = ledger.execute(
+        lines[0]["id"],
+    )
+    second = await ledger.fetchrow(
         """
         SELECT m.kind, m.id FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (lines[1]["id"],),
-    ).fetchone()
+        lines[1]["id"],
+    )
     assert first["kind"] == "transfer"
     assert second["kind"] == "expense"
-    label = ledger.execute(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = %s", (second["id"],)
-    ).fetchone()
+    label = await ledger.fetchrow(
+        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", second["id"]
+    )
     assert label["category_id"] == food["id"]
 
-    undo_import(ledger, import_id)
-    account_row = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
-    assert ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
+    await undo_import(ledger, import_id)
+    account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
 
 
-def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> dict:
-    return create_account(
+async def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> dict:
+    return await create_account(
         conn,
         kind="card",
         name=f"Slice card {last4}",
@@ -775,48 +744,44 @@ def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> dict:
     )
 
 
-def _verify(conn, import_id: str, opening_paise: int = 0) -> None:
-    row = conn.execute("SELECT review FROM imports WHERE id = %s", (import_id,)).fetchone()
+async def _verify(conn, import_id: str, opening_paise: int = 0) -> None:
+    row = await conn.fetchrow("SELECT review FROM imports WHERE id = $1", import_id)
     review = dict(row["review"] or {})
     review["manual_opening_paise"] = opening_paise
-    conn.execute(
-        "UPDATE imports SET check_result = %s, review = %s WHERE id = %s",
-        (
-            Jsonb(
-                {
-                    "status": "VERIFIED",
-                    "opening_source": "manual",
-                    "opening_paise": opening_paise,
-                }
-            ),
-            Jsonb(review),
-            import_id,
-        ),
+    await conn.execute(
+        "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
+        {
+            "status": "VERIFIED",
+            "opening_source": "manual",
+            "opening_paise": opening_paise,
+        },
+        review,
+        import_id,
     )
-    conn.commit()
 
 
-def _line(conn, import_id: str, index: int = 0) -> dict:
-    return conn.execute(
-        "SELECT * FROM statement_lines WHERE import_id = %s ORDER BY date, id", (import_id,)
-    ).fetchall()[index]
+async def _line(conn, import_id: str, index: int = 0) -> dict:
+    return (
+        await conn.fetch(
+            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
+        )
+    )[index]
 
 
-def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
-    card = _card(ledger)
-    ledger.commit()
-    spending = system_account(ledger, "spending")
-    before = ledger_balance(ledger, spending["ledger_account_id"])
-    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
-    import_id, _ = _review_import(
+async def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
+    card = await _card(ledger)
+    spending = await system_account(ledger, "spending")
+    before = await ledger_balance(ledger, spending["ledger_account_id"])
+    food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
+    import_id, _ = await _review_import(
         ledger,
         card,
         [{"date": "2026-04-04", "description": "Merchant refund", "debit": 0, "credit": 10395}],
     )
-    _verify(ledger, import_id)
-    line = _line(ledger, import_id)
+    await _verify(ledger, import_id)
+    line = await _line(ledger, import_id)
 
-    resolve_line(
+    await resolve_line(
         ledger,
         import_id=import_id,
         line_id=line["id"],
@@ -824,31 +789,28 @@ def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
         credit_kind="refund",
         category_id=str(food["id"]),
     )
-    commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id, categorize=False)
 
-    assert ledger_balance(ledger, spending["ledger_account_id"]) == before - 10395
-    card_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
-    assert ledger_balance(ledger, card_row["ledger_account_id"]) == 10395
-    movement = ledger.execute(
+    assert await ledger_balance(ledger, spending["ledger_account_id"]) == before - 10395
+    card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
+    assert await ledger_balance(ledger, card_row["ledger_account_id"]) == 10395
+    movement = await ledger.fetchrow(
         """
         SELECT m.id, m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (line["id"],),
-    ).fetchone()
-    assert movement["kind"] == "refund"
-    assert (
-        ledger.execute("SELECT count(*) AS n FROM movements WHERE kind = 'income'").fetchone()["n"]
-        == 0
+        line["id"],
     )
-    label = ledger.execute(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = %s", (movement["id"],)
-    ).fetchone()
+    assert movement["kind"] == "refund"
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'income'") == 0
+    label = await ledger.fetchrow(
+        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", movement["id"]
+    )
     assert label["category_id"] == food["id"]
 
 
-def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liability(ledger):
-    bank = create_account(
+async def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liability(ledger):
+    bank = await create_account(
         ledger,
         kind="bank",
         name="Axis savings",
@@ -856,19 +818,18 @@ def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liability(
         opening_balance_paise=100000,
         opening_balance_as_of=date(2026, 3, 31),
     )
-    card = _card(ledger, opening_paise=-100000)
-    ledger.commit()
-    spending = system_account(ledger, "spending")
-    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
-    import_id, _ = _review_import(
+    card = await _card(ledger, opening_paise=-100000)
+    spending = await system_account(ledger, "spending")
+    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    import_id, _ = await _review_import(
         ledger,
         card,
         [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
     )
-    _verify(ledger, import_id)
-    line = _line(ledger, import_id)
+    await _verify(ledger, import_id)
+    line = await _line(ledger, import_id)
 
-    resolve_line(
+    await resolve_line(
         ledger,
         import_id=import_id,
         line_id=line["id"],
@@ -876,31 +837,27 @@ def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liability(
         credit_kind="transfer",
         source_account_id=bank["id"],
     )
-    commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id, categorize=False)
 
-    bank_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (bank["id"],)).fetchone()
-    card_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (card["id"],)).fetchone()
-    assert ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
-    assert ledger_balance(ledger, card_row["ledger_account_id"]) == -100000 + 42800
-    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
-    assert (
-        ledger.execute("SELECT count(*) AS n FROM movements WHERE kind = 'income'").fetchone()["n"]
-        == 0
-    )
-    movement = ledger.execute(
+    bank_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", bank["id"])
+    card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
+    assert await ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
+    assert await ledger_balance(ledger, card_row["ledger_account_id"]) == -100000 + 42800
+    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'income'") == 0
+    movement = await ledger.fetchrow(
         """
         SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (line["id"],),
-    ).fetchone()
+        line["id"],
+    )
     assert movement["kind"] == "transfer"
 
 
-def test_an_unclassified_card_credit_blocks_the_whole_commit_before_writes(ledger):
-    card = _card(ledger)
-    ledger.commit()
-    import_id, _ = _review_import(
+async def test_an_unclassified_card_credit_blocks_the_whole_commit_before_writes(ledger):
+    card = await _card(ledger)
+    import_id, _ = await _review_import(
         ledger,
         card,
         [
@@ -908,22 +865,21 @@ def test_an_unclassified_card_credit_blocks_the_whole_commit_before_writes(ledge
             {"date": "2026-04-02", "description": "Refund", "debit": 0, "credit": 10395},
         ],
     )
-    _verify(ledger, import_id)
+    await _verify(ledger, import_id)
 
     with pytest.raises(ConflictLedgerError, match="card credit"):
-        commit_import(ledger, import_id, categorize=False)
+        await commit_import(ledger, import_id, categorize=False)
 
-    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
-    lines = ledger.execute(
-        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s", (import_id,)
-    ).fetchall()
+    assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
+    lines = await ledger.fetch(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
+    )
     assert all(line["match_state"] == "new" and line["movement_id"] is None for line in lines)
 
 
-def test_a_card_repayment_without_a_funding_account_blocks_before_writes(ledger):
-    card = _card(ledger)
-    ledger.commit()
-    import_id, _ = _review_import(
+async def test_a_card_repayment_without_a_funding_account_blocks_before_writes(ledger):
+    card = await _card(ledger)
+    import_id, _ = await _review_import(
         ledger,
         card,
         [
@@ -931,41 +887,41 @@ def test_a_card_repayment_without_a_funding_account_blocks_before_writes(ledger)
             {"date": "2026-04-02", "description": "Repayment", "debit": 0, "credit": 20000},
         ],
     )
-    credit = _line(ledger, import_id, index=1)
-    ledger.execute(
+    credit = await _line(ledger, import_id, index=1)
+    await ledger.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
+        WHERE id = $2
         """,
-        (Jsonb({"credit_kind": "transfer"}), credit["id"]),
+        {"credit_kind": "transfer"},
+        credit["id"],
     )
-    _verify(ledger, import_id)
+    await _verify(ledger, import_id)
 
     with pytest.raises(ConflictLedgerError, match="card credit"):
-        commit_import(ledger, import_id, categorize=False)
+        await commit_import(ledger, import_id, categorize=False)
 
-    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
-    lines = ledger.execute(
-        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = %s", (import_id,)
-    ).fetchall()
+    assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
+    lines = await ledger.fetch(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
+    )
     assert all(line["match_state"] == "new" and line["movement_id"] is None for line in lines)
 
 
-def test_a_card_repayment_rejects_a_missing_same_or_system_funding_account(ledger):
-    card = _card(ledger)
-    ledger.commit()
-    import_id, _ = _review_import(
+async def test_a_card_repayment_rejects_a_missing_same_or_system_funding_account(ledger):
+    card = await _card(ledger)
+    import_id, _ = await _review_import(
         ledger,
         card,
         [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
     )
-    line = _line(ledger, import_id)
-    income = system_account(ledger, "income")
+    line = await _line(ledger, import_id)
+    income = await system_account(ledger, "income")
 
     for source_account_id in ("acc_missing", card["id"], income["id"]):
         with pytest.raises(ValueError, match="account"):
-            resolve_line(
+            await resolve_line(
                 ledger,
                 import_id=import_id,
                 line_id=line["id"],
@@ -973,47 +929,46 @@ def test_a_card_repayment_rejects_a_missing_same_or_system_funding_account(ledge
                 credit_kind="transfer",
                 source_account_id=source_account_id,
             )
-    stored = ledger.execute(
-        "SELECT match_detail FROM statement_lines WHERE id = %s", (line["id"],)
-    ).fetchone()["match_detail"]
+    stored = (
+        await ledger.fetchrow("SELECT match_detail FROM statement_lines WHERE id = $1", line["id"])
+    )["match_detail"]
     assert "credit_kind" not in (stored or {})
 
 
-def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger):
-    card = _card(ledger)
-    ledger.commit()
-    spending = system_account(ledger, "spending")
-    spending_before = ledger_balance(ledger, spending["ledger_account_id"])
-    import_id, _ = _review_import(
+async def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger):
+    card = await _card(ledger)
+    spending = await system_account(ledger, "spending")
+    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    import_id, _ = await _review_import(
         ledger,
         card,
         [{"date": "2026-04-06", "description": "Cashback", "debit": 0, "credit": 5000}],
     )
-    _verify(ledger, import_id)
-    line = _line(ledger, import_id)
+    await _verify(ledger, import_id)
+    line = await _line(ledger, import_id)
 
-    resolve_line(
+    await resolve_line(
         ledger,
         import_id=import_id,
         line_id=line["id"],
         resolution="classify_credit",
         credit_kind="income",
     )
-    commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id, categorize=False)
 
-    movement = ledger.execute(
+    movement = await ledger.fetchrow(
         """
         SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (line["id"],),
-    ).fetchone()
+        line["id"],
+    )
     assert movement["kind"] == "income"
-    assert ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
 
 
-def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(ledger):
-    bank = create_account(
+async def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(ledger):
+    bank = await create_account(
         ledger,
         kind="bank",
         name="Axis savings",
@@ -1021,132 +976,121 @@ def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(ledger):
         opening_balance_paise=100000,
         opening_balance_as_of=date(2026, 3, 31),
     )
-    card = _card(ledger)
-    ledger.commit()
-    import_id, _ = _review_import(
+    card = await _card(ledger)
+    import_id, _ = await _review_import(
         ledger,
         card,
         [{"date": "2026-04-05", "description": "Repayment", "debit": 0, "credit": 42800}],
     )
-    line = _line(ledger, import_id)
-    ledger.execute(
+    line = await _line(ledger, import_id)
+    await ledger.execute(
         """
         UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || %s
-        WHERE id = %s
+        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
+        WHERE id = $2
         """,
-        (
-            Jsonb({"suggested_transfer_account_id": bank["id"], "transfer_confirmed": True}),
-            line["id"],
-        ),
+        {"suggested_transfer_account_id": bank["id"], "transfer_confirmed": True},
+        line["id"],
     )
-    _verify(ledger, import_id)
+    await _verify(ledger, import_id)
 
-    commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id, categorize=False)
 
-    movement = ledger.execute(
+    movement = await ledger.fetchrow(
         """
         SELECT m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.id = %s
+        WHERE sl.id = $1
         """,
-        (line["id"],),
-    ).fetchone()
+        line["id"],
+    )
     assert movement["kind"] == "transfer"
-    bank_row = ledger.execute("SELECT * FROM accounts WHERE id = %s", (bank["id"],)).fetchone()
-    assert ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
+    bank_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", bank["id"])
+    assert await ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
 
 
-def _assumed_zero_review(conn, account: dict, rows: list[dict], closing: int) -> str:
+async def _assumed_zero_review(conn, account: dict, rows: list[dict], closing: int) -> str:
     """A saved review shaped like the F12 case: source label says printed, no evidence."""
-    raw_account = conn.execute("SELECT * FROM accounts WHERE id = %s", (account["id"],)).fetchone()
-    import_id = new_id(conn, "imp")
-    conn.execute(
+    raw_account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    import_id = await new_id(conn, "imp")
+    await conn.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
                              commit_groups)
-        VALUES (%s, 'hash-assumed-zero', 'review', %s, '2026-04-01', '2026-04-30',
-                0, %s, %s, '[]'::jsonb)
+        VALUES ($1, 'hash-assumed-zero', 'review', $2, '2026-04-01', '2026-04-30',
+                0, $3, $4, '[]'::jsonb)
         """,
-        (
-            import_id,
-            account["id"],
-            closing,
-            Jsonb(
-                {
-                    "status": "VERIFIED",
-                    "opening_source": "printed",
-                    "opening_paise": 0,
-                    "closing_paise": closing,
-                    "chain_ok": None,
-                    "rows": len(rows),
-                }
-            ),
-        ),
+        import_id,
+        account["id"],
+        closing,
+        {
+            "status": "VERIFIED",
+            "opening_source": "printed",
+            "opening_paise": 0,
+            "closing_paise": closing,
+            "chain_ok": None,
+            "rows": len(rows),
+        },
     )
-    insert_lines(
+    await insert_lines(
         conn,
         import_id=import_id,
         account=raw_account,
         parsed_account={"rows": rows},
     )
-    reconcile(
+    await reconcile(
         conn,
         import_id=import_id,
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    conn.commit()
     return import_id
 
 
-def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledger):
-    card = _card(ledger, opening_paise=None)
-    ledger.commit()
-    import_id = _assumed_zero_review(
+async def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledger):
+    card = await _card(ledger, opening_paise=None)
+    import_id = await _assumed_zero_review(
         ledger,
         card,
         [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
         closing=-42800,
     )
 
-    detail = import_payload(ledger, import_id)
+    detail = await import_payload(ledger, import_id)
     assert detail["check"] == "VERIFIED"
     assert detail["opening_source"] == "printed"
     assert detail["opening_evidenced"] is False
     assert detail["opening_required"] is True
 
     with pytest.raises(ConflictLedgerError, match="opening balance"):
-        commit_import(ledger, import_id, categorize=False)
-    assert ledger.execute("SELECT count(*) AS n FROM movements").fetchone()["n"] == 0
+        await commit_import(ledger, import_id, categorize=False)
+    assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
 
 
-def test_manual_zero_opening_is_accepted_and_labeled_manual(ledger):
-    card = _card(ledger, opening_paise=None)
-    ledger.commit()
-    import_id = _assumed_zero_review(
+async def test_manual_zero_opening_is_accepted_and_labeled_manual(ledger):
+    card = await _card(ledger, opening_paise=None)
+    import_id = await _assumed_zero_review(
         ledger,
         card,
         [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
         closing=-42800,
     )
 
-    retry_with_opening(ledger, import_id=import_id, opening_paise=0)
+    await retry_with_opening(ledger, import_id=import_id, opening_paise=0)
 
-    detail = import_payload(ledger, import_id)
+    detail = await import_payload(ledger, import_id)
     assert detail["check"] == "VERIFIED"
     assert detail["opening_source"] == "manual"
     assert detail["opening_paise"] == 0
     assert detail["opening_evidenced"] is True
     assert detail["opening_required"] is False
-    assert commit_import(ledger, import_id, categorize=False)["status"] == "committed"
+    assert (await commit_import(ledger, import_id, categorize=False))["status"] == "committed"
 
 
-def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
-    card = _card(ledger, opening_paise=None)
-    ledger.commit()
-    food = ledger.execute("SELECT id FROM categories WHERE name = 'Food & Dining'").fetchone()
-    import_id = _assumed_zero_review(
+async def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
+    card = await _card(ledger, opening_paise=None)
+    food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
+    import_id = await _assumed_zero_review(
         ledger,
         card,
         [
@@ -1155,8 +1099,8 @@ def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
         ],
         closing=-32405,
     )
-    credit = _line(ledger, import_id, index=1)
-    resolve_line(
+    credit = await _line(ledger, import_id, index=1)
+    await resolve_line(
         ledger,
         import_id=import_id,
         line_id=credit["id"],
@@ -1165,41 +1109,40 @@ def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
         category_id=str(food["id"]),
     )
 
-    retry_with_opening(ledger, import_id=import_id, opening_paise=0)
+    await retry_with_opening(ledger, import_id=import_id, opening_paise=0)
 
-    detail = import_payload(ledger, import_id)
+    detail = await import_payload(ledger, import_id)
     assert detail["check"] == "VERIFIED"
     assert detail["opening_source"] == "manual"
-    stored = ledger.execute(
-        "SELECT match_state, movement_id, match_detail FROM statement_lines WHERE id = %s",
-        (credit["id"],),
-    ).fetchone()
+    stored = await ledger.fetchrow(
+        "SELECT match_state, movement_id, match_detail FROM statement_lines WHERE id = $1",
+        credit["id"],
+    )
     assert stored["match_state"] == "new"
     assert stored["movement_id"] is None
     assert stored["match_detail"]["credit_kind"] == "refund"
     assert stored["match_detail"]["credit_classified_by"] == "user"
-    commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id, categorize=False)
 
 
-def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):
+async def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):
     from fin_agent.importers.checks import check_statement
 
-    account = _account(ledger)
-    raw_account = ledger.execute(
-        "SELECT * FROM accounts WHERE id = %s", (account["id"],)
-    ).fetchone()
-    import_id = new_id(ledger, "imp")
-    ledger.execute(
+    account = await _account(ledger)
+    raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    import_id = await new_id(ledger, "imp")
+    await ledger.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, commit_groups)
-        VALUES (%s, 'hash-printed-bank', 'review', %s, '2026-04-01', '2026-04-30',
+        VALUES ($1, 'hash-printed-bank', 'review', $2, '2026-04-01', '2026-04-30',
                 24567890, 24522890, '[]'::jsonb)
         """,
-        (import_id, account["id"]),
+        import_id,
+        account["id"],
     )
     rows = [{"date": "2026-04-03", "debit": 45000, "credit": 0}]
-    insert_lines(
+    await insert_lines(
         ledger,
         import_id=import_id,
         account=raw_account,
@@ -1208,16 +1151,15 @@ def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):
     check = check_statement(rows, 24567890, 24522890, period=("2026-04-01", "2026-04-30"))
     assert check["status"] == "VERIFIED"
     assert check["opening_source"] == "printed"
-    ledger.execute("UPDATE imports SET check_result = %s WHERE id = %s", (Jsonb(check), import_id))
-    reconcile(
+    await ledger.execute("UPDATE imports SET check_result = $1 WHERE id = $2", check, import_id)
+    await reconcile(
         ledger,
         import_id=import_id,
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    ledger.commit()
 
-    detail = import_payload(ledger, import_id)
+    detail = await import_payload(ledger, import_id)
     assert detail["opening_evidenced"] is True
     assert detail["opening_required"] is False
-    assert commit_import(ledger, import_id, categorize=False)["status"] == "committed"
+    assert (await commit_import(ledger, import_id, categorize=False))["status"] == "committed"

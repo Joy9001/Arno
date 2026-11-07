@@ -8,22 +8,22 @@ from __future__ import annotations
 
 from typing import Any
 
-import psycopg
+from fin_agent.db.conn import Connection
 
 
-def attach_sources(
-    conn: psycopg.Connection, movement_id: str, payload: dict[str, Any]
+async def attach_sources(
+    conn: Connection, movement_id: str, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT c.kind, c.ref, m.id AS message_id, m.conversation_id
         FROM captures c
         LEFT JOIN messages m ON c.kind = 'chat' AND m.id = c.ref
-        WHERE c.movement_id = %s
+        WHERE c.movement_id = $1
         ORDER BY c.id
         """,
-        (movement_id,),
-    ).fetchall()
+        movement_id,
+    )
     payload["sources"] = [
         {
             "kind": row["kind"],

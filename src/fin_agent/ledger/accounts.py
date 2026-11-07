@@ -11,9 +11,7 @@ import re
 from datetime import date
 from typing import Any
 
-import psycopg
-from psycopg.types.json import Jsonb
-
+from fin_agent.db.conn import Connection, quote_ident
 from fin_agent.ledger.audit import WriteGroup, new_id, write_group
 from fin_agent.ledger.common import (
     ACCOUNT_KINDS,
@@ -35,8 +33,8 @@ from fin_agent.ledger.postings import TransferSpec, create_movement_in_group
 LAST4_RE = re.compile(r"^[0-9]{4}$")
 
 
-def _base_currency(conn: psycopg.Connection) -> str:
-    row = conn.execute("SELECT base_currency FROM settings WHERE id = 1").fetchone()
+async def _base_currency(conn: Connection) -> str:
+    row = await conn.fetchrow("SELECT base_currency FROM settings WHERE id = 1")
     return str(row["base_currency"]) if row else "INR"
 
 
@@ -93,49 +91,54 @@ def _validate_account_fields(
         raise InvalidLedgerError("Rate and tenure belong only to a loan")
 
 
-def ensure_system_accounts(conn: psycopg.Connection) -> dict[str, dict[str, Any]]:
+async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
     """Create the one Spending, Income, and Equity account if they are missing."""
     accounts: dict[str, dict[str, Any]] = {}
-    with write_group(conn, actor="system") as group:
-        currency = _base_currency(conn)
+    async with write_group(conn, actor="system") as group:
+        currency = await _base_currency(conn)
         for kind, name in (
             ("spending", "Spending"),
             ("income", "Income"),
             ("equity", "Equity"),
         ):
-            row = conn.execute(
-                "SELECT * FROM accounts WHERE kind = %s ORDER BY created_at LIMIT 1", (kind,)
-            ).fetchone()
+            row = await conn.fetchrow(
+                "SELECT * FROM accounts WHERE kind = $1 ORDER BY created_at LIMIT 1", kind
+            )
             if row is None:
-                ledger = conn.execute(
+                ledger = await conn.fetchrow(
                     """
-                    SELECT * FROM pgledger_create_account(%s, %s, true, true, %s)
+                    SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
                     """,
-                    (name, currency, Jsonb({"system": kind})),
-                ).fetchone()
-                row = conn.execute(
+                    name,
+                    currency,
+                    {"system": kind},
+                )
+                row = await conn.fetchrow(
                     """
                     INSERT INTO accounts (id, kind, ledger_account_id, name, liquid)
-                    VALUES (%s, %s, %s, %s, false)
+                    VALUES ($1, $2, $3, $4, false)
                     RETURNING *
                     """,
-                    (new_id(conn, "acc"), kind, ledger["id"], name),
-                ).fetchone()
+                    await new_id(conn, "acc"),
+                    kind,
+                    ledger["id"],
+                    name,
+                )
                 group.record_created("accounts", row)
             elif not row["active"]:
-                after = conn.execute(
+                after = await conn.fetchrow(
                     "UPDATE accounts SET active = true, updated_at = now() "
-                    "WHERE id = %s RETURNING *",
-                    (row["id"],),
-                ).fetchone()
+                    "WHERE id = $1 RETURNING *",
+                    row["id"],
+                )
                 group.record_updated("accounts", row["id"], row, after)
                 row = after
             accounts[kind] = row
     return accounts
 
 
-def _create_account_in_group(
-    conn: psycopg.Connection,
+async def _create_account_in_group(
+    conn: Connection,
     group: WriteGroup,
     *,
     kind: str,
@@ -168,46 +171,46 @@ def _create_account_in_group(
         tenure_months=tenure_months,
     )
 
-    ledger = conn.execute(
+    ledger = await conn.fetchrow(
         """
-        SELECT * FROM pgledger_create_account(%s, %s, true, true, %s)
+        SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
         """,
-        (name.strip(), _base_currency(conn), Jsonb({"kind": kind})),
-    ).fetchone()
-    account_id = new_id(conn, "acc")
+        name.strip(),
+        await _base_currency(conn),
+        {"kind": kind},
+    )
+    account_id = await new_id(conn, "acc")
     stated_as_of = opening_balance_as_of or today()
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         INSERT INTO accounts (
             id, kind, ledger_account_id, name, institution, last4,
             statement_balance_paise, statement_balance_as_of, liquid,
             credit_limit_paise, statement_day, due_day, rate_bps, tenure_months,
             emi_schedule_id
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *
         """,
-        (
-            account_id,
-            kind,
-            ledger["id"],
-            name.strip(),
-            institution,
-            last4,
-            opening_balance_paise,
-            stated_as_of if opening_balance_paise is not None else None,
-            liquid,
-            credit_limit_paise,
-            statement_day,
-            due_day,
-            rate_bps,
-            tenure_months,
-            emi_schedule_id,
-        ),
-    ).fetchone()
+        account_id,
+        kind,
+        ledger["id"],
+        name.strip(),
+        institution,
+        last4,
+        opening_balance_paise,
+        stated_as_of if opening_balance_paise is not None else None,
+        liquid,
+        credit_limit_paise,
+        statement_day,
+        due_day,
+        rate_bps,
+        tenure_months,
+        emi_schedule_id,
+    )
     group.record_created("accounts", row)
 
     if opening_balance_paise:
-        equity = system_account(conn, "equity")
+        equity = await system_account(conn, "equity")
         if opening_balance_paise > 0:
             transfer = TransferSpec(
                 from_account_id=equity["id"],
@@ -222,7 +225,7 @@ def _create_account_in_group(
                 amount_paise=-opening_balance_paise,
                 note="Opening balance",
             )
-        record = create_movement_in_group(
+        record = await create_movement_in_group(
             conn,
             group,
             date=stated_as_of,
@@ -235,8 +238,8 @@ def _create_account_in_group(
     return row
 
 
-def create_account(
-    conn: psycopg.Connection,
+async def create_account(
+    conn: Connection,
     *,
     kind: str,
     name: str,
@@ -254,9 +257,9 @@ def create_account(
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    ensure_system_accounts(conn)
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        row = _create_account_in_group(
+    await ensure_system_accounts(conn)
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        row = await _create_account_in_group(
             conn,
             group,
             kind=kind,
@@ -273,26 +276,24 @@ def create_account(
             tenure_months=tenure_months,
             emi_schedule_id=emi_schedule_id,
         )
-    return account_payload(conn, row) | {"undo_id": group.group_id}
+    return await account_payload(conn, row) | {"undo_id": group.group_id}
 
 
-def list_accounts(
-    conn: psycopg.Connection, *, include_system: bool = False, include_inactive: bool = False
+async def list_accounts(
+    conn: Connection, *, include_system: bool = False, include_inactive: bool = False
 ) -> list[dict[str, Any]]:
-    return [
-        account_payload(conn, row)
-        for row in list_account_rows(
-            conn, include_system=include_system, include_inactive=include_inactive
-        )
-    ]
+    rows = await list_account_rows(
+        conn, include_system=include_system, include_inactive=include_inactive
+    )
+    return [await account_payload(conn, row) for row in rows]
 
 
-def get_account(conn: psycopg.Connection, account_id: str) -> dict[str, Any]:
-    return account_payload(conn, get_account_row(conn, account_id))
+async def get_account(conn: Connection, account_id: str) -> dict[str, Any]:
+    return await account_payload(conn, await get_account_row(conn, account_id))
 
 
-def update_account(
-    conn: psycopg.Connection,
+async def update_account(
+    conn: Connection,
     account_id: str,
     *,
     name: str | None = None,
@@ -309,11 +310,11 @@ def update_account(
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    before = get_account_row(conn, account_id)
+    before = await get_account_row(conn, account_id)
     if before["kind"] in SYSTEM_KINDS:
         raise InvalidLedgerError("The system accounts are fixed")
     if emi_schedule_id is not None:
-        row = conn.execute("SELECT 1 FROM schedules WHERE id = %s", (emi_schedule_id,)).fetchone()
+        row = await conn.fetchrow("SELECT 1 FROM schedules WHERE id = $1", emi_schedule_id)
         if row is None:
             raise NotFoundLedgerError(f"No schedule {emi_schedule_id}")
     updates: dict[str, Any] = {}
@@ -333,7 +334,7 @@ def update_account(
         if value is not None:
             updates[key] = value
     if not updates:
-        return account_payload(conn, before) | {"undo_id": None}
+        return await account_payload(conn, before) | {"undo_id": None}
 
     merged = {**before, **updates}
     _validate_account_fields(
@@ -349,31 +350,32 @@ def update_account(
     )
 
     columns = list(updates)
-    assignments = [f"{column} = %s" for column in columns]
-    with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = conn.execute(
+    assignments = [f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)]
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        after = await conn.fetchrow(
             f"""
             UPDATE accounts SET {", ".join(assignments)}, updated_at = now()
-            WHERE id = %s RETURNING *
+            WHERE id = ${len(columns) + 1} RETURNING *
             """,
-            (*[updates[column] for column in columns], account_id),
-        ).fetchone()
+            *[updates[column] for column in columns],
+            account_id,
+        )
         group.record_updated("accounts", account_id, before, after)
-    return account_payload(conn, after) | {"undo_id": group.group_id}
+    return await account_payload(conn, after) | {"undo_id": group.group_id}
 
 
-def archive_account(
-    conn: psycopg.Connection,
+async def archive_account(
+    conn: Connection,
     account_id: str,
     *,
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    return update_account(conn, account_id, active=False, actor=actor, message_id=message_id)
+    return await update_account(conn, account_id, active=False, actor=actor, message_id=message_id)
 
 
-def set_statement_balance(
-    conn: psycopg.Connection,
+async def set_statement_balance(
+    conn: Connection,
     account_id: str,
     *,
     balance_paise: int,
@@ -382,18 +384,18 @@ def set_statement_balance(
     message_id: str | None = None,
 ) -> dict[str, Any]:
     """Set the last stated balance and record the difference against Equity, visibly."""
-    account = require_active_account(conn, account_id)
+    account = await require_active_account(conn, account_id)
     if account["kind"] in SYSTEM_KINDS:
         raise InvalidLedgerError("The system accounts have no statement balance")
-    ensure_system_accounts(conn)
+    await ensure_system_accounts(conn)
     as_of = as_of or today()
-    current = ledger_balance(conn, account["ledger_account_id"])
+    current = await ledger_balance(conn, account["ledger_account_id"])
     difference = int(balance_paise) - current
 
     movement_id = None
-    with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
         if difference:
-            equity = system_account(conn, "equity")
+            equity = await system_account(conn, "equity")
             if difference > 0:
                 transfer = TransferSpec(
                     from_account_id=equity["id"],
@@ -408,7 +410,7 @@ def set_statement_balance(
                     amount_paise=-difference,
                     note="Balance adjustment",
                 )
-            record = create_movement_in_group(
+            record = await create_movement_in_group(
                 conn,
                 group,
                 date=as_of,
@@ -418,20 +420,22 @@ def set_statement_balance(
             )
             movement_id = record.id
 
-        after = conn.execute(
+        after = await conn.fetchrow(
             """
             UPDATE accounts
-            SET statement_balance_paise = %s,
-                statement_balance_as_of = %s,
+            SET statement_balance_paise = $1,
+                statement_balance_as_of = $2,
                 updated_at = now()
-            WHERE id = %s RETURNING *
+            WHERE id = $3 RETURNING *
             """,
-            (balance_paise, as_of, account_id),
-        ).fetchone()
+            balance_paise,
+            as_of,
+            account_id,
+        )
         group.record_updated("accounts", account_id, account, after)
 
     return {
-        "account": account_payload(conn, after),
+        "account": await account_payload(conn, after),
         "diff_paise": difference,
         "movement_id": movement_id,
         "undo_id": group.group_id,
@@ -458,8 +462,8 @@ def cash_quality(accounts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def account_summary(conn: psycopg.Connection) -> dict[str, Any]:
-    accounts = list_accounts(conn)
+async def account_summary(conn: Connection) -> dict[str, Any]:
+    accounts = await list_accounts(conn)
     liquid_total = sum(
         account["balance_paise"] for account in accounts if account["liquid"] and account["active"]
     )
@@ -494,28 +498,28 @@ class LoanTermsError(InvalidLedgerError):
     """A named loan can't be amortized as it stands."""
 
 
-def loan_terms(conn: psycopg.Connection, name: str) -> dict[str, Any]:
+async def loan_terms(conn: Connection, name: str) -> dict[str, Any]:
     """The terms `amortize` uses for a named loan: today's outstanding balance, its rate, its
     tenure as the cap, and the EMI its schedule really charges. The eval grader reads the same
     terms, so an expected value can't drift from what the tool computes."""
-    row = conn.execute(
-        "SELECT * FROM accounts WHERE lower(name) = lower(%s) AND kind = 'loan' LIMIT 1",
-        (name,),
-    ).fetchone()
+    row = await conn.fetchrow(
+        "SELECT * FROM accounts WHERE lower(name) = lower($1) AND kind = 'loan' LIMIT 1",
+        name,
+    )
     if row is None:
         raise LoanTermsError(f"No loan named {name!r}")
     # A loan is a liability: its ledger balance is negative, as in `account_payload`. Reading it
     # unsigned made every named loan look paid off, so scripts re-derived the terms by hand.
-    principal = max(-ledger_balance(conn, row["ledger_account_id"]), 0)
+    principal = max(-(await ledger_balance(conn, row["ledger_account_id"])), 0)
     if principal <= 0:
         raise LoanTermsError("That loan has no outstanding balance")
     if not row["tenure_months"]:
         raise LoanTermsError("That loan has no tenure; pass the terms instead")
     emi = None
     if row["emi_schedule_id"]:
-        schedule = conn.execute(
-            "SELECT amount_paise FROM schedules WHERE id = %s", (row["emi_schedule_id"],)
-        ).fetchone()
+        schedule = await conn.fetchrow(
+            "SELECT amount_paise FROM schedules WHERE id = $1", row["emi_schedule_id"]
+        )
         emi = int(schedule["amount_paise"]) if schedule else None
     return {
         "principal_paise": principal,

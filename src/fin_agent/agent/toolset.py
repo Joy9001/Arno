@@ -7,12 +7,11 @@ card from a tool called inside a script is picked up from the `run_code` return 
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Awaitable, Callable
 from datetime import date
 from typing import Any, Literal
 
-import psycopg
+import asyncpg
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import RunContext, ToolReturn
 from pydantic_ai.exceptions import ApprovalRequired, ModelRetry
@@ -26,7 +25,7 @@ from fin_agent.agent.presentation import (
     build_answer,
 )
 from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect, quote_ident
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
 from fin_agent.ledger.accounts import LoanTermsError, loan_terms
@@ -102,12 +101,14 @@ def _cards_data(cards: list[dict[str, Any]]) -> list[DataChunk] | None:
     return [DataChunk(type="data-card", data=card) for card in cards] or None
 
 
-def _read_call(fn: Callable[[psycopg.Connection], dict[str, Any]]) -> dict[str, Any]:
-    with closing(connect()) as conn:
-        return fn(conn)
+async def _read_call(
+    fn: Callable[[Connection], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    async with connect() as conn:
+        return await fn(conn)
 
 
-def _finish_read(
+async def _finish_read(
     ctx: RunContext[AgentDeps],
     payload: dict[str, Any],
     *,
@@ -115,9 +116,8 @@ def _finish_read(
     context: dict[str, Any] | None = None,
 ) -> ToolReturn:
     if payload.get("outside_text"):
-        with closing(connect()) as conn:
-            flag_outside_text(conn, ctx.deps.conversation_id)
-            conn.commit()
+        async with connect() as conn:
+            await flag_outside_text(conn, ctx.deps.conversation_id)
     card = payload.pop("_card", None)
     cards: list[dict[str, Any]] = []
     if kind is not None:
@@ -138,8 +138,8 @@ async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
     """The user's whole picture: today's date, settings, accounts with balances and ages, the
     schedules behind the next 30 days, goals, who owes what, remembered preferences, what setup
     is missing, and data warnings. The sandbox has no clock, so get today's date here."""
-    payload = _read_call(read_tools.get_financial_context)
-    return _finish_read(ctx, payload, kind="context")
+    payload = await _read_call(read_tools.get_financial_context)
+    return await _finish_read(ctx, payload, kind="context")
 
 
 async def query_movements(
@@ -153,12 +153,12 @@ async def query_movements(
     entry and its reversal are hidden and not counted."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:
-        payload = _read_call(
+        payload = await _read_call(
             lambda conn: read_tools.query_movements(conn, filters=plain, limit=limit, cursor=cursor)
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    return _finish_read(
+    return await _finish_read(
         ctx,
         payload,
         kind="movements",
@@ -181,14 +181,14 @@ async def summarize_spending(
     number of entries, with a corrected entry and its reversal left out."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:
-        payload = _read_call(
+        payload = await _read_call(
             lambda conn: read_tools.summarize_spending(
                 conn, group_by=group_by, period=period, filters=plain
             )
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    return _finish_read(
+    return await _finish_read(
         ctx,
         payload,
         kind="spending",
@@ -206,12 +206,12 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     conversations(id, title, created_at, updated_at). The role cannot write and has a 2-second
     timeout."""
     try:
-        payload = read_tools.run_query(sql)
-    except psycopg.errors.QueryCanceled as exc:
+        payload = await read_tools.run_query(sql)
+    except (asyncpg.QueryCanceledError, TimeoutError) as exc:
         raise ModelRetry("The query hit the 2-second statement timeout.") from exc
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    except psycopg.Error as exc:
+    except asyncpg.PostgresError as exc:
         raise ModelRetry(str(exc).strip()) from exc
     payload["_card"] = {
         "card": "query",
@@ -219,7 +219,7 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
         "row_count": payload["row_count"],
         "truncated": payload["truncated"],
     }
-    return _finish_read(ctx, payload, kind="query")
+    return await _finish_read(ctx, payload, kind="query")
 
 
 async def project(
@@ -238,8 +238,8 @@ async def project(
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
     try:
-        with closing(connect()) as conn:
-            result = projection_tools.project(
+        async with connect() as conn:
+            result = await projection_tools.project(
                 conn,
                 horizon_days=horizon_days,
                 hypothetical=(hypothetical.model_dump(exclude_none=True) if hypothetical else None),
@@ -248,7 +248,7 @@ async def project(
         raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
     payload["_card"] = projection_tools.card(result)
-    return _finish_read(
+    return await _finish_read(
         ctx,
         payload,
         kind="project",
@@ -270,9 +270,9 @@ async def amortize(
     instead of writing the formula."""
     start: date | None = ledger_today()
     if loan:
-        with closing(connect()) as conn:
+        async with connect() as conn:
             try:
-                terms = loan_terms(conn, loan)
+                terms = await loan_terms(conn, loan)
             except LoanTermsError as exc:
                 raise ModelRetry(exc.message) from exc
         principal_paise = terms["principal_paise"]
@@ -439,24 +439,24 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
 # Writes --------------------------------------------------------------------------------------
 
 
-def _conversation_flagged(ctx: RunContext[AgentDeps]) -> bool:
+async def _conversation_flagged(ctx: RunContext[AgentDeps]) -> bool:
     if ctx.deps.flagged:
         return True
-    with closing(connect()) as conn:
-        row = conn.execute(
-            "SELECT outside_text_at FROM conversations WHERE id = %s",
-            (ctx.deps.conversation_id,),
-        ).fetchone()
+    async with connect() as conn:
+        row = await conn.fetchrow(
+            "SELECT outside_text_at FROM conversations WHERE id = $1",
+            ctx.deps.conversation_id,
+        )
     return bool(row and row["outside_text_at"] is not None)
 
 
-def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
+async def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
     """Lasting or wide writes ask first once the thread has read outside text.
 
     The flag can be set by a read earlier in the same turn, so it is read from the conversation
     row, not only from the snapshot taken when the turn started.
     """
-    if _conversation_flagged(ctx) and not ctx.tool_call_approved:
+    if await _conversation_flagged(ctx) and not ctx.tool_call_approved:
         ctx.deps.approvals_offered += 1
         raise ApprovalRequired(
             {
@@ -470,10 +470,12 @@ def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
         ctx.deps.approvals += 1
 
 
-def _call_write(fn: Callable[[psycopg.Connection], dict[str, Any]]) -> dict[str, Any]:
-    with closing(connect()) as conn:
+async def _call_write(
+    fn: Callable[[Connection], Awaitable[dict[str, Any]]],
+) -> dict[str, Any]:
+    async with connect() as conn:
         try:
-            return fn(conn)
+            return await fn(conn)
         except write_tools.ToolInputError as exc:
             raise ModelRetry(str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - ledger errors teach the model
@@ -489,21 +491,22 @@ def _write_return(payload: dict[str, Any]) -> ToolReturn:
     return ToolReturn(return_value=payload, metadata=_card_data(card) if card else None)
 
 
-def _clear_confirmed_marks(names: list[str]) -> None:
+async def _clear_confirmed_marks(names: list[str]) -> None:
     if not names:
         return
-    with closing(connect()) as conn:
+    async with connect() as conn:
         for name in names:
             clean = name.replace("<outside>", "").replace("</outside>", "").strip()
             if not clean:
                 continue
             for table, column in (("payees", "display_name"), ("schedules", "name")):
-                rows = conn.execute(
-                    f"SELECT id FROM {table} WHERE lower({column}) = lower(%s)",  # noqa: S608
-                    (clean,),
-                ).fetchall()
+                rows = await conn.fetch(
+                    f"SELECT id FROM {quote_ident(table)} "
+                    f"WHERE lower({quote_ident(column)}) = lower($1)",  # noqa: S608
+                    clean,
+                )
                 for row in rows:
-                    clear_mark(conn, table, row["id"])
+                    await clear_mark(conn, table, row["id"])
 
 
 async def record_movement(
@@ -523,13 +526,14 @@ async def record_movement(
     payload_movement = movement.model_dump(exclude_none=True, mode="python")
     if ctx.tool_call_id:
         payload_movement["tool_call_id"] = ctx.tool_call_id
-    payload = _call_write(
+    flagged = await _conversation_flagged(ctx)
+    payload = await _call_write(
         lambda conn: write_tools.record_movement(
             conn,
             movement=payload_movement,
             message_id=ctx.deps.message_id,
             conversation_id=ctx.deps.conversation_id,
-            flagged=_conversation_flagged(ctx),
+            flagged=flagged,
             user_texts=ctx.deps.user_texts,
             not_duplicate=not_duplicate,
             capture_kind=ctx.deps.capture_kind,
@@ -549,7 +553,7 @@ async def correct_movement(
     delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
     category or payee, scope sets how far it goes: this row, this row and future ones, or all rows
     past and future ('ramesh@okaxis is my landlord')."""
-    payload = _call_write(
+    payload = await _call_write(
         lambda conn: write_tools.correct_movement(
             conn,
             movement_id=movement_id,
@@ -589,8 +593,8 @@ async def update_setup(
     Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
     payload_data = data.model_dump(exclude_none=True, mode="python")
     summary = payload_data.get("name") or payload_data.get("account") or payload_data
-    _gate(ctx, f"{action} {entity}: {summary}")
-    payload = _call_write(
+    await _gate(ctx, f"{action} {entity}: {summary}")
+    payload = await _call_write(
         lambda conn: write_tools.update_setup_item(
             conn,
             entity=entity,
@@ -600,7 +604,7 @@ async def update_setup(
         )
     )
     if ctx.tool_call_approved:
-        _clear_confirmed_marks(
+        await _clear_confirmed_marks(
             [str(value) for value in payload_data.values() if isinstance(value, str)]
         )
     return _write_return(payload)
@@ -615,8 +619,8 @@ async def preference(
     """Remember a lasting fact or rule about the user, or forget one. Call it unprompted when you
     notice one, such as "Mom's monthly transfer isn't discretionary." Never store a number the
     ledger owns."""
-    _gate(ctx, f"{action} preference: {text or id}")
-    payload = _call_write(
+    await _gate(ctx, f"{action} preference: {text or id}")
+    payload = await _call_write(
         lambda conn: write_tools.preference(
             conn,
             action=action,
@@ -632,7 +636,7 @@ async def import_document(ctx: RunContext[AgentDeps], attachment_id: str) -> Too
     """Start importing an uploaded statement. Returns a status and a review link; the user
     approves on the review screen, and you can't commit an import. If the file needs a password,
     tell the user to enter it on the import card. Never ask for it in chat."""
-    payload = _call_write(
+    payload = await _call_write(
         lambda conn: write_tools.import_document(
             conn,
             attachment_id=attachment_id,
@@ -645,7 +649,7 @@ async def import_document(ctx: RunContext[AgentDeps], attachment_id: str) -> Too
 async def undo(ctx: RunContext[AgentDeps], undo_id: str | None = None) -> ToolReturn:
     """Undo a write. With no ID, it undoes the last write in this conversation. Use the undo_id
     from a write's result for an earlier one."""
-    payload = _call_write(
+    payload = await _call_write(
         lambda conn: write_tools.undo(
             conn,
             undo_id=undo_id,

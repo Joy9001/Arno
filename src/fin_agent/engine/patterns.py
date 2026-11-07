@@ -18,8 +18,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
-import psycopg
-
+from fin_agent.db.conn import Connection
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger.common import today as ledger_today
 
@@ -147,24 +146,26 @@ def detect_recurring(charges: list[Charge], schedules: list[KnownSchedule]) -> l
     return proposals
 
 
-def _load_charges(conn: psycopg.Connection, as_of: date) -> list[Charge]:
+async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
     from fin_agent.tools.read import _reversed_ids  # one definition of a corrected-away row
 
     start = as_of - timedelta(days=HISTORY_DAYS)
-    rows = conn.execute(
+    rows = await conn.fetch(
         """
         SELECT v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text,
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN payees p ON p.id = v.payee_id
         WHERE v.amount_paise > 0
-          AND v.date BETWEEN %s AND %s
+          AND v.date BETWEEN $1 AND $2
           AND p.active
-          AND NOT (v.movement_id = ANY(%s))
+          AND NOT (v.movement_id = ANY($3))
         GROUP BY v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text
         """,
-        (start, as_of, _reversed_ids(conn)),
-    ).fetchall()
+        start,
+        as_of,
+        await _reversed_ids(conn),
+    )
     return [
         Charge(
             movement_id=str(row["movement_id"]),
@@ -179,7 +180,7 @@ def _load_charges(conn: psycopg.Connection, as_of: date) -> list[Charge]:
     ]
 
 
-def _load_schedules(conn: psycopg.Connection) -> list[KnownSchedule]:
+async def _load_schedules(conn: Connection) -> list[KnownSchedule]:
     return [
         KnownSchedule(
             id=str(row["id"]),
@@ -187,12 +188,12 @@ def _load_schedules(conn: psycopg.Connection) -> list[KnownSchedule]:
             normalized=normalize_merchant(row["name"]),
             amount_paise=int(row["amount_paise"]) if row["amount_paise"] else None,
         )
-        for row in conn.execute("SELECT * FROM schedules WHERE active ORDER BY name").fetchall()
+        for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name")
     ]
 
 
-def _has_payment(
-    conn: psycopg.Connection,
+async def _has_payment(
+    conn: Connection,
     *,
     expected: date,
     amount_paise: int,
@@ -200,47 +201,46 @@ def _has_payment(
 ) -> bool:
     low = round(amount_paise * (1 - AMOUNT_TOLERANCE))
     high = round(amount_paise * (1 + AMOUNT_TOLERANCE))
-    row = conn.execute(
+    row = await conn.fetchrow(
         """
         SELECT 1 FROM v_spending
-        WHERE date BETWEEN %s AND %s
-          AND amount_paise BETWEEN %s AND %s
-          AND NOT (movement_id = ANY(%s))
+        WHERE date BETWEEN $1 AND $2
+          AND amount_paise BETWEEN $3 AND $4
+          AND NOT (movement_id = ANY($5))
         LIMIT 1
         """,
-        (
-            expected - timedelta(days=INTERVAL_TOLERANCE_DAYS),
-            expected + timedelta(days=INTERVAL_TOLERANCE_DAYS),
-            low,
-            high,
-            reversed_ids,
-        ),
-    ).fetchone()
+        expected - timedelta(days=INTERVAL_TOLERANCE_DAYS),
+        expected + timedelta(days=INTERVAL_TOLERANCE_DAYS),
+        low,
+        high,
+        reversed_ids,
+    )
     return row is not None
 
 
-def detect_missed(conn: psycopg.Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
+async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
     """Expected obligation occurrences three or more days old with no matching payment."""
     from fin_agent.tools.read import _reversed_ids
 
     day = as_of or ledger_today()
-    reversed_ids = _reversed_ids(conn)
+    reversed_ids = await _reversed_ids(conn)
     start = day - timedelta(days=90)
     end = day - timedelta(days=MISSED_AFTER_DAYS)
     proposals: list[dict[str, Any]] = []
-    for row in conn.execute(
+    for row in await conn.fetch(
         """
         SELECT * FROM schedules
         WHERE active AND kind IN ('obligation', 'instalment') AND amount_paise IS NOT NULL
         ORDER BY name
         """
-    ).fetchall():
+    ):
         amount = int(row["amount_paise"])
         if amount <= 0:
             continue
-        for occurrence in schedules_mod.expand_schedule(conn, row, max(start, row["starts"]), end):
+        occurrences = await schedules_mod.expand_schedule(conn, row, max(start, row["starts"]), end)
+        for occurrence in occurrences:
             expected = date.fromisoformat(occurrence["date"])
-            if _has_payment(
+            if await _has_payment(
                 conn,
                 expected=expected,
                 amount_paise=amount,
@@ -262,11 +262,11 @@ def detect_missed(conn: psycopg.Connection, *, as_of: date | None = None) -> lis
     return proposals
 
 
-def detect(conn: psycopg.Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
+async def detect(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
     """Run both detectors over the ledger and return proposals; no schedule is written."""
     day = as_of or ledger_today()
-    proposals = detect_recurring(_load_charges(conn, day), _load_schedules(conn))
-    proposals.extend(detect_missed(conn, as_of=day))
+    proposals = detect_recurring(await _load_charges(conn, day), await _load_schedules(conn))
+    proposals.extend(await detect_missed(conn, as_of=day))
     proposals.sort(key=lambda item: (item["kind"], item["merchant"]))
     return proposals
 

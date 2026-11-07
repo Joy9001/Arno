@@ -5,7 +5,7 @@ from __future__ import annotations
 from pydantic_ai.models.test import TestModel
 
 
-def test_chat_streams_and_saves_both_records(authed_client, demo_ledger):
+async def test_chat_streams_and_saves_both_records(authed_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Hello from the test model.")
     with authed_client.app.state.agent.override(model=model):
         response = authed_client.post(
@@ -32,7 +32,7 @@ def test_chat_streams_and_saves_both_records(authed_client, demo_ledger):
     assert thread["messages"][1]["parts"][0]["text"] == "Hello from the test model."
 
 
-def test_same_message_id_replays_the_saved_turn(authed_client, demo_ledger):
+async def test_same_message_id_replays_the_saved_turn(authed_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Only once.")
     body = {
         "id": "thread-smoke-2",
@@ -50,7 +50,7 @@ def test_same_message_id_replays_the_saved_turn(authed_client, demo_ledger):
     assert len([m for m in thread["messages"] if m["role"] == "assistant"]) == 1
 
 
-def test_threads_are_searchable_renameable_and_flagable(authed_client, demo_ledger):
+async def test_threads_are_searchable_renameable_and_flagable(authed_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Chai was ₹50.")
     body = {
         "id": "thread-search",
@@ -75,7 +75,7 @@ def test_threads_are_searchable_renameable_and_flagable(authed_client, demo_ledg
     assert flagged["flagged_at"]
 
 
-def test_the_stream_endpoint_is_204_when_nothing_runs(authed_client):
+async def test_the_stream_endpoint_is_204_when_nothing_runs(authed_client):
     response = authed_client.get("/api/chat/no-such-thread/stream")
     assert response.status_code == 204
 
@@ -130,19 +130,18 @@ def test_a_stored_approval_merges_into_a_closed_card():
     assert any(p.get("type") == "data-card" for p in merged[0]["parts"])
 
 
-def test_preferences_can_be_turned_off_and_deleted_for_good(authed_client, demo_ledger):
-    demo_ledger.execute(
+async def test_preferences_can_be_turned_off_and_deleted_for_good(authed_client, demo_ledger):
+    await demo_ledger.execute(
         "INSERT INTO preferences (id, body, created_by) "
         "VALUES ('prf_test', 'No rent warnings', 'agent')"
     )
-    demo_ledger.execute(
+    await demo_ledger.execute(
         """
         INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
         VALUES ('agent', 'und_test', 'preferences', 'prf_test',
                 '{"body": "No rent warnings"}'::jsonb, '{"body": "No rent warnings"}'::jsonb)
         """
     )
-    demo_ledger.commit()
     listed = authed_client.get("/api/preferences").json()["preferences"]
     assert any(item["id"] == "prf_test" for item in listed)
 
@@ -152,13 +151,10 @@ def test_preferences_can_be_turned_off_and_deleted_for_good(authed_client, demo_
 
     deleted = authed_client.delete("/api/preferences/prf_test")
     assert deleted.status_code == 200
-    row = demo_ledger.execute(
-        "SELECT count(*) AS n FROM preferences WHERE id = 'prf_test'"
-    ).fetchone()
-    assert row["n"] == 0
-    audit = demo_ledger.execute(
+    assert await demo_ledger.fetchval("SELECT count(*) FROM preferences WHERE id = 'prf_test'") == 0
+    audit = await demo_ledger.fetch(
         "SELECT before, after FROM audit_log "
         "WHERE table_name = 'preferences' AND row_id = 'prf_test'"
-    ).fetchall()
+    )
     assert audit
     assert all("No rent warnings" not in str(item) for item in audit)

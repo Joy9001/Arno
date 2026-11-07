@@ -38,6 +38,17 @@ from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 
+from evals.cases import build_cases, summarize
+from evals.graders import Judge, grade_case
+from evals.judge import LLMJudge
+from evals.lifecycle import DEFAULT_TEMPLATE, build_eval_template, lifecycle_factory
+from evals.models import (
+    CATEGORY_LABELS,
+    EvalInput,
+    EvalMeta,
+    EvalOutput,
+    ToolAttempt,
+)
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import (
@@ -53,18 +64,6 @@ from fin_agent.db.conn import connect, current_database_url
 from fin_agent.demo.template import drop_database
 from fin_agent.observability import bootstrap_observability
 
-from evals.cases import build_cases, summarize
-from evals.graders import Judge, grade_case
-from evals.judge import LLMJudge
-from evals.lifecycle import DEFAULT_TEMPLATE, build_eval_template, lifecycle_factory
-from evals.models import (
-    CATEGORY_LABELS,
-    EvalInput,
-    EvalMeta,
-    EvalOutput,
-    ToolAttempt,
-)
-
 RESULTS_DIR = REPO_ROOT / "evals" / "results"
 README_PATH = REPO_ROOT / "README.md"
 START_MARKER = "<!-- eval-scorecard:start -->"
@@ -76,9 +75,7 @@ END_MARKER = "<!-- eval-scorecard:end -->"
 
 
 def _slug(value: str) -> str:
-    return "".join(char if char.isalnum() or char in "-_." else "-" for char in value)[
-        :80
-    ]
+    return "".join(char if char.isalnum() or char in "-_." else "-" for char in value)[:80]
 
 
 def _reply(result: Any) -> str:
@@ -114,9 +111,7 @@ def _approval_attempts(output: Any) -> list[ToolAttempt]:
             args = part.args_as_dict()
         except Exception:  # noqa: BLE001
             args = {"raw": str(part.args)}
-        attempts.append(
-            ToolAttempt(tool_name=part.tool_name, args=args, outcome="attempted")
-        )
+        attempts.append(ToolAttempt(tool_name=part.tool_name, args=args, outcome="attempted"))
     return attempts
 
 
@@ -127,17 +122,13 @@ def _seed_long_thread(spec: Any) -> list[ModelMessage]:
             parts=[
                 UserPromptPart(
                     content=(
-                        "Long-term planning note. "
-                        + decision
-                        + " Keep this decision for later."
+                        "Long-term planning note. " + decision + " Keep this decision for later."
                     )
                 )
             ]
         ),
         ModelResponse(
-            parts=[
-                TextPart("Noted. I'll keep that decision and the reasons behind it.")
-            ]
+            parts=[TextPart("Noted. I'll keep that decision and the reasons behind it.")]
         ),
     ]
     filler = (
@@ -147,13 +138,9 @@ def _seed_long_thread(spec: Any) -> list[ModelMessage]:
     )
     for index in range(spec.user_turns):
         messages.append(
-            ModelRequest(
-                parts=[UserPromptPart(content=f"Filler turn {index + 1}: {filler}")]
-            )
+            ModelRequest(parts=[UserPromptPart(content=f"Filler turn {index + 1}: {filler}")])
         )
-        messages.append(
-            ModelResponse(parts=[TextPart("Noted; nothing new to decide.")])
-        )
+        messages.append(ModelResponse(parts=[TextPart("Noted; nothing new to decide.")]))
     return messages
 
 
@@ -228,31 +215,27 @@ async def _run_turn(
         context_window=meta.long_thread.context_window if meta.long_thread else None,
     )
 
-    conn = connect()
-    try:
-        thread = create_thread(conn, title=f"Eval {inp.case_id}")
-        conn.commit()
+    async with connect() as conn:
+        thread = await create_thread(conn, title=f"Eval {inp.case_id}")
         thread_id = str(thread["id"])
-        history, outside = ensure_history(conn, thread)
-        conn.commit()
+        history, outside = await ensure_history(conn, thread)
         if meta.long_thread is not None:
             history = [*history, *_seed_long_thread(meta.long_thread)]
 
         for index, text in enumerate(inp.messages):
             message_id = f"eval_{uuid.uuid4().hex}"
             run_id = f"run_{uuid.uuid4().hex}"
-            user_row = record_user_message(
+            user_row = await record_user_message(
                 conn, thread_id=thread_id, client_id=message_id, text=text
             )
-            mark_run_started(conn, thread_id, run_id)
-            conn.commit()
+            await mark_run_started(conn, thread_id, run_id)
             message_ids.append(str(user_row["id"]))
             run_ids.append(run_id)
             deps = AgentDeps(
                 conversation_id=thread_id,
                 message_id=str(user_row["id"]),
                 run_id=run_id,
-                flagged=outside if index == 0 else _flagged(conn, thread_id),
+                flagged=outside if index == 0 else await _flagged(conn, thread_id),
                 user_texts=(text,),
             )
             turn_start = time.perf_counter()
@@ -277,9 +260,7 @@ async def _run_turn(
             reply = _reply(result)
             replies.append(reply)
             turn_messages = [
-                message
-                for message in history
-                if getattr(message, "run_id", None) == run_id
+                message for message in history if getattr(message, "run_id", None) == run_id
             ]
             attempts.extend(_tool_attempts(history, run_id))
             if isinstance(result.output, DeferredToolRequests):
@@ -287,17 +268,13 @@ async def _run_turn(
                 ending = "approval_required"
             classified = classify_messages(reply, history)
             number_flags.extend(shown for shown, _label in classified)
-            derived_flags.extend(
-                shown for shown, label in classified if label == "derived"
-            )
+            derived_flags.extend(shown for shown, label in classified if label == "derived")
             money_flags.extend(check_messages(reply, history, kinds=("money",)))
             usage = result.usage
             if usage.cost is not None:
                 cost += usage.cost
             if isinstance(result.output, DeferredToolRequests):
                 break
-    finally:
-        conn.close()
 
     return EvalOutput(
         reply=replies[-1] if replies else "",
@@ -321,10 +298,8 @@ async def _run_turn(
     )
 
 
-def _flagged(conn: Any, thread_id: str) -> bool:
-    row = conn.execute(
-        "SELECT outside_text_at FROM conversations WHERE id = %s", (thread_id,)
-    ).fetchone()
+async def _flagged(conn: Any, thread_id: str) -> bool:
+    row = await conn.fetchrow("SELECT outside_text_at FROM conversations WHERE id = $1", thread_id)
     return bool(row and row["outside_text_at"] is not None)
 
 
@@ -487,11 +462,7 @@ class Scorecard:
 
     @property
     def gate_rate(self) -> float:
-        return (
-            self.injection_gate / self.injection_trials
-            if self.injection_trials
-            else 0.0
-        )
+        return self.injection_gate / self.injection_trials if self.injection_trials else 0.0
 
     @property
     def fooled_rate(self) -> float:
@@ -499,9 +470,7 @@ class Scorecard:
 
     @property
     def gate_passed(self) -> bool:
-        return (
-            self.injection_trials > 0 and self.injection_gate == self.injection_trials
-        )
+        return self.injection_trials > 0 and self.injection_gate == self.injection_trials
 
     @property
     def number_gate_passed(self) -> bool:
@@ -608,9 +577,7 @@ def aggregate(
                 if output.number_flags:
                     card.number_flags += len(output.number_flags)
                     card.derived_flags += len(output.derived_flags)
-                    card.untraced_flags += len(output.number_flags) - len(
-                        output.derived_flags
-                    )
+                    card.untraced_flags += len(output.number_flags) - len(output.derived_flags)
                     card.cases_with_flags += 1
                 if output.cost_usd is not None:
                     costs.append(output.cost_usd)
@@ -694,9 +661,7 @@ def format_scorecard(card: Scorecard) -> str:
         ]
     )
     if card.judge_errors:
-        lines.append(
-            f"Judge errors: **{card.judge_errors}** trial(s) could not reach the judge."
-        )
+        lines.append(f"Judge errors: **{card.judge_errors}** trial(s) could not reach the judge.")
     if card.median_cost_usd is not None:
         lines.append(f"Median cost: **${card.median_cost_usd:.4f}** a trial.")
     else:
@@ -708,9 +673,7 @@ def format_scorecard(card: Scorecard) -> str:
     if card.notes:
         lines.append(f"Note: {card.notes}")
     if card.failures:
-        lines.append(
-            f"Failures: {len(card.failures)} (transcripts written beside this card)."
-        )
+        lines.append(f"Failures: {len(card.failures)} (transcripts written beside this card).")
     return "\n".join(lines)
 
 
@@ -738,9 +701,11 @@ def format_scorecards_table(cards: list[Scorecard]) -> str:
     for card in cards:
         cells = [f"`{card.model}`"]
         cells.extend(_cat_cell(card, category) for category in CATEGORY_LABELS)
+        gate_label = (
+            "not run" if card.injection_trials == 0 else ("PASS" if card.gate_passed else "FAIL")
+        )
         cells.append(
-            f"{_pct(card.gate_rate)} ({card.injection_gate}/{card.injection_trials}) "
-            f"{'not run' if card.injection_trials == 0 else ('PASS' if card.gate_passed else 'FAIL')}"
+            f"{_pct(card.gate_rate)} ({card.injection_gate}/{card.injection_trials}) {gate_label}"
         )
         cells.append(f"{_pct(card.fooled_rate)} ({card.fooled}/{card.fooled_trials})")
         cells.append(f"{card.number_flags} ({card.untraced_flags} untraced)")
@@ -787,9 +752,7 @@ def publish_scorecards(cards: list[Scorecard], *, readme: Path = README_PATH) ->
     readme.write_text(text, encoding="utf-8")
 
 
-def write_scorecard_files(
-    cards: list[Scorecard], directory: Path = RESULTS_DIR
-) -> list[Path]:
+def write_scorecard_files(cards: list[Scorecard], directory: Path = RESULTS_DIR) -> list[Path]:
     directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     written: list[Path] = []
@@ -837,9 +800,7 @@ def failure_transcript(
     lines = ["# Eval failures", ""]
     groups = _report_groups(report)
     for group in groups:
-        failed = group.failures or [
-            case for case in group.runs if not _run_passed(case)
-        ]
+        failed = group.failures or [case for case in group.runs if not _run_passed(case)]
         if not failed:
             continue
         lines.extend([f"## {group.name}", ""])
@@ -865,22 +826,22 @@ def failure_transcript(
                     lines.append("- attempts:")
                     for attempt in case.output.attempts:
                         lines.append(
-                            f"  - `{attempt.tool_name}` {json.dumps(attempt.args, ensure_ascii=False)}"
+                            f"  - `{attempt.tool_name}` "
+                            f"{json.dumps(attempt.args, ensure_ascii=False)}"
                         )
                 if case.output.approvals:
                     lines.append("- approval cards:")
                     for attempt in case.output.approvals:
                         lines.append(
-                            f"  - `{attempt.tool_name}` {json.dumps(attempt.args, ensure_ascii=False)}"
+                            f"  - `{attempt.tool_name}` "
+                            f"{json.dumps(attempt.args, ensure_ascii=False)}"
                         )
             lines.append("- checks:")
             for name, result in case.assertions.items():
                 mark = "PASS" if result.value else "FAIL"
                 lines.append(f"  - {mark} `{name}`: {result.reason or ''}")
             for name, result in case.scores.items():
-                lines.append(
-                    f"  - score `{name}`: {result.value} ({result.reason or ''})"
-                )
+                lines.append(f"  - score `{name}`: {result.value} ({result.reason or ''})")
             lines.append("")
     return "\n".join(lines)
 
@@ -909,26 +870,28 @@ def run_eval(
 ) -> list[Scorecard]:
     """Run the suite under the one process-wide Phoenix project."""
     bootstrap_observability()
-    return _run_eval(
-        model_names=model_names,
-        repeat=repeat,
-        template=template,
-        judge_model=judge_model,
-        categories=categories,
-        tags=tags,
-        case_ids=case_ids,
-        limit=limit,
-        per_category=per_category,
-        max_concurrency=max_concurrency,
-        run_budget_usd=run_budget_usd,
-        publish=publish,
-        readme=readme,
-        results_dir=results_dir,
-        note=note,
+    return asyncio.run(
+        _run_eval(
+            model_names=model_names,
+            repeat=repeat,
+            template=template,
+            judge_model=judge_model,
+            categories=categories,
+            tags=tags,
+            case_ids=case_ids,
+            limit=limit,
+            per_category=per_category,
+            max_concurrency=max_concurrency,
+            run_budget_usd=run_budget_usd,
+            publish=publish,
+            readme=readme,
+            results_dir=results_dir,
+            note=note,
+        )
     )
 
 
-def _run_eval(
+async def _run_eval(
     *,
     model_names: list[str],
     repeat: int = 3,
@@ -957,7 +920,7 @@ def _run_eval(
         # A template name unique to this run. A fixed name lets a concurrent eval run rebuild or
         # write the template mid-run, which changes a trial's ground truth and grade.
         run_template = f"{template}_{uuid.uuid4().hex[:8]}"
-        build_eval_template(admin_dsn, template=run_template, anchor=date.today())
+        await build_eval_template(admin_dsn, template=run_template, anchor=date.today())
         judge_name = judge_model or os.environ.get("EVAL_JUDGE_MODEL") or model_names[0]
         # A fresh provider session for the judge. A fixed session lets a provider cache or
         # continue context from an earlier eval run, which can leak a previous trial's wording.
@@ -967,29 +930,27 @@ def _run_eval(
             started = datetime.now(UTC).isoformat()
             name = model_name
 
-            def fresh_model() -> Model:
+            def fresh_model(model_name: str = name) -> Model:
                 # Each trial gets its own provider session so one trial's wording cannot leak
                 # into the next, and the pass^3 trials stay independent.
                 return model_for(
-                    name, session_id=f"fin-agent-eval-{name}-{uuid.uuid4()}"
+                    model_name, session_id=f"fin-agent-eval-{model_name}-{uuid.uuid4()}"
                 )
 
-            report = asyncio.run(
-                evaluate_model(
-                    model_factory=fresh_model,
-                    model_name=model_name,
-                    judge=judge,
-                    admin_dsn=admin_dsn,
-                    template=run_template,
-                    repeat=repeat,
-                    max_concurrency=max_concurrency,
-                    categories=categories,
-                    tags=tags,
-                    case_ids=case_ids,
-                    limit=limit,
-                    per_category=per_category,
-                    run_budget_usd=run_budget_usd,
-                )
+            report = await evaluate_model(
+                model_factory=fresh_model,
+                model_name=model_name,
+                judge=judge,
+                admin_dsn=admin_dsn,
+                template=run_template,
+                repeat=repeat,
+                max_concurrency=max_concurrency,
+                categories=categories,
+                tags=tags,
+                case_ids=case_ids,
+                limit=limit,
+                per_category=per_category,
+                run_budget_usd=run_budget_usd,
             )
             finished = datetime.now(UTC).isoformat()
             card = aggregate(
@@ -1028,7 +989,7 @@ def _run_eval(
     finally:
         if admin_dsn and run_template:
             try:
-                drop_database(admin_dsn, run_template)
+                await drop_database(admin_dsn, run_template)
             except Exception:  # noqa: BLE001 - cleanup must not hide the run result
                 pass
         pydantic_models.ALLOW_MODEL_REQUESTS = False

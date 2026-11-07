@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-from contextlib import closing
 from datetime import date
 from typing import Any
 
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.engine import patterns
 from fin_agent.india.formatting import format_paise
 from fin_agent.notifications import create_notification, send_push_for_kind
@@ -56,20 +55,20 @@ def _missed(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     return title, body, key, proposal
 
 
-def run_pattern_detection(
-    conn,
+async def run_pattern_detection(
+    conn: Connection,
     *,
     as_of: date | None = None,
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
-    for proposal in patterns.detect(conn, as_of=as_of):
+    for proposal in await patterns.detect(conn, as_of=as_of):
         if proposal["kind"] == "new_subscription":
             title, body, key, data = _new_subscription(proposal)
             kind = "new_subscription"
         else:
             title, body, key, data = _missed(proposal)
             kind = "missed_recurring"
-        row = create_notification(
+        row = await create_notification(
             conn,
             kind=kind,
             title=title,
@@ -82,13 +81,11 @@ def run_pattern_detection(
     return created
 
 
-def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
-    with closing(connect()) as conn:
-        rows = run_pattern_detection(conn)
-        conn.commit()
+async def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
+    async with connect() as conn:
+        rows = await run_pattern_detection(conn)
         if rows:
-            send_push_for_kind(conn, "new_subscription")
-            conn.commit()
+            await send_push_for_kind(conn, "new_subscription")
         return {"created": len(rows), "ids": [row["id"] for row in rows]}
 
 

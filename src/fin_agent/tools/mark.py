@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-import psycopg
+from fin_agent.db.conn import Connection, quote_ident
 
 MAX_OUTSIDE_CHARS = 200
 OPEN = "<outside>"
@@ -48,24 +48,24 @@ def has_mark(value: object) -> bool:
     return isinstance(value, str) and OPEN in value
 
 
-def flag_outside_text(conn: psycopg.Connection, conversation_id: str) -> None:
-    conn.execute(
+async def flag_outside_text(conn: Connection, conversation_id: str) -> None:
+    await conn.execute(
         """
         UPDATE conversations
         SET outside_text_at = coalesce(outside_text_at, now()), updated_at = now()
-        WHERE id = %s
+        WHERE id = $1
         """,
-        (conversation_id,),
+        conversation_id,
     )
 
 
-def clear_mark(conn: psycopg.Connection, table: str, row_id: str) -> None:
+async def clear_mark(conn: Connection, table: str, row_id: str) -> None:
     """A name the user confirmed on a card loses its mark."""
     if table not in {"payees", "schedules"}:
         raise ValueError(f"{table} has no outside_text column")
-    conn.execute(
-        f"UPDATE {table} SET outside_text = false, updated_at = now() WHERE id = %s",  # noqa: S608
-        (row_id,),
+    await conn.execute(
+        f"UPDATE {quote_ident(table)} SET outside_text = false, updated_at = now() WHERE id = $1",
+        row_id,
     )
 
 

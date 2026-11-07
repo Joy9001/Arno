@@ -13,9 +13,7 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import psycopg
-from psycopg.types.json import Jsonb
-
+from fin_agent.db.conn import Connection
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger.common import today as ledger_today
 
@@ -44,8 +42,8 @@ def _rule_text(rule: str) -> str:
     return text if text.upper().startswith("RRULE:") else f"RRULE:{text}"
 
 
-def _settings(conn: psycopg.Connection) -> dict[str, Any]:
-    row = conn.execute("SELECT * FROM settings WHERE id = 1").fetchone()
+async def _settings(conn: Connection) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
     return dict(row)
 
 
@@ -109,57 +107,59 @@ def job_key(kind: str, period: str, payload: dict[str, Any] | None = None) -> st
     return f"{kind}:{period}"
 
 
-def ensure_builtin_schedules(
-    conn: psycopg.Connection, *, now: datetime | None = None
+async def ensure_builtin_schedules(
+    conn: Connection, *, now: datetime | None = None
 ) -> dict[str, str]:
     """Insert missing built-ins and follow the notification-time setting when it changes."""
     now = now or datetime.now(INDIA)
-    rules = builtin_rules(_settings(conn))
+    rules = builtin_rules(await _settings(conn))
     changed: dict[str, str] = {}
     for kind in BUILTIN_KINDS:
         rule = rules[kind]
-        row = conn.execute(
-            "SELECT * FROM job_schedules WHERE kind = %s AND payload = '{}'::jsonb",
-            (kind,),
-        ).fetchone()
+        row = await conn.fetchrow(
+            "SELECT * FROM job_schedules WHERE kind = $1 AND payload = '{}'::jsonb",
+            kind,
+        )
         if row is None:
             occurrence = next_occurrence(rule, after=now)
             if occurrence is None:  # pragma: no cover - every built-in rule recurs
                 continue
-            conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-                VALUES (%s, '{}'::jsonb, %s, %s)
+                VALUES ($1, '{}'::jsonb, $2, $3)
                 ON CONFLICT (kind, payload) DO NOTHING
                 """,
-                (kind, rule, occurrence),
+                kind,
+                rule,
+                occurrence,
             )
             changed[kind] = rule
         elif row["rule"] != rule or not row["active"]:
             occurrence = next_occurrence(rule, after=now)
             if occurrence is None:  # pragma: no cover
                 continue
-            conn.execute(
+            await conn.execute(
                 """
                 UPDATE job_schedules
-                SET rule = %s, next_run_at = %s, active = true, updated_at = now()
-                WHERE id = %s
+                SET rule = $1, next_run_at = $2, active = true, updated_at = now()
+                WHERE id = $3
                 """,
-                (rule, occurrence, row["id"]),
+                rule,
+                occurrence,
+                row["id"],
             )
             changed[kind] = rule
     return changed
 
 
-def sync_scheduled_questions(conn: psycopg.Connection, *, now: datetime | None = None) -> int:
+async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = None) -> int:
     """Mirror the user's active scheduled questions into `job_schedules`."""
     now = now or datetime.now(INDIA)
-    settings = _settings(conn)
+    settings = await _settings(conn)
     default_time = _time_value(settings.get("notification_time"), time(8, 0))
-    questions = list(
-        conn.execute(
-            "SELECT * FROM scheduled_questions WHERE active ORDER BY created_at"
-        ).fetchall()
+    questions = await conn.fetch(
+        "SELECT * FROM scheduled_questions WHERE active ORDER BY created_at"
     )
     active_ids: set[str] = set()
     changed = 0
@@ -167,13 +167,13 @@ def sync_scheduled_questions(conn: psycopg.Connection, *, now: datetime | None =
         question_id = str(question["id"])
         active_ids.add(question_id)
         payload = {"scheduled_question_id": question_id}
-        row = conn.execute(
+        row = await conn.fetchrow(
             """
             SELECT * FROM job_schedules
-            WHERE kind = 'scheduled_question' AND payload = %s
+            WHERE kind = 'scheduled_question' AND payload = $1
             """,
-            (Jsonb(payload),),
-        ).fetchone()
+            payload,
+        )
         try:
             occurrence = next_occurrence(question["rule"], after=now, default_time=default_time)
         except ValueError:
@@ -182,59 +182,61 @@ def sync_scheduled_questions(conn: psycopg.Connection, *, now: datetime | None =
         if row is None:
             if occurrence is None:
                 continue
-            conn.execute(
+            await conn.execute(
                 """
                 INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-                VALUES ('scheduled_question', %s, %s, %s)
+                VALUES ('scheduled_question', $1, $2, $3)
                 ON CONFLICT (kind, payload) DO NOTHING
                 """,
-                (Jsonb(payload), question["rule"], occurrence),
+                payload,
+                question["rule"],
+                occurrence,
             )
             changed += 1
         elif row["rule"] != question["rule"] or not row["active"]:
             if occurrence is None:
-                conn.execute(
-                    "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = %s",
-                    (row["id"],),
+                await conn.execute(
+                    "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = $1",
+                    row["id"],
                 )
             else:
-                conn.execute(
+                await conn.execute(
                     """
                     UPDATE job_schedules
-                    SET rule = %s, next_run_at = %s, active = true, updated_at = now()
-                    WHERE id = %s
+                    SET rule = $1, next_run_at = $2, active = true, updated_at = now()
+                    WHERE id = $3
                     """,
-                    (question["rule"], occurrence, row["id"]),
+                    question["rule"],
+                    occurrence,
+                    row["id"],
                 )
             changed += 1
-    for row in conn.execute(
+    for row in await conn.fetch(
         "SELECT * FROM job_schedules WHERE kind = 'scheduled_question' AND active"
-    ).fetchall():
+    ):
         question_id = (row["payload"] or {}).get("scheduled_question_id")
         if question_id not in active_ids:
-            conn.execute(
-                "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = %s",
-                (row["id"],),
+            await conn.execute(
+                "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = $1",
+                row["id"],
             )
             changed += 1
     return changed
 
 
-def enqueue_due_schedules(conn: psycopg.Connection, *, now: datetime | None = None) -> int:
+async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None) -> int:
     """Turn every due schedule into at most one job per period, then move it from now."""
     now = now or datetime.now(INDIA)
     enqueued = 0
-    with conn.transaction():
-        rows = list(
-            conn.execute(
-                """
-                SELECT * FROM job_schedules
-                WHERE active AND next_run_at <= %s
-                ORDER BY next_run_at
-                FOR UPDATE SKIP LOCKED
-                """,
-                (now,),
-            ).fetchall()
+    async with conn.transaction():
+        rows = await conn.fetch(
+            """
+            SELECT * FROM job_schedules
+            WHERE active AND next_run_at <= $1
+            ORDER BY next_run_at
+            FOR UPDATE SKIP LOCKED
+            """,
+            now,
         )
         for row in rows:
             kind = str(row["kind"])
@@ -246,7 +248,7 @@ def enqueue_due_schedules(conn: psycopg.Connection, *, now: datetime | None = No
                 "period": period,
                 "scheduled_for": occurrence.isoformat(),
             }
-            enqueue_job(
+            await enqueue_job(
                 conn,
                 key=job_key(kind, period, payload),
                 kind=kind,
@@ -258,43 +260,37 @@ def enqueue_due_schedules(conn: psycopg.Connection, *, now: datetime | None = No
                 after=now,
                 default_time=occurrence.time().replace(tzinfo=None),
             )
-            conn.execute(
+            await conn.execute(
                 """
                 UPDATE job_schedules
-                SET last_run_at = %s, next_run_at = %s, active = %s, updated_at = now()
-                WHERE id = %s
+                SET last_run_at = $1, next_run_at = $2, active = $3, updated_at = now()
+                WHERE id = $4
                 """,
-                (
-                    row["next_run_at"],
-                    following or occurrence,
-                    following is not None,
-                    row["id"],
-                ),
+                row["next_run_at"],
+                following or occurrence,
+                following is not None,
+                row["id"],
             )
             enqueued += 1
     return enqueued
 
 
-def job_status(conn: psycopg.Connection, *, limit: int = 20) -> dict[str, Any]:
-    schedules = list(
-        conn.execute(
-            """
-            SELECT js.*, sq.prompt AS question_prompt
-            FROM job_schedules js
-            LEFT JOIN scheduled_questions sq
-                ON sq.id = js.payload ->> 'scheduled_question_id'
-            ORDER BY js.active DESC, js.next_run_at
-            """
-        ).fetchall()
+async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
+    schedules = await conn.fetch(
+        """
+        SELECT js.*, sq.prompt AS question_prompt
+        FROM job_schedules js
+        LEFT JOIN scheduled_questions sq
+            ON sq.id = js.payload ->> 'scheduled_question_id'
+        ORDER BY js.active DESC, js.next_run_at
+        """
     )
-    recent = list(
-        conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC, id DESC LIMIT %s", (limit,)
-        ).fetchall()
+    recent = await conn.fetch(
+        "SELECT * FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1", limit
     )
     counts = {
         str(row["status"]): int(row["n"])
-        for row in conn.execute("SELECT status, count(*) AS n FROM jobs GROUP BY status").fetchall()
+        for row in await conn.fetch("SELECT status, count(*) AS n FROM jobs GROUP BY status")
     }
     return {
         "schedules": [

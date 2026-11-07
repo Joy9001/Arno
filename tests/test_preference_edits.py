@@ -5,20 +5,22 @@ from __future__ import annotations
 from datetime import datetime
 
 
-def _insert_preference(db, body: str, *, active: bool = True, created_by: str = "agent") -> dict:
-    row = db.execute(
+async def _insert_preference(
+    db, body: str, *, active: bool = True, created_by: str = "agent"
+) -> dict:
+    return await db.fetchrow(
         """
         INSERT INTO preferences (body, created_by, active)
-        VALUES (%s, %s, %s) RETURNING *
+        VALUES ($1, $2, $3) RETURNING *
         """,
-        (body, created_by, active),
-    ).fetchone()
-    db.commit()
-    return row
+        body,
+        created_by,
+        active,
+    )
 
 
-def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(authed_client, db):
-    preference = _insert_preference(db, "Prefers UPI for groceries", active=False)
+async def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(authed_client, db):
+    preference = await _insert_preference(db, "Prefers UPI for groceries", active=False)
 
     response = authed_client.patch(
         f"/api/preferences/{preference['id']}/content",
@@ -36,22 +38,21 @@ def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(authed_client,
         str(preference["updated_at"])
     )
 
-    db.rollback()
-    audit = db.execute(
+    audit = await db.fetchrow(
         """
         SELECT actor, before, after FROM audit_log
-        WHERE table_name = 'preferences' AND row_id = %s
+        WHERE table_name = 'preferences' AND row_id = $1
         ORDER BY created_at DESC LIMIT 1
         """,
-        (preference["id"],),
-    ).fetchone()
+        preference["id"],
+    )
     assert audit["actor"] == "user"
     assert audit["before"]["body"] == "Prefers UPI for groceries"
     assert audit["after"]["body"] == "Prefers cards for groceries"
 
 
-def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(authed_client, db):
-    preference = _insert_preference(db, "Prefers UPI")
+async def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(authed_client, db):
+    preference = await _insert_preference(db, "Prefers UPI")
 
     blank = authed_client.patch(f"/api/preferences/{preference['id']}/content", json={"body": ""})
     whitespace = authed_client.patch(
@@ -71,9 +72,9 @@ def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(authed_clien
     assert missing.status_code == 404, missing.text
 
 
-def test_delete_for_good_scrubs_the_edit_history_too(authed_client, db):
+async def test_delete_for_good_scrubs_the_edit_history_too(authed_client, db):
     marker = "sushi budget is personal"
-    preference = _insert_preference(db, marker)
+    preference = await _insert_preference(db, marker)
 
     edited = authed_client.patch(
         f"/api/preferences/{preference['id']}/content",
@@ -85,20 +86,16 @@ def test_delete_for_good_scrubs_the_edit_history_too(authed_client, db):
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["status"] == "deleted"
 
-    db.rollback()
     assert (
-        db.execute(
-            "SELECT count(*) AS n FROM preferences WHERE id = %s", (preference["id"],)
-        ).fetchone()["n"]
-        == 0
-    )
-    rows = db.execute(
+        await db.fetchrow("SELECT count(*) AS n FROM preferences WHERE id = $1", preference["id"])
+    )["n"] == 0
+    rows = await db.fetch(
         """
         SELECT before, after FROM audit_log
-        WHERE table_name = 'preferences' AND row_id = %s
+        WHERE table_name = 'preferences' AND row_id = $1
         """,
-        (preference["id"],),
-    ).fetchall()
+        preference["id"],
+    )
     assert len(rows) >= 2
     for row in rows:
         assert marker not in str(row["before"])
