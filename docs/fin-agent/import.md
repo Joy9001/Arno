@@ -69,16 +69,16 @@ Each stage works as follows:
    either resumes it with a fix or tells you the import is ready.
 6. **Dedupe.** Match against earlier imports by `content_hash`.
 7. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
-8. **Categorize, then review.** One batched model call labels the distinct counterparties, not
-   one call per line. The same call may name one of your own accounts as the other side. The web
-   app shows new rows, merged rows, ambiguous matches, categories, and suggestions to move money
-   between your accounts. The user commits, edits, or rejects. Categorizing is redesigned next, as
-   its own step.
+8. **Review.** The web app shows new rows, merged rows, ambiguous matches, and the subagent's
+   suggested moves between your own accounts (described later). Categories aren't on it; they
+   arrive after commit. The user commits, edits, or rejects.
 9. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
    record the closing balance on the account. A suggested own-account line is written as a
    transfer only after the user confirms it on the review screen. If the closing disagrees with
    the ledger, the difference is a visible adjustment. Then recompute baselines, and save the
    parser as a new version.
+10. **Categorize, after commit.** The commit queues the categorizer agent, which labels the new
+    rows in the background (described later).
 
 A parser version is saved only after you commit. One that failed the gate, or came from an import
 you rejected, isn't saved. A committed import is undone from the Imports screen, not by the agent.
@@ -285,18 +285,77 @@ statement"—wrong account, cash, or a mistake.
 
 ## Own-account moves need a human yes
 
-A card bill, a SIP, or a transfer to another account you own is not spending. The categorizer
-gets the user's own accounts (id, name, kind, institution, last four) in the same batched call,
-and can return one of them instead of a category. The review screen then shows the line as a
-suggested transfer, with the other account's name, and asks the user to confirm or reject it.
-Commit refuses to run while a suggestion is unconfirmed, so the model cannot move money between
-accounts on its own.
+A card bill, a SIP, an ATM withdrawal, or a transfer to another account you own is not spending.
+It decides which accounts the money moves between, so it needs your yes before commit; a category
+is only a label, so it can arrive after. The parser subagent makes these suggestions while it
+reads the statement. It gets your own accounts (id, name, kind, institution, last four), and it
+uses the statement's own clues: your last four digits in a narration, words such as `CC PAYMENT`
+or `ATM WDL`, or a transfer to your own name. An ATM withdrawal is a move to your cash account.
+The review screen shows each line as a suggested transfer, with the other account's name, and asks
+you to confirm or reject it. Commit refuses to run while a suggestion is unconfirmed, so the model
+cannot move money between accounts on its own. Agreed November 7, 2026; the categorizer made these
+suggestions before.
+
+When the other account's statement is imported later, its matching line (same account, same
+amount, within ±3 days) merges into the transfer, so nothing counts twice.
 
 The confirmation matters because the other statement is not always complete. Slice's monthly PDFs
 for 2026 omit several repayments that its app shows, and one repayment is a day off. A confirmed
 SBI line is therefore still booked when the card's PDF never printed the matching credit. The
 resulting difference surfaces as the usual visible closing adjustment rather than as a silent
 change to spending. The alternative, treating the line as spend, would overstate consumption.
+
+---
+
+## Categorizing, after commit
+
+![Rules label most rows, and the model labels the rest](diagrams/sd-categorize.png)
+
+*Figure: after commit, rules label every row they match. The categorizer agent sends the rest to
+the model, at once or as a batch, saves the answers it trusts, and leaves the rest uncategorized
+with the model's guess as a hint ([note](diagrams/sd-categorize.md)).*
+
+Categorizing is agent work in the background, and it never asks about a single row. Agreed November
+7, 2026, after the old one-call-per-import categorizer took 13 sequential calls and 13 minutes on a
+year of SBI, and lost its last chunks to timeouts.
+
+**Rules first.** A rule matches a payee by `equals`, `contains`, or a regex, and has a priority.
+Your rules beat the model's, and the model's beat the seed list. Each labeled row records the rule
+that fired. Indian payment rails (`UPI/DR`, `NEFT`, `IMPS`, `POS`, `NACH`, `WDL TFR`) are stripped
+before matching. A refund takes the category of the purchase it reverses.
+
+**A seed list for a first import.** About 150 large Indian merchants (Swiggy, Zomato, Rapido, IRCTC,
+and so on), shipped with the app and matched with `contains` or a regex, so `Zomato87` and
+`SWIGGY PVT LTD E COM1 BENGALURU` both hit. Payment apps that front anything—Paytm (`ONE97`),
+PhonePe, Google Pay, CRED, Amazon Pay—are marked "don't categorize by name" and go to the model
+with the amount and context.
+
+**The categorizer agent.** The commit queues a job, and the job runs the agent. It sees the payees
+no rule covers, and it picks how to ask:
+
+- `categorize_now` for a normal month: chunks sent at the same time, not one after another.
+- `submit_batch` for a big backfill, when a model with a batch API is configured: about half the
+  price, with results within a day. The job runner checks the batch; when it ends, it starts a fresh
+  categorizer run with the results.
+
+Either way, the agent checks a sample of the answers before it saves. Answers it trusts are saved as
+`llm` rules, so next month's statement only asks about new payees. The save is one write group, so
+one undo reverts it.
+
+**Accuracy is measured, not self-reported.** A model's own confidence score is poorly calibrated.
+Instead, some payees the seed list or your rules already cover are sent to the model without their
+category, and its agreement rate is recorded with the run. A low rate makes the agent save less and
+leave more uncategorized.
+
+**Unsure rows stay uncategorized, never "Other."** "Other" is a real spending bucket, and guesses
+in it would distort your totals. An uncategorized row keeps the model's guess as a hint and sits in
+an "Uncategorized (n)" list, sorted by how often the payee appears, for whenever you want to go
+through it.
+
+**People you pay by UPI are asked about once each.** Most UPI debits go to people, and no rule or
+model can tell rent from a friend's dinner share by name. The Uncategorized list groups them by
+person, with the total: "₹18,400 to RAMESH K across 12 payments—who is this?" One answer becomes a
+rule for that person. Nothing interrupts you; the agent never starts a conversation.
 
 ## Photos and voice
 

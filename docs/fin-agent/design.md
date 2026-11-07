@@ -178,12 +178,12 @@ Money owed counts in the projection only when its label has an `expected_date`.
 
 ### Categorization
 
-Three tables handle categorization:
+Three tables handle categorization. A row with no category is uncategorized, never "Other"; it can carry the model's guess as a hint.
 
 | Table | Holds |
 |---|---|
 | `categories` | Seeded with Indian defaults, editable. `reducible` (eligible for "cut a category" tradeoffs), `active`. Categories are labels on spending, not ledger accounts |
-| `category_rules` | `merchant_pattern → category_id`, created from user corrections, with hit counts. _Rules always win_; the LLM only sees counterparties no rule matches. On import, one batched call labels every distinct counterparty and may also name one of the user's own accounts; an own-account suggestion becomes a transfer only after the review screen confirms it, and no rule is saved for it. On chat, the agent's `category_guess` plays this part. `source` is `user` or `llm`; user rules win, and a correction replaces an `llm` rule |
+| `category_rules` | A payee match → `category_id`: `match` (`equals`, `contains`, or `regex`), `pattern`, `priority`, `source` (`user`, `llm`, or `seed`), hit counts. _Rules always win_, and the model only sees payees no rule matches. Your rules beat `llm` rules, which beat `seed` rules; a correction replaces an `llm` or `seed` rule. `seed` rules ship with the app for about 150 large Indian merchants; payment apps that front anything (Paytm, PhonePe, Google Pay, CRED, Amazon Pay) are marked so they never match by name. A label records the rule that fired. The categorizer agent writes `llm` rules after commit ([`import.md`](import.md#categorizing-after-commit)) |
 | `baselines` | Typical spend for each category: `amount_per_day`, `source` (`estimated` at setup, `computed` from real rows), `window`, `updated_at` |
 
 Baselines are recomputed nightly after a category has enough real rows. The `source` flag exists

@@ -262,8 +262,9 @@ supported through this switch, and the eval scorecard records what each one hand
 model's limits go in the scorecard; they are never designed into the product.
 
 Model IDs are pinned to exact, dated versions, never floating aliases, and any model change re-runs
-the eval scorecard. One-shot calls—the categorizer, briefing prose—use the chat role, and the parser
-subagent uses an optional `PARSE` role that falls back to it ([system design, step 3](system-design.md#models)).
+the eval scorecard. The categorizer agent and briefing prose use the chat role. The parser subagent
+uses an optional `PARSE` role that falls back to chat, and an optional `BATCH` role takes big
+categorizing backfills ([system design, step 3](system-design.md#models)).
 
 ---
 

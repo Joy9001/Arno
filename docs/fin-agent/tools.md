@@ -844,3 +844,34 @@ the version is saved only when you commit
 ```
 
 Details of the readers and the checks are in [`import.md`](import.md).
+
+---
+
+## Categorizer functions
+
+The categorizer is an agent the job runner starts after a commit, and again when a batch ends. It
+uses the chat model and has no ledger tools except `save_categories`. Rules have already labeled
+what they match ([`import.md`](import.md#categorizing-after-commit)).
+
+| Function | Description | Input | Output |
+|---|---|---|---|
+| `pending_payees` | Payees in this import no rule covers, with their row count, total, and a sample narration, plus your categories | `import_id` | `{"payees": [...], "categories": [...]}` |
+| `check_payees` | Payees a rule already covers, without their category, for measuring agreement | `import_id`, `count` | `[{"key", "narration"}]` |
+| `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `[{"key", "category", "guess_reason"}]` |
+| `submit_batch` | Only when `BATCH` is set. Submit the keys as one batch; the job runner checks it and starts a fresh run when it ends | `keys` | `{"batch_id", "requests"}` |
+| `batch_results` | The ended batch's answers, in a run started for it | `batch_id` | The same shape as `categorize_now` |
+| `save_categories` | One write group: labels the rows, writes `llm` rules for trusted answers, and stores a hint on the rest, which stay uncategorized | `decisions`, `agreement` | `{"undo_id", "labeled", "uncategorized"}` |
+
+**Logic**
+
+```
+commit queues a categorize job for the import
+rules label every row they match; the agent sees the rest
+agent: check_payees; ask about them with the pending ones; agreement = share that match
+    a normal month: categorize_now
+    a big backfill with BATCH set: submit_batch, and the run ends
+        the job runner checks the batch; when it ends, a fresh run reads batch_results
+agent checks a sample of answers against the narrations
+save_categories: trusted answers → labels + llm rules; the rest → uncategorized, with a hint
+payment apps (ONE97, PhonePe, Google Pay, CRED, Amazon Pay) are never matched by name
+```

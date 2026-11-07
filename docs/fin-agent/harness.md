@@ -103,6 +103,7 @@ The following capabilities wait for their triggers:
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't. No memory library either ([system design, step 6](system-design.md#memory-no-memory-library)) |
 | Step Persistence for chat, and durable execution | Chat runs get long enough that losing one hurts. A chat turn is seconds. The parser subagent already uses Step Persistence, as its task owner's step store ([system design, step 8](system-design.md#other-options)) |
 | Skills | A procedure needed only sometimes, too long to keep in instructions. Dropped from the parser on November 7, 2026: its one skill loaded at the start of every run, so it became the subagent's instructions |
+| Batch requests (`BatchModelRequests` or the model's `batch_*` methods) | A `BATCH` model is configured. The categorizer's `submit_batch` stores the batch handle in the job, and the job runner collects it ([`import.md`](import.md#categorizing-after-commit)) |
 | Detect Loops | Traces show a spend or request ceiling hit by repetition |
 | Repair Tool Arguments | A local model's evals show malformed JSON in tool calls |
 | Online Evaluation, Trajectory Judge | Not adopted ([system design, step 9](system-design.md#traces-phoenix)) |

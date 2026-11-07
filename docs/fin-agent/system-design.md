@@ -138,11 +138,12 @@ call each, and still run when the LLM is down ([note](diagrams/sd-agent-vs-workf
   when that fails; code keeps the checks, the gate, and the commit. Imports wait when no LLM is
   reachable, as chat does. This replaced "code, until a layout is new" on November 7, 2026, which
   had replaced "at most one LLM call" on October 31 ([step 5](#imports-the-agent-writes-the-parser)).
-- **The categorizer batches, and asks before moving money.** One call per import labels the
-  distinct counterparties, and the same call can name one of your own accounts. A transfer
-  suggestion is written only after you confirm it on the review screen. Category answers are
-  saved as rules (source `llm`) keyed on the counterparty; user rules win, and a correction
-  replaces an `llm` rule ([`design.md`](design.md#categorization)).
+- **Categorizing is agent work, after commit.** Rules label what they match. A categorizer
+  agent, started by the job runner, sends the rest to the model at once or as a batch, checks a
+  sample, saves what it trusts as `llm` rules, and leaves the rest uncategorized with a hint. It
+  never asks about a single row. Moves between your own accounts aren't categories: the parser
+  subagent suggests them, and you confirm them before commit. Agreed November 7, 2026
+  ([`import.md`](import.md#categorizing-after-commit)).
 
 ### Who decides what inside a chat turn
 
@@ -232,7 +233,8 @@ The following table lists the model roles:
 
 | Role | Used for |
 |---|---|
-| `CHAT` | The agent loop, your scheduled questions, and the one-shot calls: the merchant categorizer and briefing prose |
+| `CHAT` | The agent loop, your scheduled questions, the categorizer agent, and briefing prose |
+| `BATCH` | Optional. A model with a batch API (native Anthropic, OpenAI Responses, or Gemini outside Vertex). When set, the categorizer gets `submit_batch` for a big backfill |
 | `PARSE` | The parser subagent. Optional; it falls back to `CHAT`, so a stronger model can be tried for parsing without touching chat |
 | `VISION` | Photos and scanned statements |
 | `STT` | Voice notes |
