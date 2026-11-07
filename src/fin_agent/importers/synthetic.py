@@ -14,11 +14,11 @@ import io
 from datetime import date, timedelta
 from typing import Any
 
-from fin_agent.agent.parse_run import ParseResult
+from fin_agent.agent.parser import submit_parser_code
 from fin_agent.db.conn import Connection
 from fin_agent.importers.commit import commit_import
 from fin_agent.importers.periods import ledger_opening
-from fin_agent.importers.pipeline import _run_import, create_import
+from fin_agent.importers.pipeline import create_import
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import today as ledger_today
 
@@ -131,7 +131,7 @@ async def seed_committed_statement(
     debit: bool = True,
     categorize: bool = False,
 ) -> dict[str, Any]:
-    """Commit one synthetic statement line through `_run_import` and `commit_import`.
+    """Commit one synthetic statement line through the parser gate and `commit_import`.
 
     The account's ledger opening is used for the printed opening, so the balance check passes
     without special-casing the fixture. Returns the import, line, movement, and payee IDs.
@@ -171,15 +171,9 @@ async def seed_committed_statement(
     )
     import_row = await create_import(conn, attachment_id=attachment_id, account_id=account_id)
 
-    async def _parser(doc: Any, context: Any, *, account_name: str | None = None) -> ParseResult:
-        del doc, context, account_name
-        return ParseResult(
-            status="parser_submitted",
-            script=SYNTHETIC_PARSER,
-            submissions=1,
-        )
-
-    await _run_import(import_row["id"], parser_runner=_parser)
+    submitted = await submit_parser_code(conn, import_ids=[import_row["id"]], code=SYNTHETIC_PARSER)
+    if submitted["status"] != "parser_submitted":
+        raise RuntimeError(f"Synthetic import did not pass the gate: {submitted.get('reason')}")
 
     current = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_row["id"])
     if current is None or current["status"] != "review":

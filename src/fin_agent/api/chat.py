@@ -295,18 +295,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         statements = await _validated_statements(conn, statement_refs)
         photos = await _validated_photos(conn, photo_refs)
         initial_cards: list[dict[str, Any]] = []
-        statement_imports: list[tuple[str, str]] = []
-        for statement in statements:
-            try:
-                receipt = await write_tools.import_document(
-                    conn,
-                    attachment_id=statement["attachment_id"],
-                    message_id=None,
-                )
-            except write_tools.ToolInputError as exc:
-                raise HTTPException(status_code=422, detail=str(exc)) from exc
-            initial_cards.append(receipt["card"])
-            statement_imports.append((str(receipt["import_id"]), str(receipt["status"])))
+        statement_attachments = tuple(statement["attachment_id"] for statement in statements)
 
         for photo in photos:
             row = await conn.fetchrow(
@@ -380,7 +369,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         user_texts=(text,),
         capture_kind=capture_kind,
         capture_ref=capture_ref,
-        statement_imports=tuple(statement_imports),
+        statement_attachments=statement_attachments,
     )
     adapter = await VercelAIAdapter.from_request(
         request,

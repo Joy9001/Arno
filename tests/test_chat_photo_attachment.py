@@ -203,12 +203,13 @@ async def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_led
         response = authed_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
+    # The statement is handed to the parser subagent; no import starts in this turn.
     assert (
         await demo_ledger.fetchval(
             "SELECT count(*) FROM imports WHERE attachment_id = $1",
             statement.json()["id"],
         )
-        == 1
+        == 0
     )
     assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
     thread = authed_client.get("/api/threads/thread_photo/messages").json()
@@ -219,12 +220,8 @@ async def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_led
         "data-photo",
     ]
     cards = _cards(thread)
-    assert sorted(card["data"]["card"] for card in cards) == ["capture", "import"]
-    imported = await demo_ledger.fetchrow(
-        "SELECT committed_at FROM imports WHERE attachment_id = $1",
-        statement.json()["id"],
-    )
-    assert imported["committed_at"] is None
+    # The photo logs at once; the statement waits for the parser subagent's card.
+    assert sorted(card["data"]["card"] for card in cards) == ["capture"]
 
 
 async def test_a_missing_photo_ref_is_refused_before_any_capture(

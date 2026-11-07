@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 import weakref
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,6 +19,7 @@ from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 
 from fin_agent.agent import capabilities as caps
 from fin_agent.agent.cards import cards_from_messages, data_part
@@ -177,9 +179,16 @@ def _this_turn(
 
 
 class TurnManager:
-    def __init__(self, agent: Any, *, drain_seconds: float = 20.0):
+    def __init__(
+        self,
+        agent: Any,
+        *,
+        drain_seconds: float = 20.0,
+        tasks: DelegationTasks | None = None,
+    ):
         self.agent = agent
         self.drain_seconds = drain_seconds
+        self.tasks = tasks
         self.turns: dict[str, ChatTurn] = {}
         self._guard = asyncio.Lock()
         # Weak so a finished request's guard is collected; a missing thread id is request-local.
@@ -349,20 +358,28 @@ class TurnManager:
 
             with capture_run_messages() as run_messages:
                 captured_ref[0] = run_messages
-                stream = adapter.run_stream(
-                    message_history=turn.history,
-                    conversation_id=turn.thread_id,
-                    run_id=turn.run_id,
-                    cancellation_token=turn.token,
-                    timeout=300,
-                    model_settings=caps.RUN_MODEL_SETTINGS,
-                    usage_limits=caps.turn_limits(),
-                    deps=turn.deps,
-                    on_complete=on_complete,
-                    on_cancel=on_cancel,
+                reports = (
+                    [DelegationReports(self.tasks, conversation_id=turn.thread_id)]
+                    if self.tasks is not None
+                    else []
                 )
-                async for chunk in self._encoded(adapter, stream, captured_ref, turn):
-                    await turn.push(_plain_errors(chunk))
+                bound = self.tasks.bind() if self.tasks is not None else nullcontext()
+                with bound:
+                    stream = adapter.run_stream(
+                        message_history=turn.history,
+                        conversation_id=turn.thread_id,
+                        run_id=turn.run_id,
+                        cancellation_token=turn.token,
+                        timeout=300,
+                        model_settings=caps.RUN_MODEL_SETTINGS,
+                        usage_limits=caps.turn_limits(),
+                        deps=turn.deps,
+                        capabilities=reports,
+                        on_complete=on_complete,
+                        on_cancel=on_cancel,
+                    )
+                    async for chunk in self._encoded(adapter, stream, captured_ref, turn):
+                        await turn.push(_plain_errors(chunk))
             if not turn.saved:
                 async with connect() as conn:
                     await conn.execute(

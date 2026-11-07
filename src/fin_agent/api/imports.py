@@ -12,11 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from fin_agent.api.deps import Database
 from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.pipeline import (
-    create_import,
     import_payload,
     list_imports,
-    retry_with_account,
-    retry_with_opening,
     retry_with_password,
 )
 from fin_agent.importers.readers import DocError, sniff
@@ -33,21 +30,8 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class StartImport(ApiModel):
-    attachment_id: str = Field(min_length=1)
-    account_id: str | None = None
-
-
 class PasswordIn(ApiModel):
     password: str = Field(min_length=1, max_length=512)
-
-
-class AccountIn(ApiModel):
-    account_id: str = Field(min_length=1)
-
-
-class OpeningIn(ApiModel):
-    opening_paise: int
 
 
 class ResolveLine(ApiModel):
@@ -139,17 +123,6 @@ async def delete_attachment(attachment_id: str, conn: Database) -> dict[str, Any
     return {"attachment_id": attachment_id, "purged": True}
 
 
-@router.post("/imports", status_code=status.HTTP_202_ACCEPTED)
-async def start_import(body: StartImport, conn: Database) -> JSONResponse:
-    try:
-        row = await create_import(
-            conn, attachment_id=body.attachment_id, account_id=body.account_id
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(status_code=202, content=await import_payload(conn, row["id"]))
-
-
 @router.get("/imports")
 async def imports_list(conn: Database, limit: int = 50) -> dict[str, Any]:
     return {"items": await list_imports(conn, limit=min(max(limit, 1), 200))}
@@ -171,34 +144,6 @@ async def import_password(import_id: str, body: PasswordIn, conn: Database) -> J
     if row["status"] not in ("needs_password", "needs_input", "failed"):
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
     await retry_with_password(conn, import_id=import_id, password=body.password)
-    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
-
-
-@router.post("/imports/{import_id}/account", status_code=status.HTTP_202_ACCEPTED)
-async def import_account(import_id: str, body: AccountIn, conn: Database) -> JSONResponse:
-    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="No such import")
-    if row["status"] not in ("needs_input", "failed"):
-        raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
-    try:
-        await retry_with_account(conn, import_id=import_id, account_id=body.account_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
-
-
-@router.post("/imports/{import_id}/opening", status_code=status.HTTP_202_ACCEPTED)
-async def import_opening(import_id: str, body: OpeningIn, conn: Database) -> JSONResponse:
-    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="No such import")
-    if row["status"] not in ("needs_input", "failed", "review"):
-        raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
-    try:
-        await retry_with_opening(conn, import_id=import_id, opening_paise=body.opening_paise)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
 
 

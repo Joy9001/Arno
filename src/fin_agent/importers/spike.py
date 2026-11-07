@@ -187,7 +187,7 @@ def run_real(
     max_files: int = 12,
     ledger_opening_paise: int | None = None,
 ) -> tuple[list[BankRun], list[str]]:
-    from fin_agent.agent.parse_run import run_parse
+    import asyncio
 
     notes: list[str] = []
     if not root.is_dir():
@@ -203,34 +203,35 @@ def run_real(
             continue
         started = time.perf_counter()
         try:
-            docs = open_documents(files[0].read_bytes(), password=password)
+            open_documents(files[0].read_bytes(), password=password)
         except DocError as exc:
             runs.append(BankRun(bank=name, status="host error", files=1, note=exc.code))
             continue
         except Exception as exc:  # noqa: BLE001 - the spike reports, it does not crash
             runs.append(BankRun(bank=name, status="host error", files=1, note=type(exc).__name__))
             continue
-        doc = docs[0]
-        period = derive_period(doc)
-        context = ScriptContext(
-            period=(period["start"], period["end"]) if period else None,
-            ledger_opening_paise=ledger_opening_paise,
-            allow_vision=True,
+        parsed = asyncio.run(
+            _parse_first(
+                files[0].read_bytes(),
+                model=model,
+                password=password,
+                opening=ledger_opening_paise,
+            )
         )
-        result = __import__("asyncio").run(run_parse(doc, context, account_name=None, model=model))
-        if not result.script:
+        if parsed is None or not parsed["script"]:
             runs.append(
                 BankRun(
                     bank=name,
-                    status=result.status,
+                    status=(parsed or {}).get("status", "failed"),
                     files=len(files),
                     seconds=time.perf_counter() - started,
-                    note=result.reason or result.kind,
+                    note=(parsed or {}).get("reason") or "no parser",
                 )
             )
             continue
-        verified = 1 if result.verified else 0
-        rows = sum(len(account.get("rows") or []) for account in result.accounts)
+        script = parsed["script"]
+        verified = 1 if parsed["status"] == "review" else 0
+        rows = int(parsed["rows"])
         for path in files[1:]:
             try:
                 other = open_documents(path.read_bytes(), password=password)[0]
@@ -240,7 +241,7 @@ def run_real(
             replay = __import__("asyncio").run(
                 run_script(
                     other,
-                    result.script,
+                    script,
                     ScriptContext(
                         period=(other_period["start"], other_period["end"])
                         if other_period
@@ -263,17 +264,76 @@ def run_real(
         runs.append(
             BankRun(
                 bank=name,
-                status="parser_submitted" if result.verified else "checks failed",
+                status="parser_submitted" if parsed["status"] == "review" else "checks failed",
                 files=len(files),
                 rows=rows,
                 verified=verified,
-                repairs=max(0, result.submissions - 1),
+                repairs=0,
                 seconds=time.perf_counter() - started,
             )
         )
     notes.append("xfina compared: not installed; OCR comparison: not run (no OCR package).")
     notes.append(f"Helper version used by the harness: {HELPER_VERSION}.")
     return runs, notes
+
+
+async def _parse_first(
+    payload: bytes,
+    *,
+    model: Any,
+    password: str | None,
+    opening: int | None,
+) -> dict[str, Any] | None:
+    """Run one fresh parser task through the real parser subagent and read its import."""
+    import hashlib
+
+    from fin_agent.agent.deps import AgentDeps
+    from fin_agent.agent.parser import build_parser_agent
+    from fin_agent.db.conn import connect
+    from fin_agent.importers.pipeline import create_import
+    from fin_agent.ledger.audit import new_id
+
+    async with connect() as conn:
+        attachment_id = await new_id(conn, "att")
+        await conn.execute(
+            """
+            INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
+            VALUES ($1, 'statement', 'spike-statement', 'application/octet-stream', $2, $3, $4)
+            """,
+            attachment_id,
+            len(payload),
+            hashlib.sha256(payload).hexdigest(),
+            payload,
+        )
+        row = await create_import(conn, attachment_id=attachment_id)
+        if opening is not None:
+            await conn.execute(
+                "UPDATE imports SET review = jsonb_build_object('manual_opening_paise', $1) "
+                "WHERE id = $2",
+                opening,
+                row["id"],
+            )
+    agent = build_parser_agent(model)
+    try:
+        await agent.run(
+            f"Parse the attached statement. Attachment IDs: {attachment_id}",
+            deps=AgentDeps(conversation_id="spike"),
+        )
+    except Exception:  # noqa: BLE001 - the spike reports, it does not crash
+        pass
+    async with connect() as conn:
+        current = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", row["id"])
+        lines = await conn.fetchval(
+            "SELECT count(*) FROM statement_lines WHERE import_id = $1", row["id"]
+        )
+    if current is None:
+        return None
+    return {
+        "status": current["status"],
+        "reason": current["reason"],
+        "script": current["parser"],
+        "rows": int(lines or 0),
+    }
 
 
 def check_real_command(

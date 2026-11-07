@@ -8,12 +8,15 @@ from contextlib import asynccontextmanager
 import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from pydantic_ai_harness.step_persistence import PostgresStepStore
+from pydantic_ai_harness.subagents import DelegationTasks
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from fin_agent import __version__
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.history import recover_crashed_runs
+from fin_agent.agent.parser import build_parser_agent
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.agent.turns import TurnManager
 from fin_agent.api import auth, capture, chat, health, home, imports, ledger, static, watch
@@ -77,6 +80,7 @@ async def _bootstrap(settings: Settings) -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool = None
+    tasks_pool = None
     await _bootstrap(app.state.settings)
     async with connect(app.state.settings.database_url) as conn:
         recovered = await recover_crashed_runs(conn)
@@ -88,22 +92,35 @@ async def lifespan(app: FastAPI):
     spend_store, pool = await make_spend_store(app.state.settings.database_url)
     app.state.spend_store = spend_store
     app.state.spend_pool = pool
-    app.state.agent = build_agent(spend_store=spend_store)
-    app.state.turns = TurnManager(app.state.agent)
-    app.state.jobs = JobRunner()
-    if app.state.settings.jobs_enabled:
-        app.state.jobs.start()
-
     try:
-        yield
-    finally:
+        tasks_pool = await asyncpg.create_pool(
+            app.state.settings.database_url, min_size=1, max_size=4, command_timeout=30
+        )
+    except Exception:  # noqa: BLE001 - the app still serves read-only panels
+        logger.exception("subagent store pool did not start")
+    step_store = PostgresStepStore(tasks_pool) if tasks_pool is not None else None
+    tasks = DelegationTasks(directory=app.state.settings.tasks_dir, step_store=step_store)
+    parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)
+    app.state.tasks = tasks
+    async with tasks.opened():
+        app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
+        app.state.turns = TurnManager(app.state.agent, tasks=tasks)
+        app.state.jobs = JobRunner()
+        if app.state.settings.jobs_enabled:
+            app.state.jobs.start()
+
         try:
-            await app.state.jobs.stop()
-            await app.state.turns.drain()
+            yield
         finally:
-            if pool is not None:
-                await pool.close()
-            shutdown_observability()
+            try:
+                await app.state.jobs.stop()
+                await app.state.turns.drain()
+            finally:
+                if pool is not None:
+                    await pool.close()
+                if tasks_pool is not None:
+                    await tasks_pool.close()
+                shutdown_observability()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

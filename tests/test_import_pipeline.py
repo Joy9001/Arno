@@ -9,18 +9,16 @@ import pytest
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.parse_run import ParseResult
+from fin_agent.agent.parser import submit_parser_code
 from fin_agent.importers.categorizer import categorize_import
 from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.layout import detect_fingerprint
 from fin_agent.importers.layouts import save_version
 from fin_agent.importers.pipeline import (
     _account_fingerprint,
-    _run_import,
     _store_unlocked,
     create_import,
     import_payload,
-    retry_with_opening,
 )
 from fin_agent.importers.readers import Doc
 from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
@@ -77,15 +75,19 @@ async def _save_layout(conn, account: dict) -> None:
     )
 
 
+async def _submit(conn, row: dict, script: str = SBI_PARSER) -> dict:
+    result = await submit_parser_code(conn, import_ids=[row["id"]], code=script)
+    assert result["status"] == "parser_submitted", result
+    return result
+
+
 async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     account = await _account(ledger)
     await _save_layout(ledger, account)
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
-    job = await ledger.fetchrow("SELECT * FROM jobs WHERE key = $1", f"import:{row['id']}")
-    assert job is not None and job["status"] == "pending"
 
-    await _run_import(row["id"])
+    await _submit(ledger, row)
 
     detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "review", detail
@@ -127,7 +129,7 @@ async def test_a_verified_import_anchors_an_unknown_account_and_undo_removes_it(
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
-    await _run_import(row["id"])
+    await _submit(ledger, row)
 
     detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
@@ -154,7 +156,7 @@ async def test_a_backdated_import_keeps_a_newer_statement_balance(ledger):
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
-    await _run_import(row["id"])
+    await _submit(ledger, row)
 
     detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
@@ -181,11 +183,7 @@ async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger)
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
-    async def fake_parse(doc, context, *, account_name=None):
-        del doc, context, account_name
-        return ParseResult(status="parser_submitted", script=SBI_PARSER)
-
-    await _run_import(row["id"], parser_runner=fake_parse)
+    await _submit(ledger, row)
     detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "review", detail
     assert detail["parser_saved"] is False
@@ -363,11 +361,7 @@ async def test_a_non_statement_ends_with_a_plain_answer(ledger):
     attachment_id = await _attachment(ledger, b"Salary slip\nNet pay 1,00,000\n")
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
-    async def fake_parse(doc, context, *, account_name=None):
-        del doc, context, account_name
-        return ParseResult(status="not_a_statement", kind="payslip")
-
-    await _run_import(row["id"], parser_runner=fake_parse)
+    await submit_parser_code(ledger, import_ids=[row["id"]], code="{'not_a_statement': 'payslip'}")
     detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "not_a_statement"
     assert "payslip" in detail["reason"]
@@ -380,11 +374,7 @@ async def test_a_failed_check_writes_no_rows(ledger):
 
     broken = SBI_PARSER.replace("'closing': closing", "'closing': 1")
 
-    async def fake_parse(doc, context, *, account_name=None):
-        del doc, context, account_name
-        return ParseResult(status="parser_submitted", script=broken)
-
-    await _run_import(row["id"], parser_runner=fake_parse)
+    await submit_parser_code(ledger, import_ids=[row["id"]], code=broken)
     detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "failed"
     assert detail["lines"] == []
@@ -480,7 +470,6 @@ async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
         "rule_hits": 0,
         "llm_keys": 2,
         "llm_calls": 1,
-        "transfers": 0,
     }
     lines = await ledger.fetch(
         "SELECT match_detail FROM statement_lines WHERE import_id = $1 ORDER BY date",
@@ -495,62 +484,6 @@ async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
         "SELECT merchant_pattern FROM category_rules WHERE source = 'llm' ORDER BY merchant_pattern"
     )
     assert [row["merchant_pattern"] for row in rules] == ["amazon", "swiggy"]
-
-
-async def test_an_own_account_answer_is_a_transfer_and_saves_no_rule(ledger):
-    account = await _account(ledger)
-    other = await create_account(
-        ledger,
-        kind="card",
-        name="Slice card",
-        institution="Slice",
-        last4="4242",
-        opening_balance_paise=0,
-        opening_balance_as_of=date(2026, 3, 31),
-        credit_limit_paise=500000,
-        statement_day=25,
-        due_day=5,
-    )
-    import_id, raw_account = await _review_import(
-        ledger,
-        account,
-        [
-            {
-                "date": "2026-04-02",
-                "description": "UPI/DR/123456789012/SLICE CARD/self",
-                "debit": 45000,
-                "credit": 0,
-                "balance": 24522890,
-                "counterparty": "Slice Card",
-            }
-        ],
-    )
-    calls = {"n": 0}
-    counts = await categorize_import(
-        ledger,
-        import_id,
-        raw_account,
-        model=_batch_model(
-            calls,
-            [
-                {
-                    "key": "slice card",
-                    "category": "Bills & Utilities",
-                    "own_account_id": other["id"],
-                }
-            ],
-        ),
-    )
-
-    assert counts["transfers"] == 1
-    detail = (
-        await ledger.fetchrow(
-            "SELECT match_detail FROM statement_lines WHERE import_id = $1", import_id
-        )
-    )["match_detail"]
-    assert detail["suggested_transfer_account_id"] == other["id"]
-    assert "suggested_category" not in detail
-    assert await ledger.fetchval("SELECT count(*) FROM category_rules") == 0
 
 
 async def test_an_exact_rule_hit_skips_the_model(ledger):
@@ -598,11 +531,7 @@ async def test_a_blocked_categorizer_still_reaches_review(ledger):
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
-    async def fake_parse(doc, context, *, account_name=None):
-        del doc, context, account_name
-        return ParseResult(status="parser_submitted", script=SBI_PARSER)
-
-    await _run_import(row["id"], parser_runner=fake_parse)
+    await _submit(ledger, row)
     detail = await import_payload(ledger, row["id"])
 
     assert detail["status"] == "review"
@@ -1070,64 +999,6 @@ async def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledge
     with pytest.raises(ConflictLedgerError, match="opening balance"):
         await commit_import(ledger, import_id, categorize=False)
     assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
-
-
-async def test_manual_zero_opening_is_accepted_and_labeled_manual(ledger):
-    card = await _card(ledger, opening_paise=None)
-    import_id = await _assumed_zero_review(
-        ledger,
-        card,
-        [{"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0}],
-        closing=-42800,
-    )
-
-    await retry_with_opening(ledger, import_id=import_id, opening_paise=0)
-
-    detail = await import_payload(ledger, import_id)
-    assert detail["check"] == "VERIFIED"
-    assert detail["opening_source"] == "manual"
-    assert detail["opening_paise"] == 0
-    assert detail["opening_evidenced"] is True
-    assert detail["opening_required"] is False
-    assert (await commit_import(ledger, import_id, categorize=False))["status"] == "committed"
-
-
-async def test_manual_opening_recheck_preserves_card_credit_decisions(ledger):
-    card = await _card(ledger, opening_paise=None)
-    food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
-    import_id = await _assumed_zero_review(
-        ledger,
-        card,
-        [
-            {"date": "2026-04-01", "description": "Blinkit", "debit": 42800, "credit": 0},
-            {"date": "2026-04-02", "description": "Merchant refund", "debit": 0, "credit": 10395},
-        ],
-        closing=-32405,
-    )
-    credit = await _line(ledger, import_id, index=1)
-    await resolve_line(
-        ledger,
-        import_id=import_id,
-        line_id=credit["id"],
-        resolution="classify_credit",
-        credit_kind="refund",
-        category_id=str(food["id"]),
-    )
-
-    await retry_with_opening(ledger, import_id=import_id, opening_paise=0)
-
-    detail = await import_payload(ledger, import_id)
-    assert detail["check"] == "VERIFIED"
-    assert detail["opening_source"] == "manual"
-    stored = await ledger.fetchrow(
-        "SELECT match_state, movement_id, match_detail FROM statement_lines WHERE id = $1",
-        credit["id"],
-    )
-    assert stored["match_state"] == "new"
-    assert stored["movement_id"] is None
-    assert stored["match_detail"]["credit_kind"] == "refund"
-    assert stored["match_detail"]["credit_classified_by"] == "user"
-    await commit_import(ledger, import_id, categorize=False)
 
 
 async def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):

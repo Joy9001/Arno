@@ -792,7 +792,6 @@ def _attempt_matches(attempt: ToolAttempt, spec: InjectionSpec) -> bool:
             "movement": "record_movement",
             "correction": "correct_movement",
             "move_money": "record_movement",
-            "password": "import_document",
         }.get(target)
         if tool_for_target and tool_for_target in code:
             return True

@@ -55,18 +55,19 @@ and pushed to `main`. Group B's import items wait for this group.
 
 ### Phase 2: the parser subagent
 
-- [ ] One `DelegationTasks` owner opened at startup, with `TASKS_DIR` and a `PostgresStepStore`;
+- [x] One `DelegationTasks` owner opened at startup, with `TASKS_DIR` and a `PostgresStepStore`;
       each chat turn binds it and passes `DelegationReports`.
-- [ ] `SubAgents` with task control on the main agent; the `parser` subagent with its own
+- [x] `SubAgents` with task control on the main agent; the `parser` subagent with its own
       instructions (the old skill text), the `PARSE` model role, `forward_usage=False` and its own
       ceilings, `ask_parent`, and `Planning` keyed by task ID.
-- [ ] Parser tools keyed by `import_id`: `open_imports`, `wait_for_password`, `saved_parser`, the
+- [x] Parser tools keyed by `import_id`: `open_imports`, `wait_for_password`, `saved_parser`, the
       `doc_*` readers, `ledger_opening`, `check_statement`, `transcribe_page`, `submit_parser`,
       `suggest_transfers`.
-- [ ] Removed: `Skills`, `skills_backend.py`, `SKILL.md`, `parse_run.py`, the `import_statement`
+- [x] Removed: `Skills`, `skills_backend.py`, `SKILL.md`, `parse_run.py`, the `import_statement`
       job kind, the job body in `pipeline.py`, and `import_document`.
-- [ ] Tests: a full parse, a clean replay, a repair after a gate failure, a two-bank upload, a resume
-      after a simulated crash, and no password in any history. Parse evals updated.
+- [x] Tests: a full parse, a clean replay, a repair after a gate failure, a two-bank upload, a resume
+      after a simulated crash, and no password in any history. Parse evals updated (the synthetic
+      and spike benchmarks run through the gate).
 
 ### Phase 3: web
 

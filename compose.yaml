@@ -46,6 +46,7 @@ services:
       FIN_AGENT_WEB_DIR: /app/web/dist
       FIN_AGENT_AUTO_MIGRATE: "1"
       FIN_AGENT_PRE_MIGRATION_DIR: /app/pre-migration
+      FIN_AGENT_TASKS_DIR: /app/tasks
       # Native Pydantic AI traces go straight to Phoenix over OTLP/HTTP. This Compose Phoenix
       # requires authentication. By default the local Phoenix admin secret is the bearer token,
       # so a normal start exports with no extra provisioning step. PHOENIX_API_KEY overrides it
@@ -63,6 +64,8 @@ services:
     volumes:
       # A dump from before each migration. The image creates this path owned by the API user.
       - pre-migration-data:/app/pre-migration
+      # The parser subagent's task records. The step store in Postgres holds each run's steps.
+      - tasks-data:/app/tasks
       # Read-only access to the default restic repository so `fin-agent restore` works with the
       # local volume. Off-site repositories are read through restic directly.
       - backup-data:/backups:ro
@@ -199,6 +202,7 @@ volumes:
   db-data:
   backup-data:
   pre-migration-data:
+  tasks-data:
   ollama-data:
   speaches-data:
   phoenix-data:

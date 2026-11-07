@@ -365,13 +365,15 @@ async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert [part["type"] for part in user["parts"]] == ["text", "data-statement"]
     assert user["metadata"]["custom"]["quote"]["text"] == "The statement covers October."
+    # The statement is handed to the parser subagent; no import starts in this turn.
     assert (
         await demo_ledger.fetchval(
             "SELECT count(*) FROM imports WHERE attachment_id = $1",
             statement_ref["id"],
         )
-        == 1
+        == 0
     )
+    assert statement_ref["id"] in str(seen[0])
 
 
 async def test_a_legacy_turn_without_a_quote_is_unchanged_and_keeps_the_stream_headers(

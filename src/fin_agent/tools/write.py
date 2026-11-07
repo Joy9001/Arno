@@ -1205,41 +1205,6 @@ async def preference(
     raise ToolInputError("action is remember or forget")
 
 
-async def import_document(
-    conn: Connection,
-    *,
-    attachment_id: str,
-    message_id: str | None = None,
-) -> dict[str, Any]:
-    """Start an import in review state. The ledger is untouched and no statement text returns."""
-    del message_id
-    from fin_agent.importers.pipeline import create_import, import_payload
-
-    try:
-        row = await create_import(conn, attachment_id=attachment_id)
-    except ValueError as exc:
-        raise ToolInputError(str(exc)) from exc
-    payload = await import_payload(conn, row["id"])
-    return {
-        "import_id": payload["import_id"],
-        "status": payload["status"],
-        "account": payload["account"]["name"] if payload["account"] else None,
-        "period": payload["period"],
-        "counts": payload["counts"],
-        "check": payload["check"],
-        "reason": payload["reason"],
-        "card": _card(
-            "import",
-            title="Import started",
-            import_id=payload["import_id"],
-            filename=(payload["attachment"] or {}).get("filename"),
-            status=payload["status"],
-            reason=payload["reason"],
-            review_url=f"#activity/imports/{payload['import_id']}",
-        ),
-    }
-
-
 async def undo(
     conn: Connection,
     *,

@@ -1,42 +1,25 @@
-"""The import pipeline: open, known layout or parse run, checks, dedupe, reconcile.
+"""Statement imports: rows, accounts, and the step that moves an import to review.
 
-Stages run as a job off the chat path. Nothing reaches the ledger before a commit.
+The parser subagent reads the file and submits a script; this module owns the import row,
+resolving it to an account, and writing the reviewed rows. Nothing reaches the ledger before a
+commit.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
 from fin_agent.db.conn import Connection, connect
-from fin_agent.importers.categorizer import categorize_import
-from fin_agent.importers.checks import (
-    INPUT_REASONS,
-    account_check,
-    check_statement,
-    opening_is_evidenced,
-)
-from fin_agent.importers.helpers import HELPER_VERSION
+from fin_agent.importers.checks import opening_is_evidenced
 from fin_agent.importers.identifiers import scrub_account_number
-from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.layouts import layout_for
-from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_script
 from fin_agent.importers.passwords import PASSWORDS
-from fin_agent.importers.periods import derive_period, ledger_last_date, ledger_opening
-from fin_agent.importers.readers import Doc, DocError, open_documents, sniff
+from fin_agent.importers.readers import Doc
 from fin_agent.importers.reconcile import credit_decision_required, insert_lines, reconcile
-from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import today as ledger_today
 
 logger = logging.getLogger("fin_agent.importers")
-
-PARSER_RUNNER = Callable[
-    [Doc, ScriptContext],
-    Awaitable[Any],
-]
 
 
 async def _account_for_row(conn: Connection, import_row: dict[str, Any]) -> dict[str, Any] | None:
@@ -115,7 +98,7 @@ async def create_import(
     attachment_id: str,
     account_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create an import and its job in one transaction, or return the one already importing it."""
+    """Create the import row for an upload, or return the one already importing that file."""
     attachment = await conn.fetchrow("SELECT * FROM attachments WHERE id = $1", attachment_id)
     if attachment is None:
         raise ValueError("No such attachment")
@@ -152,125 +135,13 @@ async def create_import(
             import_id,
             attachment_id,
         )
-        await enqueue_job(
-            conn,
-            key=f"import:{import_id}",
-            kind="import_statement",
-            payload={"import_id": import_id},
-        )
     return dict(row)
 
 
 async def retry_with_password(conn: Connection, *, import_id: str, password: str) -> None:
+    """Put the card's password in the in-memory vault; the waiting parser picks it up."""
     PASSWORDS.put(import_id, password)
-    await conn.execute(
-        """
-        UPDATE imports SET status = 'parsing', reason = NULL WHERE id = $1
-        """,
-        import_id,
-    )
-    await enqueue_job(
-        conn,
-        key=f"import:{import_id}:pw:{datetime.now().isoformat(timespec='microseconds')}",
-        kind="import_statement",
-        payload={"import_id": import_id},
-    )
-
-
-async def retry_with_account(conn: Connection, *, import_id: str, account_id: str) -> None:
-    row = await conn.fetchrow("SELECT id FROM accounts WHERE id = $1 AND active", account_id)
-    if row is None:
-        raise ValueError("No such account")
-    await conn.execute(
-        """
-        UPDATE imports SET status = 'parsing', account_id = $1, reason = NULL WHERE id = $2
-        """,
-        account_id,
-        import_id,
-    )
-    await enqueue_job(
-        conn,
-        key=f"import:{import_id}:account:{datetime.now().isoformat(timespec='microseconds')}",
-        kind="import_statement",
-        payload={"import_id": import_id},
-    )
-
-
-async def retry_with_opening(conn: Connection, *, import_id: str, opening_paise: int) -> None:
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
-    if row is None:
-        raise ValueError("No such import")
-    review = dict(row["review"] or {})
-    review["manual_opening_paise"] = int(opening_paise)
-    lines = await conn.fetch(
-        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
-    )
-    if lines and row["status"] in ("review", "failed"):
-        # Recheck the stored rows instead of reparsing: the user's card-credit decisions survive.
-        await _recheck_opening(
-            conn, row=row, review=review, lines=lines, opening_paise=opening_paise
-        )
-        return
-    await conn.execute(
-        """
-        UPDATE imports SET status = 'parsing', reason = NULL, review = $1 WHERE id = $2
-        """,
-        review,
-        import_id,
-    )
-    await enqueue_job(
-        conn,
-        key=f"import:{import_id}:opening:{datetime.now().isoformat(timespec='microseconds')}",
-        kind="import_statement",
-        payload={"import_id": import_id},
-    )
-
-
-async def _recheck_opening(
-    conn: Connection,
-    *,
-    row: dict[str, Any],
-    review: dict[str, Any],
-    lines: list[dict[str, Any]],
-    opening_paise: int,
-) -> None:
-    rows = [
-        {
-            "date": line["date"].isoformat(),
-            "debit": int(line["debit_paise"] or 0),
-            "credit": int(line["credit_paise"] or 0),
-            "balance": line["balance_paise"],
-        }
-        for line in lines
-    ]
-    period = None
-    if row["period_start"] and row["period_end"]:
-        period = (row["period_start"].isoformat(), row["period_end"].isoformat())
-    check = check_statement(
-        rows,
-        None,
-        row["closing_balance_paise"],
-        period=period,
-        manual_opening=int(opening_paise),
-    )
-    status = "review"
-    reason = None
-    if check["status"] != "VERIFIED":
-        reason = check.get("reason") or "The opening, rows, and closing do not reconcile."
-    await conn.execute(
-        """
-        UPDATE imports
-        SET status = $1, reason = $2, review = $3, check_result = $4,
-            opening_balance_paise = $5
-        WHERE id = $6
-        """,
-        status,
-        reason,
-        review,
-        check,
-        int(opening_paise),
-        row["id"],
-    )
+    await conn.execute("UPDATE imports SET updated_at = now() WHERE id = $1", import_id)
 
 
 async def _set_status(
@@ -293,46 +164,6 @@ async def _set_status(
     )
 
 
-def _context(
-    *,
-    account: dict[str, Any] | None,
-    period: dict[str, Any] | None,
-    opening: dict[str, Any] | None,
-    manual_opening_paise: int | None,
-    fingerprint: str | None,
-    expected_fingerprint: str | None,
-    import_id: str | None = None,
-) -> ScriptContext:
-    return ScriptContext(
-        period=(period["start"], period["end"]) if period else None,
-        ledger_opening_paise=opening["paise"] if opening else None,
-        ledger_opening_as_of=opening["as_of"] if opening else None,
-        manual_opening_paise=manual_opening_paise,
-        account_name=account["name"] if account else None,
-        fingerprint=fingerprint,
-        expected_fingerprint=expected_fingerprint,
-        allow_vision=True,
-        import_id=import_id,
-    )
-
-
-def _check_account(
-    parsed_account: dict[str, Any],
-    *,
-    period: dict[str, Any] | None,
-    ledger_opening_paise: int | None,
-    manual_opening_paise: int | None,
-    expected_fingerprint: str | None,
-) -> dict[str, Any]:
-    return account_check(
-        parsed_account,
-        period=(period["start"], period["end"]) if period else None,
-        ledger_opening=ledger_opening_paise,
-        manual_opening=manual_opening_paise,
-        expected_fingerprint=expected_fingerprint,
-    )
-
-
 async def _finalize(
     conn: Connection,
     *,
@@ -345,31 +176,7 @@ async def _finalize(
     fingerprint: str | None,
     period: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    return await _finalize_body(
-        conn,
-        import_id=import_id,
-        account=account,
-        parsed_account=parsed_account,
-        check=check,
-        script=script,
-        helper_version=helper_version,
-        fingerprint=fingerprint,
-        period=period,
-    )
-
-
-async def _finalize_body(
-    conn: Connection,
-    *,
-    import_id: str,
-    account: dict[str, Any],
-    parsed_account: dict[str, Any],
-    check: dict[str, Any],
-    script: str,
-    helper_version: str | None,
-    fingerprint: str | None,
-    period: dict[str, Any] | None,
-) -> dict[str, Any]:
+    """Write the reviewed rows and move the import to `review`."""
     async with conn.transaction():
         await conn.execute("DELETE FROM statement_lines WHERE import_id = $1", import_id)
         await conn.execute(
@@ -411,255 +218,10 @@ async def _finalize_body(
     return review
 
 
-async def _run_import(
-    import_id: str,
-    *,
-    parser_runner: PARSER_RUNNER | None = None,
-) -> None:
-    """Run one import: read, replay or parse, finalize, categorize."""
-    await _run_import_body(import_id, parser_runner=parser_runner)
-
-
-async def _run_import_body(
-    import_id: str,
-    *,
-    parser_runner: PARSER_RUNNER | None = None,
-) -> None:
-    async with connect() as conn:
-        row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
-        if row["status"] in ("committed", "rejected"):
-            return
-        attachment = await conn.fetchrow(
-            "SELECT * FROM attachments WHERE import_id = $1 ORDER BY created_at DESC LIMIT 1",
-            import_id,
-        )
-        if attachment is None:
-            await _set_status(conn, import_id, "failed", reason="the attachment is gone")
-            return
-        if attachment["data"] is None:
-            await _set_status(conn, import_id, "failed", reason="the file was cleaned up")
-            return
-        data = bytes(attachment["data"])
-        account = await _account_for_row(conn, row)
-        password = PASSWORDS.pop(import_id)
-        await conn.execute(
-            """
-            UPDATE imports
-            SET status = 'parsing', reason = NULL, updated_at = now()
-            WHERE id = $1
-            """,
-            import_id,
-        )
-
-    try:
-        docs = open_documents(data, password=password)
-    except DocError as exc:
-        async with connect() as conn:
-            if exc.code in ("password_required", "wrong_password"):
-                await _set_status(
-                    conn,
-                    import_id,
-                    "needs_password",
-                    reason="wrong password"
-                    if exc.code == "wrong_password"
-                    else "password required",
-                )
-            else:
-                await _set_status(
-                    conn, import_id, "failed", reason=f"could not open the file: {exc.code}"
-                )
-        return
-    except Exception as exc:  # noqa: BLE001
-        async with connect() as conn:
-            await _set_status(
-                conn, import_id, "failed", reason=f"could not open the file: {type(exc).__name__}"
-            )
-        return
-
-    if password is not None:
-        await _store_unlocked(attachment["id"], data, docs)
-
-    doc = docs[0]
-    async with connect() as conn:
-        if account is None:
-            account = await _infer_account(conn, doc)
-        ledger_last = await ledger_last_date(conn, account["id"]) if account else None
-        period = derive_period(doc, ledger_last=ledger_last, today=ledger_today())
-        opening = (
-            await ledger_opening(conn, account["id"], date.fromisoformat(period["start"]))
-            if account and period
-            else None
-        )
-        manual_opening = (row.get("review") or {}).get("manual_opening_paise")
-        if manual_opening is not None:
-            manual_opening = int(manual_opening)
-        fingerprint = detect_fingerprint(doc) or _account_fingerprint(account)
-        layout = await layout_for(
-            conn,
-            fingerprint,
-            institution=(account["institution"] or account["name"]) if account else None,
-            kind=account["kind"] if account else None,
-        )
-        if layout is not None and layout["helper_version"] != HELPER_VERSION:
-            # The saved script ran with another helper block. Replaying it with this one would
-            # silently change its meaning, so the layout counts as new.
-            layout = None
-        if layout is not None and account is None:
-            await _set_status(
-                conn, import_id, "needs_input", reason="Which account is this statement for?"
-            )
-            return
-        context = _context(
-            account=account,
-            period=period,
-            opening=opening,
-            manual_opening_paise=manual_opening,
-            fingerprint=fingerprint,
-            expected_fingerprint=fingerprint if layout else None,
-            import_id=import_id,
-        )
-
-    if layout is not None:
-        replayed = await run_script(doc, layout["parser"], context, stage="layout_replay")
-        parsed_accounts, reason = normalize_accounts(replayed.output)
-        if replayed.output is not None and not reason and parsed_accounts:
-            parsed = parsed_accounts[0]
-            resolved = account
-            check = _check_account(
-                parsed,
-                period=period,
-                ledger_opening_paise=opening["paise"] if opening else None,
-                manual_opening_paise=manual_opening,
-                expected_fingerprint=fingerprint,
-            )
-            if check["status"] == "VERIFIED":
-                async with connect() as conn:
-                    await _finalize(
-                        conn,
-                        import_id=import_id,
-                        account=resolved,
-                        parsed_account=parsed,
-                        check=check,
-                        script=layout["parser"],
-                        helper_version=layout["helper_version"],
-                        fingerprint=fingerprint,
-                        period=period,
-                    )
-                    await categorize_import(conn, import_id, resolved)
-                return
-            if check.get("reason") in INPUT_REASONS:
-                # A missing input cannot be repaired by replaying the layout; ask for it.
-                async with connect() as conn:
-                    await _set_status(
-                        conn,
-                        import_id,
-                        "needs_input",
-                        reason="What was the opening balance?",
-                        check_result=check,
-                    )
-                return
-
-    if parser_runner is None:
-        from fin_agent.agent.parse_run import run_parse
-
-        parser_runner = run_parse
-    parse_result = await parser_runner(
-        doc,
-        context,
-        account_name=account["name"] if account else None,
-    )
-    status = parse_result.status
-    if status == "not_a_statement":
-        async with connect() as conn:
-            await _set_status(
-                conn,
-                import_id,
-                "not_a_statement",
-                reason=f"This isn't a statement: {parse_result.kind or 'unknown document'}",
-            )
-        return
-    if status == "needs_input":
-        async with connect() as conn:
-            await _set_status(
-                conn,
-                import_id,
-                "needs_input",
-                reason=parse_result.question or "More information is needed",
-            )
-        return
-    if status != "parser_submitted" or not parse_result.script:
-        async with connect() as conn:
-            await _set_status(
-                conn, import_id, "failed", reason=parse_result.reason or "the parse run gave up"
-            )
-        return
-
-    async with connect() as conn:
-        fresh = await run_script(doc, parse_result.script, context, stage="fresh_replay")
-        parsed_accounts, reason = normalize_accounts(fresh.output)
-        if not parsed_accounts:
-            await _set_status(
-                conn, import_id, "failed", reason=reason or "the parser returned no accounts"
-            )
-            return
-        parsed = parsed_accounts[0]
-        resolved = await _resolve_parsed_account(
-            conn, parsed_account=parsed, current=account, doc=doc
-        )
-        if resolved is None:
-            await _set_status(
-                conn, import_id, "needs_input", reason="Which account is this statement for?"
-            )
-            return
-        if not period:
-            ledger_last = await ledger_last_date(conn, resolved["id"])
-            period = derive_period(doc, ledger_last=ledger_last, today=ledger_today())
-        if opening is None and period:
-            opening = await ledger_opening(
-                conn, resolved["id"], date.fromisoformat(period["start"])
-            )
-        check = _check_account(
-            parsed,
-            period=period,
-            ledger_opening_paise=opening["paise"] if opening else None,
-            manual_opening_paise=manual_opening,
-            expected_fingerprint=fingerprint,
-        )
-        if check["status"] != "VERIFIED":
-            reason = check.get("reason") or "the checks did not pass"
-            if reason in INPUT_REASONS:
-                await _set_status(
-                    conn,
-                    import_id,
-                    "needs_input",
-                    reason="What was the opening balance?",
-                    check_result=check,
-                )
-                return
-            await _set_status(
-                conn,
-                import_id,
-                "failed",
-                reason=reason,
-                check_result=check,
-            )
-            return
-        await _finalize(
-            conn,
-            import_id=import_id,
-            account=resolved,
-            parsed_account=parsed,
-            check=check,
-            script=parse_result.script,
-            helper_version=HELPER_VERSION,
-            fingerprint=fingerprint or _fingerprint_from_headers(parsed),
-            period=period,
-        )
-        await categorize_import(conn, import_id, resolved)
-
-
 async def _store_unlocked(attachment_id: str, data: bytes, docs: list[Doc]) -> None:
     """Keep the unlocked copy once the password opened it, so a replay needs no password."""
+    from fin_agent.importers.readers import sniff
+
     if not docs or sniff(data) == "zip":
         return
     try:
@@ -691,14 +253,6 @@ def _fingerprint_from_headers(parsed: dict[str, Any]) -> str | None:
 
     headers = parsed.get("headers")
     return normalize_headers(headers) if headers else None
-
-
-async def handle_import_job(payload: dict[str, Any]) -> dict[str, Any]:
-    import_id = str(payload.get("import_id") or "")
-    if not import_id:
-        raise ValueError("import job has no import_id")
-    await _run_import(import_id)
-    return {"import_id": import_id}
 
 
 async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
@@ -847,10 +401,7 @@ async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]
 
 __all__ = [
     "create_import",
-    "handle_import_job",
     "import_payload",
     "list_imports",
-    "retry_with_account",
-    "retry_with_opening",
     "retry_with_password",
 ]

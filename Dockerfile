@@ -48,8 +48,8 @@ COPY --from=pgclient /usr/lib/x86_64-linux-gnu/liblzma.so.5 /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 RUN useradd --create-home --uid 10001 fin \
-    && mkdir -p /app/pre-migration \
-    && chown fin:fin /app /app/pre-migration
+    && mkdir -p /app/pre-migration /app/tasks \
+    && chown fin:fin /app /app/pre-migration /app/tasks
 COPY --chown=fin:fin pyproject.toml uv.lock ./
 COPY --chown=fin:fin src ./src
 COPY --chown=fin:fin evals ./evals

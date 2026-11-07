@@ -10,7 +10,6 @@ from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
-from fin_agent.tools import write as write_tools
 
 
 async def _account(conn) -> dict:
@@ -436,31 +435,3 @@ async def test_baselines_are_computed_from_real_rows(ledger):
     assert row["source"] == "computed"
     assert row["amount_per_day_paise"] > 0
     assert row["window_days"] == 90
-
-
-async def test_import_document_returns_no_statement_text_and_enqueues_one_job(ledger):
-    import hashlib
-
-    from tests.import_fixtures import sbi_csv
-
-    account = await _account(ledger)
-    del account
-    payload = sbi_csv()
-    attachment_id = await new_id(ledger, "att")
-    await ledger.execute(
-        """
-        INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES ($1, 'statement', 'sbi.csv', 'text/csv', $2, $3, $4)
-        """,
-        attachment_id,
-        len(payload),
-        hashlib.sha256(payload).hexdigest(),
-        payload,
-    )
-    await ledger.execute("UPDATE attachments SET import_id = NULL")
-    result = await write_tools.import_document(ledger, attachment_id=attachment_id)
-    assert result["status"] == "parsing"
-    assert result["import_id"].startswith("imp_")
-    assert "SWIGGY" not in str(result)
-    jobs = await ledger.fetchval("SELECT count(*) FROM jobs WHERE kind = 'import_statement'")
-    assert jobs == 1

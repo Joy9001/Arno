@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from fin_agent.agent.presentation import ResultRegistry
 
@@ -23,9 +24,11 @@ class AgentDeps:
     # may name a voice attachment, but the server fixes the kind.
     capture_kind: str = "chat"
     capture_ref: str | None = None
-    # Server-started statement imports: (import_id, status). The model sees that the
-    # server already ran the one import path, so it must not call import_document again.
-    statement_imports: tuple[tuple[str, str], ...] = ()
+    # Server-set: statement attachment IDs uploaded with this turn. Filenames stay out: they are
+    # outside text and these go into the instructions. No import starts here.
+    statement_attachments: tuple[str, ...] = ()
+    # Opened statement documents for the parser subagent, keyed by import id. Lives for one run.
+    parse_docs: dict[str, Any] = field(default_factory=dict)
     # Charts and cards a tool produced inside this turn, for the post-run extractor.
     cards: list[dict[str, object]] = field(default_factory=list)
     # Bounded result snapshots for this turn. IDs are never reused across turns.

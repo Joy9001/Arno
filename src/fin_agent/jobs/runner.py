@@ -22,9 +22,6 @@ logger = logging.getLogger("fin_agent.jobs")
 Handler = Callable[[dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
 MAX_ATTEMPTS = 3
 DEFAULT_TIMEOUTS = {
-    # A 12-month statement can spend five minutes in the parse run, then a few more
-    # in batched categorization before review.
-    "import_statement": 1200,
     "recompute_baselines": 120,
     "weekly_briefing": 180,
     "reminders": 60,
@@ -38,7 +35,6 @@ DEFAULT_TIMEOUTS = {
 def default_handlers() -> dict[str, Handler]:
     """Imported lazily, so the job module does not import the whole agent at boot."""
     from fin_agent.importers.baselines import handle_recompute_baselines
-    from fin_agent.importers.pipeline import handle_import_job
     from fin_agent.jobs.backup import handle_backup_check
     from fin_agent.jobs.briefing import handle_weekly_briefing
     from fin_agent.jobs.patterns import handle_pattern_detection
@@ -47,7 +43,6 @@ def default_handlers() -> dict[str, Handler]:
     from fin_agent.jobs.risk import handle_risk_check
 
     return {
-        "import_statement": handle_import_job,
         "recompute_baselines": handle_recompute_baselines,
         "weekly_briefing": handle_weekly_briefing,
         "reminders": handle_reminders,
@@ -217,17 +212,6 @@ async def _fail(conn: Connection, job: dict[str, Any], error: str, *, timed_out:
             data={"job_id": job["id"], "kind": job["kind"]},
             dedupe_key=f"job_failed:{job['id']}",
         )
-        import_id = (job.get("payload") or {}).get("import_id")
-        if job["kind"] == "import_statement" and import_id:
-            await conn.execute(
-                """
-                UPDATE imports
-                SET status = 'failed', reason = $1, updated_at = now()
-                WHERE id = $2 AND status = 'parsing'
-                """,
-                f"The import failed three times: {error[:300]}",
-                import_id,
-            )
     else:
         delay = min(300, 5 * (2**attempts))
         await conn.execute(

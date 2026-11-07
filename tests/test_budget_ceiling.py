@@ -19,9 +19,8 @@ from pydantic_ai_harness.compaction import compact_now
 from pydantic_ai_harness.spend import Spent
 
 from fin_agent.agent.builder import build_agent
-from fin_agent.agent.parse_run import run_parse
-from fin_agent.importers.monty import ScriptContext
-from fin_agent.importers.readers import Doc
+from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.parser import build_parser_agent
 
 
 class ExhaustedStore:
@@ -63,21 +62,11 @@ async def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(authe
     assert calls["n"] == 0
 
 
-def test_a_parse_run_refuses_at_the_ceiling_and_says_so():
-    doc = Doc(b"date,description,amount\n2026-01-01,Coffee,-100\n")
-    context = ScriptContext(period=("2026-01-01", "2026-01-31"))
-    result = __import__("asyncio").run(
-        run_parse(
-            doc,
-            context,
-            account_name=None,
-            model=FunctionModel(_never_called),
-            spend_store=ExhaustedStore(),
-        )
-    )
-
-    assert result.status == "gave_up"
-    assert "ceiling" in (result.reason or "")
+def test_a_parser_run_refuses_at_the_ceiling_and_says_so():
+    agent = build_parser_agent(model=FunctionModel(_never_called), spend_store=ExhaustedStore())
+    with pytest.raises(Exception) as raised:
+        asyncio.run(agent.run("parse", deps=AgentDeps(conversation_id="ceiling")))
+    assert type(raised.value).__name__ == "SpendLimitExceeded"
 
 
 def test_the_cli_production_path_uses_the_shared_daily_ledger(monkeypatch):

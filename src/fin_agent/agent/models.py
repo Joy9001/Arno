@@ -168,6 +168,13 @@ def vision_model() -> Model:
     return build_model(role_config("VISION"))
 
 
+def parse_model() -> Model:
+    """The parser subagent's model, or the chat model when `PARSE_*` is unset."""
+    if not os.environ.get("PARSE_BASE_URL") and not os.environ.get("PARSE_MODEL"):
+        return primary_model()
+    return build_model(role_config("PARSE"))
+
+
 def backup_model() -> Model | None:
     config = chat_config(fallback=True)
     if not os.environ.get("CHAT_FALLBACK_BASE_URL") and not os.environ.get("CHAT_FALLBACK_MODEL"):
@@ -184,6 +191,7 @@ __all__ = [
     "build_model",
     "chat_config",
     "model_for",
+    "parse_model",
     "primary_model",
     "role_config",
     "vision_model",

@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import DeferredToolRequests
+from pydantic_ai_harness.subagents import SubAgent, SubAgents, TaskControl
 
 from fin_agent.agent.capabilities import build_capabilities
 from fin_agent.agent.deps import AgentDeps
@@ -50,14 +51,20 @@ async def _categories() -> list[str]:
 
 async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
     text = render_instructions(await _categories())
-    imports = getattr(getattr(ctx, "deps", None), "statement_imports", ())
-    if imports:
-        text += """
+    attachments = getattr(getattr(ctx, "deps", None), "statement_attachments", ())
+    if attachments:
+        listing = ", ".join(attachments)
+        text += f"""
 
-Statement import already started
-- The server has already started the import for this turn's statement attachment. Do not call
-  import_document for it again. Tell the user the import card shows the live status, and that a
-  password, if needed, is entered only on the exact import screen. You cannot commit it.
+Uploaded statement files
+- This turn has statement files: {listing}. Hand them to the `parser` subagent in the
+  background with `delegate_task("parser", "Import these attachment IDs: ...", background=True)`
+  and end your turn. One upload is one task, and each file becomes an import card.
+- The parser reports a status, counts, and anything blocking. It never writes to the ledger, and
+  you cannot commit an import. If it asks a question, answer from the ledger when you can and ask
+  the user only when you cannot. If a parser task was interrupted by a restart, resume it with
+  `delegate_task(..., resume=<task_id>)` when the user asks to continue. Never ask for a
+  statement password in chat; it goes on the import card.
 """
     return text + READ_ONLY_SUFFIX if read_only else text
 
@@ -72,6 +79,7 @@ def build_agent(
     context_window: int | None = None,
     read_only: bool = False,
     name: str | None = None,
+    parser_agent: Any = None,
 ) -> Agent[AgentDeps, str]:
     """Build an agent. Tests pass a `TestModel` or `FunctionModel`; production reads env.
 
@@ -79,6 +87,7 @@ def build_agent(
     whole trial, and a smaller window so a long thread really compacts. `read_only` builds the
     scheduled-question agent: the same read tools and Code Mode, no write tools, one run ceiling.
     `name` becomes the native `gen_ai.agent.name`; instrumentation is the process default.
+    `parser_agent` is the parser subagent, offered to the chat agent through `SubAgents`.
     """
     primary = model or primary_model()
     if backup is None and model is None:
@@ -97,6 +106,25 @@ def build_agent(
     async def instructions_fn(ctx: Any) -> str:
         return await _instructions(ctx, read_only=read_only)
 
+    subagents = None
+    if parser_agent is not None and not read_only:
+        from fin_agent.agent.parser import PARSE_USAGE_LIMITS
+
+        subagents = SubAgents(
+            agents=[
+                SubAgent(
+                    parser_agent,
+                    usage_limits=PARSE_USAGE_LIMITS,
+                    timeout_seconds=1200,
+                    can_ask_questions=True,
+                    resumable=True,
+                )
+            ],
+            forward_usage=False,
+            contain_errors=True,
+            task_control=TaskControl(),
+        )
+
     return Agent(
         primary,
         deps_type=AgentDeps,
@@ -111,6 +139,7 @@ def build_agent(
             run_budget_usd=run_budget_usd,
             question_budget_usd=question_budget_usd,
             context_window=context_window,
+            subagents=subagents,
         ),
     )
 

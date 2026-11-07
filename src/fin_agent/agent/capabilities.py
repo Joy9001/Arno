@@ -32,6 +32,7 @@ from pydantic_ai_harness.compaction import (
 from pydantic_ai_harness.guardrails import InputGuardrail
 from pydantic_ai_harness.guardrails.detectors import personal_data, secret_data
 from pydantic_ai_harness.spend import Budget, SpendLimits
+from pydantic_ai_harness.subagents import is_task_report
 from pydantic_ai_harness.system_reminders import SystemReminders
 from pydantic_ai_harness.tool_output_limits import (
     Band,
@@ -46,6 +47,7 @@ from fin_agent.agent.models import DEFAULT_CONTEXT_WINDOW
 from fin_agent.agent.redaction import redact_text
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.tools.mark import flag_outside_text
 
 logger = logging.getLogger("fin_agent.agent")
 
@@ -53,7 +55,7 @@ DAILY_CEILING_USD = Decimal("20")
 SHARED_DAILY_BUDGET = "shared daily"
 
 WRITE_TOOLS = frozenset(
-    {"record_movement", "correct_movement", "update_setup", "preference", "import_document", "undo"}
+    {"record_movement", "correct_movement", "update_setup", "preference", "undo"}
 )
 
 SUMMARY_PROMPT = (
@@ -147,6 +149,48 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
         }
 
 
+def _task_marker(part: Any) -> str | None:
+    """A stable identity for a delivered parser report or question."""
+    if not is_task_report(part):
+        return None
+    content = part.content
+    if isinstance(content, list):
+        for item in content:
+            metadata = getattr(item, "metadata", None)
+            if isinstance(metadata, dict):
+                task_id = metadata.get("task_id")
+                if task_id:
+                    detail = metadata.get("generation") or metadata.get("question_id") or ""
+                    return f"{task_id}:{detail}"
+    return f"task:{repr(content)[:80]}"
+
+
+class TaskTextIsOutside(AbstractCapability[AgentDeps]):
+    """A parser report or question is outside text: it was written by a model that read a file."""
+
+    def __init__(self) -> None:
+        self._flagged: set[str] = set()
+
+    async def before_model_request(self, ctx: RunContext[AgentDeps], request_context: Any) -> Any:
+        deps = ctx.deps
+        conversation_id = getattr(deps, "conversation_id", None)
+        if not conversation_id:
+            return request_context
+        markers: set[str] = set()
+        for message in request_context.messages:
+            if not isinstance(message, ModelRequest):
+                continue
+            for part in message.parts:
+                marker = _task_marker(part)
+                if marker is not None and marker not in self._flagged:
+                    markers.add(marker)
+        if markers:
+            async with connect() as conn:
+                await flag_outside_text(conn, conversation_id)
+            self._flagged |= markers
+        return request_context
+
+
 def shared_daily_budget() -> Budget:
     """The `$20/day` ceiling promised across chat, schedules, parse, vision, and briefing.
 
@@ -212,6 +256,7 @@ def build_capabilities(
     run_budget_usd: Decimal | None = None,
     question_budget_usd: Decimal | None = None,
     context_window: int | None = None,
+    subagents: AbstractCapability[Any] | None = None,
 ) -> list[AbstractCapability[Any]]:
     window = int(
         context_window or __import__("os").environ.get("LLM_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW)
@@ -294,7 +339,10 @@ def build_capabilities(
             target_tokens=target,
         ),
         ToolErrorsToModel(),
+        TaskTextIsOutside(),
     ]
+    if subagents is not None:
+        capabilities.append(subagents)
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
     if budgets is not None:
@@ -317,6 +365,7 @@ __all__ = [
     "SHARED_DAILY_BUDGET",
     "SUMMARY_PROMPT",
     "RootSpanIO",
+    "TaskTextIsOutside",
     "ToolErrorsToModel",
     "WRITE_TOOLS",
     "build_capabilities",

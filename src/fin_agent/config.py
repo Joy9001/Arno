@@ -52,6 +52,7 @@ class Settings:
     agent_ro_password: str | None
     backup_password: str | None
     pre_migration_dir: Path
+    tasks_dir: Path
     vapid_subject: str = "mailto:fin-agent@localhost"
 
     @property
@@ -104,6 +105,11 @@ class Settings:
                 os.environ.get(
                     "FIN_AGENT_PRE_MIGRATION_DIR",
                     Path(tempfile.gettempdir()) / "fin-agent-pre-migration",
+                )
+            ),
+            tasks_dir=Path(
+                os.environ.get(
+                    "FIN_AGENT_TASKS_DIR", Path(tempfile.gettempdir()) / "fin-agent-tasks"
                 )
             ),
             vapid_subject=os.environ.get(
