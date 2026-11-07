@@ -23,6 +23,7 @@ from pydantic_ai_harness.step_persistence import PostgresStepStore
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 
 from fin_agent.agent.builder import build_agent
+from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent
 from fin_agent.importers.commit import commit_import
@@ -535,6 +536,85 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
     assert (await import_payload(ledger, import_id))["status"] == "review"
 
 
+async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledger, tmp_path):
+    account = await _sbi_account(ledger)
+    attachment_id = await _att(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    import_id = row["id"]
+
+    parser = build_parser_agent(
+        model=_streaming(
+            _code(f"print(await open_imports(attachment_ids=[{attachment_id!r}]))"),
+            _code(f"print(await doc_words(import_id={import_id!r}, page=0))"),
+            ModelResponse(
+                parts=[
+                    ToolCallPart("ask_parent", {"question": "Which account is this statement for?"})
+                ]
+            ),
+            _code(f"print(await submit_parser(import_ids=[{import_id!r}], code={SBI_PARSER!r}))"),
+            _output(
+                ParseReport(
+                    status="ready",
+                    imports=[ImportReport(import_id=import_id, status="review", rows=3)],
+                )
+            ),
+        )
+    )
+    parent = build_agent(
+        model=_sequence(
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "delegate_task",
+                        {
+                            "agent_name": "parser",
+                            "task": f"Import attachment {attachment_id}",
+                            "background": True,
+                        },
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart("Started.")]),
+        ),
+        parser_agent=parser,
+    )
+    owner = DelegationTasks(directory=tmp_path)
+    async with owner.opened():
+        with owner.bind():
+            await parent.run(
+                "Import the statement.",
+                deps=AgentDeps(conversation_id="conv_progress"),
+                conversation_id="conv_progress",
+            )
+        task_id = next(iter(owner.records))
+        assert task_id
+
+        question = None
+        for _ in range(200):
+            question = owner.pending_question(task_id)
+            if question is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert question is not None
+
+        live = await ledger.fetchrow(
+            "SELECT task_id, progress FROM imports WHERE id = $1", import_id
+        )
+        assert live["task_id"] == task_id
+        assert live["progress"] == "reading the statement"
+
+        assert owner.answer(task_id, question_id=question[0], answer="SBI savings")
+        for _ in range(200):
+            status = await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id)
+            if status == "review":
+                break
+            await asyncio.sleep(0.05)
+        assert status == "review"
+        assert (
+            await ledger.fetchval("SELECT progress FROM imports WHERE id = $1", import_id) is None
+        )
+
+
 async def _conversation(conn, thread_id: str) -> None:
     await conn.execute("INSERT INTO conversations (id, title) VALUES ($1, 'test')", thread_id)
 
@@ -600,6 +680,50 @@ async def test_a_report_with_parser_text_flags_the_conversation(ledger):
                     capabilities=reports,
                 )
     assert await _flagged(ledger, "conv_flag_report")
+
+
+async def test_a_background_parser_receipt_becomes_an_import_task_card(ledger, tmp_path):
+    del ledger
+    parser = build_parser_agent(model=_streaming(_output(ParseReport(status="ready"))))
+    parent = build_agent(
+        model=_sequence(
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "delegate_task",
+                        {
+                            "agent_name": "parser",
+                            "task": "Import attachment att_x",
+                            "background": True,
+                        },
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart("Started.")]),
+        ),
+        parser_agent=parser,
+    )
+    owner = DelegationTasks(directory=tmp_path)
+    async with owner.opened():
+        with owner.bind():
+            result = await parent.run(
+                "Import it.",
+                deps=AgentDeps(conversation_id="conv_card"),
+                conversation_id="conv_card",
+            )
+        task_id = next(iter(owner.records))
+        cards = cards_from_messages(result.all_messages())
+        rebuilt = cards_for_transcript(result.all_messages())
+
+    found = [
+        card
+        for card in cards
+        if isinstance(card.data, dict) and card.data.get("card") == "import-task"
+    ]
+    assert [card.data["task_id"] for card in found] == [task_id]
+    assert any(
+        isinstance(card.data, dict) and card.data.get("task_id") == task_id for card in rebuilt
+    )
 
 
 async def _flagged(conn, thread_id: str) -> bool:

@@ -50,7 +50,7 @@ and pushed to `main`. Group B's import items wait for this group.
       committed, not-undone statement from that bank that must reproduce its `statement_lines`
       exactly; the first mismatch is the reason.
 - [x] A commit saves a new version and moves the pointer; a rollback moves it back.
-      `rollback_layout` is a function for now; its route comes with the web phase.
+      The route is `POST /api/layouts/{id}/rollback`, behind a confirm in the Imports panel.
 - [x] Tests: replay set excludes undone imports and deleted files; a mismatch blocks; rollback works.
 
 ### Phase 2: the parser subagent
@@ -71,10 +71,10 @@ and pushed to `main`. Group B's import items wait for this group.
 
 ### Phase 3: web
 
-- [ ] An upload from the Imports panel posts into chat; there's no direct import path.
-- [ ] The import card uses assistant-ui's Task card, Agent plan, Agent status, Job progress, and
+- [x] An upload from the Imports panel posts into chat; there's no direct import path.
+- [x] The import card uses assistant-ui's Task card, Agent plan, Agent status, Job progress, and
       Option list, fed by an API for the task's state and plan.
-- [ ] The review screen drops categories and keeps the transfer confirmations.
+- [x] The review screen drops categories and keeps the transfer confirmations.
 
 ### Phase 4: the categorizer
 

@@ -397,3 +397,68 @@ export type PushKey = {
   public_key: string;
   subject: string;
 };
+
+export type ImportTaskReport = {
+  status: "ready" | "not_a_statement" | "blocked" | "gave_up";
+  reason?: string | null;
+  blocking?: string | null;
+  imports?: {
+    import_id: string;
+    status: string;
+    accounts: number;
+    rows: number;
+    debits: number;
+    credits: number;
+    reason?: string | null;
+  }[];
+};
+
+export type ImportTaskPlanItem = {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled" | "blocked";
+  active_form: string | null;
+  parent_id: string | null;
+};
+
+export type ImportTaskImport = {
+  import_id: string;
+  filename: string | null;
+  status: ImportRecord["status"];
+  reason: string | null;
+  progress: string | null;
+  counts: ImportCounts | null;
+};
+
+export type ImportTask = {
+  task_id: string;
+  agent_name: string;
+  state: "running" | "finished";
+  outcome: string | null;
+  started_at: number;
+  finished_at: number | null;
+  report: ImportTaskReport | null;
+  question: { question_id: string | null; text: string } | null;
+  plan: ImportTaskPlanItem[];
+  imports: ImportTaskImport[];
+};
+
+export type ParserVersion = {
+  version: number;
+  created_at: string;
+  helper_version: string | null;
+  active: boolean;
+};
+
+export type StatementLayout = {
+  id: string;
+  institution: string;
+  kind: string;
+  variants: string[];
+  active_version: number | null;
+  versions: ParserVersion[];
+};
+
+export type LayoutList = {
+  items: StatementLayout[];
+};

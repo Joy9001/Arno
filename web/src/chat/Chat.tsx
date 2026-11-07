@@ -334,6 +334,8 @@ type AssistantProps = {
   seed?: { id: number; text: string } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
+  attachments?: { id: number; files: File[] } | null;
+  onAttachmentsConsumed?: () => void;
   onClose?: () => void;
   onActivity?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
@@ -501,6 +503,8 @@ function AssistantChat({
   seed,
   focusSignal,
   onSeedConsumed,
+  attachments,
+  onAttachmentsConsumed,
   onClose,
   onActivity,
   onEvidence,
@@ -590,6 +594,8 @@ function AssistantChat({
         seed={seed}
         focusSignal={focusSignal}
         onSeedConsumed={onSeedConsumed}
+        attachments={attachments}
+        onAttachmentsConsumed={onAttachmentsConsumed}
         onClose={onClose}
         onActivity={onActivity}
         onEvidence={onEvidence}
@@ -618,6 +624,8 @@ type ChatShellProps = {
   seed?: { id: number; text: string } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
+  attachments?: { id: number; files: File[] } | null;
+  onAttachmentsConsumed?: () => void;
   onClose?: () => void;
   onActivity?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
@@ -640,6 +648,8 @@ function ChatShell({
   seed,
   focusSignal,
   onSeedConsumed,
+  attachments,
+  onAttachmentsConsumed,
   onClose,
   onActivity,
   onEvidence,
@@ -732,6 +742,30 @@ function ChatShell({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed?.id]);
+
+  useEffect(() => {
+    if (!attachments?.files.length) return;
+    let alive = true;
+    void (async () => {
+      for (const file of attachments.files) {
+        if (!alive) return;
+        try {
+          await aui.composer.addAttachment(file);
+        } catch {
+          // The composer's own status line reports a file it would not take.
+        }
+      }
+      if (!alive) return;
+      onAttachmentsConsumed?.();
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachments?.id]);
 
   useEffect(() => {
     if (!focusMounted.current) {

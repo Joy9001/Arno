@@ -46,6 +46,7 @@ from fin_agent.importers.pipeline import (
     _set_status,
     _store_unlocked,
     create_import,
+    set_progress,
 )
 from fin_agent.importers.readers import Doc, DocError, open_documents, sniff
 from fin_agent.importers.vision import transcribe_page as vision_transcribe
@@ -338,6 +339,7 @@ async def open_imports(
 ) -> list[dict[str, Any]]:
     """Create the import rows for this upload and read each file's kind and lock state."""
     opened: list[dict[str, Any]] = []
+    task_id = DelegationTasks.child_id()
     async with connect() as conn:
         for attachment_id in attachment_ids:
             try:
@@ -355,6 +357,10 @@ async def open_imports(
                     }
                 )
                 continue
+            if task_id:
+                await conn.execute(
+                    "UPDATE imports SET task_id = $1 WHERE id = $2", task_id, row["id"]
+                )
             _attachment_id, data = await _data(conn, row["id"])
             kind = sniff(data)
             if row["status"] in ("review", "committed", "rejected", "not_a_statement"):
@@ -374,6 +380,7 @@ async def open_imports(
             except DocError as exc:
                 if exc.code in ("password_required", "wrong_password"):
                     await _set_status(conn, row["id"], "needs_password", reason="password required")
+                    await set_progress(conn, row["id"], "waiting for the password")
                     opened.append(
                         {
                             "import_id": row["id"],
@@ -404,6 +411,7 @@ async def open_imports(
             doc = docs[0]
             info = await _context(conn, row, doc)
             await _set_status(conn, row["id"], "parsing")
+            await set_progress(conn, row["id"], "reading the statement")
             ctx.deps.parse_docs[row["id"]] = doc
             opened.append(
                 {
@@ -429,6 +437,7 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
         ctx.deps.parse_docs[import_id] = docs[0]
         async with connect() as conn:
             await _set_status(conn, import_id, "parsing", reason=None)
+            await set_progress(conn, import_id, "reading the statement")
         return {"status": "unlocked"}
     deadline = time.monotonic() + PASSWORD_WAIT_SECONDS
     while True:
@@ -448,16 +457,23 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
                     "needs_password",
                     reason="That password didn't open the file. Try again.",
                 )
+                await set_progress(conn, import_id, "waiting for the password")
     await _store_unlocked(attachment_id, data, docs)
     ctx.deps.parse_docs[import_id] = docs[0]
     async with connect() as conn:
         await _set_status(conn, import_id, "parsing", reason=None)
+        await set_progress(conn, import_id, "reading the statement")
     return {"status": "unlocked"}
 
 
 async def _data_import(import_id: str) -> tuple[str, bytes]:
     async with connect() as conn:
         return await _data(conn, import_id)
+
+
+async def _progress(import_id: str, text: str) -> None:
+    async with connect() as conn:
+        await set_progress(conn, import_id, text)
 
 
 async def saved_parser(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, Any] | None:
@@ -486,14 +502,26 @@ async def doc_words(
     ctx: RunContext[AgentDeps], import_id: str, page: int = 0
 ) -> list[dict[str, Any]]:
     """One page's positioned words. Use doc_words_range past a few pages."""
-    return (await _load_doc(ctx, import_id)).words(page)
+    doc = await _load_doc(ctx, import_id)
+    total = doc.page_count()
+    line = f"reading page {page + 1} of {total}" if total > 0 else "reading the statement"
+    await _progress(import_id, line)
+    return doc.words(page)
 
 
 async def doc_words_range(
     ctx: RunContext[AgentDeps], import_id: str, first: int = 0, last: int = 0
 ) -> list[list[dict[str, Any]]]:
     """Many pages' words at once, one list of words for each page."""
-    return (await _load_doc(ctx, import_id)).words_range(first, last)
+    doc = await _load_doc(ctx, import_id)
+    total = doc.page_count()
+    line = (
+        f"reading pages {first + 1} to {last + 1} of {total}"
+        if total > 0
+        else "reading the statement"
+    )
+    await _progress(import_id, line)
+    return doc.words_range(first, last)
 
 
 async def doc_cells(
@@ -573,6 +601,8 @@ async def submit_parser(
     ctx: RunContext[AgentDeps], import_ids: list[str], code: str
 ) -> dict[str, Any]:
     """The gate. It reruns the script, checks every import, and replays the bank's stored rows."""
+    for import_id in import_ids:
+        await _progress(import_id, "checking the parser")
     async with connect() as conn:
         return await submit_parser_code(conn, import_ids=import_ids, code=code)
 
@@ -588,6 +618,7 @@ async def submit_parser_code(
         try:
             docs = open_documents(data)
         except DocError as exc:
+            await set_progress(conn, import_id, None)
             return _report(
                 "failed",
                 reason=f"could not open import {import_id}: {exc.code}",
@@ -596,6 +627,13 @@ async def submit_parser_code(
         doc = docs[0]
         info = await _context(conn, row, doc)
         gate = await run_gate(doc=doc, context=info["context"], code=code)
+        replay = gate.get("replay") or {}
+        if "checked" in replay:
+            await set_progress(
+                conn,
+                import_id,
+                f"checking against {replay['checked']} stored statements",
+            )
         counts = gate.get("counts") or {}
         checks = [
             {

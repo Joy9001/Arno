@@ -19,7 +19,7 @@ from fin_agent.agent.history import recover_crashed_runs
 from fin_agent.agent.parser import build_parser_agent
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.agent.turns import TurnManager
-from fin_agent.api import auth, capture, chat, health, home, imports, ledger, static, watch
+from fin_agent.api import auth, capture, chat, health, home, imports, ledger, static, tasks, watch
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
 from fin_agent.auth.enrollment import enrollment_message
@@ -147,6 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ledger.router)
     app.include_router(home.router)
     app.include_router(imports.router)
+    app.include_router(tasks.router)
     app.include_router(capture.router)
     app.include_router(chat.router)
     app.include_router(watch.router)

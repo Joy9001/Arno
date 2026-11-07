@@ -5,11 +5,11 @@ from __future__ import annotations
 import hashlib
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from fin_agent.api.deps import Database
+from fin_agent.api.deps import Database, current_session
 from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.pipeline import (
     import_payload,
@@ -20,7 +20,7 @@ from fin_agent.importers.readers import DocError, sniff
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
 
-router = APIRouter(prefix="/api", tags=["imports"])
+router = APIRouter(prefix="/api", tags=["imports"], dependencies=[Depends(current_session)])
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 CHAT_STATEMENT_KINDS = frozenset({"pdf", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml"})

@@ -120,8 +120,13 @@ from assistant-ui elements in their standalone, props-only mode:
 | Each file in a multi-file upload | Job progress |
 | A question passed to you, such as which account | Option list |
 
-Task card's props-only mode is checked. The other elements and how they install are checked when
-the card is built.
+The five come from the assistant-ui registry (`@assistant-ui/elements-task-card` and so on) and
+live in `web/src/components/assistant-ui/elements/`. The card finds its task from the harness's
+acceptance receipt for a background `parser` task and polls `GET /api/tasks/{id}` while it runs.
+Job progress has no slot for a per-file status, so each file's status is part of its stage name.
+A "which account" question is answered on the card by picking one of your accounts, and the server
+writes the answer from that account; any other question shows as plain text and is answered in
+chat.
 
 ### Parser versions
 

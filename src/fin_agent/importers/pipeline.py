@@ -144,6 +144,11 @@ async def retry_with_password(conn: Connection, *, import_id: str, password: str
     await conn.execute("UPDATE imports SET updated_at = now() WHERE id = $1", import_id)
 
 
+async def set_progress(conn: Connection, import_id: str, progress: str | None) -> None:
+    """Write the card's live line. Only host-made text belongs here, never a model's."""
+    await conn.execute("UPDATE imports SET progress = $1 WHERE id = $2", progress, import_id)
+
+
 async def _set_status(
     conn: Connection,
     import_id: str,
@@ -152,7 +157,7 @@ async def _set_status(
     reason: str | None = None,
     **fields: Any,
 ) -> None:
-    assignments = ["status = $1", "reason = $2"]
+    assignments = ["status = $1", "reason = $2", "progress = NULL"]
     params: list[Any] = [status, reason]
     for key, value in fields.items():
         assignments.append(f"{key} = ${len(params) + 1}")
@@ -185,7 +190,8 @@ async def _finalize(
             SET account_id = $1, period_start = $2, period_end = $3,
                 opening_balance_paise = $4, closing_balance_paise = $5,
                 check_result = $6, parser = $7, helper_version = $8,
-                fingerprint = $9, institution = $10, status = 'review', reason = NULL
+                fingerprint = $9, institution = $10, status = 'review', reason = NULL,
+                progress = NULL
             WHERE id = $11
             """,
             account["id"],
@@ -404,4 +410,5 @@ __all__ = [
     "import_payload",
     "list_imports",
     "retry_with_password",
+    "set_progress",
 ]

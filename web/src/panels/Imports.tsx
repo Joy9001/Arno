@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { Skeleton } from "@radix-ui/themes";
 import {
   AlertCircle,
@@ -7,8 +8,9 @@ import {
   MessageCircle,
   RefreshCw,
 } from "lucide-react";
-import { askAgent } from "../ask";
+import { askAgent, attachAgent } from "../ask";
 import { api, errorMessage } from "../api";
+import { STATEMENT_ACCEPT } from "../chat/statement-attachment";
 import { formatDate, formatMoment, formatPaise } from "../format";
 import { Busy } from "../Loading";
 import type {
@@ -16,6 +18,8 @@ import type {
   ImportLine,
   ImportList,
   ImportRecord,
+  LayoutList,
+  StatementLayout,
 } from "../types";
 import { useApi } from "../useApi";
 import "./Activity.css";
@@ -132,13 +136,7 @@ function Pager({
   );
 }
 
-function LineTable({
-  detail,
-  accountNames,
-}: {
-  detail: ImportRecord;
-  accountNames: Map<string, string>;
-}) {
+function LineTable({ detail }: { detail: ImportRecord }) {
   const [filter, setFilter] = useState("all");
   const [page, setPage] = useState(0);
   const lines = detail.lines.filter((line) => lineMatchesFilter(line, filter));
@@ -197,7 +195,6 @@ function LineTable({
                   <th scope="col">Narration</th>
                   <th scope="col">Amount</th>
                   <th scope="col">Balance</th>
-                  <th scope="col">Category</th>
                   <th scope="col">Match</th>
                 </tr>
               </thead>
@@ -210,29 +207,6 @@ function LineTable({
                       {formatPaise(line.amount_paise)}
                     </td>
                     <td>{line.balance_paise === null ? "—" : formatPaise(line.balance_paise)}</td>
-                    <td>
-                      {line.suggested_transfer_account_id
-                        ? `Transfer${
-                            accountNames.get(line.suggested_transfer_account_id)
-                              ? ` · ${accountNames.get(line.suggested_transfer_account_id)}`
-                              : ""
-                          }`
-                        : line.credit_kind === "refund"
-                          ? `Refund${
-                              line.suggested_category
-                                ? ` · ${line.suggested_category.category_name}`
-                                : ""
-                            }`
-                          : line.credit_kind === "transfer"
-                            ? `Repayment${
-                                accountNames.get(line.credit_source_account_id ?? "")
-                                  ? ` · ${accountNames.get(line.credit_source_account_id ?? "")}`
-                                  : ""
-                              }`
-                            : line.credit_kind === "income"
-                              ? "Income"
-                              : (line.suggested_category?.category_name ?? "—")}
-                    </td>
                     <td>
                       <span className="act-line-state">
                         <span
@@ -645,6 +619,138 @@ function HistorySkeleton() {
   );
 }
 
+function ParserLayouts() {
+  const layouts = useApi<LayoutList>("/api/layouts");
+  const [choice, setChoice] = useState<{ layout: StatementLayout; version: number } | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function applyVersion() {
+    if (!choice) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/layouts/${encodeURIComponent(choice.layout.id)}/rollback`, {
+        method: "POST",
+        body: JSON.stringify({ version: choice.version }),
+      });
+      setChoice(null);
+      layouts.reload();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="subcard" aria-labelledby="parser-layouts-heading">
+      <div className="section-head">
+        <h3 id="parser-layouts-heading">Parsers</h3>
+        <span className="fine">{layouts.data?.items.length ?? 0} layouts</span>
+      </div>
+      <p className="muted">
+        Each bank layout keeps its saved parser versions. Using an older version moves the
+        active pointer; nothing is deleted.
+      </p>
+      {layouts.error && (
+        <div className="act-error" role="alert">
+          <AlertCircle size={18} strokeWidth={1.8} aria-hidden="true" />
+          <div>
+            <strong>The parsers couldn’t load.</strong>
+            <p className="fine">{layouts.error}</p>
+          </div>
+          <button type="button" className="ghost small" onClick={layouts.reload}>
+            Retry
+          </button>
+        </div>
+      )}
+      {layouts.loading && !layouts.data && <Skeleton className="sk sk-line wide" />}
+      {layouts.data?.items.length === 0 && (
+        <p className="compact-empty">
+          No saved parsers yet. The first committed import saves one.
+        </p>
+      )}
+      {layouts.data && layouts.data.items.length > 0 && (
+        <ul className="plain-list">
+          {layouts.data.items.map((layout) => (
+            <li key={layout.id}>
+              <span>
+                <strong>{layout.institution}</strong> · {layout.kind} ·{" "}
+                {layout.variants.length} {layout.variants.length === 1 ? "variant" : "variants"}
+              </span>
+              <ul className="plain-list">
+                {layout.versions.map((version) => (
+                  <li key={version.version}>
+                    <span>
+                      Version {version.version} · {formatMoment(version.created_at)}
+                      {version.version === layout.active_version && (
+                        <span className="badge good"> Active</span>
+                      )}
+                    </span>
+                    {version.version !== layout.active_version && (
+                      <button
+                        type="button"
+                        className="ghost small"
+                        disabled={busy}
+                        onClick={() => setChoice({ layout, version: version.version })}
+                      >
+                        Use this version
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Dialog.Root
+        open={Boolean(choice)}
+        onOpenChange={(open) => {
+          if (!open) setChoice(null);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
+            <Dialog.Title>Use parser version {choice?.version}?</Dialog.Title>
+            <p className="fine">
+              {choice?.layout.institution} · {choice?.layout.kind}. The next statement from this
+              bank reruns version {choice?.version}.
+            </p>
+            <div className="row-actions">
+              <button type="button" disabled={busy} onClick={() => void applyVersion()}>
+                {busy ? (
+                  <>
+                    <Busy />
+                    Switching…
+                  </>
+                ) : (
+                  "Use this version"
+                )}
+              </button>
+              <Dialog.Close asChild>
+                <button type="button" className="ghost" disabled={busy}>
+                  Cancel
+                </button>
+              </Dialog.Close>
+            </div>
+            {error && (
+              <p className="error" role="alert">
+                {error}
+              </p>
+            )}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </section>
+  );
+}
+
 export function ImportsPanel({
   importId,
   onImportId,
@@ -694,14 +800,9 @@ export function ImportsPanel({
     (accounts.data?.accounts ?? []).map((account) => [account.id, account.name]),
   );
   const [selected, setSelected] = useState<ImportRecord | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [accountId, setAccountId] = useState("");
   const [password, setPassword] = useState("");
-  const [accountChoice, setAccountChoice] = useState("");
-  const [openingRupees, setOpeningRupees] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollError, setPollError] = useState<string | null>(null);
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
@@ -718,12 +819,10 @@ export function ImportsPanel({
   const pendingCreditCount = selectedLines.filter(
     (line) => line.credit_decision_required,
   ).length;
-  const openingRequired = selected?.opening_required ?? false;
   const ambiguousCount =
     selected?.counts?.ambiguous ??
     selectedLines.filter((line) => line.match_state === "ambiguous").length;
-  const decisions =
-    ambiguousCount + pendingTransferCount + pendingCreditCount + (openingRequired ? 1 : 0);
+  const decisions = ambiguousCount + pendingTransferCount + pendingCreditCount;
   const needsPoll = Boolean(
     selected && ["parsing", "needs_password", "needs_input"].includes(selected.status),
   );
@@ -757,8 +856,6 @@ export function ImportsPanel({
     setError(null);
     setPollError(null);
     setPassword("");
-    setAccountChoice("");
-    setOpeningRupees("");
     try {
       const next = await api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`);
       if (seq !== writeSeq.current) return;
@@ -786,8 +883,6 @@ export function ImportsPanel({
     setPollError(null);
     setDeepLinkError(null);
     setPassword("");
-    setAccountChoice("");
-    setOpeningRupees("");
     loadedImport.current = null;
     setSelected(null);
     api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`)
@@ -811,44 +906,6 @@ export function ImportsPanel({
       active = false;
     };
   }, [importId, deepLinkRetry]);
-
-  async function upload() {
-    if (!file) return;
-    writeSeq.current += 1;
-    setStarting(true);
-    setError(null);
-    setDeepLinkError(null);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const attachment = await api<{ id: string }>("/api/attachments", {
-        method: "POST",
-        body: form,
-      });
-      const started = await api<ImportRecord>("/api/imports", {
-        method: "POST",
-        body: JSON.stringify({
-          attachment_id: attachment.id,
-          account_id: accountId || null,
-        }),
-      });
-      setSelected(started);
-      loadedImport.current = started.import_id;
-      setDeepLinkError(null);
-      onImportId?.(started.import_id);
-      setFile(null);
-      setPassword("");
-      setAccountChoice("");
-      setOpeningRupees("");
-      setHistoryCursors([null]);
-      reloadList();
-      scrollToDetail(detailRef.current);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setStarting(false);
-    }
-  }
 
   async function act(path: string, body?: unknown) {
     if (!selected) return;
@@ -896,9 +953,6 @@ export function ImportsPanel({
         pendingCreditCount === 1 ? "credit" : "credits"
       }`,
     );
-  }
-  if (openingRequired) {
-    blockers.push("the opening balance");
   }
 
   return (
@@ -948,53 +1002,27 @@ export function ImportsPanel({
 
       <section className="subcard act-upload">
         <div className="section-head">
-          <h3>Upload a statement</h3>
+          <h3>Import a statement</h3>
           <span className="fine">PDF, spreadsheet, CSV, or text · 25 MB</span>
         </div>
         <div className="act-upload-fields">
           <label>
-            File
+            Statements
             <input
               type="file"
-              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              accept=".pdf,.xlsx,.xls,.xlsb,.ods,.csv,.tsv,.txt,.docx,.rtf,.ofx,.qfx,.xml,.json,.zip"
+              multiple
+              accept={STATEMENT_ACCEPT}
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                event.target.value = "";
+                if (files.length) attachAgent(files);
+              }}
             />
           </label>
-          <label>
-            Account (optional)
-            <select value={accountId} onChange={(event) => setAccountId(event.target.value)}>
-              <option value="">Infer from the file</option>
-              {(accounts.data?.accounts ?? [])
-                .filter((account) => ["bank", "card", "wallet"].includes(account.kind))
-                .map((account) => (
-                  <option key={account.id} value={account.id}>
-                    {account.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <button type="button" disabled={!file || starting} onClick={() => void upload()}>
-            {starting ? (
-              <>
-                <Busy />
-                Starting…
-              </>
-            ) : (
-              "Upload and start"
-            )}
-          </button>
         </div>
         <p className="fine">
-          Up to 25 MB. Files stay in the database only until commit or reject.
+          Choosing files attaches them to a chat message, so you can add a note and send.
         </p>
-        {accounts.error && (
-          <p className="act-field-error" role="alert">
-            Accounts didn’t load, so the statement’s account will be inferred.{" "}
-            <button type="button" className="inline-link" onClick={accounts.reload}>
-              Try again
-            </button>
-          </p>
-        )}
       </section>
 
       <div className="imports-layout">
@@ -1261,75 +1289,6 @@ export function ImportsPanel({
                 </div>
               )}
 
-              {selected.status === "needs_input" && (
-                <div className="password-card">
-                  <h4>One more answer</h4>
-                  <p className="fine">{selected.reason ?? "Which account is this statement for?"}</p>
-                  <div className="row-actions">
-                    <select
-                      aria-label="Statement account"
-                      value={accountChoice}
-                      disabled={busy !== null}
-                      onChange={(event) => setAccountChoice(event.target.value)}
-                    >
-                      <option value="">Choose an account</option>
-                      {(accounts.data?.accounts ?? [])
-                        .filter((account) => ["bank", "card", "wallet"].includes(account.kind))
-                        .map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.name}
-                          </option>
-                        ))}
-                    </select>
-                    <button
-                      type="button"
-                      disabled={!accountChoice || busy !== null}
-                      onClick={() => void act("account", { account_id: accountChoice })}
-                    >
-                      {busy === "account" ? (
-                        <>
-                          <Busy />
-                          Saving…
-                        </>
-                      ) : (
-                        "Use this account"
-                      )}
-                    </button>
-                  </div>
-                  {selected.reason?.toLowerCase().includes("opening") && (
-                    <div className="row-actions">
-                      <input
-                        type="number"
-                        step="0.01"
-                        aria-label="Opening balance in rupees"
-                        placeholder="Opening balance in rupees"
-                        value={openingRupees}
-                        disabled={busy !== null}
-                        onChange={(event) => setOpeningRupees(event.target.value)}
-                      />
-                      <button
-                        type="button"
-                        disabled={!openingRupees || busy !== null}
-                        onClick={() =>
-                          void act("opening", {
-                            opening_paise: Math.round(Number(openingRupees) * 100),
-                          })
-                        }
-                      >
-                        {busy === "opening" ? (
-                          <>
-                            <Busy />
-                            Saving…
-                          </>
-                        ) : (
-                          "Use this opening"
-                        )}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {selected.counts && (
                 <div className="summary-strip">
                   <div className="summary-cell">
@@ -1364,46 +1323,6 @@ export function ImportsPanel({
                   <p className="fine act-decision-note">
                     Nothing reaches the ledger until every item here is resolved and you commit.
                   </p>
-                  {openingRequired && (
-                    <div className="password-card">
-                      <h4>Opening balance needed</h4>
-                      <p className="fine">
-                        This statement's opening balance is not confirmed. Enter the actual
-                        opening from the statement or your records, including a negative card
-                        balance if that is the real figure. Zero is accepted only when it is the
-                        real balance; your value is recorded as a manual entry, not a printed fact.
-                      </p>
-                      <div className="row-actions">
-                        <input
-                          type="number"
-                          step="0.01"
-                          aria-label="Opening balance in rupees"
-                          placeholder="Opening balance in rupees"
-                          value={openingRupees}
-                          disabled={busy !== null}
-                          onChange={(event) => setOpeningRupees(event.target.value)}
-                        />
-                        <button
-                          type="button"
-                          disabled={!openingRupees || busy !== null}
-                          onClick={() =>
-                            void act("opening", {
-                              opening_paise: Math.round(Number(openingRupees) * 100),
-                            })
-                          }
-                        >
-                          {busy === "opening" ? (
-                            <>
-                              <Busy />
-                              Saving…
-                            </>
-                          ) : (
-                            "Use this opening"
-                          )}
-                        </button>
-                      </div>
-                    </div>
-                  )}
                   <CreditClassifyRows
                     detail={selected}
                     accounts={accounts.data?.accounts ?? []}
@@ -1419,11 +1338,7 @@ export function ImportsPanel({
               )}
 
               {selected.lines.length > 0 && (
-                <LineTable
-                  key={selected.import_id}
-                  detail={selected}
-                  accountNames={accountNames}
-                />
+                <LineTable key={selected.import_id} detail={selected} />
               )}
 
               {selected.review?.logged_not_on_statement &&
@@ -1484,6 +1399,8 @@ export function ImportsPanel({
           )}
         </section>
       </div>
+
+      <ParserLayouts />
     </section>
   );
 }

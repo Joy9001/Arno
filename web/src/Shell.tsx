@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, errorMessage } from "./api";
-import { ASK_EVENT } from "./ask";
+import { ASK_EVENT, ATTACH_EVENT } from "./ask";
 import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
 import { EvidencePanel } from "./EvidencePanel";
@@ -129,6 +129,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [focusImportId, setFocusImportId] = useState<string | null>(initial.importId);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [seed, setSeed] = useState<{ id: number; text: string } | null>(null);
+  const [attachments, setAttachments] = useState<{ id: number; files: File[] } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [todayOpen, setTodayOpen] = useState(false);
   const [homeVersion, setHomeVersion] = useState(0);
@@ -232,6 +233,20 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   }, [compact, page]);
 
   useEffect(() => {
+    const onAttach = (event: Event) => {
+      const files = (event as CustomEvent<File[]>).detail ?? [];
+      if (!files.length) return;
+      setAttachments({ id: Date.now(), files });
+      setFocusSignal((value) => value + 1);
+      if (compact && page !== "home") setAssistantOpen(true);
+      setTodayOpen(false);
+      setEvidence(null);
+    };
+    window.addEventListener(ATTACH_EVENT, onAttach);
+    return () => window.removeEventListener(ATTACH_EVENT, onAttach);
+  }, [compact, page]);
+
+  useEffect(() => {
     const onEvidence = (event: Event) => {
       const payload = (event as CustomEvent<ProjectionPayload>).detail;
       if (!payload || !Array.isArray(payload.curve)) return;
@@ -304,6 +319,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       seed={seed}
       focusSignal={focusSignal}
       onSeedConsumed={() => setSeed(null)}
+      attachments={attachments}
+      onAttachmentsConsumed={() => setAttachments(null)}
       focusThreadId={focusThreadId}
       focusMessageId={focusMessageId}
       onFocusHandled={() => {
@@ -455,6 +472,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               seed={seed}
               focusSignal={focusSignal}
               onSeedConsumed={() => setSeed(null)}
+              attachments={attachments}
+              onAttachmentsConsumed={() => setAttachments(null)}
               focusThreadId={focusThreadId}
               focusMessageId={focusMessageId}
               onFocusHandled={() => {
