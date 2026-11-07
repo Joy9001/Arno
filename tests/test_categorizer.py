@@ -405,6 +405,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         ],
     )
     monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 25)
+    monkeypatch.setattr(categorizer_mod, "CHECK_PAYEES", 2)
     answers = {
         "swiggy": CATEGORY,
         "zomato": CATEGORY,
@@ -434,8 +435,6 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         ]
         if not returns:
             return _output([ToolCallPart("pending_payees", {"import_id": import_id})])
-        if "check_payees" not in returns:
-            return _output([ToolCallPart("check_payees", {"import_id": import_id, "count": 2})])
         if "categorize_now" not in returns:
             return _output([ToolCallPart("categorize_now", {"keys": list(answers)})])
         if "save_categories" not in returns:

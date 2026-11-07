@@ -856,7 +856,6 @@ what they match ([`import.md`](import.md#categorizing-after-commit)).
 | Function | Description | Input | Output |
 |---|---|---|---|
 | `pending_payees` | Payees in this import no rule covers, with their row count, total, and a sample narration, plus your categories | `import_id` | `{"payees": [...], "categories": [...]}` |
-| `check_payees` | Payees a rule already covers, without their category, for measuring agreement | `import_id`, `count` | `[{"key", "narration"}]` |
 | `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `{"answers": {key: category}, "agreement": {"rate", "checked"}, "failed": [key]}`; the host keeps each reason for the hint; a failed chunk's keys can be asked again once |
 | `submit_batch` | Only when `BATCH` is set. Submit the keys as one batch; the job runner checks it and starts a fresh run when it ends | `keys` | `{"batch_id", "requests"}` |
 | `batch_results` | The ended batch's answers, in a run started for it | `batch_id` | The same shape as `categorize_now` |
@@ -867,8 +866,8 @@ what they match ([`import.md`](import.md#categorizing-after-commit)).
 ```
 commit queues a categorize job for the import
 rules label every row they match; the agent sees the rest
-agent: check_payees; ask about them with the pending ones
-host: agreement = share of check payees the model got right, returned to the agent and saved with the run
+host: adds a few payees a rule already covers, without their category, to the first ask
+host: agreement = share of those the model got right, returned to the agent and saved with the run
     a normal month: categorize_now
     a big backfill with BATCH set: submit_batch, and the run ends
         the job runner checks the batch; when it ends, a fresh run reads batch_results

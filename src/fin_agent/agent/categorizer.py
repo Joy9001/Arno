@@ -33,6 +33,7 @@ logger = logging.getLogger("fin_agent.agent.categorizer")
 
 CHUNK_PAYEES = 25
 CHUNK_CONCURRENCY = 8
+CHECK_PAYEES = 5
 BATCH_MAX_WAIT = timedelta(seconds=30)
 CATEGORIZE_USAGE_LIMITS = UsageLimits(request_limit=40, tool_calls_limit=80)
 
@@ -85,15 +86,13 @@ Work in this order:
 1. `pending_payees` with the import id from your task lists what no rule covers, with each
    payee's count, total, a sample narration, and direction. It also lists the user's category
    names.
-2. `check_payees` with the same import id returns a small sample of payees a rule already
-   covers, without their category. Ask about them in the same call as the pending payees. The
-   host compares your answers with the known categories; the agreement it returns is how much of
-   your judgement to keep.
-3. Ask the model. Normally call `categorize_now` once with every key. When `submit_batch` is
+2. Ask the model. Normally call `categorize_now` once with every key. When `submit_batch` is
    offered and this is a big backfill, call it instead; the run ends there and a later run reads
-   `batch_results`. If `categorize_now` returns `failed` keys, call it once more with just
+   `batch_results`. The host adds a few payees a rule already covers, without their category,
+   and returns how often the model agreed with them: that agreement is how much of the model's
+   judgement to keep. If `categorize_now` returns `failed` keys, call it once more with just
    those; keys that fail again have no answer and stay uncategorized.
-4. Review the answers against what `pending_payees` showed: `{"answers": {key: category or
+3. Review the answers against what `pending_payees` showed: `{"answers": {key: category or
    null}, "agreement": {...}, "failed": [keys]}`. The host keeps the full answer, including the
    reason, so you never see one. Then call `save_categories` once, with `distrust` holding only
    the keys you do not trust. It saves every answer the host holds: a trusted one labels its rows
@@ -246,25 +245,19 @@ async def pending_payees(ctx: RunContext[CategorizerDeps], import_id: str) -> di
     return {"payees": payees, "categories": categories}
 
 
-async def check_payees(
-    ctx: RunContext[CategorizerDeps], import_id: str, count: int = 5
-) -> list[dict[str, str]]:
-    """Payees a rule already covers, without their category, for measuring agreement."""
-    if import_id != ctx.deps.import_id:
-        raise ModelRetry("This run categorizes a different import.")
-    async with connect() as conn:
-        samples, known = await rules_mod.check_payees(conn, import_id, count)
-    ctx.deps.check_answers.update(known)
-    return samples
-
-
 async def _payloads_for(
     ctx: RunContext[CategorizerDeps], keys: list[str]
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    wanted = [normalize_pattern(key) for key in keys if normalize_pattern(key)]
+    wanted = list(dict.fromkeys(normalize_pattern(key) for key in keys if normalize_pattern(key)))
     if not wanted:
         raise ModelRetry("Pass the payee keys you want categorized.")
     async with connect() as conn:
+        if not ctx.deps.check_answers:
+            # Agreement is measured by the host, so it never depends on the agent asking for it:
+            # a few payees a rule already covers ride along without their category.
+            _samples, known = await rules_mod.check_payees(conn, ctx.deps.import_id, CHECK_PAYEES)
+            ctx.deps.check_answers.update(known)
+            wanted += [key for key in known if key not in wanted]
         payees = await rules_mod.payee_samples(conn, ctx.deps.import_id, wanted)
         categories, _by_name = await _categories(conn)
     payloads = _chunk_payloads(payees, wanted, categories)
@@ -496,7 +489,7 @@ def build_categorizer_agent(
     spend_store: Any = None,
     with_batch_results: bool = False,
 ) -> Agent[CategorizerDeps, CategorizeReport]:
-    tools: list[Any] = [pending_payees, check_payees, categorize_now, save_categories]
+    tools: list[Any] = [pending_payees, categorize_now, save_categories]
     if batch_model is not None and not with_batch_results:
         tools.append(submit_batch)
     if with_batch_results:
