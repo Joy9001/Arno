@@ -35,6 +35,61 @@ Work the groups in order, because each depends on the one before it.
 - [x] *(Optional)* Remove the backup manifest race. The dump and the manifest now come from one
       `pg_export_snapshot()`, and `tests/test_l8_ship.py` forces a write between them.
 
+## A2. Import redesign: code, in this order
+
+Agreed November 7, 2026 ([`import.md`](import.md#the-pipeline)). Each phase ends with tests green
+and pushed to `main`. Group B's import items wait for this group.
+
+### Phase 1: schema, kept files, versions, the gate (no model)
+
+- [ ] Migration `0013`: `statement_layouts` by bank and statement type, with header variants and an
+      active-version pointer; append-only `parser_versions`; `category_rules` with `match`,
+      `pattern`, `priority`, and the `seed` source; a label records the rule that fired.
+- [ ] Statement files are kept: no deletion at commit or reject, an unlocked copy stored once the
+      file opens, and an endpoint to delete one.
+- [ ] `submit_parser` is the gate: a fresh sandbox, the checks, and a replay on every stored,
+      committed, not-undone statement from that bank that must reproduce its `statement_lines`
+      exactly; the first mismatch is the reason.
+- [ ] A commit saves a new version and moves the pointer; a rollback moves it back.
+- [ ] Tests: replay set excludes undone imports and deleted files; a mismatch blocks; rollback works.
+
+### Phase 2: the parser subagent
+
+- [ ] One `DelegationTasks` owner opened at startup, with `TASKS_DIR` and a `PostgresStepStore`;
+      each chat turn binds it and passes `DelegationReports`.
+- [ ] `SubAgents` with task control on the main agent; the `parser` subagent with its own
+      instructions (the old skill text), the `PARSE` model role, `forward_usage=False` and its own
+      ceilings, `ask_parent`, and `Planning` keyed by task ID.
+- [ ] Parser tools keyed by `import_id`: `open_imports`, `wait_for_password`, `saved_parser`, the
+      `doc_*` readers, `ledger_opening`, `check_statement`, `transcribe_page`, `submit_parser`,
+      `suggest_transfers`.
+- [ ] Removed: `Skills`, `skills_backend.py`, `SKILL.md`, `parse_run.py`, the `import_statement`
+      job kind, the job body in `pipeline.py`, and `import_document`.
+- [ ] Tests: a full parse, a clean replay, a repair after a gate failure, a two-bank upload, a resume
+      after a simulated crash, and no password in any history. Parse evals updated.
+
+### Phase 3: web
+
+- [ ] An upload from the Imports panel posts into chat; there's no direct import path.
+- [ ] The import card uses assistant-ui's Task card, Agent plan, Agent status, Job progress, and
+      Option list, fed by an API for the task's state and plan.
+- [ ] The review screen drops categories and keeps the transfer confirmations.
+
+### Phase 4: the categorizer
+
+- [ ] Rules engine: match types and priority, payment-rail stripping, the seed list of about 150
+      merchants, payment apps never matched by name, refunds take the original category.
+- [ ] Categorizer agent and tools; `categorize_import` and `collect_batch` jobs; the `BATCH` role.
+- [ ] The Uncategorized list, grouped by payee, with people asked once.
+- [ ] Removed: the pre-commit categorizer call and `suggested_category` in commit.
+- [ ] Tests, including the agreement rate saved with each run.
+
+### Phase 5: end to end on the dev instance
+
+- [ ] A real SBI import: chat stays responsive, a restart resumes, a second import of the same
+      layout replays, and categorizing finishes in minutes with no timeouts. Compare with Phoenix
+      session `__LOCALID_y8OJ3G9`.
+
 ## B. Owner setup and measurements
 
 Each item needs real data, a real endpoint, or a device. Most can't run in CI.
