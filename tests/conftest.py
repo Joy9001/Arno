@@ -127,6 +127,7 @@ RESET_TABLES = (
     "goals",
     "scheduled_questions",
     "category_rules",
+    "categorize_runs",
     "baselines",
     "conversations",
     "messages",

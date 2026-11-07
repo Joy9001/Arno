@@ -748,9 +748,6 @@ async def submit_parser_code(
             fingerprint=item["fingerprint"],
             period=item["period"],
         )
-        from fin_agent.importers.categorizer import categorize_import
-
-        await categorize_import(conn, item["import_id"], item["account"])
 
     return {
         "status": "parser_submitted",

@@ -101,7 +101,7 @@ async def test_rule_edit_upserts_one_rule_and_becomes_a_user_rule(authed_client)
     created = authed_client.post(
         "/api/category-rules",
         json={
-            "merchant_pattern": "Settings Test Merchant",
+            "pattern": "Settings Test Merchant",
             "category_id": categories[0]["id"],
             "source": "llm",
         },
@@ -113,7 +113,7 @@ async def test_rule_edit_upserts_one_rule_and_becomes_a_user_rule(authed_client)
     edited = authed_client.post(
         "/api/category-rules",
         json={
-            "merchant_pattern": rule["merchant_pattern"],
+            "pattern": rule["pattern"],
             "category_id": categories[1]["id"],
             "source": "user",
         },

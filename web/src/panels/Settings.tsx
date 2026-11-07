@@ -578,13 +578,13 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
       ? categoryId
       : (activeCategories[0]?.id ?? "");
   const rules = [...tree.rules].sort(
-    (a, b) => b.hits - a.hits || a.merchant_pattern.localeCompare(b.merchant_pattern),
+    (a, b) => b.hits - a.hits || a.pattern.localeCompare(b.pattern),
   );
   const query = ruleQuery.trim().toLowerCase();
   const filteredRules = query
     ? rules.filter(
         (rule) =>
-          rule.merchant_pattern.toLowerCase().includes(query) ||
+          rule.pattern.toLowerCase().includes(query) ||
           rule.category_name.toLowerCase().includes(query),
       )
     : rules;
@@ -680,7 +680,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
       await api("/api/category-rules", {
         method: "POST",
         body: JSON.stringify({
-          merchant_pattern: merchant.trim(),
+          pattern: merchant.trim(),
           category_id: selectedCategoryId,
           source: "user",
         }),
@@ -704,7 +704,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
       await api("/api/category-rules", {
         method: "POST",
         body: JSON.stringify({
-          merchant_pattern: rule.merchant_pattern,
+          pattern: rule.pattern,
           category_id: ruleCategoryId,
           source: "user",
         }),
@@ -712,8 +712,8 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
       setEditingRuleId(null);
       setMessage(
         rule.source === "llm"
-          ? `“${rule.merchant_pattern}” is now your rule and beats the agent's guess.`
-          : `“${rule.merchant_pattern}” now uses the selected category.`,
+          ? `“${rule.pattern}” is now your rule and beats the agent's guess.`
+          : `“${rule.pattern}” now uses the selected category.`,
       );
       onChanged();
     } catch (caught) {
@@ -728,7 +728,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
     setMessage(null);
     try {
       await api(`/api/category-rules/${rule.id}`, { method: "DELETE" });
-      setMessage(`Rule for “${rule.merchant_pattern}” deleted. Past labels stay unchanged.`);
+      setMessage(`Rule for “${rule.pattern}” deleted. Past labels stay unchanged.`);
       onChanged();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -911,11 +911,11 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
               <tbody>
                 {visibleRules.map((rule) => (
                   <tr key={rule.id}>
-                    <td>{rule.merchant_pattern}</td>
+                    <td>{rule.pattern}</td>
                     <td>
                       {editingRuleId === rule.id ? (
                         <select
-                          aria-label={`Category for ${rule.merchant_pattern}`}
+                          aria-label={`Category for ${rule.pattern}`}
                           value={ruleCategoryId}
                           onChange={(event) => setRuleCategoryId(event.target.value)}
                         >
@@ -936,7 +936,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
                     </td>
                     <td>
                       <span className={`badge ${rule.source === "user" ? "muted" : "warn"}`}>
-                        {rule.source === "user" ? "You" : "Agent"}
+                        {rule.source === "user" ? "You" : rule.source === "llm" ? "Agent" : "Seed"}
                       </span>
                     </td>
                     <td className="num">{rule.hits}</td>
@@ -979,7 +979,7 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
                             <ConfirmButton
                               label="Delete"
                               icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
-                              title={`Delete the rule for “${rule.merchant_pattern}”?`}
+                              title={`Delete the rule for “${rule.pattern}”?`}
                               description="Future captures stop using this rule. Labels already on past movements stay unchanged."
                               confirmLabel="Delete rule"
                               onConfirm={() => void removeRule(rule)}

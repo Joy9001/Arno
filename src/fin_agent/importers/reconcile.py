@@ -496,8 +496,7 @@ async def _classify_credit(
         raise ValueError("credit_kind must be refund, transfer, or income")
     changes: dict[str, Any] = {"credit_kind": credit_kind, "credit_classified_by": "user"}
     if credit_kind == "refund":
-        suggested = (line.get("match_detail") or {}).get("suggested_category") or {}
-        chosen = str(category_id or suggested.get("category_id") or "").strip()
+        chosen = str(category_id or "").strip()
         if chosen:
             category = await conn.fetchrow(
                 "SELECT id FROM categories WHERE id = $1 AND active", chosen

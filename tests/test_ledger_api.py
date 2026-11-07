@@ -228,11 +228,11 @@ async def test_category_and_rule_endpoints(authed_client):
 
     rule = authed_client.post(
         "/api/category-rules",
-        json={"merchant_pattern": "Supertails", "category_id": category_id, "source": "user"},
+        json={"pattern": "Supertails", "category_id": category_id, "source": "user"},
     )
     assert rule.status_code == 201, rule.text
     rules = authed_client.get("/api/category-rules").json()["items"]
-    assert any(row["merchant_pattern"] == "supertails" for row in rules)
+    assert any(row["pattern"] == "supertails" for row in rules)
 
     categories = authed_client.get("/api/categories").json()
     assert any(row["name"] == "Pets" for row in categories["categories"])

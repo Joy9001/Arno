@@ -47,7 +47,7 @@ async def test_goal_creation_is_undoable(ledger):
 async def test_rule_creation_is_undoable(ledger):
     rule = await upsert_rule(
         ledger,
-        merchant_pattern="Swiggy",
+        pattern="Swiggy",
         category_id=await _category(ledger, "Food & Dining"),
         source="user",
     )

@@ -487,14 +487,12 @@ async def seed_demo(
     await update_account_emi(conn, loan, emi_schedule)
 
     await upsert_rule(
-        conn, merchant_pattern="BigBasket", category_id=groceries, source="llm", actor="system"
+        conn, pattern="BigBasket", category_id=groceries, source="llm", actor="system"
     )
     await upsert_rule(
-        conn, merchant_pattern="BigBasket", category_id=shopping, source="user", actor="system"
+        conn, pattern="BigBasket", category_id=shopping, source="user", actor="system"
     )
-    await upsert_rule(
-        conn, merchant_pattern="Swiggy", category_id=food, source="user", actor="system"
-    )
+    await upsert_rule(conn, pattern="Swiggy", category_id=food, source="user", actor="system")
 
     for months_ago in (3, 2, 1, 0):
         salary_day = last_working_day(

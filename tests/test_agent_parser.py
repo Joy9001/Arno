@@ -177,7 +177,7 @@ async def test_a_second_statement_replays_the_saved_parser_cleanly(ledger):
         )
     )
     await _run(agent, AgentDeps(conversation_id="conv_replay"))
-    await commit_import(ledger, first["id"], categorize=False)
+    await commit_import(ledger, first["id"])
 
     second_attachment = await _att(
         ledger,
@@ -319,7 +319,7 @@ async def test_own_account_suggestions_land_on_the_lines(ledger):
         row["id"],
     )
     assert lines[2]["match_detail"]["suggested_transfer_account_id"] == other["id"]
-    assert all(line["match_detail"].get("suggested_category") is None for line in lines)
+    assert all("suggested_category" not in line["match_detail"] for line in lines)
     assert other["id"] in _returns(result.all_messages())
 
 

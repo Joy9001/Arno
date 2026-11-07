@@ -6,22 +6,17 @@ replaces the guess. Categories are labels, so recategorizing never touches pgled
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from fin_agent.db.conn import Connection, quote_ident
+from fin_agent.importers.rules import load_rules, match_rule, normalize_pattern
 from fin_agent.india.categories import DEFAULT_CATEGORIES
 from fin_agent.ledger.audit import WriteGroup, write_group
 from fin_agent.ledger.common import today
 from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 
 RuleSource = str
-_NORMALIZE_RE = re.compile(r"\s+")
-
-
-def normalize_pattern(text: str) -> str:
-    """One spelling for a merchant: trim, collapse whitespace, lower-case."""
-    return _NORMALIZE_RE.sub(" ", text.strip()).lower()
+MATCH_TYPES = ("equals", "contains", "regex")
 
 
 async def _category_row(conn: Connection, category_id: str) -> dict[str, Any]:
@@ -148,23 +143,8 @@ async def list_rules(conn: Connection) -> list[dict[str, Any]]:
         SELECT r.*, c.name AS category_name
         FROM category_rules r
         JOIN categories c ON c.id = r.category_id
-        ORDER BY r.source DESC, r.merchant_pattern
+        ORDER BY r.source DESC, r.priority DESC, r.pattern
         """
-    )
-
-
-async def _find_rule(conn: Connection, patterns: list[str], source: str) -> dict[str, Any] | None:
-    if not patterns:
-        return None
-    return await conn.fetchrow(
-        """
-        SELECT * FROM category_rules
-        WHERE merchant_pattern = ANY($1) AND source = $2
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT 1
-        """,
-        patterns,
-        source,
     )
 
 
@@ -179,7 +159,7 @@ async def resolve_category(
     """Resolve a category, returning where it came from.
 
     Order: an explicit category, a user rule, the payee's default (also a user correction), an
-    llm rule, then nothing.
+    llm rule, a seed rule, then nothing.
     """
     if category_id:
         category = await _category_row(conn, category_id)
@@ -198,7 +178,8 @@ async def resolve_category(
         display_name = display_name or payee["display_name"]
         upi_id = upi_id or payee["upi_id"]
 
-    patterns = [normalize_pattern(text) for text in (display_name, upi_id) if text]
+    texts = [text for text in (display_name, upi_id) if text]
+    rules = await load_rules(conn) if texts else []
 
     async def from_rule(rule: dict[str, Any]) -> dict[str, Any]:
         await conn.execute("UPDATE category_rules SET hits = hits + 1 WHERE id = $1", rule["id"])
@@ -210,7 +191,11 @@ async def resolve_category(
             "rule_id": rule["id"],
         }
 
-    user_rule = await _find_rule(conn, patterns, "user")
+    def best(sources: tuple[str, ...]) -> dict[str, Any] | None:
+        found = [match_rule(text, rules, sources=sources) for text in texts]
+        return next((rule for rule in found if rule is not None), None)
+
+    user_rule = best(("user",))
     if user_rule is not None:
         return await from_rule(user_rule)
 
@@ -224,49 +209,64 @@ async def resolve_category(
             "rule_id": None,
         }
 
-    llm_rule = await _find_rule(conn, patterns, "llm")
-    if llm_rule is not None:
-        return await from_rule(llm_rule)
+    for sources in (("llm",), ("seed",)):
+        rule = best(sources)
+        if rule is not None:
+            return await from_rule(rule)
 
     return {"category_id": None, "category_name": None, "source": "none", "rule_id": None}
 
 
-async def _upsert_rule_in_group(
+async def upsert_rule_in_group(
     conn: Connection,
     group: WriteGroup,
     *,
-    merchant_pattern: str,
+    pattern: str,
     category_id: str,
     source: str,
+    match: str = "equals",
+    priority: int = 0,
 ) -> dict[str, Any]:
-    pattern = normalize_pattern(merchant_pattern)
-    if not pattern:
-        raise InvalidLedgerError("A rule needs a merchant pattern")
+    normalized = normalize_pattern(pattern)
+    if not normalized:
+        raise InvalidLedgerError("A rule needs a pattern")
+    if source not in {"user", "llm", "seed"}:
+        raise InvalidLedgerError("A rule source is user, llm, or seed")
+    if match not in MATCH_TYPES:
+        raise InvalidLedgerError("A rule match is equals, contains, or regex")
     await _category_row(conn, category_id)
 
     before = await conn.fetchrow(
-        "SELECT * FROM category_rules WHERE merchant_pattern = $1", pattern
+        "SELECT * FROM category_rules WHERE match = $1 AND pattern = $2", match, normalized
     )
     after = await conn.fetchrow(
         """
-        INSERT INTO category_rules (merchant_pattern, category_id, source)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (merchant_pattern) DO UPDATE
+        INSERT INTO category_rules (match, pattern, category_id, source, priority)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (match, pattern) DO UPDATE
             SET category_id = EXCLUDED.category_id,
                 source = EXCLUDED.source,
+                priority = EXCLUDED.priority,
                 updated_at = now()
-            WHERE category_rules.source = 'llm' OR EXCLUDED.source = 'user'
+            WHERE EXCLUDED.source = 'user'
+               OR (EXCLUDED.source = 'llm' AND category_rules.source = 'seed')
         RETURNING *
         """,
-        pattern,
+        match,
+        normalized,
         category_id,
         source,
+        priority,
     )
     if after is None:
         after = before
     if before is None:
         group.record_created("category_rules", after)
-    elif after["category_id"] != before["category_id"] or after["source"] != before["source"]:
+    elif (
+        after["category_id"] != before["category_id"]
+        or after["source"] != before["source"]
+        or after["priority"] != before["priority"]
+    ):
         group.record_updated("category_rules", after["id"], before, after)
     return dict(after)
 
@@ -274,21 +274,23 @@ async def _upsert_rule_in_group(
 async def upsert_rule(
     conn: Connection,
     *,
-    merchant_pattern: str,
+    pattern: str,
     category_id: str,
     source: str = "user",
+    match: str = "equals",
+    priority: int = 0,
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    if source not in {"user", "llm"}:
-        raise InvalidLedgerError("A rule source is user or llm")
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await _upsert_rule_in_group(
+        after = await upsert_rule_in_group(
             conn,
             group,
-            merchant_pattern=merchant_pattern,
+            pattern=pattern,
             category_id=category_id,
             source=source,
+            match=match,
+            priority=priority,
         )
     return after | {"undo_id": group.group_id}
 
@@ -296,7 +298,7 @@ async def upsert_rule(
 async def learn_rule(
     conn: Connection,
     *,
-    merchant_pattern: str,
+    pattern: str,
     category_id: str,
     actor: str = "agent",
     message_id: str | None = None,
@@ -304,7 +306,7 @@ async def learn_rule(
     """Save the categorizer's answer as an `llm` rule. It never replaces a user rule."""
     return await upsert_rule(
         conn,
-        merchant_pattern=merchant_pattern,
+        pattern=pattern,
         category_id=category_id,
         source="llm",
         actor=actor,
@@ -391,10 +393,10 @@ async def _apply_payee_correction_in_group(
     )
     group.record_updated("payees", payee_id, payee, after)
 
-    rule = await _upsert_rule_in_group(
+    rule = await upsert_rule_in_group(
         conn,
         group,
-        merchant_pattern=payee["display_name"],
+        pattern=payee["display_name"],
         category_id=category_id,
         source="user",
     )

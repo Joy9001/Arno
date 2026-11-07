@@ -129,7 +129,6 @@ async def seed_committed_statement(
     period_start: date | None = None,
     period_end: date | None = None,
     debit: bool = True,
-    categorize: bool = False,
 ) -> dict[str, Any]:
     """Commit one synthetic statement line through the parser gate and `commit_import`.
 
@@ -180,7 +179,7 @@ async def seed_committed_statement(
         reason = current["reason"] if current is not None else "the import disappeared"
         raise RuntimeError(f"Synthetic import did not reach review: {reason}")
 
-    committed = await commit_import(conn, import_row["id"], categorize=categorize)
+    committed = await commit_import(conn, import_row["id"])
     line = await conn.fetchrow(
         "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY id LIMIT 1",
         import_row["id"],

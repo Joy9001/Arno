@@ -29,6 +29,7 @@ from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
 from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
 from fin_agent.db.pre_migration import dump_before_migrating
+from fin_agent.importers.seed_rules import ensure_seed_rules
 from fin_agent.jobs.runner import JobRunner, recover_interrupted_jobs
 from fin_agent.jobs.schedules import ensure_builtin_schedules, sync_scheduled_questions
 from fin_agent.ledger.accounts import ensure_system_accounts
@@ -52,6 +53,7 @@ async def _bootstrap(settings: Settings) -> list[str]:
         await set_agent_ro_password(conn, settings.agent_ro_password)
         await set_backup_password(conn, settings.backup_password)
         await ensure_default_categories(conn)
+        await ensure_seed_rules(conn)
         await ensure_system_accounts(conn)
         await ensure_vapid_keys(conn, subject=settings.vapid_subject)
         await ensure_builtin_schedules(conn)

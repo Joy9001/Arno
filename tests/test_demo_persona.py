@@ -60,12 +60,8 @@ async def test_demo_persona_seeds_a_complete_indian_ledger(db):
     assert owed["Ravi"]["balance_paise"] > 0
     assert owed["Amit"]["balance_paise"] == 20_000
 
-    rules = await db.fetch(
-        "SELECT merchant_pattern, source FROM category_rules ORDER BY merchant_pattern"
-    )
-    assert any(
-        rule["merchant_pattern"] == "bigbasket" and rule["source"] == "user" for rule in rules
-    )
+    rules = await db.fetch("SELECT pattern, source FROM category_rules ORDER BY pattern")
+    assert any(rule["pattern"] == "bigbasket" and rule["source"] == "user" for rule in rules)
 
     movements = (await list_movements(db, limit=200))["items"]
     assert movements

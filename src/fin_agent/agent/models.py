@@ -7,6 +7,7 @@ history, because Ollama otherwise truncates silently.
 
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -22,6 +23,8 @@ from pydantic_ai_harness.compaction import estimate_context_tokens
 
 DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_FALLBACK_CONTEXT_WINDOW = 32_000
+
+logger = logging.getLogger("fin_agent.agent.models")
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,12 +185,43 @@ def backup_model() -> Model | None:
     return WindowLimited(build_model(config), config.context_window)
 
 
+def batch_model() -> Model | None:
+    """The optional batch model, or None when `BATCH_PROVIDER` or `BATCH_MODEL` is unset.
+
+    A batch API exists only for the providers' native APIs, so this builds a native model rather
+    than the OpenAI-compatible chat path: Anthropic, OpenAI Responses, or Gemini outside Vertex.
+    """
+    provider_name = os.environ.get("BATCH_PROVIDER", "").strip().lower()
+    model_name = os.environ.get("BATCH_MODEL", "").strip()
+    if not provider_name or not model_name:
+        return None
+    api_key = os.environ.get("BATCH_API_KEY", "").strip() or None
+    if provider_name in ("google", "gemini"):
+        from pydantic_ai.models.google import GoogleModel
+        from pydantic_ai.providers.google import GoogleProvider
+
+        return GoogleModel(model_name, provider=GoogleProvider(api_key=api_key))
+    if provider_name == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        return AnthropicModel(model_name, provider=AnthropicProvider(api_key=api_key))
+    if provider_name == "openai":
+        from pydantic_ai.models.openai import OpenAIResponsesModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        return OpenAIResponsesModel(model_name, provider=OpenAIProvider(api_key=api_key))
+    logger.warning("unknown BATCH_PROVIDER %r; batching is off", provider_name)
+    return None
+
+
 __all__ = [
     "DEFAULT_CONTEXT_WINDOW",
     "DEFAULT_FALLBACK_CONTEXT_WINDOW",
     "RoleConfig",
     "WindowLimited",
     "backup_model",
+    "batch_model",
     "build_model",
     "chat_config",
     "model_for",

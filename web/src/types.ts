@@ -170,10 +170,12 @@ export type Category = {
 
 export type Rule = {
   id: string;
-  merchant_pattern: string;
+  match: "equals" | "contains" | "regex";
+  pattern: string;
   category_id: string;
   category_name: string;
-  source: "user" | "llm";
+  source: "user" | "llm" | "seed";
+  priority: number;
   hits: number;
 };
 
@@ -181,6 +183,20 @@ export type CategoryTree = {
   categories: Category[];
   rules: Rule[];
   as_of: string;
+};
+
+export type UncategorizedGroup = {
+  key: string;
+  kind: "merchant" | "person";
+  count: number;
+  total_paise: number;
+  narration: string;
+  hint: { category_id: string | null; reason: string | null } | null;
+};
+
+export type UncategorizedList = {
+  groups: UncategorizedGroup[];
+  total: number;
 };
 
 export type BackupStatus = {
@@ -250,7 +266,6 @@ export type ImportLine = {
   match_state: "new" | "certain" | "ambiguous" | "merged" | "ignored";
   movement_id: string | null;
   counterparty: string | null;
-  suggested_category: { category_id: string; category_name: string; source: string } | null;
   suggested_transfer_account_id: string | null;
   transfer_confirmed: boolean;
   credit_kind: "refund" | "transfer" | "income" | null;

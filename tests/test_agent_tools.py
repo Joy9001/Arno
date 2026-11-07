@@ -257,9 +257,7 @@ async def test_correct_movement_learns_a_user_rule(demo_ledger):
         message_id=None,
     )
     assert result["rows_changed"] >= 1
-    rule = await demo_ledger.fetchrow(
-        "SELECT * FROM category_rules WHERE merchant_pattern = 'swiggy'"
-    )
+    rule = await demo_ledger.fetchrow("SELECT * FROM category_rules WHERE pattern = 'swiggy'")
     assert rule["source"] == "user"
     assert rule["category_id"] == category["id"]
 

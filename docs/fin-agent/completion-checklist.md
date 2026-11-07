@@ -78,14 +78,14 @@ and pushed to `main`. Group B's import items wait for this group.
 
 ### Phase 4: the categorizer
 
-- [ ] A migration gives `category_rules` `match`, `pattern`, `priority`, and the `seed` source, and a
+- [x] A migration gives `category_rules` `match`, `pattern`, `priority`, and the `seed` source, and a
       label records the rule that fired.
-- [ ] Rules engine: match types and priority, payment-rail stripping, the seed list of about 150
+- [x] Rules engine: match types and priority, payment-rail stripping, the seed list of about 150
       merchants, payment apps never matched by name, refunds take the original category.
-- [ ] Categorizer agent and tools; `categorize_import` and `collect_batch` jobs; the `BATCH` role.
-- [ ] The Uncategorized list, grouped by payee, with people asked once.
-- [ ] Removed: the pre-commit categorizer call and `suggested_category` in commit.
-- [ ] Tests, including the agreement rate saved with each run.
+- [x] Categorizer agent and tools; `categorize_import` and `collect_batch` jobs; the `BATCH` role.
+- [x] The Uncategorized list, grouped by payee, with people asked once.
+- [x] Removed: the pre-commit categorizer call and `suggested_category` in commit.
+- [x] Tests, including the agreement rate saved with each run.
 
 ### Phase 5: end to end on the dev instance
 

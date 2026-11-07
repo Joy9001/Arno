@@ -22,6 +22,7 @@ from fin_agent.ledger import (
     preference_edits,
     schedules,
     settings,
+    uncategorized,
 )
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import projection as projection_tools
@@ -275,9 +276,16 @@ class CategoryUpdate(ApiModel):
 
 
 class RuleCreate(ApiModel):
-    merchant_pattern: str = Field(min_length=1, max_length=200)
+    pattern: str = Field(min_length=1, max_length=200)
     category_id: str
     source: Literal["user", "llm"] = "user"
+    match: Literal["equals", "contains", "regex"] = "equals"
+    priority: int = 0
+
+
+class UncategorizedAnswer(ApiModel):
+    key: str = Field(min_length=1, max_length=200)
+    category_id: str
 
 
 class SettingsUpdate(ApiModel):
@@ -450,6 +458,16 @@ async def post_rule(body: RuleCreate, conn: Database) -> dict[str, Any]:
 @router.delete("/category-rules/{rule_id}")
 async def delete_rule(rule_id: str, conn: Database) -> dict[str, Any]:
     return await categories.delete_rule(conn, rule_id)
+
+
+@router.get("/uncategorized")
+async def get_uncategorized(conn: Database) -> dict[str, Any]:
+    return await uncategorized.groups(conn)
+
+
+@router.post("/uncategorized/answer")
+async def post_uncategorized_answer(body: UncategorizedAnswer, conn: Database) -> dict[str, Any]:
+    return await uncategorized.answer(conn, key=body.key, category_id=body.category_id)
 
 
 @router.get("/schedules/upcoming")

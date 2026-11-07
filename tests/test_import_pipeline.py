@@ -6,11 +6,8 @@ import hashlib
 from datetime import date
 
 import pytest
-from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from fin_agent.agent.parser import submit_parser_code
-from fin_agent.importers.categorizer import categorize_import
 from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.layout import detect_fingerprint
 from fin_agent.importers.layouts import save_version
@@ -95,7 +92,7 @@ async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     assert detail["counts"]["new"] == 3
     assert len(detail["lines"]) == 3
 
-    result = await commit_import(ledger, row["id"], categorize=False)
+    result = await commit_import(ledger, row["id"])
     assert result["status"] == "committed"
     detail = await import_payload(ledger, row["id"])
     assert detail["status"] == "committed"
@@ -133,7 +130,7 @@ async def test_a_verified_import_anchors_an_unknown_account_and_undo_removes_it(
 
     detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
-    await commit_import(ledger, row["id"], categorize=False)
+    await commit_import(ledger, row["id"])
     assert (await account_summary(ledger))["cash_quality"]["status"] == "known"
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] == 34402890
@@ -160,7 +157,7 @@ async def test_a_backdated_import_keeps_a_newer_statement_balance(ledger):
 
     detail = await import_payload(ledger, row["id"])
     assert detail["check"] == "VERIFIED"
-    await commit_import(ledger, row["id"], categorize=False)
+    await commit_import(ledger, row["id"])
 
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert account_row["statement_balance_paise"] == 30_000_000
@@ -189,7 +186,7 @@ async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger)
     assert detail["parser_saved"] is False
     assert await ledger.fetchval("SELECT count(*) FROM statement_layouts") == 0
 
-    await commit_import(ledger, row["id"], categorize=False)
+    await commit_import(ledger, row["id"])
     assert await ledger.fetchval("SELECT count(*) FROM statement_layouts") == 1
     assert await ledger.fetchval("SELECT count(*) FROM parser_versions") == 1
     layout = await ledger.fetchrow("SELECT * FROM statement_layouts")
@@ -271,7 +268,7 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
     )
     line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
     assert line["match_state"] == "certain"
-    await commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id)
     corrected = await ledger.fetchrow("SELECT * FROM movements WHERE id = $1", line["movement_id"])
     assert str(corrected["date"]) == "2026-04-03"
     label = await ledger.fetchrow(
@@ -341,7 +338,7 @@ async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledg
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    result = await commit_import(ledger, import_id, categorize=False)
+    result = await commit_import(ledger, import_id)
     assert result["adjustment_paise"] == 5000
     row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert row["statement_balance_paise"] == 24522890
@@ -379,16 +376,7 @@ async def test_a_failed_check_writes_no_rows(ledger):
     assert detail["status"] == "failed"
     assert detail["lines"] == []
     with pytest.raises(InvalidLedgerError):
-        await commit_import(ledger, row["id"], categorize=False)
-
-
-def _batch_model(calls: dict, answers: list[dict]) -> FunctionModel:
-    def respond(messages, info: AgentInfo) -> ModelResponse:
-        del messages
-        calls["n"] += 1
-        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"response": answers})])
-
-    return FunctionModel(respond)
+        await commit_import(ledger, row["id"])
 
 
 async def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, dict]:
@@ -418,128 +406,7 @@ async def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, di
     return import_id, raw_account
 
 
-async def test_one_batched_call_categorizes_many_lines_sharing_keys(ledger):
-    account = await _account(ledger)
-    import_id, raw_account = await _review_import(
-        ledger,
-        account,
-        [
-            {
-                "date": "2026-04-01",
-                "description": "UPI/DR/123456789012/SWIGGY BANGALORE/ramesh@okaxis",
-                "debit": 45000,
-                "credit": 0,
-                "balance": 24522890,
-                "counterparty": "Swiggy",
-            },
-            {
-                "date": "2026-04-02",
-                "description": "UPI/DR/123456789013/SWIGGY BANGALORE/ramesh@okaxis",
-                "debit": 30000,
-                "credit": 0,
-                "balance": 24492890,
-                "counterparty": "Swiggy",
-            },
-            {
-                "date": "2026-04-03",
-                "description": "UPI/DR/223456789012/AMAZON PAY INDIA/amazon@okhdfcbank",
-                "debit": 120000,
-                "credit": 0,
-                "balance": 24372890,
-                "counterparty": "Amazon",
-            },
-        ],
-    )
-    calls = {"n": 0}
-    counts = await categorize_import(
-        ledger,
-        import_id,
-        raw_account,
-        model=_batch_model(
-            calls,
-            [
-                {"key": "swiggy", "category": "Food & Dining"},
-                {"key": "amazon", "category": "Shopping"},
-            ],
-        ),
-    )
-
-    assert calls["n"] == 1
-    assert counts == {
-        "lines": 3,
-        "rule_hits": 0,
-        "llm_keys": 2,
-        "llm_calls": 1,
-    }
-    lines = await ledger.fetch(
-        "SELECT match_detail FROM statement_lines WHERE import_id = $1 ORDER BY date",
-        import_id,
-    )
-    assert [line["match_detail"]["suggested_category"]["category_name"] for line in lines] == [
-        "Food & Dining",
-        "Food & Dining",
-        "Shopping",
-    ]
-    rules = await ledger.fetch(
-        "SELECT merchant_pattern FROM category_rules WHERE source = 'llm' ORDER BY merchant_pattern"
-    )
-    assert [row["merchant_pattern"] for row in rules] == ["amazon", "swiggy"]
-
-
-async def test_an_exact_rule_hit_skips_the_model(ledger):
-    account = await _account(ledger)
-    category = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
-    await ledger.execute(
-        """
-        INSERT INTO category_rules (merchant_pattern, category_id, source)
-        VALUES ('swiggy', $1, 'user')
-        """,
-        category["id"],
-    )
-    import_id, raw_account = await _review_import(
-        ledger,
-        account,
-        [
-            {
-                "date": "2026-04-01",
-                "description": "UPI/DR/123456789012/SWIGGY/ramesh@okaxis",
-                "debit": 45000,
-                "credit": 0,
-                "balance": 24522890,
-                "counterparty": "Swiggy",
-            }
-        ],
-    )
-
-    def explode(messages, info: AgentInfo) -> ModelResponse:
-        del messages, info
-        raise AssertionError("the model must not be called for a rule hit")
-
-    counts = await categorize_import(ledger, import_id, raw_account, model=FunctionModel(explode))
-
-    assert counts["rule_hits"] == 1
-    assert counts["llm_keys"] == 0
-    assert counts["llm_calls"] == 0
-    line = await ledger.fetchrow(
-        "SELECT match_detail FROM statement_lines WHERE import_id = $1", import_id
-    )
-    assert line["match_detail"]["suggested_category"]["source"] == "rule"
-
-
-async def test_a_blocked_categorizer_still_reaches_review(ledger):
-    account = await _account(ledger)
-    attachment_id = await _attachment(ledger, sbi_csv())
-    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
-
-    await _submit(ledger, row)
-    detail = await import_payload(ledger, row["id"])
-
-    assert detail["status"] == "review"
-    assert detail["lines"] != []
-    assert all(line["suggested_category"] is None for line in detail["lines"])
-
-
-async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatch):
+async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
     account = await _account(ledger)
     other = await create_account(
         ledger,
@@ -552,7 +419,6 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
     )
     spending = await system_account(ledger, "spending")
     spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
-    food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
 
     import_id, _raw_account = await _review_import(
         ledger,
@@ -589,34 +455,14 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
         lines[0]["id"],
     )
     await ledger.execute(
-        """
-        UPDATE statement_lines
-        SET match_detail = coalesce(match_detail, '{}'::jsonb) || $1
-        WHERE id = $2
-        """,
-        {
-            "suggested_category": {
-                "category_id": str(food["id"]),
-                "category_name": "Food & Dining",
-                "source": "llm",
-            }
-        },
-        lines[1]["id"],
-    )
-    await ledger.execute(
         "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
         {"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0},
         {"manual_opening_paise": 0},
         import_id,
     )
 
-    def no_model(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("commit must not call the model")
-
-    monkeypatch.setattr("fin_agent.importers.categorizer.Agent", no_model)
     with pytest.raises(ConflictLedgerError, match="Confirm every payment"):
-        await commit_import(ledger, import_id, categorize=True)
+        await commit_import(ledger, import_id)
 
     await ledger.execute(
         """
@@ -627,7 +473,7 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
         {"transfer_confirmed": True},
         lines[0]["id"],
     )
-    await commit_import(ledger, import_id, categorize=True)
+    await commit_import(ledger, import_id)
 
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     other_after = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", other["id"])
@@ -656,7 +502,12 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger, monkeypatc
     label = await ledger.fetchrow(
         "SELECT category_id FROM transfer_labels WHERE movement_id = $1", second["id"]
     )
-    assert label["category_id"] == food["id"]
+    assert label["category_id"] is None
+    queued = await ledger.fetchval(
+        "SELECT count(*) FROM jobs WHERE kind = 'categorize_import' AND key = $1",
+        f"categorize_import:{import_id}",
+    )
+    assert queued == 1
 
     await undo_import(ledger, import_id)
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
@@ -723,7 +574,7 @@ async def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
         credit_kind="refund",
         category_id=str(food["id"]),
     )
-    await commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id)
 
     assert await ledger_balance(ledger, spending["ledger_account_id"]) == before - 10395
     card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
@@ -771,7 +622,7 @@ async def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liab
         credit_kind="transfer",
         source_account_id=bank["id"],
     )
-    await commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id)
 
     bank_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", bank["id"])
     card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
@@ -802,7 +653,7 @@ async def test_an_unclassified_card_credit_blocks_the_whole_commit_before_writes
     await _verify(ledger, import_id)
 
     with pytest.raises(ConflictLedgerError, match="card credit"):
-        await commit_import(ledger, import_id, categorize=False)
+        await commit_import(ledger, import_id)
 
     assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
     lines = await ledger.fetch(
@@ -834,7 +685,7 @@ async def test_a_card_repayment_without_a_funding_account_blocks_before_writes(l
     await _verify(ledger, import_id)
 
     with pytest.raises(ConflictLedgerError, match="card credit"):
-        await commit_import(ledger, import_id, categorize=False)
+        await commit_import(ledger, import_id)
 
     assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
     lines = await ledger.fetch(
@@ -888,7 +739,7 @@ async def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger)
         resolution="classify_credit",
         credit_kind="income",
     )
-    await commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id)
 
     movement = await ledger.fetchrow(
         """
@@ -928,7 +779,7 @@ async def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(led
     )
     await _verify(ledger, import_id)
 
-    await commit_import(ledger, import_id, categorize=False)
+    await commit_import(ledger, import_id)
 
     movement = await ledger.fetchrow(
         """
@@ -997,7 +848,7 @@ async def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledge
     assert detail["opening_required"] is True
 
     with pytest.raises(ConflictLedgerError, match="opening balance"):
-        await commit_import(ledger, import_id, categorize=False)
+        await commit_import(ledger, import_id)
     assert await ledger.fetchval("SELECT count(*) FROM movements") == 0
 
 
@@ -1038,7 +889,7 @@ async def test_a_bank_printed_opening_without_running_balances_still_commits(led
     detail = await import_payload(ledger, import_id)
     assert detail["opening_evidenced"] is True
     assert detail["opening_required"] is False
-    assert (await commit_import(ledger, import_id, categorize=False))["status"] == "committed"
+    assert (await commit_import(ledger, import_id))["status"] == "committed"
 
 
 async def test_reject_keeps_the_statement_file(ledger):

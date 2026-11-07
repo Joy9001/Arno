@@ -14,8 +14,8 @@ from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import WriteGroup, group_for_row, write_group
 from fin_agent.ledger.categories import (
     _apply_payee_correction_in_group,
-    _upsert_rule_in_group,
     resolve_category,
+    upsert_rule_in_group,
 )
 from fin_agent.ledger.common import (
     get_account_row,
@@ -219,10 +219,19 @@ async def _resolve_label_category(
     payee_id: str | None,
     category_id: str | None,
     category_guess_id: str | None,
+    apply_rules: bool = True,
 ) -> dict[str, Any]:
     if payee_id:
         await get_payee(conn, payee_id)
-    resolution = await resolve_category(conn, payee_id=payee_id, category_id=category_id)
+    # An imported row is categorized after commit, so its write skips the rule lookup.
+    if apply_rules:
+        resolution = await resolve_category(conn, payee_id=payee_id, category_id=category_id)
+    else:
+        resolution = (
+            await resolve_category(conn, category_id=category_id)
+            if category_id
+            else {"category_id": None, "category_name": None, "source": "none", "rule_id": None}
+        )
     if resolution["category_id"] is None and category_guess_id:
         guessed = await resolve_category(conn, category_id=category_guess_id)
         resolution = {
@@ -232,10 +241,10 @@ async def _resolve_label_category(
         }
         if payee_id:
             payee = await get_payee(conn, payee_id)
-            await _upsert_rule_in_group(
+            await upsert_rule_in_group(
                 conn,
                 group,
-                merchant_pattern=payee["display_name"],
+                pattern=payee["display_name"],
                 category_id=category_guess_id,
                 source="llm",
             )
@@ -257,6 +266,7 @@ async def record_expense(
     capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    apply_rules: bool = True,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("An expense must be positive")
@@ -272,6 +282,7 @@ async def record_expense(
             payee_id=payee_id,
             category_id=category_id,
             category_guess_id=category_guess_id,
+            apply_rules=apply_rules,
         )
         transfer = TransferSpec(
             from_account_id=account_id,

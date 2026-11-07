@@ -29,12 +29,15 @@ DEFAULT_TIMEOUTS = {
     "pattern_detection": 120,
     "backup_check": 30,
     "scheduled_question": 300,
+    "categorize_import": 900,
+    "collect_batch": 600,
 }
 
 
 def default_handlers() -> dict[str, Handler]:
     """Imported lazily, so the job module does not import the whole agent at boot."""
     from fin_agent.importers.baselines import handle_recompute_baselines
+    from fin_agent.importers.categorize import handle_categorize_import, handle_collect_batch
     from fin_agent.jobs.backup import handle_backup_check
     from fin_agent.jobs.briefing import handle_weekly_briefing
     from fin_agent.jobs.patterns import handle_pattern_detection
@@ -50,6 +53,8 @@ def default_handlers() -> dict[str, Handler]:
         "pattern_detection": handle_pattern_detection,
         "backup_check": handle_backup_check,
         "scheduled_question": handle_scheduled_question,
+        "categorize_import": handle_categorize_import,
+        "collect_batch": handle_collect_batch,
     }
 
 

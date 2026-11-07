@@ -813,3 +813,65 @@
     min-height: 40px;
   }
 }
+
+/* Uncategorized list ---------------------------------------------------------------------- */
+
+.act-uncat {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.act-uncat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.act-uncat-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.act-uncat-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.act-uncat-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.act-uncat-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.act-uncat-main .statement-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-uncat-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.act-uncat-actions select {
+  min-width: 160px;
+}

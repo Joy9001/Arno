@@ -16,8 +16,8 @@ async def _seed_rule(conn, pattern: str, category: str = "Food & Dining") -> Non
     row = await conn.fetchrow("SELECT id FROM categories WHERE name = $1", category)
     await conn.execute(
         """
-        INSERT INTO category_rules (merchant_pattern, category_id, source)
-        VALUES ($1, $2, 'user') ON CONFLICT (merchant_pattern) DO NOTHING
+        INSERT INTO category_rules (match, pattern, category_id, source)
+        VALUES ('equals', $1, $2, 'user') ON CONFLICT (match, pattern) DO NOTHING
         """,
         pattern,
         row["id"],

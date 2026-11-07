@@ -15,7 +15,14 @@ import { api, errorMessage } from "../api";
 import { formatDate, formatPaise } from "../format";
 import { Busy } from "../Loading";
 import { movementLabel, movementNote, humanizeKind } from "../movement";
-import type { AccountSummary, Movement, MovementList } from "../types";
+import type {
+  AccountSummary,
+  CategoryTree,
+  Movement,
+  MovementList,
+  UncategorizedGroup,
+  UncategorizedList,
+} from "../types";
 import { useApi } from "../useApi";
 import "./Activity.css";
 
@@ -168,6 +175,145 @@ function LedgerSkeleton() {
   );
 }
 
+function UncategorizedSection({ onAnswered }: { onAnswered: () => void }) {
+  const list = useApi<UncategorizedList>("/api/uncategorized");
+  const tree = useApi<CategoryTree>("/api/categories");
+  const [choice, setChoice] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [undoId, setUndoId] = useState<string | null>(null);
+  const activeCategories = (tree.data?.categories ?? []).filter((item) => item.active);
+
+  async function answer(group: UncategorizedGroup) {
+    const categoryId = choice[group.key];
+    if (!categoryId || busy) return;
+    setBusy(group.key);
+    setError(null);
+    setMessage(null);
+    setUndoId(null);
+    try {
+      const result = await api<{ labeled: number; undo_id: string }>(
+        "/api/uncategorized/answer",
+        {
+          method: "POST",
+          body: JSON.stringify({ key: group.key, category_id: categoryId }),
+        },
+      );
+      setUndoId(result.undo_id);
+      setMessage(
+        `${result.labeled} ${result.labeled === 1 ? "row" : "rows"} labeled. One undo reverts it.`,
+      );
+      list.reload();
+      tree.reload();
+      onAnswered();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function undoAnswer() {
+    if (!undoId) return;
+    setError(null);
+    try {
+      await api(`/api/undo/${undoId}`, { method: "POST" });
+      setUndoId(null);
+      setMessage("The answer was undone.");
+      list.reload();
+      tree.reload();
+      onAnswered();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  return (
+    <section className="act-uncat" aria-labelledby="uncat-title">
+      <div className="act-uncat-head">
+        <h3 id="uncat-title">Uncategorized ({list.data?.total ?? 0})</h3>
+        <button type="button" className="ghost small" onClick={list.reload}>
+          Refresh
+        </button>
+      </div>
+      <p className="muted">
+        Rows the rules and the agent were not sure about. Answer a payee once and its future rows
+        use the same rule.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {message && (
+        <p className="fine" role="status">
+          {message}{" "}
+          {undoId && (
+            <button type="button" className="inline-link" onClick={() => void undoAnswer()}>
+              Undo
+            </button>
+          )}
+        </p>
+      )}
+      {list.error && (
+        <p className="error" role="alert">
+          {list.error}
+        </p>
+      )}
+      {list.loading && !list.data && <p className="fine">Loading uncategorized rows…</p>}
+      {!list.loading && (list.data?.groups.length ?? 0) === 0 && (
+        <p className="fine">Nothing is uncategorized.</p>
+      )}
+      {(list.data?.groups.length ?? 0) > 0 && (
+        <ul className="act-uncat-list">
+          {(list.data?.groups ?? []).map((group) => (
+            <li key={group.key} className="act-uncat-row">
+              <div className="act-uncat-main">
+                <strong>{group.key.toUpperCase()}</strong>
+                <span className="fine">
+                  {group.kind === "person"
+                    ? `${formatPaise(group.total_paise)} across ${group.count} ${group.count === 1 ? "payment" : "payments"}`
+                    : `${group.count} ${group.count === 1 ? "row" : "rows"} · ${formatPaise(group.total_paise)}`}
+                </span>
+                {group.hint?.reason && <span className="fine">Guess: {group.hint.reason}</span>}
+                <span className="fine statement-text" title={group.narration}>
+                  {group.narration}
+                </span>
+              </div>
+              <div className="act-uncat-actions">
+                <select
+                  aria-label={`Category for ${group.key}`}
+                  value={choice[group.key] ?? ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setChoice((current) => ({ ...current, [group.key]: value }));
+                  }}
+                >
+                  <option value="">Choose a category</option>
+                  {activeCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="ghost small"
+                  disabled={!choice[group.key] || busy === group.key}
+                  onClick={() => void answer(group)}
+                >
+                  {busy === group.key ? <Busy /> : "Answer"}
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function LedgerPanel() {
   const [draft, setDraft] = useState<Filters>(EMPTY);
   const [request, setRequest] = useState<Request>({
@@ -313,6 +459,8 @@ export function LedgerPanel() {
           )}
         </button>
       </header>
+
+      <UncategorizedSection onAnswered={retry} />
 
       <form
         className="act-toolbar"

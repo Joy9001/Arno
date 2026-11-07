@@ -369,7 +369,7 @@ async def test_payee_correction_relabels_past_rows_and_creates_a_user_rule(ledge
     assert (await get_movement(ledger, first["id"]))["category_name"] == "Rent"
     assert (await get_movement(ledger, second["id"]))["category_name"] == "Rent"
     rule = await ledger.fetchrow(
-        "SELECT source, category_id FROM category_rules WHERE merchant_pattern = 'ramesh'"
+        "SELECT source, category_id FROM category_rules WHERE pattern = 'ramesh'"
     )
     assert rule["source"] == "user"
     assert rule["category_id"] == rent
@@ -378,9 +378,7 @@ async def test_payee_correction_relabels_past_rows_and_creates_a_user_rule(ledge
     assert (await get_movement(ledger, first["id"]))["category_name"] == "Food & Dining"
     assert (await get_movement(ledger, second["id"]))["category_name"] == "Food & Dining"
     assert (
-        await ledger.fetchrow(
-            "SELECT count(*) AS n FROM category_rules WHERE merchant_pattern = 'ramesh'"
-        )
+        await ledger.fetchrow("SELECT count(*) AS n FROM category_rules WHERE pattern = 'ramesh'")
     )["n"] == 0
 
 
@@ -389,15 +387,15 @@ async def test_user_rule_beats_llm_rule(ledger):
     shopping = await _category(ledger, "Shopping")
     payee = await create_payee(ledger, display_name="Swiggy", kind="merchant")
 
-    await upsert_rule(ledger, merchant_pattern="swiggy", category_id=shopping, source="llm")
-    await upsert_rule(ledger, merchant_pattern="swiggy", category_id=food, source="user")
+    await upsert_rule(ledger, pattern="swiggy", category_id=shopping, source="llm")
+    await upsert_rule(ledger, pattern="swiggy", category_id=food, source="user")
 
     resolved = await resolve_category(ledger, payee_id=payee["id"])
     assert resolved["category_id"] == food
     assert resolved["source"] == "rule"
-    assert (
-        await ledger.fetchrow("SELECT source FROM category_rules WHERE merchant_pattern = 'swiggy'")
-    )["source"] == "user"
+    assert (await ledger.fetchrow("SELECT source FROM category_rules WHERE pattern = 'swiggy'"))[
+        "source"
+    ] == "user"
 
 
 async def test_a_payee_default_beats_an_llm_rule(ledger):
@@ -406,7 +404,7 @@ async def test_a_payee_default_beats_an_llm_rule(ledger):
     payee = await create_payee(
         ledger, display_name="Swiggy", kind="merchant", default_category_id=food
     )
-    await upsert_rule(ledger, merchant_pattern="swiggy", category_id=shopping, source="llm")
+    await upsert_rule(ledger, pattern="swiggy", category_id=shopping, source="llm")
 
     resolved = await resolve_category(ledger, payee_id=payee["id"])
 
@@ -429,7 +427,7 @@ async def test_a_category_guess_is_saved_as_an_llm_rule_once(ledger):
     )
 
     rule = await ledger.fetchrow(
-        "SELECT source, category_id FROM category_rules WHERE merchant_pattern = 'bigbasket'"
+        "SELECT source, category_id FROM category_rules WHERE pattern = 'bigbasket'"
     )
     assert rule["source"] == "llm"
     assert rule["category_id"] == groceries

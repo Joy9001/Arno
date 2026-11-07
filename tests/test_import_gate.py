@@ -266,13 +266,13 @@ async def test_two_commits_append_two_versions_and_move_the_pointer(ledger):
     assert fingerprint
     account = await _account(ledger)
     first = await _review_with_parser(ledger, account, fingerprint, SBI_PARSER)
-    await commit_import(ledger, first, categorize=False)
+    await commit_import(ledger, first)
 
     active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
     assert active["version"] == 1
 
     second = await _review_with_parser(ledger, account, fingerprint, SBI_PARSER + "\n# v2")
-    await commit_import(ledger, second, categorize=False)
+    await commit_import(ledger, second)
 
     active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
     assert active["version"] == 2

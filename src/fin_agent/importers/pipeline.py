@@ -349,7 +349,6 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
                 "match_state": line["match_state"],
                 "movement_id": line["movement_id"],
                 "counterparty": (line["match_detail"] or {}).get("counterparty"),
-                "suggested_category": (line["match_detail"] or {}).get("suggested_category"),
                 "suggested_transfer_account_id": (line["match_detail"] or {}).get(
                     "suggested_transfer_account_id"
                 ),

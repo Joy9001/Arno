@@ -102,7 +102,6 @@ async def _new_movement(
     *,
     line: dict[str, Any],
     account: dict[str, Any],
-    categorize: bool,
 ) -> dict[str, Any]:
     amount = int(line["amount_paise"])
     if amount == 0:
@@ -127,8 +126,7 @@ async def _new_movement(
             match_hash=hashes[0] if hashes else None,
             outside_text=True,
         )
-    suggested = detail.get("suggested_category") or {}
-    category_id = suggested.get("category_id") if categorize else None
+    category_id = None
 
     other_id = detail.get("suggested_transfer_account_id")
     other = None
@@ -158,7 +156,7 @@ async def _new_movement(
         if credit_kind not in ("refund", "transfer", "income"):
             raise InvalidLedgerError("Choose what this card credit is before committing")
         if credit_kind == "refund":
-            category = detail.get("credit_category_id") or (suggested or {}).get("category_id")
+            category = detail.get("credit_category_id")
             refund = await movements_mod.record_refund(
                 conn,
                 account_id=account["id"],
@@ -204,6 +202,7 @@ async def _new_movement(
             idempotency_key=f"stmt:{line['id']}",
             capture=capture,
             actor="user",
+            apply_rules=False,
         )
         return {"id": record["id"], "undo_id": [record["undo_id"]]}
     record = await movements_mod.record_income(
@@ -275,8 +274,6 @@ async def _adjust_closing(
 async def commit_import(
     conn: Connection,
     import_id: str,
-    *,
-    categorize: bool = True,
 ) -> dict[str, Any]:
     row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
     if row is None:
@@ -401,7 +398,7 @@ async def commit_import(
             )
             committed_lines += 1
             continue
-        result = await _new_movement(conn, line=line, account=account, categorize=categorize)
+        result = await _new_movement(conn, line=line, account=account)
         movement_id = str(result["id"])
         group_ids.extend(str(part) for part in result["undo_id"])
 
@@ -494,6 +491,12 @@ async def commit_import(
             key=f"pattern_detection:{date.today().isoformat()}:import:{import_id}",
             kind="pattern_detection",
             payload={"day": date.today().isoformat(), "import_id": import_id},
+        )
+        await enqueue_job(
+            conn,
+            key=f"categorize_import:{import_id}",
+            kind="categorize_import",
+            payload={"import_id": import_id},
         )
     result = {
         "status": "committed",
