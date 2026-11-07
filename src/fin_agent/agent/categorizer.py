@@ -31,7 +31,7 @@ from fin_agent.ledger.categories import normalize_pattern, upsert_rule_in_group
 
 logger = logging.getLogger("fin_agent.agent.categorizer")
 
-CHUNK_PAYEES = 25
+CHUNK_PAYEES = 12  # smaller chunks keep a reasoning model's reply under the request timeout
 CHUNK_CONCURRENCY = 8
 CHECK_PAYEES = 5
 BATCH_MAX_WAIT = timedelta(seconds=30)
@@ -150,7 +150,8 @@ def _chunk_agent(model: Any) -> Agent[None, list[KeyChoice]]:
         model or primary_model(),
         output_type=list[KeyChoice],
         instructions=LABEL_INSTRUCTIONS,
-        model_settings=ModelSettings(request_timeout=120),
+        # Naming a category needs no long reasoning; it was 90% of the output and the timeouts.
+        model_settings=ModelSettings(request_timeout=120, thinking=False),
         name="categorizer-chunk",
     )
 
@@ -477,7 +478,7 @@ def build_labeling_agent(model: Any) -> Agent[None, Any]:
         model,
         output_type=[list[KeyChoice], PendingModelResponse],
         instructions=LABEL_INSTRUCTIONS,
-        model_settings=ModelSettings(request_timeout=180),
+        model_settings=ModelSettings(request_timeout=180, thinking=False),
         name="categorizer-batch",
     )
 

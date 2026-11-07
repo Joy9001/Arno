@@ -92,6 +92,10 @@ and pushed to `main`. Group B's import items wait for this group.
 - [ ] A real SBI import: chat stays responsive, a restart resumes, a second import of the same
       layout replays, and categorizing finishes in minutes with no timeouts. Compare with Phoenix
       session `__LOCALID_y8OJ3G9`.
+      Operator run on November 7 (see the run log): responsive chat, a verified 939-row parse,
+      commit, replay of the saved parser, and categorizing in 3-5 minutes all pass. Open: the
+      restart, the same run through the UI with a passkey, and the categorizing chunks that
+      still hit the request limit on `deepseek-v4.1-flash`.
 
 ## B. Owner setup and measurements
 

@@ -22,6 +22,38 @@ not count as a completed user journey.
   opened. Record the actual build and dirty-diff identity before the next execution; a commit SHA
   alone is insufficient for this working tree.
 
+## Import redesign operator run (7 November 2026)
+
+An operator run, not a UI journey: no passkey sign-in and no browser. A script drove the real
+code inside the `api` container (the main agent, the parser subagent, commit, and the categorize
+job) against a scratch database (`fin_agent_e2e_test`), with the real chat model
+(`deepseek-v4.1-flash`) and traces in Phoenix. The owner typed the statement password into a
+private prompt; it went straight to the in-memory vault, the import card's path.
+
+Statement: the 12-month SBI savings PDF (74 pages, password protected).
+
+| Check | Result |
+|---|---|
+| Chat stays responsive | The chat turn returned in 14-16 s; the parse ran in the background |
+| First parse | A new parser, repaired after two gate failures, verified 939 rows (828 debits, 111 credits); opening ₹16,548.42 and closing ₹15,348.55 match the printed summary and the ledger. 5-8.5 minutes |
+| Commit | 17 s, zero adjustment; the parser saved as v1 of the SBI layout |
+| Second import, same layout | Replayed v1: the chat turn returned in 5.6 s, the task finished in 33 s, the gate checked it against 1 stored statement, and all 939 rows matched as already imported |
+| Categorizing | Rules labelled 223 rows; the categorizer then raised it to 533 of 939 with 109 `llm` rules, in 3-5 minutes per run. The rest, mostly UPI payments to people, stay uncategorized with a hint |
+| Restart mid-parse | Not run |
+
+Bugs found and fixed during the run: the 180 s tool limit cut the 600 s password wait short
+(`cb440b7`); an SBI PDF's headers aren't detected before parsing, so no version was saved and no
+replay could happen (`b9f1a44`); the categorizer re-emitted every answer in one save call and
+timed out, and the main agent miscopied an attachment ID (`ccd2558`); agreement depended on the
+agent asking for check payees (`adef16c`).
+
+Open: `deepseek-v4.1-flash` spends 60-90% of each categorizing reply on reasoning, and
+pydantic-ai's profile doesn't map `thinking=False` for that model name (it matches
+`deepseek-v4-`). With 12 payees per chunk, a few chunks a run still hit the 120 s request limit;
+their payees stay uncategorized and the run saves the rest. The agreement sample is small
+(1-5 payees) on this import, because few payees are both rule-covered and in a chunk that
+returned.
+
 ## Seeded greeting baseline (6 November 2026)
 
 Run `2026-11-06-J01-seeded`; owner sends messages, parent inspects. Session
