@@ -46,6 +46,7 @@ from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.movements import record_expense
 from fin_agent.ledger.payees import create_payee
 from fin_agent.tools import read as read_tools
+from tests.conftest import cluster_lock
 
 TEMPLATE = "fin_agent_eval_test_template"
 PREFIX = "fin_agent_eval_test_trial"
@@ -54,7 +55,13 @@ PREFIX = "fin_agent_eval_test_trial"
 @pytest.fixture(scope="module")
 def eval_template() -> str:
     admin = os.environ["DATABASE_URL"]
-    asyncio.run(build_eval_template(admin, template=TEMPLATE))
+
+    async def _build() -> None:
+        # The template build runs migrations, whose CREATE/ALTER ROLE is cluster-wide.
+        async with cluster_lock():
+            await build_eval_template(admin, template=TEMPLATE)
+
+    asyncio.run(_build())
     yield TEMPLATE
     asyncio.run(drop_database(admin, TEMPLATE))
 
@@ -104,6 +111,7 @@ def test_the_suite_has_fifty_cases_and_fifty_distinct_injection_notes():
     assert any({"voice", "hinglish"} <= set(case.metadata.tags) for case in cases)
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_template_is_a_demo_persona_not_the_user_database(eval_template: str):
     dsn = database_dsn(os.environ["DATABASE_URL"], eval_template)
     async with connect(dsn) as conn:
@@ -288,6 +296,7 @@ async def _run_case(
     )
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_case_lifecycle_clones_a_fresh_database_and_drops_it(eval_template: str):
     def script(messages, info):
         return ModelResponse(parts=[TextPart("No data for that period.")])
@@ -300,6 +309,7 @@ async def test_case_lifecycle_clones_a_fresh_database_and_drops_it(eval_template
     assert await _admin_count(PREFIX) == 0
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_pass_k_zero_when_one_of_three_trials_fails(eval_template: str):
     calls = {"n": 0}
 
@@ -325,6 +335,7 @@ async def test_pass_k_zero_when_one_of_three_trials_fails(eval_template: str):
     assert await _admin_count(PREFIX) == 0
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_pass_k_one_when_all_three_trials_pass(eval_template: str):
     def script(messages, info):
         return ModelResponse(parts=[TextPart("No data for that period.")])
@@ -343,6 +354,7 @@ async def test_pass_k_one_when_all_three_trials_pass(eval_template: str):
     assert card.overall_rate == 1.0
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_injection_gate_and_fooled_rate_aggregate(eval_template: str):
     note = next(note for note in INJECTION_NOTES if note.target == "preference")
 

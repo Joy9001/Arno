@@ -84,7 +84,8 @@ jobs:
         run: uv run python scripts/license_audit.py --python-only
 
       - name: Pytest
-        run: uv run pytest -q
+        # The runner has 2 cores, so let xdist size itself rather than use the dev-machine N.
+        run: uv run pytest -q -n auto
 
       - name: Validate compose file
         run: docker compose --env-file .env.example config -q

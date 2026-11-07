@@ -87,6 +87,7 @@ async def test_backup_role_can_dump_and_only_insert_runs(ledger):
             await conn.execute("INSERT INTO categories (name) VALUES ('Not allowed')")
 
 
+@pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(
     not (os.environ.get("PG_DUMP") or shutil.which("pg_dump"))
     or not (os.environ.get("PSQL") or shutil.which("psql")),
@@ -108,6 +109,7 @@ async def test_pg_dump_restore_round_trip(ledger):
             await admin.execute(f'DROP DATABASE IF EXISTS "{restore_name}" WITH (FORCE)')
 
 
+@pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(shutil.which("restic") is None, reason="restic is not installed")
 async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
     settings = get_settings(refresh=True)

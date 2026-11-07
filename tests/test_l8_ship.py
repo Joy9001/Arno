@@ -129,6 +129,7 @@ def _binary(env_name: str, name: str) -> str | None:
     return os.environ.get(env_name) or shutil.which(name)
 
 
+@pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(
     not (
         _binary("RESTIC", "restic")
@@ -282,6 +283,7 @@ def _client_path() -> str:
 BACKUP_SCRIPT_SKIP = _backup_script_skip_reason()
 
 
+@pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(BACKUP_SCRIPT_SKIP is not None, reason=BACKUP_SCRIPT_SKIP or "")
 async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
     demo_ledger, tmp_path: Path

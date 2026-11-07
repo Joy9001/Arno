@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from fin_agent.config import get_settings
 from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
 from fin_agent.demo.persona import seed_demo
@@ -183,6 +185,7 @@ async def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
     assert (await db.fetchrow("SELECT count(*) AS n FROM audit_log"))["n"] > 0
 
 
+@pytest.mark.xdist_group("cluster")
 async def test_demo_template_can_be_cloned():
     settings = get_settings(refresh=True)
     target = "fin_agent_demo_template_test"

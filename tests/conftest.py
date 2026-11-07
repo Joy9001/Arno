@@ -10,14 +10,53 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import os
+import shlex
 import socket
+import tempfile
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _per_worker_env() -> None:
+    """Point each xdist worker at its own database and task folders.
+
+    Runs before `fin_agent` is imported, so `Settings.from_env()` sees the worker values. Without
+    xdist nothing changes.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker:
+        return
+    dsn = os.environ.get("DATABASE_URL", "")
+    if "://" in dsn:
+        parts = urlsplit(dsn)
+        name = parts.path.lstrip("/")
+        if name.endswith("_test"):
+            dsn = urlunsplit(parts._replace(path=f"/{name[:-5]}_{worker}_test"))
+    elif dsn:
+        tokens = shlex.split(dsn)
+        tokens = [
+            f"dbname={token[7:-5]}_{worker}_test"
+            if token.startswith("dbname=") and token.endswith("_test")
+            else token
+            for token in tokens
+        ]
+        dsn = shlex.join(tokens)
+    if dsn:
+        os.environ["DATABASE_URL"] = dsn
+    temp = Path(tempfile.gettempdir())
+    os.environ["FIN_AGENT_TASKS_DIR"] = str(temp / f"fin-agent-tasks-{worker}")
+    os.environ["FIN_AGENT_PRE_MIGRATION_DIR"] = str(temp / f"fin-agent-pre-migration-{worker}")
+
+
+_per_worker_env()
 
 # Set before importing fin_agent, so Settings.from_env sees them.
 os.environ.setdefault("FIN_AGENT_RP_ID", "localhost")
@@ -49,7 +88,13 @@ from fin_agent.api.app import create_app  # noqa: E402
 from fin_agent.auth.setup import issue_setup_token  # noqa: E402
 from fin_agent.config import Settings, get_settings  # noqa: E402
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
-from fin_agent.db.conn import Connection, connect, conninfo_to_dict, quote_ident  # noqa: E402
+from fin_agent.db.conn import (  # noqa: E402
+    Connection,
+    connect,
+    conninfo_to_dict,
+    make_conninfo,
+    quote_ident,
+)
 from fin_agent.db.migrate import run_migrations  # noqa: E402
 from fin_agent.demo.persona import seed_demo  # noqa: E402
 from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
@@ -161,6 +206,35 @@ def _dsn() -> str:
     return dsn
 
 
+# One key, taken on the `postgres` database, so every worker serialises the cluster-wide DDL
+# (CREATE/ALTER ROLE, CREATE DATABASE) even though each worker uses its own test database.
+CLUSTER_LOCK_KEY = 0x66696E5F6C6F636B  # "fin_lock"
+
+
+@asynccontextmanager
+async def cluster_lock() -> AsyncIterator[None]:
+    """Hold a Postgres advisory lock that all workers can see, on the shared server."""
+    info = conninfo_to_dict(_dsn())
+    info["dbname"] = "postgres"
+    async with connect(make_conninfo(**info), autocommit=True) as conn:
+        await conn.execute("SELECT pg_advisory_lock($1)", CLUSTER_LOCK_KEY)
+        try:
+            yield
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock($1)", CLUSTER_LOCK_KEY)
+
+
+async def _ensure_database() -> None:
+    """Create this run's database if it does not exist yet."""
+    info = conninfo_to_dict(_dsn())
+    name = info["dbname"]
+    info["dbname"] = "postgres"
+    async with connect(make_conninfo(**info), autocommit=True) as conn:
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
+        if not exists:
+            await conn.execute(f"CREATE DATABASE {quote_ident(name)}")
+
+
 def pytest_configure(config: pytest.Config) -> None:
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
@@ -221,13 +295,15 @@ def migrated() -> list[str]:
     dsn = _dsn()
 
     async def _run() -> list[str]:
-        async with connect(dsn) as conn:
-            await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
-            await conn.execute("CREATE SCHEMA public")
-            applied = await run_migrations(conn)
-            await set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
-            await set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
-            return applied
+        async with cluster_lock():
+            await _ensure_database()
+            async with connect(dsn) as conn:
+                await conn.execute("DROP SCHEMA IF EXISTS public CASCADE")
+                await conn.execute("CREATE SCHEMA public")
+                applied = await run_migrations(conn)
+                await set_agent_ro_password(conn, os.environ.get("AGENT_RO_PASSWORD"))
+                await set_backup_password(conn, os.environ.get("BACKUP_PASSWORD"))
+                return applied
 
     return asyncio.run(_run())
 
@@ -285,7 +361,9 @@ def demo_snapshot(migrated: list[str]) -> Iterator[str]:
 
 @pytest.fixture
 def settings() -> Settings:
-    return get_settings(refresh=True)
+    # App startup must not ALTER ROLE: the roles are cluster-wide and `migrated` already set
+    # both passwords. Role connections read them from the global settings.
+    return replace(get_settings(refresh=True), agent_ro_password=None, backup_password=None)
 
 
 @pytest.fixture

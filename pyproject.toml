@@ -48,6 +48,7 @@ dev = [
     "pip-audit>=2.9.0",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.0.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.14.0",
 ]
 
@@ -65,3 +66,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Eight workers measured fastest on the 12-core dev box; Postgres, not the CPU, is the limit.
+# `-n 0` still runs serially. The `cluster` group (cluster-wide DDL, fixed database names)
+# always runs on one worker.
+addopts = "-n 8 --dist loadgroup"
