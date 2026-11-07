@@ -12,7 +12,7 @@ from typing import Any
 
 from fin_agent.db.conn import Connection
 from fin_agent.importers.checks import opening_is_evidenced
-from fin_agent.importers.layouts import save_layout
+from fin_agent.importers.layouts import save_version
 from fin_agent.importers.reconcile import credit_decision_required
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger import movements as movements_mod
@@ -452,9 +452,10 @@ async def commit_import(
         fingerprint = row["fingerprint"]
         parser = row["parser"]
         if fingerprint and parser:
-            layout = await save_layout(
+            layout = await save_version(
                 conn,
-                institution=row["institution"] or account["institution"] or account["name"],
+                institution=account["institution"] or account["name"],
+                kind=account["kind"],
                 fingerprint=fingerprint,
                 parser=parser,
                 source_import_id=import_id,
@@ -480,14 +481,6 @@ async def commit_import(
             group_ids,
             review,
             layout["id"] if layout else None,
-            import_id,
-        )
-        await conn.execute(
-            """
-            UPDATE attachments
-            SET data = NULL, purged_at = now()
-            WHERE import_id = $1 AND data IS NOT NULL
-            """,
             import_id,
         )
         await enqueue_job(
@@ -627,14 +620,6 @@ async def reject_import(conn: Connection, import_id: str, reason: str | None = N
                                          'not_a_statement')
             """,
             reason,
-            import_id,
-        )
-        await conn.execute(
-            """
-            UPDATE attachments
-            SET data = NULL, purged_at = now()
-            WHERE import_id = $1 AND data IS NOT NULL
-            """,
             import_id,
         )
 

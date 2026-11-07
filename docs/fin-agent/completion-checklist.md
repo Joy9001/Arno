@@ -42,15 +42,16 @@ and pushed to `main`. Group B's import items wait for this group.
 
 ### Phase 1: schema, kept files, versions, the gate (no model)
 
-- [ ] Migration `0013`: `statement_layouts` by bank and statement type, with header variants and an
+- [x] Migration `0013`: `statement_layouts` by bank and statement type, with header variants and an
       active-version pointer; append-only `parser_versions`; `attachments` keep statement files.
-- [ ] Statement files are kept: no deletion at commit or reject, an unlocked copy stored once the
+- [x] Statement files are kept: no deletion at commit or reject, an unlocked copy stored once the
       file opens, and an endpoint to delete one.
-- [ ] `submit_parser` is the gate: a fresh sandbox, the checks, and a replay on every stored,
+- [x] `submit_parser` is the gate: a fresh sandbox, the checks, and a replay on every stored,
       committed, not-undone statement from that bank that must reproduce its `statement_lines`
       exactly; the first mismatch is the reason.
-- [ ] A commit saves a new version and moves the pointer; a rollback moves it back.
-- [ ] Tests: replay set excludes undone imports and deleted files; a mismatch blocks; rollback works.
+- [x] A commit saves a new version and moves the pointer; a rollback moves it back.
+      `rollback_layout` is a function for now; its route comes with the web phase.
+- [x] Tests: replay set excludes undone imports and deleted files; a mismatch blocks; rollback works.
 
 ### Phase 2: the parser subagent
 

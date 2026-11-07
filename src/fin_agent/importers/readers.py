@@ -289,6 +289,21 @@ class Doc:
             self._lines = text.splitlines()
             self._sheets = [("text", self._text_rows(self._lines))]
 
+    def readable_bytes(self) -> bytes:
+        """The bytes a later replay can open without the password.
+
+        An encrypted Office file is decrypted in place, so `data` is already plain. A PDF is
+        rewritten by PDFium, which drops the password from the saved copy.
+        """
+        if self.kind == "pdf" and self.password and self._pdf is not None:
+            import pypdfium2.raw as pdfium_c
+
+            buffer = io.BytesIO()
+            # Without this flag PDFium keeps the encryption, and the copy still needs the password.
+            self._pdf.save(buffer, flags=pdfium_c.FPDF_REMOVE_SECURITY)
+            return buffer.getvalue()
+        return self.data
+
     @staticmethod
     def _trim(row: list[Any]) -> list[Any]:
         row = list(row)

@@ -21,11 +21,11 @@ from fin_agent.importers.checks import (
 from fin_agent.importers.helpers import HELPER_VERSION
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.layouts import layout_for, touch_layout
+from fin_agent.importers.layouts import layout_for
 from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_script
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.periods import derive_period, ledger_last_date, ledger_opening
-from fin_agent.importers.readers import Doc, DocError, open_documents
+from fin_agent.importers.readers import Doc, DocError, open_documents, sniff
 from fin_agent.importers.reconcile import credit_decision_required, insert_lines, reconcile
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger.audit import new_id
@@ -301,6 +301,7 @@ def _context(
     manual_opening_paise: int | None,
     fingerprint: str | None,
     expected_fingerprint: str | None,
+    import_id: str | None = None,
 ) -> ScriptContext:
     return ScriptContext(
         period=(period["start"], period["end"]) if period else None,
@@ -311,6 +312,7 @@ def _context(
         fingerprint=fingerprint,
         expected_fingerprint=expected_fingerprint,
         allow_vision=True,
+        import_id=import_id,
     )
 
 
@@ -388,7 +390,7 @@ async def _finalize_body(
             script,
             helper_version,
             fingerprint,
-            parsed_account.get("institution") or account["institution"] or account["name"],
+            account["institution"] or account["name"] or parsed_account.get("institution"),
             import_id,
         )
         await insert_lines(
@@ -474,6 +476,9 @@ async def _run_import_body(
             )
         return
 
+    if password is not None:
+        await _store_unlocked(attachment["id"], data, docs)
+
     doc = docs[0]
     async with connect() as conn:
         if account is None:
@@ -489,9 +494,12 @@ async def _run_import_body(
         if manual_opening is not None:
             manual_opening = int(manual_opening)
         fingerprint = detect_fingerprint(doc) or _account_fingerprint(account)
-        layout = await layout_for(conn, fingerprint)
-        if layout is not None and layout["fingerprint"] != fingerprint:
-            layout = None
+        layout = await layout_for(
+            conn,
+            fingerprint,
+            institution=(account["institution"] or account["name"]) if account else None,
+            kind=account["kind"] if account else None,
+        )
         if layout is not None and layout["helper_version"] != HELPER_VERSION:
             # The saved script ran with another helper block. Replaying it with this one would
             # silently change its meaning, so the layout counts as new.
@@ -507,7 +515,8 @@ async def _run_import_body(
             opening=opening,
             manual_opening_paise=manual_opening,
             fingerprint=fingerprint,
-            expected_fingerprint=layout["fingerprint"] if layout else None,
+            expected_fingerprint=fingerprint if layout else None,
+            import_id=import_id,
         )
 
     if layout is not None:
@@ -521,7 +530,7 @@ async def _run_import_body(
                 period=period,
                 ledger_opening_paise=opening["paise"] if opening else None,
                 manual_opening_paise=manual_opening,
-                expected_fingerprint=layout["fingerprint"],
+                expected_fingerprint=fingerprint,
             )
             if check["status"] == "VERIFIED":
                 async with connect() as conn:
@@ -537,7 +546,6 @@ async def _run_import_body(
                         period=period,
                     )
                     await categorize_import(conn, import_id, resolved)
-                    await touch_layout(conn, layout["id"])
                 return
             if check.get("reason") in INPUT_REASONS:
                 # A missing input cannot be repaired by replaying the layout; ask for it.
@@ -650,6 +658,27 @@ async def _run_import_body(
         await categorize_import(conn, import_id, resolved)
 
 
+async def _store_unlocked(attachment_id: str, data: bytes, docs: list[Doc]) -> None:
+    """Keep the unlocked copy once the password opened it, so a replay needs no password."""
+    if not docs or sniff(data) == "zip":
+        return
+    try:
+        unlocked = docs[0].readable_bytes()
+    except Exception:  # noqa: BLE001 - the original stays readable with the password
+        logger.warning("could not store an unlocked copy for attachment %s", attachment_id)
+        return
+    if unlocked == data:
+        return
+    async with connect() as conn:
+        await conn.execute(
+            """
+            UPDATE attachments SET data = $1, unlocked_at = now() WHERE id = $2
+            """,
+            unlocked,
+            attachment_id,
+        )
+
+
 def _account_fingerprint(account: dict[str, Any] | None) -> str | None:
     """A card statement has no column headers; key its layout by the card instead."""
     if not account or not account.get("last4"):
@@ -698,11 +727,17 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     )
     attachment = await conn.fetchrow(
         """
-        SELECT filename, content_type, size_bytes, sha256, purged_at
+        SELECT id, filename, content_type, size_bytes, sha256, purged_at, unlocked_at
         FROM attachments WHERE import_id = $1 ORDER BY created_at DESC LIMIT 1
         """,
         import_id,
     )
+    attachment_payload = None
+    if attachment is not None:
+        attachment_payload = dict(attachment)
+        for key in ("purged_at", "unlocked_at"):
+            value = attachment_payload[key]
+            attachment_payload[key] = value.isoformat() if value else None
     check = row["check_result"] or {}
     opening_evidenced = opening_is_evidenced(
         check=check,
@@ -718,7 +753,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     return {
         "import_id": row["id"],
         "status": row["status"],
-        "attachment": dict(attachment) if attachment else None,
+        "attachment": attachment_payload,
         "account": account,
         "period": {
             "start": row["period_start"].isoformat() if row["period_start"] else None,

@@ -11,11 +11,13 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from fin_agent.agent.parse_run import ParseResult
 from fin_agent.importers.categorizer import categorize_import
-from fin_agent.importers.commit import commit_import, undo_import
+from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.layout import detect_fingerprint
+from fin_agent.importers.layouts import save_version
 from fin_agent.importers.pipeline import (
     _account_fingerprint,
     _run_import,
+    _store_unlocked,
     create_import,
     import_payload,
     retry_with_opening,
@@ -66,16 +68,12 @@ async def _save_layout(conn, account: dict) -> None:
     payload = sbi_csv()
     fingerprint = detect_fingerprint(Doc(payload))
     assert fingerprint
-    await conn.execute(
-        """
-        INSERT INTO statement_layouts
-            (id, institution, fingerprint, parser, helper_version, last_used_at)
-        VALUES ($1, $2, $3, $4, '1', now())
-        """,
-        await new_id(conn, "lay"),
-        "SBI",
-        fingerprint,
-        SBI_PARSER,
+    await save_version(
+        conn,
+        institution="SBI",
+        kind=account["kind"],
+        fingerprint=fingerprint,
+        parser=SBI_PARSER,
     )
 
 
@@ -104,7 +102,7 @@ async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     attachment = await ledger.fetchrow(
         "SELECT data, purged_at FROM attachments WHERE import_id = $1", row["id"]
     )
-    assert attachment["data"] is None and attachment["purged_at"] is not None
+    assert attachment["data"] is not None and attachment["purged_at"] is None
 
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 34402890
@@ -195,6 +193,13 @@ async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger)
 
     await commit_import(ledger, row["id"], categorize=False)
     assert await ledger.fetchval("SELECT count(*) FROM statement_layouts") == 1
+    assert await ledger.fetchval("SELECT count(*) FROM parser_versions") == 1
+    layout = await ledger.fetchrow("SELECT * FROM statement_layouts")
+    version = await ledger.fetchrow("SELECT * FROM parser_versions")
+    assert layout["active_version_id"] == version["id"]
+    assert version["version"] == 1
+    assert version["helper_version"]
+    assert layout["kind"] == "bank"
 
 
 async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
@@ -1163,3 +1168,35 @@ async def test_a_bank_printed_opening_without_running_balances_still_commits(led
     assert detail["opening_evidenced"] is True
     assert detail["opening_required"] is False
     assert (await commit_import(ledger, import_id, categorize=False))["status"] == "committed"
+
+
+async def test_reject_keeps_the_statement_file(ledger):
+    account = await _account(ledger)
+    attachment_id = await _attachment(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+
+    await reject_import(ledger, row["id"], "not needed")
+
+    attachment = await ledger.fetchrow(
+        "SELECT data, purged_at FROM attachments WHERE id = $1", attachment_id
+    )
+    assert attachment["data"] is not None
+    assert attachment["purged_at"] is None
+
+
+async def test_an_unlocked_copy_is_stored_when_a_password_opened_the_file(ledger):
+    attachment_id = await _attachment(ledger, b"locked-bytes")
+
+    class Opened:
+        def readable_bytes(self) -> bytes:
+            return b"unlocked-bytes"
+
+    await _store_unlocked(attachment_id, b"locked-bytes", [Opened()])
+
+    attachment = await ledger.fetchrow(
+        "SELECT data, unlocked_at, sha256 FROM attachments WHERE id = $1", attachment_id
+    )
+    assert bytes(attachment["data"]) == b"unlocked-bytes"
+    assert attachment["unlocked_at"] is not None
+    # The hash is still the original upload's, so dedupe keeps working.
+    assert attachment["sha256"] == hashlib.sha256(b"locked-bytes").hexdigest()

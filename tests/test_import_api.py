@@ -70,6 +70,23 @@ async def test_upload_is_capped_and_start_import_returns_202(authed_client, ledg
     assert repeated.json()["import_id"] == payload["import_id"]
 
 
+async def test_delete_statement_file_purges_it(authed_client, db):
+    upload = authed_client.post(
+        "/api/attachments",
+        files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
+    )
+    assert upload.status_code == 201, upload.text
+    attachment_id = upload.json()["id"]
+
+    response = authed_client.delete(f"/api/attachments/{attachment_id}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["purged"] is True
+    row = await db.fetchrow("SELECT data, purged_at FROM attachments WHERE id = $1", attachment_id)
+    assert row["data"] is None
+    assert row["purged_at"] is not None
+
+
 async def test_password_is_write_only_and_never_stored(authed_client, ledger):
     account = await _account(ledger)
     payload = sbi_csv()

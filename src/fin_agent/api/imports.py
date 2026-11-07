@@ -124,6 +124,21 @@ async def upload_attachment(
     return payload
 
 
+@router.delete("/attachments/{attachment_id}")
+async def delete_attachment(attachment_id: str, conn: Database) -> dict[str, Any]:
+    """Purge a stored statement file; the replay set drops it. The password is already gone."""
+    row = await conn.fetchrow("SELECT id, kind FROM attachments WHERE id = $1", attachment_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such attachment")
+    if row["kind"] != "statement":
+        raise HTTPException(status_code=409, detail="Only a statement file can be deleted here")
+    await conn.execute(
+        "UPDATE attachments SET data = NULL, purged_at = now() WHERE id = $1",
+        attachment_id,
+    )
+    return {"attachment_id": attachment_id, "purged": True}
+
+
 @router.post("/imports", status_code=status.HTTP_202_ACCEPTED)
 async def start_import(body: StartImport, conn: Database) -> JSONResponse:
     try:

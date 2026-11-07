@@ -47,6 +47,8 @@ class ScriptContext:
     fingerprint: str | None = None
     expected_fingerprint: str | None = None
     allow_vision: bool = False
+    # Set by the pipeline so the gate can replay this bank's committed statements.
+    import_id: str | None = None
 
 
 @dataclass

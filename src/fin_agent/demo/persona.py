@@ -41,7 +41,7 @@ _RESET_TABLES = """
 TRUNCATE
     pgledger_idempotency_keys, pgledger_entries, pgledger_transfers, pgledger_accounts,
     accounts, payees, categories, movements, transfer_labels, captures,
-    imports, statement_lines, statement_layouts, attachments,
+    imports, statement_lines, statement_layouts, parser_versions, attachments,
     schedules, goals, scheduled_questions,
     category_rules, baselines, audit_log, backup_runs
 RESTART IDENTITY CASCADE

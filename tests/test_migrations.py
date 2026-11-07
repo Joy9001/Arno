@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "imports",
     "statement_lines",
     "statement_layouts",
+    "parser_versions",
     "attachments",
     "schedules",
     "goals",

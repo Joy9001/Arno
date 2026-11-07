@@ -20,9 +20,8 @@ from pydantic_ai_harness.skills import Skills
 from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, turn_limits
 from fin_agent.agent.models import primary_model
 from fin_agent.agent.skills_backend import LocalFilesBackend
-from fin_agent.importers.checks import INPUT_REASONS, account_check, worst_status
-from fin_agent.importers.helpers import HELPER_VERSION
-from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_script
+from fin_agent.importers.gate import run_gate
+from fin_agent.importers.monty import ScriptContext
 from fin_agent.importers.readers import Doc
 from fin_agent.importers.vision import transcribe_page as vision_transcribe
 
@@ -85,37 +84,6 @@ class ParseResult:
         return self.status == "parser_submitted" and all(
             check.get("status") == "VERIFIED" for check in self.checks
         )
-
-
-def _sample(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for account in accounts:
-        for row in account.get("rows") or []:
-            rows.append(
-                {
-                    "date": row.get("date"),
-                    "description": str(row.get("description") or "")[:100],
-                    "debit": row.get("debit"),
-                    "credit": row.get("credit"),
-                    "balance": row.get("balance"),
-                }
-            )
-            if len(rows) >= 5:
-                return rows
-    return rows
-
-
-def _check_accounts(deps: ParseDeps, accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        account_check(
-            account,
-            period=deps.context.period,
-            ledger_opening=deps.context.ledger_opening_paise,
-            manual_opening=deps.context.manual_opening_paise,
-            expected_fingerprint=deps.context.expected_fingerprint,
-        )
-        for account in accounts
-    ]
 
 
 def build_parse_agent(
@@ -183,81 +151,51 @@ def build_parse_agent(
         return await vision_transcribe(ctx.deps.doc, page)
 
     async def submit_parser(ctx: RunContext[ParseDeps], code: str) -> dict[str, Any]:
-        """Submit a parser script's text. The server reruns it; rows stay here."""
+        """Submit a parser script's text. The gate reruns it; rows stay here."""
         ctx.deps.submissions += 1
         if ctx.deps.submissions > 6:
             return {"status": "gave_up", "reason": "too many submissions"}
-        result = await run_script(
-            ctx.deps.doc,
-            code,
-            ctx.deps.context,
-            stage="submission",
+        result = await run_gate(
+            doc=ctx.deps.doc,
+            context=ctx.deps.context,
+            code=code,
         )
-        if result.error:
-            return {"status": "failed", "reason": result.error, "counts": {}}
-        output = result.output
-        if isinstance(output, dict) and output.get("not_a_statement"):
-            kind = str(output["not_a_statement"])[:80]
+        status = result["status"]
+        if status == "not_a_statement":
             ctx.deps.submitted = {
                 "status": "not_a_statement",
-                "kind": kind,
+                "kind": result.get("kind"),
                 "script": code,
             }
-            return {"status": "not_a_statement", "kind": kind}
-        if isinstance(output, dict) and output.get("needs_input"):
-            question = str(output["needs_input"])[:500]
+            return {"status": "not_a_statement", "kind": result.get("kind")}
+        if status == "needs_input":
             ctx.deps.submitted = {
                 "status": "needs_input",
-                "question": question,
+                "question": result.get("question"),
                 "script": code,
             }
-            return {"status": "needs_input", "question": question}
-        accounts, reason = normalize_accounts(output)
-        if not accounts:
-            return {"status": "failed", "reason": reason or "no accounts", "counts": {}}
-        checks = _check_accounts(ctx.deps, accounts)
-        # A missing opening (or closing) cannot be repaired by rewriting the script; submit it
-        # so the pipeline can ask the user instead of burning another submission.
-        input_only = bool(checks) and all(
-            check.get("status") == "VERIFIED" or check.get("reason") in INPUT_REASONS
-            for check in checks
-        )
-        status = (
-            "parser_submitted"
-            if all(check.get("status") == "VERIFIED" for check in checks) or input_only
-            else "failed"
-        )
-        ctx.deps.submitted = {
-            "status": status,
-            "script": code,
-            "accounts": accounts,
-            "checks": checks,
-            "helper_version": HELPER_VERSION,
-        }
-        counts = {
-            "accounts": len(accounts),
-            "rows": sum(len(account.get("rows") or []) for account in accounts),
-            "debits": sum(
-                1 for account in accounts for row in account.get("rows") or [] if row.get("debit")
-            ),
-            "credits": sum(
-                1 for account in accounts for row in account.get("rows") or [] if row.get("credit")
-            ),
-        }
+            return {"status": "needs_input", "question": result.get("question")}
+        if status == "parser_submitted":
+            ctx.deps.submitted = {
+                "status": status,
+                "script": code,
+                "accounts": result.get("accounts") or [],
+                "checks": result.get("checks") or [],
+                "helper_version": result.get("helper_version"),
+            }
         return {
             "status": status,
-            "counts": counts,
-            "sample": _sample(accounts),
+            "counts": result.get("counts") or {},
+            "sample": result.get("sample") or [],
             "checks": [
                 {
                     key: check.get(key)
                     for key in ("status", "reason", "computed_closing", "chain_breaks")
                 }
-                for check in checks
+                for check in result.get("checks") or []
             ],
-            "reason": None
-            if status == "parser_submitted"
-            else worst_status([check.get("status", "FAILED") for check in checks]),
+            "reason": result.get("reason"),
+            "replay": result.get("replay"),
         }
 
     toolset = FunctionToolset(
