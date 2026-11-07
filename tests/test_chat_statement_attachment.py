@@ -63,7 +63,7 @@ def _events(response) -> list[dict]:
     ]
 
 
-async def test_the_model_sees_the_attachment_id_and_no_import_starts(authed_client, ledger):
+async def test_the_model_sees_the_file_count_and_no_attachment_id(authed_client, ledger):
     attachment = _upload(authed_client)
     body = _body("client_statement_text", attachment["id"], "Review this statement")
     seen: list[Any] = []
@@ -81,8 +81,9 @@ async def test_the_model_sees_the_attachment_id_and_no_import_starts(authed_clie
     )
     assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
     assert await ledger.fetchval("SELECT count(*) FROM jobs WHERE kind = 'import_statement'") == 0
-    # The instructions name the attachment ID so the main agent can delegate it.
-    assert attachment["id"] in str(seen)
+    # The host hands the parser this turn's files, so the main agent never copies an id.
+    assert attachment["id"] not in str(seen)
+    assert "1 statement file" in str(seen)
 
     thread = authed_client.get("/api/threads/thread_statement/messages").json()
     assert "never-send-this" not in str(thread)

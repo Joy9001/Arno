@@ -42,8 +42,8 @@ job that ran a parse run as one step.
 Each stage works as follows:
 
 1. **Hand off.** You upload one or more files. The main agent calls `delegate_task` for the
-   `parser` subagent with `background=True` and the attachment IDs in the task text, and your turn
-   ends. One upload is one task, so 12 monthly PDFs from a new bank get one parser, written once
+   `parser` subagent with `background=True`, and your turn ends. No model copies an attachment
+   ID: the parser's first tool reads the turn's files from the host. One upload is one task, so 12 monthly PDFs from a new bank get one parser, written once
    and replayed on the rest, with no two runs racing to save it.
 2. **Open.** The subagent's first tool creates the import rows, so the card appears within seconds.
    The reader finds each file's type from its contents. If a file is locked, the import card shows a

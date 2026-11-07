@@ -3,7 +3,7 @@
 It has no write or ledger tools. A script reads the file through the host functions and returns
 rows; `submit_parser` reruns the script in a fresh sandbox and only a pass moves an import to
 review. The parent's deps are forwarded, so each function takes an `import_id` and loads the
-file itself.
+file itself, and `open_imports` opens the turn's own attachments.
 """
 
 from __future__ import annotations
@@ -122,16 +122,18 @@ A Python script whose last expression is one of:
 
 ## One task, several files
 
-An upload can hold one file or many. `open_imports(attachment_ids=[...])` creates the import
-rows and opens each file. One upload is one task. For a bank already seen, replay its saved
+An upload can hold one file or many. `open_imports()` creates the import rows for this turn's
+statement files and opens each one; it takes no arguments, because the host already knows which
+files belong to the turn. One upload is one task. For a bank already seen, replay its saved
 parser on every file of that bank. A bank never seen gets one parser written from a sample. If
 one task mixes banks, submit one script for each bank's imports.
 
 ## The order of work
 
-1. `open_imports` with the attachment IDs. A locked file returns `locked: true`; call
+1. `open_imports()`. A locked file returns `locked: true`; call
    `wait_for_password(import_id)` and wait. The user types the password on the import card, not
-   in chat, and you never see it.
+   in chat, and you never see it. A result with no `import_id` means the turn has no statement
+   files: finish with `blocked` and say the upload did not arrive.
 2. `saved_parser(import_id)`. If it returns a script, replay it first: pass its text to
    `submit_parser(import_ids, code)`.
 3. If the gate fails, read the reason and repair the script. Submit again. Only repair the
@@ -334,10 +336,23 @@ async def _context(
     }
 
 
-async def open_imports(
-    ctx: RunContext[AgentDeps], attachment_ids: list[str]
-) -> list[dict[str, Any]]:
-    """Create the import rows for this upload and read each file's kind and lock state."""
+async def open_imports(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
+    """Create the import rows for this turn's statement files and read each file's state.
+
+    The turn's attachment IDs come from the host, so you never copy one.
+    """
+    attachment_ids = list(ctx.deps.statement_attachments)
+    if not attachment_ids:
+        return [
+            {
+                "import_id": None,
+                "kind": None,
+                "locked": False,
+                "institution": None,
+                "variant": None,
+                "reason": "this turn has no statement attachments",
+            }
+        ]
     opened: list[dict[str, Any]] = []
     task_id = DelegationTasks.child_id()
     async with connect() as conn:

@@ -53,13 +53,15 @@ async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
     text = render_instructions(await _categories())
     attachments = getattr(getattr(ctx, "deps", None), "statement_attachments", ())
     if attachments:
-        listing = ", ".join(attachments)
+        count = len(attachments)
+        noun = "file" if count == 1 else "files"
         text += f"""
 
 Uploaded statement files
-- This turn has statement files: {listing}. Hand them to the `parser` subagent in the
-  background with `delegate_task("parser", "Import these attachment IDs: ...", background=True)`
-  and end your turn. One upload is one task, and each file becomes an import card.
+- This turn has {count} statement {noun}. Hand the upload to the `parser` subagent in the
+  background with `delegate_task("parser", "Import the statement files from this turn.",
+  background=True)` and end your turn. Never put an attachment ID in the task text: the parser
+  already has this turn's files. One upload is one task, and each file becomes an import card.
 - The parser reports a status, counts, and anything blocking. It never writes to the ledger, and
   you cannot commit an import. If it asks a question, answer from the ledger when you can and ask
   the user only when you cannot. If a parser task was interrupted by a restart, resume it with

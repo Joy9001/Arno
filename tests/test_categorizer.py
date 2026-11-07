@@ -8,6 +8,7 @@ from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 
+import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
@@ -377,7 +378,13 @@ async def test_categorize_now_sends_its_chunks_concurrently(ledger, monkeypatch)
     payees = await rules_mod.pending_payees(ledger, import_id)
     result = await categorizer_mod.categorize_now(ctx, [payee["key"] for payee in payees])
 
-    assert len(result["answers"]) == 4
+    # The agent sees every answer, as a name, and no reason.
+    assert set(result["answers"]) == {f"shop {i}" for i in range(4)}
+    assert set(result["answers"].values()) == {CATEGORY}
+    assert result["failed"] == []
+    assert "reason" not in json.dumps(result)
+    # The host keeps the reason for the save.
+    assert deps.answers["shop 0"] == (CATEGORY, "name")
     assert barrier.n_waiting == 0
 
 
@@ -394,6 +401,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
             _row("UPI/DR/3/ALPHA STORE", debit=1000, day="2026-04-03", counterparty="Alpha"),
             _row("UPI/DR/4/BETA STORE", debit=2000, day="2026-04-04", counterparty="Beta"),
             _row("UPI/DR/5/GAMMA STORE", debit=3000, day="2026-04-05", counterparty="Gamma"),
+            _row("UPI/DR/6/DELTA STORE", debit=4000, day="2026-04-06", counterparty="Delta"),
         ],
     )
     monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 25)
@@ -402,8 +410,10 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         "zomato": CATEGORY,
         "alpha": "Shopping",
         "beta": "Shopping",
-        "gamma": "Shopping",
+        "gamma": "Other",
+        "delta": None,
     }
+    reasons = {"alpha": "store", "beta": "store guess", "gamma": "unclear", "delta": "no match"}
 
     def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         if "pending_payees" not in {tool.name for tool in info.function_tools}:
@@ -411,7 +421,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
                 {
                     "key": item["key"],
                     "category": answers.get(item["key"], CATEGORY),
-                    "guess_reason": "name",
+                    "guess_reason": reasons.get(item["key"], "name"),
                 }
                 for item in _chunk_answer(messages)
             ]
@@ -429,40 +439,12 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         if "categorize_now" not in returns:
             return _output([ToolCallPart("categorize_now", {"keys": list(answers)})])
         if "save_categories" not in returns:
-            return _output(
-                [
-                    ToolCallPart(
-                        "save_categories",
-                        {
-                            "decisions": [
-                                {
-                                    "key": "alpha",
-                                    "category": "Shopping",
-                                    "trusted": True,
-                                    "guess_reason": "store",
-                                },
-                                {
-                                    "key": "beta",
-                                    "category": "Shopping",
-                                    "trusted": False,
-                                    "guess_reason": "store",
-                                },
-                                {
-                                    "key": "gamma",
-                                    "category": "Other",
-                                    "trusted": True,
-                                    "guess_reason": "unclear",
-                                },
-                            ]
-                        },
-                    )
-                ]
-            )
+            return _output([ToolCallPart("save_categories", {"distrust": ["beta"]})])
         return _output(
             [
                 ToolCallPart(
                     info.output_tools[0].name,
-                    {"status": "saved", "labeled": 1, "uncategorized": 2},
+                    {"status": "saved", "labeled": 1, "uncategorized": 3},
                 )
             ]
         )
@@ -474,7 +456,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
     assert float(run["agreement_rate"]) == 1.0
     assert run["agreement_checked"] == 2
     assert run["labeled"] == 3  # the two rule-labeled check rows and alpha
-    assert run["uncategorized"] == 2
+    assert run["uncategorized"] == 3
 
     rows = await ledger.fetch(
         """
@@ -495,10 +477,12 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         row for row in rows if row["category_name"] == "Shopping" and row["category_hint"] is None
     )
     assert alpha is not None
-    beta = by_hint["store"]
+    beta = by_hint["store guess"]
     assert beta["category_id"] is None
     gamma = by_hint["unclear"]
     assert gamma["category_id"] is None
+    delta = by_hint["no match"]
+    assert delta["category_id"] is None
     assert all(row["category_name"] != "Other" for row in rows)
 
     group_id = await ledger.fetchval(
@@ -519,7 +503,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         import_id,
     )
     # The two check rows keep their user-rule labels; the agent's save is gone.
-    assert [row["category_id"] for row in rows].count(None) == 3
+    assert [row["category_id"] for row in rows].count(None) == 4
     assert all(row["category_hint"] is None for row in rows)
     assert await ledger.fetchval("SELECT count(*) FROM category_rules WHERE source = 'llm'") == 0
 
@@ -641,23 +625,7 @@ async def test_a_finished_batch_starts_a_fresh_run_that_saves(ledger, monkeypatc
         if "batch_results" not in returns:
             return _output([ToolCallPart("batch_results", {"batch_id": run_id})])
         if "save_categories" not in returns:
-            return _output(
-                [
-                    ToolCallPart(
-                        "save_categories",
-                        {
-                            "decisions": [
-                                {
-                                    "key": "alpha",
-                                    "category": CATEGORY,
-                                    "trusted": True,
-                                    "guess_reason": "store",
-                                }
-                            ]
-                        },
-                    )
-                ]
-            )
+            return _output([ToolCallPart("save_categories", {"distrust": []})])
         return _output(
             [
                 ToolCallPart(
@@ -823,4 +791,24 @@ async def test_a_failed_chunk_returns_its_keys_and_keeps_the_other_answers(ledge
 
     assert len(result["answers"]) == 2
     assert len(result["failed"]) == 2
-    assert not {a["key"] for a in result["answers"]} & set(result["failed"])
+    assert not set(result["answers"]) & set(result["failed"])
+    assert set(deps.answers) == set(result["answers"])
+
+
+async def test_save_categories_refuses_no_answers_and_an_unknown_distrust_key(ledger):
+    from pydantic_ai import ModelRetry
+
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger, account, [_row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha")]
+    )
+    deps = CategorizerDeps(import_id=import_id, run_id="run")
+    ctx = RunContext(deps=deps, model=FunctionModel(lambda *_: _output([])), usage=RunUsage())
+
+    with pytest.raises(ModelRetry):
+        await categorizer_mod.save_categories(ctx, [])
+
+    deps.answers["alpha"] = ("Shopping", "store")
+    with pytest.raises(ModelRetry):
+        await categorizer_mod.save_categories(ctx, ["not a payee"])
+    assert await ledger.fetchval("SELECT count(*) FROM category_rules WHERE source = 'llm'") == 0

@@ -373,7 +373,9 @@ async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_
         )
         == 0
     )
-    assert statement_ref["id"] in str(seen[0])
+    # The parser already holds this turn's files, so the main agent's context never names the id.
+    assert statement_ref["id"] not in str(seen[0])
+    assert "1 statement file" in str(seen[0])
 
 
 async def test_a_legacy_turn_without_a_quote_is_unchanged_and_keeps_the_stream_headers(

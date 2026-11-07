@@ -802,7 +802,7 @@ The task ends with a report: `ready` for review, `not_a_statement` with the kind
 
 | Function | Description | Input | Output |
 |---|---|---|---|
-| `open_imports` | Create the import rows for this upload and read each file | `attachment_ids` | `[{"import_id", "kind", "locked", "institution", "variant"}]` |
+| `open_imports` | Create the import rows for this turn's uploaded files, which the host passes in, so no model copies an ID, and read each file | None | `[{"import_id", "kind", "locked", "institution", "variant"}]` |
 | `wait_for_password` | Wait until the password typed on the import card unlocks the file. The model never sees it | `import_id` | `{"status": "unlocked" \| "timed_out"}` |
 | `saved_parser` | The bank's active parser version and its known header variants | `import_id` | `{"version", "script", "variants"}` or `null` |
 | `doc_info` | What the file is | `import_id` | `{"kind", "pages", "text_layer_pages", "sheets", "delimiter", "encoding"}` |
@@ -857,10 +857,10 @@ what they match ([`import.md`](import.md#categorizing-after-commit)).
 |---|---|---|---|
 | `pending_payees` | Payees in this import no rule covers, with their row count, total, and a sample narration, plus your categories | `import_id` | `{"payees": [...], "categories": [...]}` |
 | `check_payees` | Payees a rule already covers, without their category, for measuring agreement | `import_id`, `count` | `[{"key", "narration"}]` |
-| `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `{"answers": [{"key", "category", "guess_reason"}], "agreement": {"rate", "checked"}, "failed": [key]}`; a failed chunk's keys can be asked again once |
+| `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `{"answers": {key: category}, "agreement": {"rate", "checked"}, "failed": [key]}`; the host keeps each reason for the hint; a failed chunk's keys can be asked again once |
 | `submit_batch` | Only when `BATCH` is set. Submit the keys as one batch; the job runner checks it and starts a fresh run when it ends | `keys` | `{"batch_id", "requests"}` |
 | `batch_results` | The ended batch's answers, in a run started for it | `batch_id` | The same shape as `categorize_now` |
-| `save_categories` | One write group: labels the rows, writes `llm` rules for trusted answers, and stores a hint on the rest, which stay uncategorized | `decisions`: `[{"key", "category", "trusted", "guess_reason"}]` | `{"undo_id", "labeled", "uncategorized"}` |
+| `save_categories` | One write group over every answer the host holds for the run: labels the trusted ones and writes `llm` rules, and stores a hint (guess and reason) on the rest, which stay uncategorized. An answer is untrusted when its key is in `distrust`, or its category is null, unknown, or "Other" | `distrust`: keys | `{"undo_id", "labeled", "uncategorized"}` |
 
 **Logic**
 

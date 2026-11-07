@@ -25,7 +25,7 @@ from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent
+from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
 from fin_agent.importers.commit import commit_import
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.pipeline import create_import, import_payload
@@ -138,7 +138,7 @@ async def test_a_statement_parses_to_review_and_keeps_rows_on_the_host(ledger):
     import_id = row["id"]
 
     steps = [
-        _code(f"print(await open_imports(attachment_ids=[{attachment_id!r}]))"),
+        _code("print(await open_imports())"),
         _code(f"print(await saved_parser(import_id={import_id!r}))"),
         _code(f"print(await submit_parser(import_ids=[{import_id!r}], code={SBI_PARSER!r}))"),
         _output(
@@ -149,7 +149,10 @@ async def test_a_statement_parses_to_review_and_keeps_rows_on_the_host(ledger):
         ),
     ]
     agent = build_parser_agent(model=_sequence(*steps))
-    result = await _run(agent, AgentDeps(conversation_id="conv_parse"))
+    result = await _run(
+        agent,
+        AgentDeps(conversation_id="conv_parse", statement_attachments=(attachment_id,)),
+    )
 
     assert result.output.status == "ready", result.output
     detail = await import_payload(ledger, import_id)
@@ -250,10 +253,7 @@ async def test_one_task_can_carry_two_banks(ledger):
     )
     agent = build_parser_agent(
         model=_sequence(
-            _code(
-                "print(await open_imports(attachment_ids="
-                f"[{sbi_attachment!r}, {union_attachment!r}]))"
-            ),
+            _code("print(await open_imports())"),
             _code(
                 f"print(await submit_parser(import_ids=[{sbi_import['id']!r}], "
                 f"code={SBI_PARSER!r}))"
@@ -273,7 +273,13 @@ async def test_one_task_can_carry_two_banks(ledger):
             ),
         )
     )
-    result = await _run(agent, AgentDeps(conversation_id="conv_two_banks"))
+    result = await _run(
+        agent,
+        AgentDeps(
+            conversation_id="conv_two_banks",
+            statement_attachments=(sbi_attachment, union_attachment),
+        ),
+    )
 
     assert result.output.status == "ready"
     for import_row in (sbi_import, union_import):
@@ -331,7 +337,7 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
 
     parser = build_parser_agent(
         model=_streaming(
-            _code(f"print(await open_imports(attachment_ids=[{attachment_id!r}]))"),
+            _code("print(await open_imports())"),
             _code(f"print(await wait_for_password(import_id={import_id!r}))"),
             _output(
                 ParseReport(
@@ -349,7 +355,7 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
                         "delegate_task",
                         {
                             "agent_name": "parser",
-                            "task": f"Import attachment {attachment_id}",
+                            "task": "Import the statement files from this turn.",
                             "background": True,
                         },
                     )
@@ -367,7 +373,9 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
             with first_owner.bind():
                 await parent.run(
                     "Import the statement.",
-                    deps=AgentDeps(conversation_id="conv_resume"),
+                    deps=AgentDeps(
+                        conversation_id="conv_resume", statement_attachments=(attachment_id,)
+                    ),
                     conversation_id="conv_resume",
                 )
             task_id = next(iter(first_owner.records))
@@ -468,7 +476,7 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
                         ToolCallPart("write_plan", {"items": [{"content": "Read the statement"}]})
                     ]
                 ),
-                _code(f"print(await open_imports(attachment_ids=[{attachment_id!r}]))"),
+                _code("print(await open_imports())"),
                 _code(f"print(await wait_for_password(import_id={import_id!r}))"),
                 _code(
                     f"print(await submit_parser(import_ids=[{import_id!r}], code={SBI_PARSER!r}))"
@@ -490,7 +498,7 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
                             "delegate_task",
                             {
                                 "agent_name": "parser",
-                                "task": f"Import attachment {attachment_id}",
+                                "task": "Import the statement files from this turn.",
                             },
                         )
                     ]
@@ -517,7 +525,9 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
             with owner.bind():
                 result = await parent.run(
                     "Import the statement.",
-                    deps=AgentDeps(conversation_id="conv_password"),
+                    deps=AgentDeps(
+                        conversation_id="conv_password", statement_attachments=(attachment_id,)
+                    ),
                     conversation_id="conv_password",
                 )
             await injector
@@ -536,6 +546,83 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
     assert (await import_payload(ledger, import_id))["status"] == "review"
 
 
+async def test_open_imports_uses_the_turn_attachments_with_no_argument(ledger):
+    from types import SimpleNamespace
+
+    attachment_id = await _att(ledger, sbi_csv())
+    deps = AgentDeps(conversation_id="conv_open", statement_attachments=(attachment_id,))
+
+    opened = await open_imports(SimpleNamespace(deps=deps))
+
+    assert len(opened) == 1
+    import_id = opened[0]["import_id"]
+    assert import_id
+    assert opened[0]["locked"] is False
+    assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == "parsing"
+
+    empty = await open_imports(SimpleNamespace(deps=AgentDeps(conversation_id="conv_open")))
+    assert [item["import_id"] for item in empty] == [None]
+    assert "no statement attachments" in empty[0]["reason"]
+
+
+async def test_a_background_parser_opens_the_turns_attachment_without_an_id_in_the_task(
+    ledger, tmp_path
+):
+    account = await _sbi_account(ledger)
+    attachment_id = await _att(ledger, sbi_csv())
+    row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
+    import_id = row["id"]
+
+    parser = build_parser_agent(
+        model=_streaming(
+            _code("print(await open_imports())"),
+            _output(
+                ParseReport(
+                    status="ready",
+                    imports=[ImportReport(import_id=import_id, status="review", rows=3)],
+                )
+            ),
+        )
+    )
+    parent = build_agent(
+        model=_sequence(
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "delegate_task",
+                        {
+                            "agent_name": "parser",
+                            "task": "Import the statement files from this turn.",
+                            "background": True,
+                        },
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart("Started.")]),
+        ),
+        parser_agent=parser,
+    )
+    owner = DelegationTasks(directory=tmp_path)
+    async with owner.opened():
+        with owner.bind():
+            await parent.run(
+                "Import it.",
+                deps=AgentDeps(
+                    conversation_id="conv_open_bg", statement_attachments=(attachment_id,)
+                ),
+                conversation_id="conv_open_bg",
+            )
+        task_id = next(iter(owner.records))
+        for _ in range(200):
+            if owner.records[task_id].status == "finished":
+                break
+            await asyncio.sleep(0.05)
+        history = str(owner.history(task_id))
+
+    assert import_id in history
+    assert await ledger.fetchval("SELECT task_id FROM imports WHERE id = $1", import_id) == task_id
+
+
 async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledger, tmp_path):
     account = await _sbi_account(ledger)
     attachment_id = await _att(ledger, sbi_csv())
@@ -544,7 +631,7 @@ async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledge
 
     parser = build_parser_agent(
         model=_streaming(
-            _code(f"print(await open_imports(attachment_ids=[{attachment_id!r}]))"),
+            _code("print(await open_imports())"),
             _code(f"print(await doc_words(import_id={import_id!r}, page=0))"),
             ModelResponse(
                 parts=[
@@ -568,7 +655,7 @@ async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledge
                         "delegate_task",
                         {
                             "agent_name": "parser",
-                            "task": f"Import attachment {attachment_id}",
+                            "task": "Import the statement files from this turn.",
                             "background": True,
                         },
                     )
@@ -583,7 +670,9 @@ async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledge
         with owner.bind():
             await parent.run(
                 "Import the statement.",
-                deps=AgentDeps(conversation_id="conv_progress"),
+                deps=AgentDeps(
+                    conversation_id="conv_progress", statement_attachments=(attachment_id,)
+                ),
                 conversation_id="conv_progress",
             )
         task_id = next(iter(owner.records))
