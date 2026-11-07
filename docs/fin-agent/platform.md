@@ -345,6 +345,7 @@ The following table lists what leaves the box, by role:
 | Chat | Snapshot (balances, names, preferences), thread history, tool returns | Every turn |
 | Parser subagent (`PARSE`, or `CHAT` when unset) | Sample statement rows, including payee names and notes | Each import; a few rows when a saved parser replays cleanly |
 | Vision | The photo, or statement pages with no text | Each photo or such page |
+| Batch (only when `BATCH` is set) | Payee names, a sample narration for each, and your category names | Big categorizing backfills. Batch APIs are cloud-only; a local setup leaves `BATCH` unset and categorizes with the chat model |
 | Speech-to-text | Your audio | Each voice note |
 | Backups, push | Encrypted backups; contentless pings | Nightly; on notification |
 | Never | Statement passwords, API keys, session tokens, full account or card numbers from statements | |

@@ -145,7 +145,7 @@ floating `latest` aliases; re-run `fin-agent eval --model X` after changing one.
 | Role | Variables | Used for |
 |---|---|---|
 | Chat | `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL` | The agent loop, scheduled questions, the categorizer agent, and briefing prose |
-| Batch | `BATCH_PROVIDER`, `BATCH_API_KEY`, `BATCH_MODEL` | Optional. A model with a batch API—Anthropic, OpenAI, or Gemini—for categorizing a big backfill at about half the price |
+| Batch | `BATCH_PROVIDER`, `BATCH_API_KEY`, `BATCH_MODEL` | Optional, cloud-only. A model with a batch API—Anthropic, OpenAI, or Gemini—for categorizing a big backfill at about half the price. Leave it unset for a fully local setup |
 | Parse | `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional. The parser subagent; unset, it uses Chat |
 | Vision | `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Photos and scanned statement pages with no text |
 | Speech-to-text | `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL` | Voice notes |
@@ -235,6 +235,7 @@ role means nothing leaves for that role.
 | Chat | Snapshot (balances, names, preferences), thread history, tool returns | Every turn |
 | Parser subagent | Sample statement rows, including payee names and notes | Each import; a few rows when a saved parser replays cleanly |
 | Vision | The photo, or statement pages with no text | Each photo or such page |
+| Batch (only when `BATCH` is set) | Payee names, a sample narration for each, and your category names | Big categorizing backfills. Batch APIs are cloud-only; a local setup leaves `BATCH` unset and categorizes with the chat model |
 | Speech-to-text | Your audio | Each voice note |
 | Backups, push | Encrypted backups; contentless push pings | Nightly; on notification |
 | Never | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
