@@ -199,8 +199,9 @@ The following tables hold memory, conversations, and provenance:
 | `conversations`, `messages` | One `conversations` row for each thread you see, and two records of it ([step 6](system-design.md#two-records-both-on-the-server)). `messages` is what you saw, never edited, and its unique `client_id` is the client's message ID, so an ID starts only one turn ([step 8](system-design.md#every-ending-saves-the-same-two-records)). `messages.trace_id` and `messages.flagged_at` mark a reply you flagged and where to read its trace ([step 9](system-design.md#agent-evals)). `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.model_history` (`jsonb`) is what the model gets, and compaction may edit it. `conversations.snapshot_at` records when the pinned snapshot was taken. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)). `conversations.run_started_at` is set while a turn runs and cleared in the transaction that saves both records, so a value still set at boot means a crash ([step 8](system-design.md#every-ending-saves-the-same-two-records)) |
 | `audit_log` | Every write: actor, `message_id`, `group_id`, table, row ID, before and after JSON, `undone_at`. Powers undo; one undo reverts a whole group, such as a payee correction and every label it changed |
 | `imports` | File hash, parser, account, period, opening and closing balances, check result, status (`review`, `committed`, or `rejected`) |
-| `statement_layouts` | One saved parser for each statement layout: `institution`, `fingerprint` (the normalized column headers), `parser` (the script's text), `helper_version`, `source_import_id`, `last_used_at`. Saved only after you commit an import ([`import.md`](import.md)) |
-| `attachments` | Receipt photos and UPI screenshots as `bytea`. Statement files stay only until their import is committed or rejected; after that, only their hash |
+| `statement_layouts` | One layout for each bank and statement type: `institution`, `kind`, the known header variants (normalized column headers), and a pointer to the active version. Rolling back moves the pointer ([`import.md`](import.md#parser-versions)) |
+| `parser_versions` | Append-only: `layout_id`, `version`, `parser` (the script's text), `helper_version`, `source_import_id`, `created_at`. Saved only after you commit an import that used it |
+| `attachments` | Receipt photos, UPI screenshots, and statement files as `bytea`. A statement is kept as an unlocked copy, because its password is never stored; the kept files are what a new parser version is replayed on. You can delete one. Changed November 7, 2026: statements were deleted at commit or reject ([`import.md`](import.md#parser-versions)) |
 | `spend_counters`, `spend_dedup` | Spend ceilings. The harness's `PostgresSpendStore` creates and owns them ([step 9](system-design.md#traces-phoenix)) |
 | `notifications`, `push_subscriptions` | Inbox items and web-push endpoints |
 | `jobs`, `job_schedules` | The [job loop](platform.md#notifications-and-scheduler). `jobs`: unique `key` (a job and its period), `kind`, `payload`, `status` (`pending`, `running`, `done`, or `failed`), `run_at`, `attempts`, `last_error`; never a statement password, and `agent_ro` can't read it. `job_schedules`: `kind`, `payload`, `rule` (the same rules `schedules` use), `next_run_at` |
@@ -244,7 +245,7 @@ The agent has six write tools:
 | `correct_movement(id, changes, scope)` | Conversational repair. A label change edits the label; an amount fix or a delete appends a reversal. `scope` says how far a category or payee change goes: `this`, `future` (a rule), or `all` (a rule and past rows) |
 | `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, payees, settings, and scheduled questions. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
 | `preference(action, text or id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
-| `import_document(attachment_id)` | Starts an import, which ends in `review` state. Committing is a separate, explicit step on the review screen. It has no password argument: a password goes in a field on the import card, over REST |
+| `delegate_task` and the task tools | From the harness. The main agent hands an upload to the parser subagent in the background, and can steer, answer, resume, or cancel it. An import ends in `review` state; committing is a separate, explicit step on the review screen. No password passes through them: it goes in a field on the import card, over REST ([`tools.md`](tools.md#delegation-delegate_task-and-the-task-tools)) |
 | `undo(undo_id)` | Reverts the last write in this conversation, or a given one |
 
 Voice and photos are not tools. They're input preprocessing, which keeps rule 2 in `plan.md` §4.
@@ -332,9 +333,11 @@ name copied from a statement would flag every conversation that reads the financ
 every lasting write would need a card. `get_financial_context` marks only the names that still carry
 it.
 
-**Parse runs.** A parse run reads raw statement text, but it has no write or ledger tools and
-doesn't flag your conversation. `import_document` returns no statement text, so starting an import
-doesn't flag it either.
+**The parser subagent.** It reads raw statement text in its own context, with no write or ledger
+tools. Its report to the main agent carries statuses and counts, which don't flag your
+conversation. Any statement text in a report or a question, such as a payee name, goes through
+`mark()`, which flags it, so a lasting write after that asks first. Handing off an upload doesn't
+flag it either.
 
 **Write tiers.** The following table sets which writes ask first:
 

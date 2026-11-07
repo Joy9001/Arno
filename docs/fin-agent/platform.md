@@ -18,8 +18,8 @@ src/fin_agent/
   db/          connection, migrations/*.sql, roles, vendor/pgledger/ (unmodified, with licenses)
   ledger/      plain functions over the DB — the tools live here (no PydanticAI types)
   engine/      projection, affordability, backtest, pattern detection
-  importers/   readers, parse-run host functions, checks, reconciliation, photo extraction
-  agent/       PydanticAI agent, system prompt, tool wrappers, skills/parse-statement/
+  importers/   readers, parser-subagent host functions, the gate, reconciliation, photo extraction
+  agent/       PydanticAI agent, system prompt, tool wrappers, the parser subagent
   api/         FastAPI app, routers, auth
   jobs/        job loop, briefing, reminders, patterns
   india/       categories, statement parsers, holidays, ₹ formatting, prompt notes
@@ -190,8 +190,9 @@ The loop works as follows:
   interrupted. A job runs again from the top, so every handler is safe to rerun.
 - **A failing job retries with backoff, up to 3 attempts.** After the last one, it's marked `failed`
   and you get an inbox item.
-- **At most two jobs run at once,** so a long parse run can't hold up a reminder. Each has a time limit.
-- **A job can commit in the same transaction as its data,** so an import and its parse job exist
+- **At most two jobs run at once,** so a long job can't hold up a reminder. Each has a time limit.
+  Imports aren't jobs: the parser subagent is a delegated task ([`import.md`](import.md#the-subagents-run)).
+- **A job can commit in the same transaction as its data,** so a write and its follow-up job exist
   together or not at all.
 
 Backups are not a job. They run in their own sidecar, so they keep running when the
@@ -342,7 +343,7 @@ The following table lists what leaves the box, by role:
 | Role | Sends | When |
 |---|---|---|
 | Chat | Snapshot (balances, names, preferences), thread history, tool returns | Every turn |
-| Parse run | Sample statement rows, including payee names and notes | New layouts only |
+| Parser subagent (`PARSE`, or `CHAT` when unset) | Sample statement rows, including payee names and notes | Each import; a few rows when a saved parser replays cleanly |
 | Vision | The photo, or statement pages with no text | Each photo or such page |
 | Speech-to-text | Your audio | Each voice note |
 | Backups, push | Encrypted backups; contentless pings | Nightly; on notification |

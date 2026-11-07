@@ -673,7 +673,7 @@ Do not assume ordinary chat undo is the statement-undo path.
 | ☐ | J20.07 | Undo a statement that introduced a visible closing adjustment. | Adjustment is reversed consistently; it never remains as unexplained spending. |
 | ☐ | J20.08 | Re-import after undo. | No stale content hash falsely suppresses legitimate reinstatement; no duplicated active money. |
 | ☐ | J20.09 | Reject the first new layout, then upload it again. | Rejected/uncommitted parser was not promoted to trusted reusable layout. |
-| ☐ | J20.10 | Inspect attachment accessibility after commit/reject versus failure. | Retention follows documented lifecycle; purged statements cannot be downloaded through stale URLs. |
+| ☐ | J20.10 | Inspect attachment accessibility after commit, reject, failure, and a delete you make. | Statement files are kept as unlocked copies after commit and reject; a file you delete can't be downloaded through a stale URL and leaves the replay set. |
 
 ### J21: Import failures, other formats, and hostile files
 

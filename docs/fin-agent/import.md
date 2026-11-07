@@ -16,7 +16,7 @@ The following table shows who does each half of an import:
 | Half | Who does it |
 |---|---|
 | Turn any file into cells or positioned words | Fin-Agent's readers, on the host, written once |
-| Turn those into rows, for one bank's layout | A script the agent writes once in Monty, saved, and rerun with no LLM |
+| Turn those into rows, for one bank's layout | A script the parser subagent writes in Monty, saved as a version, and replayed or repaired on later statements |
 | Check them and reconcile them | Fin-Agent's own code. No library knows its data model |
 
 **The interface is generic.** "We only accept CSV" is never a thing the user is told. An
@@ -27,48 +27,113 @@ accepts that type.
 
 ## The pipeline
 
-![The agent learns each statement layout once](diagrams/sd-import-pipeline.png)
+![A parser subagent imports each statement](diagrams/sd-import-pipeline.png)
 
-*Figure: a known layout reruns its saved parser with no LLM call. A new layout starts a parse run,
-checks gate both paths, and the parser is saved only after you commit
+*Figure: the main agent hands the upload to a parser subagent in the background. The subagent
+replays or repairs the bank's saved parser, a code gate checks it against the statement and every
+stored statement from that bank, and your commit saves it as a new version
 ([note](diagrams/sd-import-pipeline.md)).*
+
+An import is agent work, not a workflow with a model inside it. Reading an unfamiliar statement,
+noticing that a column moved, and fixing a parser are judgment. Code keeps the parts that must not
+bend: the readers, the checks, the gate, and the commit. Agreed November 7, 2026; it replaces the
+job that ran a parse run as one step.
 
 Each stage works as follows:
 
-1. **Open.** Find the file's type from its contents, not its extension. If it's locked, the import
-   card shows a password field. The password goes over REST, stays in memory, is never stored, and
-   never reaches the model. Statements arrive monthly, so asking is cheap.
-2. **Known layout?** Match the normalized column headers against `statement_layouts`. On a match, the
-   server reruns the saved parser in Monty. If the checks fail, the layout counts as new.
-3. **Parse run,** for a new layout. The same agent and model, with no write or ledger tools, guided
-   by the `parse-statement` skill. It reads a sample, writes a script, and repairs it against the
-   checks ([`tools.md`](tools.md#parse-run-functions-new-statement-layouts-only)). It submits the
-   script, never rows, and the server reruns it from its text. A page with no text layer goes to the
-   `VISION` model instead. If it can't find what it needs, its question comes back on the import card.
-4. **Checks** (described later). A failure writes nothing and says why.
-5. **Dedupe.** Match against earlier imports by `content_hash`.
-6. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
-7. **Categorize, then review.** One batched model call labels the distinct counterparties, not
+1. **Hand off.** You upload one or more files. The main agent calls `delegate_task` for the
+   `parser` subagent with `background=True` and the attachment IDs in the task text, and your turn
+   ends. One upload is one task, so 12 monthly PDFs from a new bank get one parser, written once
+   and replayed on the rest, with no two runs racing to save it.
+2. **Open.** The subagent's first tool creates the import rows, so the card appears within seconds.
+   The reader finds each file's type from its contents. If a file is locked, the import card shows a
+   password field, and the subagent calls `wait_for_password`, a host tool that waits on the vault.
+   The password goes over REST into the vault, stays in memory, is never stored, and never reaches
+   either model or the chat. It doesn't go through `ask_parent`: a question there can reach the main
+   agent while you're chatting, and the password must never be asked for in chat.
+3. **Replay or repair.** Layouts are grouped by bank and statement type, and each set of column
+   headers is a variant of that layout. The subagent replays the latest version first. If it
+   passes, the import is ready in a few model calls. If it fails, the subagent gets that version
+   and the failing check's reason, and repairs it. A bank it has never seen gets a parser written
+   from a sample. It works in Monty with the host functions, keeps a plan, and can run the checks
+   itself as often as it likes ([`tools.md`](tools.md#parser-subagent-functions)). A page with no
+   text layer goes to the `VISION` model.
+4. **The gate** (described later). `submit_parser` reruns the script from its text in a fresh
+   sandbox, runs the checks, and replays it on every stored statement from that bank. A failure
+   returns the reason to the subagent as the tool result, and it repairs. Only a pass moves the
+   import to review.
+5. **Ask or report.** A fact the file can't give—which account, an opening balance that isn't
+   printed—goes up through `ask_parent`. The main agent answers from the ledger when it can and asks
+   you only when it can't. Doubts about single rows never block; they show on the review screen.
+   The subagent ends with a report: status, reason, counts, and what's blocking. The main agent
+   either resumes it with a fix or tells you the import is ready.
+6. **Dedupe.** Match against earlier imports by `content_hash`.
+7. **Reconcile.** Match against rows logged by chat, voice, or photo (described later).
+8. **Categorize, then review.** One batched model call labels the distinct counterparties, not
    one call per line. The same call may name one of your own accounts as the other side. The web
    app shows new rows, merged rows, ambiguous matches, categories, and suggestions to move money
-   between your accounts. The user commits, edits, or rejects.
-8. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
+   between your accounts. The user commits, edits, or rejects. Categorizing is redesigned next, as
+   its own step.
+9. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
    record the closing balance on the account. A suggested own-account line is written as a
    transfer only after the user confirms it on the review screen. If the closing disagrees with
    the ledger, the difference is a visible adjustment. Then recompute baselines, and save the
-   parser.
+   parser as a new version.
 
-A parser is saved only after you commit. One that failed the checks, or came from an import you
-rejected, isn't saved. A committed import is undone from the Imports screen, not by the agent.
-
-Stages 1-6 run as a [job](platform.md#notifications-and-scheduler), off the chat path. A crash or a
-failed attempt runs the job again from the top, which costs little, because nothing reaches the ledger
-before commit. The password isn't stored, so after a crash the card asks for it again. After the last
-attempt, the import is marked `failed`, with the reason on its card, and the file stays so you can
-retry ([step 8](system-design.md#jobs-a-plain-table-and-one-loop)).
+A parser version is saved only after you commit. One that failed the gate, or came from an import
+you rejected, isn't saved. A committed import is undone from the Imports screen, not by the agent.
 
 A file that isn't a statement, such as a salary slip or a loan letter, gets a plain "this isn't a
 statement," and nothing is imported.
+
+### The subagent's run
+
+The task runs in the API process, owned by one `DelegationTasks` opened at startup. The owner's
+folder, on a Docker volume, holds each task's record. The owner's `step_store` is a
+`PostgresStepStore`, so every step of the subagent's run is saved as it happens; without it, the
+folder saves a task's history only when the task settles or asks, and a crash mid-parse would lose
+the run. So a restart loses nothing the subagent learned. After a restart the task shows as cancelled in that conversation, and you ask the
+main agent to continue; it resumes the same task with its history. Resuming is safe because the
+subagent writes nothing to the ledger. There is no job retry loop and no server-started turn:
+reports and questions wait for the conversation's next turn, and the import card shows progress
+from the database meanwhile.
+
+The subagent has no write or ledger tools, so a crafted payee note can't reach a write. Its report
+does reach the main agent, which has write tools, so the report carries counts and statuses, and
+any statement text in it goes through `mark()`. The usual rule then applies: in a conversation that
+has read outside text, a lasting write asks first ([`design.md`](design.md#untrusted-text-and-write-tiers)).
+
+A file can't be parsed forever. An unreadable file, a file that isn't a statement, or a spend
+ceiling ends the run with a report. You and the main agent decide what happens next.
+
+### The import card
+
+A subagent in the background says nothing in the chat, so the card shows the work. It reads from
+the database, because once the chat turn has ended there is no stream to carry events. It is built
+from assistant-ui elements in their standalone, props-only mode:
+
+| What the card shows | Element |
+|---|---|
+| The task: state, time, result, transcript | Task card |
+| The subagent's plan, from `PostgresPlanStore` | Agent plan |
+| One live line, such as "reading page 12 of 74" | Agent status |
+| Each file in a multi-file upload | Job progress |
+| A question passed to you, such as which account | Option list |
+
+Task card's props-only mode is checked. The other elements and how they install are checked when
+the card is built.
+
+### Parser versions
+
+A layout's versions are append-only. The layout points to its active version, and rolling back
+moves the pointer. Statement files are kept: an unlocked copy is stored once the file opens,
+because a password is never stored. You can delete a file, which takes it out of the replay set.
+
+The replay set is every stored statement from that bank whose import was committed and not undone.
+A new version must reproduce each one's saved rows (`statement_lines`) exactly: the same dates,
+amounts, balances, and descriptions. Those rows are what you approved, so they are the expected
+answer. This catches a script that fits only this month. Ledger edits don't affect it; the replay
+compares against the parser's saved output, not the ledger.
 
 ---
 
@@ -180,12 +245,19 @@ often has no running balance, so only its total is checked. So the following che
 | Check | Catches |
 |---|---|
 | Every date falls inside the period, taken from outside the parser: a month name in the header, or the day after the ledger's last row. If the parser supplied it, a swapped format would flip both | A day/month swap |
-| The normalized column headers match the saved fingerprint; otherwise the layout counts as new | A new column dirtying the narrations |
+| The normalized column headers match a known variant of the bank's layout; otherwise the subagent repairs the parser for the new variant | A new column dirtying the narrations |
+| A new parser version reproduces the saved rows of every stored statement from that bank | A script that fits only this month |
 | At least one row, unless the statement says there were none | A parser that drops every row when opening equals closing |
 | The opening is evidenced by a user manual entry, a trusted prior/ledger balance, or the statement's printed opening. A parser fallback zero is never labeled printed. On a first card import with no prior or manual opening, the review card asks before commit | A missing opening silently defaulted to zero, or a gap between statements |
 
 No check covers the text of a narration. A misread payee shows up on the review screen, which stays
-the last guard.
+the last guard. After commit, you fix it with a ledger edit, and you can tell the main agent so the
+next version of the parser gets it right. Committed imports aren't re-parsed: their numbers are
+already proven. Editing the amount of a row a statement verified is allowed, but the edit card warns
+that the ledger will no longer match the bank, and the next import's opening check will fail.
+
+The subagent can call the checks itself as tools, and does so while it works. The gate runs the same
+checks again in code, so the model can't skip them or claim they passed.
 
 ---
 

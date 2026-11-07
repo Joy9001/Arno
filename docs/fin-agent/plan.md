@@ -262,8 +262,8 @@ supported through this switch, and the eval scorecard records what each one hand
 model's limits go in the scorecard; they are never designed into the product.
 
 Model IDs are pinned to exact, dated versions, never floating aliases, and any model change re-runs
-the eval scorecard. Parse runs and one-shot calls—the categorizer, briefing prose—use the chat
-role ([system design, step 3](system-design.md#models)).
+the eval scorecard. One-shot calls—the categorizer, briefing prose—use the chat role, and the parser
+subagent uses an optional `PARSE` role that falls back to it ([system design, step 3](system-design.md#models)).
 
 ---
 
@@ -375,11 +375,12 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 
 21. **Spike:** a fresh model writes a parser for my real SBI, Union Bank, and Slice statements in
     Monty. Output is a decision for each bank. Protocol in [`import.md`](import.md).
-22. Pipeline: upload → read → saved parser or parse run → checks → dedupe and reconcile against
-    logged rows → review screen → commit. The `jobs` table and its loop land here, to run this off
-    the chat path.
-23. Parse runs: the `parse-statement` skill and host functions; parsers saved in
-    `statement_layouts` after commit, and rerun with no LLM.
+22. Pipeline: upload → the main agent hands it to the parser subagent in the background → replay,
+    repair, or write the bank's parser → the gate → dedupe and reconcile against logged rows →
+    review screen → commit. The subagent runs under one `DelegationTasks` owner; the `jobs` table
+    keeps the scheduled work. Redesigned November 7, 2026 ([`import.md`](import.md#the-pipeline)).
+23. The parser subagent: its instructions, host functions, `ask_parent`, and `Planning`; parser
+    versions saved after commit, statement files kept, and every new version replayed on them.
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)

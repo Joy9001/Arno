@@ -120,11 +120,11 @@ For each path: who picks the next move—the model, code, or you? Agreed October
 
 ### Agent or workflow, for each path
 
-![The agent loop runs for you and for new layouts](diagrams/sd-agent-vs-workflow.png)
+![The agent loop runs for you and for your statements](diagrams/sd-agent-vs-workflow.png)
 
-*Figure: your chat and the questions you schedule drive the agent loop, and a new statement layout
-starts a parse run with no write tools. Built-in jobs and known layouts run as code with at most
-one LLM call each, and still run when the LLM is down ([note](diagrams/sd-agent-vs-workflow.md)).*
+*Figure: your chat and the questions you schedule drive the agent loop, and a statement upload goes
+from chat to a parser subagent with no write tools. Built-in jobs run as code with at most one LLM
+call each, and still run when the LLM is down ([note](diagrams/sd-agent-vs-workflow.md)).*
 
 - **Built-in jobs are workflows.** Warnings, reminders, and the briefing run as fixed code: the
   engine computes, rules decide whether to warn, and at most one LLM call writes the prose. They
@@ -133,10 +133,11 @@ one LLM call each, and still run when the LLM is down ([note](diagrams/sd-agent-
   food and whether it's up" runs the agent on a schedule, the way Claude Cowork's scheduled tasks
   do. No write tools—nobody is there to see an undo card or answer a confirm card—so the answer
   lands in the inbox, and each run has its own spend limit.
-- **Imports are code, until a layout is new.** A known layout reruns its saved parser with no LLM
-  call. A new layout starts a parse run: the same agent, with no write tools, and it waits if the
-  LLM is down. This replaced "at most one LLM call" on October 31, 2026
-  ([step 5](#imports-the-agent-writes-the-parser)).
+- **Imports are agent work.** The main agent hands each upload to a parser subagent in the
+  background, with no write tools. It replays the bank's saved parser, and repairs or writes one
+  when that fails; code keeps the checks, the gate, and the commit. Imports wait when no LLM is
+  reachable, as chat does. This replaced "code, until a layout is new" on November 7, 2026, which
+  had replaced "at most one LLM call" on October 31 ([step 5](#imports-the-agent-writes-the-parser)).
 - **The categorizer batches, and asks before moving money.** One call per import labels the
   distinct counterparties, and the same call can name one of your own accounts. A transfer
   suggestion is written only after you confirm it on the review screen. Category answers are
@@ -215,8 +216,9 @@ the context small, a backup model covers errors, and circuit breakers stop a run
 - **One agent.** The work is sequential and write-heavy—where the research found multi-agent
   setups lose. None of the research's three reasons for another agent applies: there's no context
   to isolate (the data is small), nothing to parallelize (turns are sequential), and independent
-  review is a deterministic check ([step 9](#step-9-evals-and-observability)). A parse run is this
-  agent with fewer tools ([step 5](#imports-the-agent-writes-the-parser)).
+  review is a deterministic check ([step 9](#step-9-evals-and-observability)). The one exception is
+  the parser subagent: a statement is long, untrusted text, and it needs its own context, its own
+  tools, and to run while you keep chatting ([step 5](#imports-the-agent-writes-the-parser)).
 - **Code Mode gives it computing power, and the engine gives verdicts.** Scripts orchestrate:
   standard money maths (EMI and amortization, prepayment, compounding) comes from tested engine
   functions, and free-form arithmetic covers the rest, with the script shown
@@ -226,11 +228,12 @@ the context small, a backup model covers errors, and circuit breakers stop a run
 
 ### Models
 
-The following table lists the three model roles:
+The following table lists the model roles:
 
 | Role | Used for |
 |---|---|
-| `CHAT` | The agent loop, your scheduled questions, parse runs, and the one-shot calls: the merchant categorizer and briefing prose |
+| `CHAT` | The agent loop, your scheduled questions, and the one-shot calls: the merchant categorizer and briefing prose |
+| `PARSE` | The parser subagent. Optional; it falls back to `CHAT`, so a stronger model can be tried for parsing without touching chat |
 | `VISION` | Photos and scanned statements |
 | `STT` | Voice notes |
 
@@ -398,24 +401,45 @@ every write is a direct call with its own card ([note](diagrams/sd-tool-surface.
 
 ### Imports: the agent writes the parser
 
-![The agent learns each statement layout once](diagrams/sd-import-pipeline.png)
+![A parser subagent imports each statement](diagrams/sd-import-pipeline.png)
 
-*Figure: a known layout reruns its saved parser with no LLM call. A new layout starts a parse run,
-checks gate both paths, and the parser is saved only after you commit
+*Figure: the main agent hands the upload to a parser subagent in the background. The subagent
+replays or repairs the bank's saved parser, a code gate checks it against the statement and every
+stored statement from that bank, and your commit saves it as a new version
 ([note](diagrams/sd-import-pipeline.md)).*
 
+Redesigned November 7, 2026, after a real 74-page SBI import. The parse run itself worked: 4
+minutes, 939 rows, verified on its second submit. The design around it didn't. It was a job with
+the model as one step, so the main agent couldn't steer it, a question ended it, and a stop lost it.
+A parser that passed overwrote the one that worked, and the statement file was deleted at commit.
+
 - **No parser for each bank.** A small set of readers turns any file into cells or positioned words,
-  and the agent writes a parser for each new layout. A typed layout spec would need new schema and
+  and the agent writes a parser for each layout. A typed layout spec would need new schema and
   code for every oddity, such as wrapped narrations, which is per-format logic under another name.
-- **A parse run is the same agent with different tools.** It has `run_code` and a skill, and no write
-  or ledger tools, the way scheduled questions have no write tools. To write a parser the model must
-  read sample rows. In the chat run, that would flag the conversation and put a crafted payee note
-  beside the write tools. In its own run, the worst case is wrong rows, and the chat stays free. The
-  cost is that its questions come back through the import card. It uses the chat turn's ceilings.
+- **A parser subagent, through the harness.** `SubAgents` with `TaskControl`: the main agent calls
+  `delegate_task` in the background and stays free, can steer the task, answer its `ask_parent`
+  questions, and resume it. One `DelegationTasks` owner, opened at startup, keeps each task's
+  record in a folder on a Docker volume, and its `PostgresStepStore` saves every step as it happens. The subagent has its own instructions, model setting, and
+  tools: `run_code`, `ask_parent`, `Planning`, and no write or ledger tools. To write a parser the
+  model must read sample rows; in the chat run, that would put a crafted payee note beside the write
+  tools. Its report carries counts and statuses, and statement text in it goes through `mark()`.
+- **The parent and you decide when it's done.** The subagent ends with a report. The main agent
+  resumes it with a fix or tells you the import is ready. A restart cancels the task; you ask, and
+  the main agent resumes it with its history. Nothing extra restarts it, because nothing is lost.
+- **Ask the parent for facts; flag rows in bulk.** The balance math decides whether a parse is
+  right, so your answers can't make it more accurate. Only facts outside the file block: which
+  account, an opening that isn't printed. They go up through `ask_parent`, and the main agent asks
+  you only when the ledger can't answer. Doubts about single rows show on the review screen.
 - **Monty is the sandbox.** It's already in the stack, runs in the API process, and has no filesystem,
   environment, or network. Local sandboxes remain the fallback ([parked](parked.md#a-separate-code-sandbox)).
-- **The model submits a script, never rows.** The server reruns the script from its text in a fresh
-  sandbox. Saved after you commit, it parses later statements with no LLM call.
+- **The model submits a script, never rows, and code holds the gate.** The subagent can run the
+  checks as tools while it works. `submit_parser` reruns the script from its text in a fresh sandbox,
+  runs the checks, and replays it on every stored statement from that bank. A failure returns the
+  reason to the subagent.
+- **Parsers are versioned, and statements are kept.** Versions are append-only and grouped by bank
+  and statement type, with each header set a variant. A failing version is repaired from the latest,
+  not rewritten. An unlocked copy of each statement is kept, so a new version must reproduce every
+  committed statement's saved rows before it passes.
 - **A vision model reads pages with no text.** OCR waits for the L3 spike
   ([parked](parked.md#ocr-for-scanned-statements)).
 
@@ -425,7 +449,11 @@ The following table records the other options that were considered:
 |---|---|---|
 | A library for each bank (`xfina`, `bankstatementparser`) | Optional | The L3 spike keeps one only if it beats a written parser on real statements |
 | `FileUnderstanding`, the harness capability | No | It describes files a model can't read, as free text. A frontier model gets the PDF unchanged, in the run that holds the write tools, and it leaves files alone under `FallbackModel` |
-| The model reads the whole file every time | Last layer only | Every import would send the whole statement to the provider and stop when the LLM is down. It stays for pages with no text |
+| The model reads the whole file every time | Last layer only | Every import would send the whole statement to the provider. It stays for pages with no text |
+| Keep the import a job, with the parse run as one step | No, since November 7, 2026 | The main agent couldn't steer it or answer it, and its questions dead-ended on the card. A subagent keeps the chat free just as well |
+| `Skills` for the parser's know-how | No, since November 7, 2026 | One skill, loaded at the start of every run, costs a round trip and does what instructions do. Skills suit occasional procedures |
+| A job retry loop or `pgtask` to restart a stopped task | No | The task's history is already saved; the main agent resumes it when you ask |
+| Ask you each doubt as the parse runs | No | The balance math settles the parse; questions about single rows would interrupt you for nothing |
 | Docker, BoxLite, Smol, Bubblewrap sandboxes | Fallback | Docker needs the host's Docker socket from inside Compose, and its docs say not to mount it. BoxLite and Smol need `/dev/kvm`. Bubblewrap's docs say it isn't a boundary against a hostile agent |
 | E2B, boxd | No | Cloud-hosted, so statements would reach another third party |
 
@@ -501,7 +529,7 @@ What the app opens to and how threads get their titles belong to
   hybrid—some data up front, explore the rest—optimal for financial work. It isn't in the
   instructions, because they sit before the history, so a changed balance would break the cache for
   the whole thread. It isn't a `SystemPromptPart`, because PydanticAI warns against building one from
-  content you didn't write. Scheduled questions get a snapshot; parse runs don't.
+  content you didn't write. Scheduled questions get a snapshot; the parser subagent doesn't.
 - **The flag follows what the model read.** The snapshot goes through `mark()` like any read, so a
   new thread starts flagged only if a name in its snapshot still carries a mark
   ([write tiers](design.md#untrusted-text-and-write-tiers)).
@@ -586,7 +614,7 @@ decide whether a 1-hour cache is worth it.
 | This thread | `conversations.model_history` and the snapshot | Every request | Each turn |
 | Facts about you | `preferences` | Always, in the snapshot | The agent, unprompted, with a card |
 | Past conversations | `messages` | When needed, by keyword search through `run_query`, which flags the thread | Automatically |
-| How to behave | Instructions, category rules, the parse skill, saved parsers | Instructions always; the rest in code or parse runs | Releases, your corrections, and committed imports |
+| How to behave | Instructions, category rules, the parser subagent's instructions, saved parser versions | Instructions always; the rest in code or the parser subagent | Releases, your corrections, and committed imports |
 | Money | The ledger | Through tools; never memorized | Write tools |
 
 Mem0, Graphiti, Letta, Cognee, Memobase, and Supermemory were considered and rejected
@@ -694,7 +722,7 @@ you notice its card or reconcile, or skew the wording of a reply.
 | Only you can confirm | Adapter plus stored history | Enforced |
 | Model-written SQL can't write or read auth tables | Postgres grants | Enforced |
 | Scripts reach nothing | Monty ([step 5](#the-monty-test-october-31-2026)) | Enforced |
-| A saved parser can only produce wrong rows | Monty, the checks, the review screen ([step 5](#imports-the-agent-writes-the-parser)) | Enforced |
+| A saved parser can only produce wrong rows | Monty, the gate, the review screen ([step 5](#imports-the-agent-writes-the-parser)) | Enforced |
 | Nothing else leaves the box | No outbound tools; client file URLs off | Enforced by absence |
 | Replies can't carry data out | Content security policy; links as plain text | Enforced from L0; [tested in step 10](#the-interface-tests-november-1-2026) |
 | Passwords stay out of chat | A field on the import card | By design; a password typed into chat can't be detected |
@@ -816,7 +844,7 @@ The following table records the other options that were considered:
 | `ApprovalReviewer` | It approves, on your behalf, exactly the writes this gate exists for |
 | `ToolCallJudge` | A second model on input the attacker partly shapes; its own docs say it isn't a boundary. Revisit if the eval fooled rate is high |
 | `ArtifactScanner` on preferences | Misses Hinglish, and `mark()` already strips invisible characters |
-| A quarantined reader for all chat data | Parse runs and vision calls already work this way, but the chat agent has to read payee names to answer anything |
+| A quarantined reader for all chat data | The parser subagent and vision calls already work this way, but the chat agent has to read payee names to answer anything |
 | Saving lasting writes at once, with undo | [Covered above](#why-the-models-judgment-isnt-the-only-layer) |
 | An egress proxy | [Parked](parked.md#an-egress-proxy) with its shape and trigger |
 | [Hex](https://github.com/anomalyco/hex) as the speech-to-text server | A dictation app, not an endpoint: no OpenAI-compatible API found, and its service is a helper a desktop app spawns, with the package unpublished and the API left out of the Windows beta. No Android app, and iPhone is internal TestFlight. Its benchmark feeds the [L7 question](plan.md#6-open-questions). The repository was read, not run |
@@ -943,11 +971,12 @@ A tool that throws something unexpected would end the run, and the raw text, suc
 A `jobs` table and one loop in the API process replace APScheduler
 ([`platform.md`](platform.md#notifications-and-scheduler)). With one process, anything marked `running`
 at boot was interrupted, so recovery is one `UPDATE`. A job can commit in the same transaction as its
-data, so an import and its parse job exist together or not at all. A due schedule creates one job and
+data, so a write and its follow-up job exist together or not at all. A due schedule creates one job and
 moves on from now, so any downtime collapses to one run.
 
-A restart runs a job again from the top, which is cheap for everything here. Statement passwords stay
-out of the table, so after a crash the import card asks again.
+A restart runs a job again from the top, which is cheap for everything here. Imports aren't jobs: the
+parser subagent is a delegated task, resumed by the main agent ([step 5](#imports-the-agent-writes-the-parser)).
+Statement passwords are never stored, so after a restart the import card asks again.
 
 | Option | Verdict | Why |
 |---|---|---|
@@ -976,7 +1005,7 @@ ago makes the agent ask in words; statement reconciliation is a third, separate 
 | What's down | What still works | What you see |
 |---|---|---|
 | The main model | Everything, on the backup if one is set | A badge on replies the backup wrote |
-| All LLMs | Panels, undo, saved parsers, reminders, risk checks, template briefings | "Couldn't answer" |
+| All LLMs | Panels, undo, reminders, risk checks, template briefings. Imports wait, with the file saved | "Couldn't answer" |
 | Vision or speech-to-text | The file is saved first | A retry card |
 | Postgres | Nothing | A plain "database unreachable", with no LLM spend |
 | Machine asleep | Nothing until it wakes | Jobs fire once on wake |
@@ -993,8 +1022,8 @@ ago makes the agent ask in words; statement reconciliation is a third, separate 
 
 | Option | Why not |
 |---|---|
-| A durable engine for chat: Temporal, DBOS, Prefect, Restate, Absurd, pgtask | [Absurd and pgtask](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/) don't stream live inside a task, and [DBOS](https://pydantic.dev/docs/ai/capabilities/durable_execution/dbos/) needs a separate handler for it and can't take a `CancellationToken`. Nothing here runs long enough to justify one, because restarting a parse run costs little. The [trigger](harness.md#later-with-triggers) stays |
-| `StepPersistence` | It now has a Postgres store, but that needs an asyncpg pool and creates its own tables with no migration step. The three save paths above cover the need, and [step 9](#traces-phoenix) settled on Phoenix for traces |
+| A durable engine for chat: Temporal, DBOS, Prefect, Restate, Absurd, pgtask | [Absurd and pgtask](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/) don't stream live inside a task, and [DBOS](https://pydantic.dev/docs/ai/capabilities/durable_execution/dbos/) needs a separate handler for it and can't take a `CancellationToken`. Nothing here runs long enough to justify one: the parser subagent's history is saved by `DelegationTasks`, and the main agent resumes it. The [trigger](harness.md#later-with-triggers) stays |
+| `StepPersistence` for chat | The three save paths above cover a chat turn, and [step 9](#traces-phoenix) settled on Phoenix for traces. The parser subagent does use it, since November 7, 2026: its `PostgresStepStore` is what lets a stopped task resume. The app is on asyncpg now, and the store creates its own tables, as the spend store does |
 | `DetectLoops` | Off until traces show a ceiling hit by repetition. The [ceilings](#the-loop-context-is-managed-runaways-are-stopped) already stop a runaway |
 | `RepairToolArguments` | Off until a local model's evals show malformed JSON |
 
@@ -1205,7 +1234,7 @@ Settings shows only those, plus the last model error, and links to Phoenix for t
 
 | Also not taken | Why |
 |---|---|
-| `StepPersistence` | It needs asyncpg and its own tables, and its trail repeats what Phoenix and `audit_log` hold |
+| `StepPersistence` as a trail | Its trail repeats what Phoenix and `audit_log` hold. The parser subagent uses it only to resume ([step 5](#imports-the-agent-writes-the-parser)) |
 | [`OnlineEvaluation`](https://pydantic.dev/docs/ai/evals/online-evaluation/) | Runs only after completed turns, and LLM judges on real data would send more out |
 | `TrajectoryJudge` | A second model steering the run. Evals grade outcomes, not paths |
 

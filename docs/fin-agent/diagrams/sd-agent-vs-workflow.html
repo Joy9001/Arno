@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>The agent loop runs for you and for new layouts</title>
+  <title>The agent loop runs for you and for your statements</title>
   <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&family=Noto+Sans+KR:wght@400;500;600&family=Noto+Serif+KR:wght@400&family=Noto+Sans+TC:wght@400;500;600&family=Noto+Serif+TC:wght@400&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -56,12 +56,12 @@
 <body>
   <div class="frame">
     <p class="eyebrow">Architecture · Fin-Agent system design, step 2</p>
-    <h1>The agent loop runs for you and for new layouts</h1>
+    <h1>The agent loop runs for you and for your statements</h1>
 
     <div class="diagram-container">
       <svg viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-agent-vs-workflow-title sd-agent-vs-workflow-desc">
-        <title id="sd-agent-vs-workflow-title">The agent loop runs for you and for new layouts</title>
-        <desc id="sd-agent-vs-workflow-desc">Fin-Agent's paths by trigger: your chat and the questions you schedule go to the agent loop, a new statement layout starts a parse run with no write tools, and known layouts, the categorizer and built-in jobs run as code that still works when the LLM is down.</desc>
+        <title id="sd-agent-vs-workflow-title">The agent loop runs for you and for your statements</title>
+        <desc id="sd-agent-vs-workflow-desc">Fin-Agent's paths by trigger: your chat and the questions you schedule go to the agent loop, a statement upload goes from chat to a parser subagent with no write tools, and the categorizer and built-in jobs run as code that still works when the LLM is down.</desc>
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
         </defs>
@@ -71,30 +71,26 @@
         <!-- Zones -->
         <rect x="280" y="40" width="328" height="196" rx="8" fill="none" stroke="rgba(191,69,32,0.45)" stroke-width="1" stroke-dasharray="4,3"/>
         <text x="292" y="58" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">MODEL DECIDES THE STEPS</text>
-        <rect x="280" y="252" width="328" height="264" rx="8" fill="none" stroke="rgba(45,49,66,0.30)" stroke-width="1" stroke-dasharray="4,3"/>
-        <text x="292" y="268" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">CODE DECIDES · AT MOST ONE LLM CALL</text>
+        <rect x="280" y="336" width="328" height="180" rx="8" fill="none" stroke="rgba(45,49,66,0.30)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="292" y="352" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">CODE DECIDES · AT MOST ONE LLM CALL</text>
 
         <!-- Arrows (drawn before boxes) -->
         <path d="M 208,106 H 296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
         <path d="M 208,231 H 240 Q 248,231 248,223 V 194 Q 248,186 256,186 H 296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
-        <path d="M 208,263 H 240 Q 248,263 248,271 V 300 Q 248,308 256,308 H 296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
         <path d="M 208,472 H 296" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
-        <path d="M 560,220 V 276" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
-        <path d="M 444,340 V 364" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 560,220 V 364" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
         <path d="M 592,106 H 672 Q 680,106 680,114 V 244 Q 680,252 688,252 H 704" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
-        <path d="M 592,308 H 704" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 592,196 H 632 Q 640,196 640,204 V 300 Q 640,308 648,308 H 704" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
         <path d="M 592,396 H 704" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
         <path d="M 592,472 H 804 Q 812,472 812,464 V 440" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
 
         <!-- Arrow labels -->
-        <rect x="178" y="194" width="60" height="12" fill="#f5f5f5"/>
-        <text x="208" y="203" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">NEW LAYOUT</text>
-        <rect x="200" y="284" width="38" height="12" fill="#f5f5f5"/>
-        <text x="219" y="293" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">KNOWN</text>
-        <rect x="444" y="238" width="104" height="12" fill="#f5f5f5"/>
-        <text x="496" y="247" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">SAVED AFTER REVIEW</text>
-        <rect x="620" y="286" width="72" height="12" fill="#f5f5f5"/>
-        <text x="656" y="295" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">AFTER REVIEW</text>
+        <rect x="186" y="194" width="44" height="12" fill="#f5f5f5"/>
+        <text x="208" y="203" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">IN CHAT</text>
+        <rect x="512" y="280" width="40" height="12" fill="#f5f5f5"/>
+        <text x="532" y="289" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ROWS</text>
+        <rect x="568" y="300" width="64" height="12" fill="#f5f5f5"/>
+        <text x="600" y="309" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">AFTER REVIEW</text>
 
         <!-- Triggers (input) -->
         <rect x="40" y="72" width="168" height="68" rx="6" fill="#f5f5f5"/>
@@ -123,20 +119,13 @@
 
         <rect x="296" y="152" width="296" height="68" rx="6" fill="#f5f5f5"/>
         <rect x="296" y="152" width="296" height="68" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
-        <text x="312" y="178" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Parse run</text>
-        <text x="312" y="194" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">the same agent, no write tools;</text>
-        <text x="312" y="207" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">writes a parser for the new layout</text>
+        <text x="312" y="178" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Parser subagent</text>
+        <text x="312" y="194" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">handed off from chat; no write tools;</text>
+        <text x="312" y="207" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">replays, repairs, or writes a parser</text>
         <rect x="524" y="162" width="56" height="14" rx="2" fill="#f5f5f5" stroke="#bf4520" stroke-width="0.8"/>
         <text x="552" y="172" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">LLM LOOP</text>
 
         <!-- Workflows (backend) -->
-        <rect x="296" y="276" width="296" height="64" rx="6" fill="#f5f5f5"/>
-        <rect x="296" y="276" width="296" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
-        <text x="312" y="302" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Saved parser</text>
-        <text x="312" y="318" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">a known layout reruns in Monty;</text>
-        <text x="312" y="331" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">checks gate every import</text>
-        <rect x="532" y="286" width="48" height="14" rx="2" fill="#f5f5f5" stroke="rgba(45,49,66,0.30)" stroke-width="0.8"/>
-        <text x="556" y="296" fill="#2d3142" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">NO LLM</text>
 
         <rect x="296" y="364" width="296" height="64" rx="6" fill="#f5f5f5"/>
         <rect x="296" y="364" width="296" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
@@ -162,8 +151,8 @@
         <circle cx="280" cy="372" r="2" fill="#2d3142"/>
         <line x1="224" y1="372" x2="276" y2="372" stroke="rgba(45,49,66,0.40)" stroke-width="1" stroke-dasharray="4,3"/>
         <text x="40" y="356" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">Code still runs with the LLM</text>
-        <text x="40" y="372" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">down; only a new layout has</text>
-        <text x="40" y="388" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">to wait for it.</text>
+        <text x="40" y="372" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">down. Imports wait for it,</text>
+        <text x="40" y="388" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">like chat does.</text>
 
         <!-- Legend -->
         <line x1="40" y1="532" x2="920" y2="532" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>

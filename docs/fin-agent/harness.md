@@ -88,7 +88,8 @@ The following capabilities are on from the start:
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
-| Skills, in parse runs only | The know-how for writing a statement parser stays out of the main prompt, and it can grow without code changes. A library shipped with the app, read through a `workspace=` backend, adds one tool, `load_capability` ([`import.md`](import.md)) |
+| SubAgents with Task Control, for the parser | A statement import is agent work that must not hold up the chat. The main agent delegates it in the background and can steer, answer, and resume it. One `DelegationTasks` owner, opened at startup, keeps each task's record; its `step_store`, a `PostgresStepStore`, saves every step as it happens, and `DelegationReports` brings reports into the next turn. Adopted November 7, 2026 ([`import.md`](import.md#the-subagents-run)) |
+| Planning, in the parser subagent only | A 74-page statement is dozens of steps; the plan keeps the subagent on track, and the import card shows it. `PostgresPlanStore` takes an asyncpg pool like the spend store's and creates its own table the same way, with the task ID as the session, since one task can hold several imports |
 
 ### Later, with triggers
 
@@ -100,7 +101,8 @@ The following capabilities wait for their triggers:
 | Prompt Injection Defender, Approval Reviewer, Tool Call Judge, Artifact Scanner | Not adopted ([system design, step 7](system-design.md#options-not-taken)). Revisit Tool Call Judge if the eval fooled rate is high |
 | Tool Search | Evals show the model confusing or missing tools. The model sees only seven of the 14, so a tool count isn't the trigger |
 | Memory | Not adopted. Memory is the typed `preferences` table (`plan.md` §2): the agent saves to it unprompted, with a "Remembered" card and undo—visible, editable, and audited, which a notebook isn't. No memory library either ([system design, step 6](system-design.md#memory-no-memory-library)) |
-| Step Persistence and durable execution | Runs get long enough that losing one hurts. A chat turn is seconds, and a parse run restarts cheaply ([system design, step 8](system-design.md#other-options)) |
+| Step Persistence for chat, and durable execution | Chat runs get long enough that losing one hurts. A chat turn is seconds. The parser subagent already uses Step Persistence, as its task owner's step store ([system design, step 8](system-design.md#other-options)) |
+| Skills | A procedure needed only sometimes, too long to keep in instructions. Dropped from the parser on November 7, 2026: its one skill loaded at the start of every run, so it became the subagent's instructions |
 | Detect Loops | Traces show a spend or request ceiling hit by repetition |
 | Repair Tool Arguments | A local model's evals show malformed JSON in tool calls |
 | Online Evaluation, Trajectory Judge | Not adopted ([system design, step 9](system-design.md#traces-phoenix)) |

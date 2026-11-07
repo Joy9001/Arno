@@ -641,6 +641,9 @@ write_group:
     if scope == "all":
         relabel the payee's past transfers; rows_changed = count
 queue the risk check if amount, account, date, or delete changed
+if amount changed on a movement a committed statement verified:
+    the card warns that the ledger no longer matches the bank,
+    and that the next import's opening check will fail                # allowed, not blocked
 ```
 
 ### `update_setup`
@@ -722,46 +725,35 @@ it out of the tool means every write the agent makes stays undoable, and a tool 
 can't reverse would fire the [Guardrails trigger](harness.md#later-with-triggers). In chat, the agent
 turns the preference off and points you to Settings.
 
-### `import_document`
+### Delegation: `delegate_task` and the task tools
 
-**Tier:** writes only an import in review state. The ledger is untouched.
+**Tier:** none of these writes to the ledger. They come from the harness's `SubAgents` capability
+with `TaskControl`, so Fin-Agent configures them rather than builds them.
 
-**Description:** "Start importing an uploaded statement. Returns a status and a review link; the user
-approves on the review screen, and you can't commit an import. If the file needs a password, tell
-the user to enter it on the import card. Never ask for it in chat."
+| Tool | Use |
+|---|---|
+| `delegate_task(agent_name, task, background, resume)` | Hand an upload to the `parser` subagent, in the background. `resume=<task_id>` continues a finished or interrupted task with its history |
+| `list_tasks()` | The tasks started in this conversation, with status and IDs |
+| `message_task(task_id, message)` | Steer a running task; it reads the message at its next model request |
+| `answer_task(task_id, answer)` | Answer a question the task asked through `ask_parent` |
+| `cancel_task(task_id)` | Stop a task |
 
-**Input:** `import_document(attachment_id: str)`
-
-**Output**
-
-```python
-{"import_id", "status": "parsing" | "needs_password" | "needs_input" | "review"
-                        | "not_a_statement" | "failed",
- "account", "period",
- "counts": {"new", "merged", "ambiguous", "logged_not_on_statement"},
- "check": "VERIFIED" | "DISCREPANCY" | "FAILED" | None,
- "reason": str | None}
-```
-
-No statement text is in this return, so calling it doesn't flag the conversation. UI: import card
-with the password field and the review link.
+The parser's description in the main prompt: "Imports uploaded statements. Give it the attachment
+IDs. It reports a status, counts, and anything blocking; it never writes to the ledger, and you
+can't commit an import."
 
 **Logic**
 
 ```
-if this file's hash is already imported: return that import
-in one transaction: create the import (status = parsing) and its job
-the job loop runs the rest off the chat path (step 8); a restart runs it from the top
-    open the file by its contents; if locked: status = needs_password and stop
-        the password arrives over REST on the card, stays in memory,
-        is never stored and never reaches the model; after a crash, the card asks again
-    fingerprint = the column headers, normalized
-    if a saved layout matches: rerun its parser in Monty; if the checks pass: go to review
-    otherwise: start a parse run (below)
-        it ends with a submitted parser, not_a_statement, needs_input, or gave up
-review: dedupe by content_hash; reconcile against logged rows; status = review
+upload: the main agent calls delegate_task("parser", "<attachment ids>", background=True)
+    one upload is one task; the turn ends at once
+the task runs under the DelegationTasks owner opened at startup; history is saved after each step
+a report or a question waits for the conversation's next turn (DelegationReports)
+    a report carries statuses and counts; statement text in it goes through mark()
+a password never passes through these tools or ask_parent: the subagent's wait_for_password
+    host tool waits on the vault, and the import card's endpoint fills it
+after a restart the task is cancelled; you ask, and the main agent resumes it
 committing is a REST endpoint on the review screen; no tool does it
-commit: write the movements, then save the parser in statement_layouts
 ```
 
 ### `undo`
@@ -794,26 +786,33 @@ The undo button on a card calls this same function over REST, so undo works with
 
 ---
 
-## Parse run functions: new statement layouts only
+## Parser subagent functions
 
-A parse run is the same agent and model with a different toolset: `run_code` and `load_capability`,
-for the `parse-statement` skill. It has no write tools and no ledger tools, the way scheduled
-questions have no write tools. A script reaches the functions below. Rows stay on the host, and
-`run_code` returns counts, status, and a sample, so a statement's text doesn't fill the context.
+The `parser` subagent is its own agent: its own instructions (the statement know-how that was the
+`parse-statement` skill), its own model setting (`PARSE_*`, falling back to the chat model), and a
+different toolset: `run_code`, `ask_parent`, and `Planning`'s plan tools. It has no write tools and
+no ledger tools. A script reaches the functions below. Rows stay on the host, and `run_code` returns
+counts, status, and a sample, so a statement's text doesn't fill the context.
 
-The run's output is one of the following: `parser_submitted`, `not_a_statement` with the kind it
-found, `needs_input` with a question for the import card, or `gave_up` with the reason.
+The main agent's deps are passed to it, so the file isn't in its deps. Each function takes the
+`import_id`, which one task may hold several of, and loads the file itself.
+
+The task ends with a report: `ready` for review, `not_a_statement` with the kind it found,
+`blocked` with what it needs, or `gave_up` with the reason and what it tried.
 
 | Function | Description | Input | Output |
 |---|---|---|---|
-| `doc_info` | What the file is | none | `{"kind", "pages", "text_layer_pages", "sheets", "delimiter", "encoding"}` |
-| `doc_words` | One page's words with positions | `page` | `[{"text", "x0", "x1", "top", "bottom"}]` |
-| `doc_words_range` | Many pages at once; use this past a few pages | `first`, `last` | The same words, for each page |
-| `doc_cells` | A sheet's rows. Text formats arrive as one-line cells | `sheet=0` | `[[cell, ...], ...]` |
-| `ledger_opening` | The account's ledger balance before this statement, for statements that print none | `account` | `{"paise", "as_of"}` or `null` on a first import |
-| `check_statement` | The checks, on rows a script produced | `rows`, `opening`, `closing` | `{"status", "reason", "computed_closing", "chain_breaks", ...}` |
-| `transcribe_page` | An isolated, tool-less `VISION` call, for a page with no text layer | `page` | Typed rows |
-| `submit_parser` | Submit a script. The model never submits rows | `code` | `{"status", "counts", "sample", "reason"}` |
+| `open_imports` | Create the import rows for this upload and read each file | `attachment_ids` | `[{"import_id", "kind", "locked", "institution", "variant"}]` |
+| `wait_for_password` | Wait until the password typed on the import card unlocks the file. The model never sees it | `import_id` | `{"status": "unlocked" \| "timed_out"}` |
+| `saved_parser` | The bank's active parser version and its known header variants | `import_id` | `{"version", "script", "variants"}` or `null` |
+| `doc_info` | What the file is | `import_id` | `{"kind", "pages", "text_layer_pages", "sheets", "delimiter", "encoding"}` |
+| `doc_words` | One page's words with positions | `import_id`, `page` | `[{"text", "x0", "x1", "top", "bottom"}]` |
+| `doc_words_range` | Many pages at once; use this past a few pages | `import_id`, `first`, `last` | The same words, for each page |
+| `doc_cells` | A sheet's rows. Text formats arrive as one-line cells | `import_id`, `sheet=0` | `[[cell, ...], ...]` |
+| `ledger_opening` | The account's ledger balance before this statement, for statements that print none | `import_id`, `account` | `{"paise", "as_of"}` or `null` on a first import |
+| `check_statement` | The checks, on rows a script produced. Call it as often as useful | `import_id`, `rows`, `opening`, `closing` | `{"status", "reason", "computed_closing", "chain_breaks", ...}` |
+| `transcribe_page` | An isolated, tool-less `VISION` call, for a page with no text layer | `import_id`, `page` | Typed rows |
+| `submit_parser` | The gate. Submit one bank layout's script for its imports in this upload; an upload mixing banks gets one submit per bank. The model never submits rows | `import_ids`, `code` | `{"status", "counts", "sample", "reason", "replay"}` |
 
 **`check_statement`**
 
@@ -835,9 +834,13 @@ VERIFIED otherwise
 rerun the script's text in a fresh AsyncMonty           # only this proves it stands alone
     prepend the helper block at its current version
     os_policy blocks the clock and random; sleep limit set
-run check_statement on what it returned
-keep the rows on the host; return counts and a five-row sample
-if VERIFIED: the import moves to review, holding the script and its fingerprint
+run check_statement on what it returned, for each import
+replay it on every stored statement from that bank whose import is committed and not undone;
+    each must reproduce its saved statement_lines exactly
+keep the rows on the host; return counts, a five-row sample, and the first replay mismatch
+on any failure: return the reason; the subagent repairs and submits again
+if everything passes: each import moves to review, holding the script and its header variant
+the version is saved only when you commit
 ```
 
 Details of the readers and the checks are in [`import.md`](import.md).
