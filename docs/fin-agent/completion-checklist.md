@@ -43,8 +43,7 @@ and pushed to `main`. Group B's import items wait for this group.
 ### Phase 1: schema, kept files, versions, the gate (no model)
 
 - [ ] Migration `0013`: `statement_layouts` by bank and statement type, with header variants and an
-      active-version pointer; append-only `parser_versions`; `category_rules` with `match`,
-      `pattern`, `priority`, and the `seed` source; a label records the rule that fired.
+      active-version pointer; append-only `parser_versions`; `attachments` keep statement files.
 - [ ] Statement files are kept: no deletion at commit or reject, an unlocked copy stored once the
       file opens, and an endpoint to delete one.
 - [ ] `submit_parser` is the gate: a fresh sandbox, the checks, and a replay on every stored,
@@ -77,6 +76,8 @@ and pushed to `main`. Group B's import items wait for this group.
 
 ### Phase 4: the categorizer
 
+- [ ] A migration gives `category_rules` `match`, `pattern`, `priority`, and the `seed` source, and a
+      label records the rule that fired.
 - [ ] Rules engine: match types and priority, payment-rail stripping, the seed list of about 150
       merchants, payment apps never matched by name, refunds take the original category.
 - [ ] Categorizer agent and tools; `categorize_import` and `collect_batch` jobs; the `BATCH` role.
