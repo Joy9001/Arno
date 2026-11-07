@@ -15,7 +15,7 @@ from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import UsageLimits
 from pydantic_ai_harness.code_mode import CodeMode
@@ -838,7 +838,8 @@ def build_parser_agent(
     toolset = FunctionToolset(
         tools=[
             open_imports,
-            wait_for_password,
+            # The toolset's 180 s limit would cut the password wait short.
+            Tool(wait_for_password, timeout=PASSWORD_WAIT_SECONDS + 30),
             saved_parser,
             doc_info,
             doc_words,

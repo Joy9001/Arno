@@ -835,3 +835,25 @@ async def test_a_wrong_password_asks_again_and_is_not_handed_back(ledger, monkey
     assert result == {"status": "unlocked"}
     assert PASSWORDS.get(import_id) is None
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == "parsing"
+
+
+def test_the_password_wait_outlasts_the_toolset_timeout():
+    import fin_agent.agent.parser as parser_module
+
+    found = []
+
+    def visit(toolset):
+        tools = getattr(toolset, "tools", None)
+        if isinstance(tools, dict) and "wait_for_password" in tools:
+            found.append(tools["wait_for_password"])
+        for name in ("wrapped", "toolsets"):
+            inner = getattr(toolset, name, None)
+            for item in inner if isinstance(inner, (list, tuple)) else [inner]:
+                if item is not None:
+                    visit(item)
+
+    for toolset in build_parser_agent(model="test").toolsets:
+        visit(toolset)
+    assert found, "wait_for_password is not on the parser"
+    assert found[0].timeout is not None
+    assert found[0].timeout > parser_module.PASSWORD_WAIT_SECONDS
