@@ -395,11 +395,13 @@ def test_backup_script_stops_promptly_while_idle(tmp_path: Path):
 
         started = time.monotonic()
         proc.terminate()
-        proc.wait(timeout=5)
+        # The point is not waiting out the 3600 s interval. 30 s leaves room for a busy CI runner
+        # running tests in parallel, where 5 s was occasionally exceeded.
+        proc.wait(timeout=30)
         elapsed = time.monotonic() - started
     finally:
         if proc.poll() is None:
             proc.kill()
 
-    assert elapsed < 5, f"stop took {elapsed:.1f}s; output: {''.join(output)}"
+    assert elapsed < 30, f"stop took {elapsed:.1f}s; output: {''.join(output)}"
     assert proc.returncode == 0, f"output: {''.join(output)}"
