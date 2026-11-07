@@ -357,3 +357,25 @@ def test_an_unlocked_pdf_copy_opens_without_the_password():
     unlocked = doc.readable_bytes()
     assert unlocked != locked
     assert open_documents(unlocked)[0].kind == "pdf"
+
+
+async def test_a_statement_without_detectable_headers_still_saves_and_replays(ledger):
+    # An SBI PDF's headers aren't found before a parser runs, so its fingerprint is None.
+    saved = await save_version(
+        ledger,
+        institution="SBI",
+        kind="bank",
+        fingerprint=None,
+        parser="result = 1",
+        source_import_id=None,
+    )
+    assert saved["version"] == 1
+    variants = await ledger.fetchval(
+        "SELECT variants FROM statement_layouts WHERE id = $1", saved["id"]
+    )
+    assert list(variants) == []
+
+    found = await layout_for(ledger, None, institution="SBI", kind="bank")
+    assert found is not None and found["parser"] == "result = 1"
+    assert await layout_for(ledger, None, institution="HDFC", kind="bank") is None
+    assert await layout_for(ledger, None) is None

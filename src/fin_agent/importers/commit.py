@@ -448,7 +448,7 @@ async def commit_import(
         layout = None
         fingerprint = row["fingerprint"]
         parser = row["parser"]
-        if fingerprint and parser:
+        if parser:
             layout = await save_version(
                 conn,
                 institution=account["institution"] or account["name"],

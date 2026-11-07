@@ -30,7 +30,7 @@ from fin_agent.importers.checks import INPUT_REASONS, account_check
 from fin_agent.importers.checks import check_statement as run_checks
 from fin_agent.importers.gate import run_gate
 from fin_agent.importers.helpers import HELPER_VERSION
-from fin_agent.importers.layout import detect_fingerprint
+from fin_agent.importers.layout import detect_fingerprint, normalize_headers
 from fin_agent.importers.layouts import layout_for
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.periods import (
@@ -729,7 +729,10 @@ async def submit_parser_code(
                 "account": resolved,
                 "check": check,
                 "period": period,
-                "fingerprint": info["fingerprint"],
+                # The script's printed headers name the variant when the file's own headers
+                # couldn't be detected before it ran.
+                "fingerprint": info["fingerprint"]
+                or (normalize_headers(parsed["headers"]) if parsed.get("headers") else None),
                 "counts": counts,
                 "sample": gate.get("sample") or [],
                 "replay": gate.get("replay"),

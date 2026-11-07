@@ -857,7 +857,7 @@ what they match ([`import.md`](import.md#categorizing-after-commit)).
 |---|---|---|---|
 | `pending_payees` | Payees in this import no rule covers, with their row count, total, and a sample narration, plus your categories | `import_id` | `{"payees": [...], "categories": [...]}` |
 | `check_payees` | Payees a rule already covers, without their category, for measuring agreement | `import_id`, `count` | `[{"key", "narration"}]` |
-| `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `{"answers": [{"key", "category", "guess_reason"}], "agreement": {"rate", "checked"}}` |
+| `categorize_now` | Ask the model now, in chunks sent at the same time | `keys` | `{"answers": [{"key", "category", "guess_reason"}], "agreement": {"rate", "checked"}, "failed": [key]}`; a failed chunk's keys can be asked again once |
 | `submit_batch` | Only when `BATCH` is set. Submit the keys as one batch; the job runner checks it and starts a fresh run when it ends | `keys` | `{"batch_id", "requests"}` |
 | `batch_results` | The ended batch's answers, in a run started for it | `batch_id` | The same shape as `categorize_now` |
 | `save_categories` | One write group: labels the rows, writes `llm` rules for trusted answers, and stores a hint on the rest, which stay uncategorized | `decisions`: `[{"key", "category", "trusted", "guess_reason"}]` | `{"undo_id", "labeled", "uncategorized"}` |

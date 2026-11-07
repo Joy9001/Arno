@@ -21,8 +21,14 @@ async def layout_for(
     institution: str | None = None,
     kind: str | None = None,
 ) -> dict[str, Any] | None:
-    """The layout whose variants include this header fingerprint, with its active version."""
-    if not fingerprint:
+    """The bank's layout for this statement, with its active version.
+
+    A layout is a bank and statement type; each header set is a variant of it. A known variant
+    picks its layout; otherwise the bank and type do, because a file's headers aren't always
+    detectable before a parser runs (an SBI PDF's are not), and a changed header set is exactly
+    what a replay-then-repair handles.
+    """
+    if not fingerprint and not (institution and kind):
         return None
     return await conn.fetchrow(
         """
@@ -30,10 +36,12 @@ async def layout_for(
                v.id AS version_id, v.version, v.parser, v.helper_version
         FROM statement_layouts l
         JOIN parser_versions v ON v.id = l.active_version_id
-        WHERE $1 = ANY(l.variants)
-          AND ($2::text IS NULL OR lower(l.kind) = lower($2))
-          AND ($3::text IS NULL OR lower(l.institution) = lower($3))
-        ORDER BY l.created_at
+        WHERE ($1::text IS NOT NULL AND $1 = ANY(l.variants)
+               AND ($2::text IS NULL OR lower(l.kind) = lower($2))
+               AND ($3::text IS NULL OR lower(l.institution) = lower($3)))
+           OR ($2::text IS NOT NULL AND $3::text IS NOT NULL
+               AND lower(l.kind) = lower($2) AND lower(l.institution) = lower($3))
+        ORDER BY ($1::text IS NOT NULL AND $1 = ANY(l.variants)) DESC, l.created_at
         LIMIT 1
         """,
         fingerprint,
@@ -47,7 +55,7 @@ async def save_version(
     *,
     institution: str,
     kind: str,
-    fingerprint: str,
+    fingerprint: str | None,
     parser: str,
     source_import_id: str | None = None,
 ) -> dict[str, Any]:
@@ -67,7 +75,7 @@ async def save_version(
         layout = await conn.fetchrow(
             """
             INSERT INTO statement_layouts (id, institution, kind, variants)
-            VALUES ($1, $2, $3, ARRAY[$4]::text[])
+            VALUES ($1, $2, $3, array_remove(ARRAY[$4::text], NULL))
             RETURNING *
             """,
             await new_id(conn, "lay"),
@@ -80,7 +88,7 @@ async def save_version(
             """
             UPDATE statement_layouts
             SET variants = variants || $1::text[], updated_at = now()
-            WHERE id = $2 AND NOT ($1 = ANY(variants))
+            WHERE id = $2 AND $1::text IS NOT NULL AND NOT ($1 = ANY(variants))
             """,
             fingerprint,
             layout["id"],

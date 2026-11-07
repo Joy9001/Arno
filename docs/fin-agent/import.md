@@ -52,7 +52,9 @@ Each stage works as follows:
    either model or the chat. It doesn't go through `ask_parent`: a question there can reach the main
    agent while you're chatting, and the password must never be asked for in chat.
 3. **Replay or repair.** Layouts are grouped by bank and statement type, and each set of column
-   headers is a variant of that layout. The subagent replays the latest version first. If it
+   headers is a variant of that layout. A file whose headers can't be read before a parser
+   runs, such as an SBI PDF, finds its layout by bank and type, and the script's printed
+   headers name its variant. The subagent replays the latest version first. If it
    passes, the import is ready in a few model calls. If it fails, the subagent gets that version
    and the failing check's reason, and repairs it. A bank it has never seen gets a parser written
    from a sample. It works in Monty with the host functions, keeps a plan, and can run the checks

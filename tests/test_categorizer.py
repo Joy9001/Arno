@@ -784,3 +784,43 @@ async def test_uncategorized_routes_answer_with_a_session(authed_client, ledger)
     payload = authed_client.get("/api/uncategorized")
     assert payload.status_code == 200
     assert payload.json()["groups"] == []
+
+
+async def test_a_failed_chunk_returns_its_keys_and_keeps_the_other_answers(ledger, monkeypatch):
+    from pydantic_ai.exceptions import ModelHTTPError
+
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger,
+        account,
+        [
+            _row(
+                f"UPI/DR/12345678901{i}/SHOP{i} INDIA/merchant{i}@okaxis",
+                debit=1000 + i,
+                day=f"2026-04-0{i + 1}",
+                counterparty=f"Shop {i}",
+            )
+            for i in range(4)
+        ],
+    )
+    monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 2)
+    calls = {"n": 0}
+
+    async def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls["n"] += 1
+        items = _chunk_answer(messages)
+        if calls["n"] == 1:
+            raise ModelHTTPError(504, "test-model", "gateway timeout")
+        answers = [
+            {"key": item["key"], "category": CATEGORY, "guess_reason": "name"} for item in items
+        ]
+        return _output([ToolCallPart(info.output_tools[0].name, {"response": answers})])
+
+    deps = CategorizerDeps(import_id=import_id, run_id="run", model=FunctionModel(respond))
+    ctx = RunContext(deps=deps, model=FunctionModel(lambda *_: _output([])), usage=RunUsage())
+    payees = await rules_mod.pending_payees(ledger, import_id)
+    result = await categorizer_mod.categorize_now(ctx, [payee["key"] for payee in payees])
+
+    assert len(result["answers"]) == 2
+    assert len(result["failed"]) == 2
+    assert not {a["key"] for a in result["answers"]} & set(result["failed"])

@@ -96,7 +96,8 @@ Work in this order:
    your judgement to keep.
 3. Ask the model. Normally call `categorize_now` once with every key. When `submit_batch` is
    offered and this is a big backfill, call it instead; the run ends there and a later run reads
-   `batch_results`.
+   `batch_results`. If `categorize_now` returns `failed` keys, call it once more with just
+   those; keys that fail again are left out of the save and stay uncategorized.
 4. Check the answers against the narrations. Then call `save_categories` once. Mark `trusted`
    only for answers you would stand behind. Leave the rest untrusted: they stay uncategorized and
    keep your guess as a hint.
@@ -170,8 +171,12 @@ async def _ask_chunk(
 
 async def _categorize_payloads(
     payloads: list[dict[str, Any]], *, model: Any, spend_store: Any
-) -> list[dict[str, Any]]:
-    """Ask every chunk at the same time, never one after another."""
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Ask every chunk at the same time, never one after another.
+
+    A chunk that fails (a provider timeout, say) doesn't sink the others: its keys come back as
+    failed, so the agent can ask about just those again or leave them uncategorized.
+    """
     semaphore = asyncio.Semaphore(CHUNK_CONCURRENCY)
 
     async def one(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -179,9 +184,17 @@ async def _categorize_payloads(
             return await _ask_chunk(payload, model=model, spend_store=spend_store)
 
     answers: list[dict[str, Any]] = []
-    for chunk in await asyncio.gather(*(one(payload) for payload in payloads)):
+    failed: list[str] = []
+    results = await asyncio.gather(*(one(payload) for payload in payloads), return_exceptions=True)
+    for payload, chunk in zip(payloads, results, strict=True):
+        if isinstance(chunk, BaseException):
+            if not isinstance(chunk, Exception):
+                raise chunk
+            logger.warning("a categorize chunk failed: %s", type(chunk).__name__)
+            failed.extend(payload["keys"])
+            continue
         answers.extend(chunk)
-    return answers
+    return answers, failed
 
 
 def _measure(ctx: RunContext[CategorizerDeps], answers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -244,10 +257,10 @@ async def _payloads_for(
 async def categorize_now(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dict[str, Any]:
     """Ask the model now, in chunks sent at the same time. Returns the answers and agreement."""
     payloads, _categories_list = await _payloads_for(ctx, keys)
-    answers = await _categorize_payloads(
+    answers, failed = await _categorize_payloads(
         payloads, model=ctx.deps.model, spend_store=ctx.deps.spend_store
     )
-    return {"answers": answers, "agreement": _measure(ctx, answers)}
+    return {"answers": answers, "agreement": _measure(ctx, answers), "failed": failed}
 
 
 async def batch_results(ctx: RunContext[CategorizerDeps], batch_id: str) -> dict[str, Any]:
