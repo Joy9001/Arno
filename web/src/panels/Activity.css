@@ -497,6 +497,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  margin-bottom: 16px;
 }
 
 .act-detail-placeholder {
@@ -758,13 +759,17 @@
     flex-direction: column;
   }
 
-  .act-detail-actions,
-  .act-detail-actions button {
+  .act-detail-actions {
     width: 100%;
+    align-items: center;
   }
 
   .act-detail-actions button {
     min-height: 40px;
+  }
+
+  .act-detail-actions .ghost {
+    flex: 1;
   }
 
   .act-import-item {

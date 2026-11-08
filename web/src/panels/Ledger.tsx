@@ -327,7 +327,7 @@ function UncategorizedSection({
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? "Show fewer" : `Show all ${list.data?.groups.length}`}
+          {expanded ? "Show fewer" : `Show all ${list.data?.groups.length} payees`}
         </button>
       )}
     </section>

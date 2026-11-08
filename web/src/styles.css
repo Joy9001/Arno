@@ -485,6 +485,11 @@ a.button {
   min-height: 0;
   padding: 0 var(--gutter) 72px;
   overflow-y: auto;
+  /* Scrolled-to and focused targets clear the pinned section tabs. */
+  scroll-padding-top: 76px;
+  /* Absolutely positioned status text (sr-only) must scroll and clip with the page, not stretch
+     the document, or scrollIntoView scrolls the whole frame and hides the top bar. */
+  position: relative;
   scrollbar-gutter: stable;
 }
 
