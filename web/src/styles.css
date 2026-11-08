@@ -386,6 +386,8 @@ a.button {
   min-width: 0;
 }
 
+.moneyv-head .sr-only + p { margin: 0; }
+
 .panel-head h2,
 .moneyv-head h2 {
   margin: 0;
@@ -1244,13 +1246,6 @@ input[type="file"]::file-selector-button:hover {
   font-weight: 600;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
-}
-
-.account-grid,
-.goal-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
 }
 
 .account,
@@ -2679,13 +2674,13 @@ button.icon-only {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  padding: 20px 18px 14px;
+  padding: 24px 28px 18px;
   border-bottom: 1px solid var(--line-soft);
 }
 
 .evidence-head h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
@@ -2697,9 +2692,29 @@ button.icon-only {
 .evidence-body {
   flex: 1;
   min-height: 0;
-  padding: 16px 18px 20px;
+  padding: 24px 28px 28px;
   overflow-y: auto;
 }
+
+.canvas-verdict {
+  margin: 0 0 16px;
+  color: var(--lime);
+  font-size: clamp(44px, 5vw, 80px);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.98;
+  text-wrap: balance;
+}
+
+.canvas-verdict:not(.negative) {
+  background: var(--mesh);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.canvas-reason { margin: 0 0 22px; max-width: 65ch; color: var(--sub); font-size: 15px; }
+.canvas-chart-label { margin: 0; color: var(--sub); font-size: 12px; }
+.evidence-curve { margin-top: 24px; }
 
 .evidence-verdict {
   display: flex;
@@ -2716,25 +2731,25 @@ button.icon-only {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 14px;
-  margin: 14px 0 10px;
+  margin: 24px 0 20px;
 }
 
 .evidence-figures dt {
   color: var(--sub);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .evidence-figures dd {
   margin: 4px 0 1px;
-  font-size: 18px;
-  font-weight: 650;
+  font-size: clamp(24px, 3vw, 38px);
+  font-weight: 800;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
 .evidence-figures span {
   color: var(--ter);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .evidence .chart-box {
@@ -2742,8 +2757,8 @@ button.icon-only {
 }
 
 .evidence-section {
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 28px;
+  padding-top: 20px;
   border-top: 1px solid var(--line-soft);
 }
 
@@ -2756,7 +2771,7 @@ button.icon-only {
 
 .evidence-section h3 {
   margin: 0 0 8px;
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 650;
 }
 
@@ -2776,21 +2791,23 @@ button.icon-only {
 
 .source-list {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
 }
+
+.source-list > .citation-detail { flex-basis: 100%; min-width: 0; }
 
 .source-row {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  width: 100%;
-  padding: 9px 0;
+  max-width: 100%;
+  padding: 10px 14px;
   border: 0;
-  border-bottom: 1px solid var(--line-soft);
-  border-radius: 0;
-  background: transparent;
+  border-radius: 20px;
+  background: var(--surface);
   color: var(--text);
   text-align: left;
 }
@@ -2800,9 +2817,8 @@ button.icon-only {
 }
 
 .source-row.on {
-  padding: 9px 8px;
-  border-radius: 8px;
   background: var(--surface-2);
+  outline: 1px solid var(--lime);
 }
 
 .source-row-main {
@@ -2839,7 +2855,7 @@ button.icon-only {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 18px calc(18px + env(safe-area-inset-bottom));
+  padding: 18px 28px calc(20px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line-soft);
 }
 
@@ -2936,8 +2952,7 @@ button.icon-only {
   }
 }
 
-.queue-dialog,
-.movement-dialog {
+.queue-dialog {
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
@@ -3182,7 +3197,7 @@ button.icon-only {
   }
 
   .evidence-figures dd {
-    font-size: 16px;
+    font-size: 26px;
   }
 
   .receipt-metrics {

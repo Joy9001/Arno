@@ -7,8 +7,20 @@ import {
   type ProjectionPayload,
   type ProjectionSource,
 } from "./projection";
-import { dataQualityNotes, lowAmount, OBLIGATION_WARNING, paymentMethodLabel } from "./projectionData";
+import {
+  dataQualityNotes,
+  lowAmount,
+  OBLIGATION_WARNING,
+  paymentMethodLabel,
+  projectionReadiness,
+} from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
+
+const VERDICT_TEXT = {
+  yes: "Yes.",
+  "yes-but": "Yes, with some caution.",
+  no: "Not this time.",
+};
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -67,6 +79,8 @@ export function EvidencePanel({
     | { amount_paise?: number; date?: string; method?: string; emi_months?: number }
     | undefined;
   const payment = paymentMethodLabel(purchase?.method);
+  const readiness = projectionReadiness(payload);
+  const verdict = payload.verdict ? VERDICT_TEXT[payload.verdict] : "Your outlook.";
 
   return (
     <div className="evidence">
@@ -89,59 +103,40 @@ export function EvidencePanel({
 
       <div className="evidence-body">
         <section className="evidence-summary" aria-label="Projection result">
+          <h3 className={`canvas-verdict${payload.verdict === "no" ? " negative" : ""}`}>
+            {readiness.ready ? verdict : "A balance is missing."}
+          </h3>
+          {(readiness.ready ? payload.verdict_reason : readiness.message) && (
+            <p className="canvas-reason">
+              {readiness.ready ? payload.verdict_reason : readiness.message}
+            </p>
+          )}
           <div className="evidence-verdict">
-            {floorSet ? (
+            {floorSet && readiness.ready ? (
               <span className={`badge ${payload.floor_probability >= payload.floor_threshold ? "good" : "danger"}`}>
                 {percent(payload.floor_probability)} above floor
               </span>
             ) : (
-              <span className="badge muted">No floor set</span>
+              <span className="badge muted">{floorSet ? "Forecast unavailable" : "No floor set"}</span>
             )}
-            {floorSet && <span className="fine">threshold {percent(payload.floor_threshold)}</span>}
+            {floorSet && readiness.ready && <span className="fine">threshold {percent(payload.floor_threshold)}</span>}
           </div>
-          <dl className="evidence-figures">
-            <div>
-              <dt>Lowest median balance</dt>
-              <dd>{median === null ? "—" : formatPaise(median)}</dd>
-              <span>{formatDate(payload.median_low.date)}</span>
-            </div>
-            <div>
-              <dt>Floor</dt>
-              <dd>{floorText ?? "Not set"}</dd>
-              <span>{floorSet ? "Your current setting" : "Set one in Profile"}</span>
-            </div>
-          </dl>
-          <ProjectionChart payload={payload} height={150} />
-        </section>
-
-        <section className="evidence-section">
-          <h3>Assumptions</h3>
-          <ul className="evidence-list">
-            <li>{payload.horizon_days} days from {formatDate(payload.as_of)}</li>
-            {payload.runs !== undefined && (
-              <li>
-                {payload.runs.toLocaleString("en-IN")} simulated runs ·{" "}
-                {percent(payload.floor_threshold)} threshold
-              </li>
-            )}
-            {purchase?.amount_paise !== undefined && (
-              <li>
-                Purchase of {formatPaise(purchase.amount_paise)}
-                {purchase.date ? ` on ${formatDate(purchase.date)}` : ""}
-                {payment ? ` · ${payment}` : ""}
-                {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}
-              </li>
-            )}
-            {floorSet && payload.optimistic && (
-              <li>
-                Unconfirmed income is shown separately:{" "}
-                {percent(payload.optimistic.floor_probability)} above floor, optimistic only
-              </li>
-            )}
-            {payload.obligations_met === false && (
-              <li>{OBLIGATION_WARNING}</li>
-            )}
-          </ul>
+          {readiness.ready && (
+            <>
+              <dl className="evidence-figures">
+                <div>
+                  <dt>Lowest median balance</dt>
+                  <dd>{median === null ? "—" : formatPaise(median)}</dd>
+                  <span>{formatDate(payload.median_low.date)}</span>
+                </div>
+                <div>
+                  <dt>Floor</dt>
+                  <dd>{floorSet ? floorText ?? "Not recorded" : "Not set"}</dd>
+                  <span>{floorSet ? "Your current setting" : "Set one in Profile"}</span>
+                </div>
+              </dl>
+            </>
+          )}
         </section>
 
         <section className="evidence-section">
@@ -173,6 +168,45 @@ export function EvidencePanel({
             <p className="empty-inline">No source rows were returned for this answer.</p>
           )}
         </section>
+
+        {readiness.ready && (
+          <div className="evidence-curve">
+            <ProjectionChart payload={payload} height={220} />
+            <p className="canvas-chart-label">Median balance · shaded range P10–P90</p>
+          </div>
+        )}
+
+        <section className="evidence-section">
+          <h3>Assumptions</h3>
+          <ul className="evidence-list">
+            <li>{payload.horizon_days} days from {formatDate(payload.as_of)}</li>
+            {payload.runs !== undefined && (
+              <li>
+                {payload.runs.toLocaleString("en-IN")} simulated runs ·{" "}
+                {percent(payload.floor_threshold)} threshold
+              </li>
+            )}
+            {purchase?.amount_paise !== undefined && (
+              <li>
+                Purchase of {formatPaise(purchase.amount_paise)}
+                {purchase.date ? ` on ${formatDate(purchase.date)}` : ""}
+                {payment ? ` · ${payment}` : ""}
+                {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}
+              </li>
+            )}
+            {floorSet && readiness.ready && payload.optimistic && (
+              <li>
+                Unconfirmed income is shown separately:{" "}
+                {percent(payload.optimistic.floor_probability)} above floor, optimistic only
+              </li>
+            )}
+            {payload.obligations_met === false && (
+              <li>{OBLIGATION_WARNING}</li>
+            )}
+          </ul>
+        </section>
+
+
 
         {notes.length > 0 && (
           <section className="evidence-section">

@@ -1574,10 +1574,6 @@ h3 {
 
 /* Canvas: planner and evidence --------------------------------------------------------------- */
 
-.canvas .evidence {
-  padding: 20px 24px;
-}
-
 .planner {
   display: flex;
   flex-direction: column;

@@ -16,9 +16,9 @@
   align-items: flex-end;
   gap: 12px;
   margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  padding: 20px;
+  border: 0;
+  border-radius: 24px;
   background: var(--surface);
 }
 
@@ -111,8 +111,8 @@
 }
 
 .act-list {
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  border: 0;
+  border-radius: 24px;
   background: var(--surface);
   overflow: hidden;
 }
@@ -325,6 +325,28 @@
 
 /* Ledger details dialog ------------------------------------------------------------------ */
 
+.movement-dialog.act-dialog {
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  left: auto;
+  width: min(480px, calc(100vw - 32px));
+  max-height: none;
+  padding: 28px;
+  border: 0;
+  border-radius: 30px;
+  transform: none;
+}
+
+.act-dialog .queue-head h2 { font-size: 26px; letter-spacing: -0.03em; }
+.movement-hero-amount { margin: 20px 0 28px; font-size: 48px; font-weight: 800; letter-spacing: -0.04em; overflow-wrap: anywhere; }
+.act-dialog .detail-grid { grid-template-columns: 100px minmax(0, 1fr); }
+.act-dialog .statement-text { padding: 12px; border-radius: 14px; background: var(--surface-2); }
+
+@media (max-width: 620px) {
+  .movement-dialog.act-dialog { inset: 8px; width: auto; padding: 22px; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .act-dialog {
     animation: act-dialog-in 180ms cubic-bezier(0.22, 1, 0.36, 1);
@@ -334,15 +356,45 @@
 @keyframes act-dialog-in {
   from {
     opacity: 0;
-    transform: translate(-50%, -49%);
+    transform: translateX(24px);
   }
   to {
     opacity: 1;
-    transform: translate(-50%, -50%);
+    transform: translateX(0);
   }
 }
 
 /* Imports -------------------------------------------------------------------------------- */
+
+.act-imports .act-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 30px 24px;
+  border: 1px dashed color-mix(in srgb, var(--lime) 45%, transparent);
+  border-radius: 28px;
+  background: color-mix(in srgb, var(--lime) 3%, var(--bg));
+  text-align: center;
+}
+
+.act-upload > svg { color: var(--lime); }
+.act-upload .section-head { flex-direction: column; gap: 6px; margin: 0; }
+.act-upload .section-head h3 { font-size: 24px; letter-spacing: -0.03em; }
+.act-upload > .fine { margin: 0; }
+.act-upload input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.act-upload-fields { justify-content: center; }
 
 .act-upload-fields {
   display: flex;
@@ -420,10 +472,10 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   width: 100%;
-  padding: 11px 12px;
+  padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: transparent;
+  border-radius: 22px;
+  background: var(--surface);
   color: inherit;
   text-align: left;
   font-weight: 400;
@@ -804,16 +856,20 @@
 
 /* Uncategorized ------------------------------------------------------------------------------ */
 
-/* A short queue above the ledger, on the ground like every other section: rows and hairlines,
-   capped so the movements stay within reach. */
+/* The bounded category queue gets attention without pushing the ledger out of reach. */
 .act-uncat {
-  margin: 0 0 36px;
+  margin: 0 0 24px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--sun) 28%, transparent);
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--sun) 4%, var(--bg));
 }
 
 .act-uncat-head h3 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
+  color: var(--sun);
 }
 
 .act-uncat > .muted {

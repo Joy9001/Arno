@@ -1,168 +1,427 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-04T22:00:00+05:30",
-  "title": "Design System: Fin-Agent",
+  "generatedAt": "2026-11-08T19:29:53.053Z",
+  "title": "Design system: Fin-Agent",
   "extensions": {
     "colorMeta": {
       "ground": {
         "role": "neutral",
-        "displayName": "True Black Ground",
-        "canonical": "#000000",
-        "tonalRamp": ["#000000", "#0a0a0b", "#111112", "#1c1c1e", "#2a2a2c", "#3a3a3c", "#636366", "#8b8b90"]
+        "displayName": "ground",
+        "canonical": "#0e0f0c",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252523",
+          "#414240",
+          "#61625f",
+          "#828380",
+          "#a4a5a3",
+          "#c9c9c7",
+          "#eeeeee"
+        ]
       },
       "surface": {
         "role": "neutral",
-        "displayName": "Graphite",
-        "canonical": "#1c1c1e",
-        "tonalRamp": ["#000000", "#0a0a0b", "#111112", "#1c1c1e", "#2a2a2c", "#3a3a3c", "#636366", "#8b8b90"]
+        "displayName": "surface",
+        "canonical": "#171814",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252523",
+          "#42423f",
+          "#61625e",
+          "#82837f",
+          "#a4a5a2",
+          "#c9c9c7",
+          "#eeeeee"
+        ]
+      },
+      "surface-raised": {
+        "role": "neutral",
+        "displayName": "surface raised",
+        "canonical": "#22241e",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#242622",
+          "#41433e",
+          "#60625c",
+          "#81837e",
+          "#a4a6a1",
+          "#c8cac6",
+          "#eeeeed"
+        ]
+      },
+      "surface-high": {
+        "role": "neutral",
+        "displayName": "surface high",
+        "canonical": "#2c2f27",
+        "tonalRamp": [
+          "#0b0c09",
+          "#242621",
+          "#41433d",
+          "#60625b",
+          "#81847c",
+          "#a4a6a0",
+          "#c8cac6",
+          "#eeefed"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "hairline",
+        "canonical": "rgba(255, 255, 255, 0.08)",
+        "tonalRamp": [
+          "rgba(255,255,255,0.03)",
+          "rgba(255,255,255,0.05)",
+          "rgba(255,255,255,0.07)",
+          "rgba(255,255,255,0.09)",
+          "rgba(255,255,255,0.11)",
+          "rgba(255,255,255,0.13)",
+          "rgba(255,255,255,0.15)",
+          "rgba(255,255,255,0.17)"
+        ]
       },
       "ink": {
         "role": "neutral",
-        "displayName": "Warm Ink",
-        "canonical": "#f5f5f7",
-        "tonalRamp": ["#1c1c1e", "#3a3a3c", "#636366", "#8b8b90", "#a1a1a6", "#c7c7cc", "#e5e5ea", "#f5f5f7"]
+        "displayName": "ink",
+        "canonical": "#f6f7f0",
+        "tonalRamp": [
+          "#0b0b0a",
+          "#252522",
+          "#42423e",
+          "#61625d",
+          "#82837e",
+          "#a5a5a1",
+          "#c9c9c7",
+          "#eeeeee"
+        ]
       },
-      "action-blue": {
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "ink secondary",
+        "canonical": "#a3a79a",
+        "tonalRamp": [
+          "#0b0c08",
+          "#242620",
+          "#41433b",
+          "#606359",
+          "#81847a",
+          "#a4a69e",
+          "#c8cac5",
+          "#eeefed"
+        ]
+      },
+      "ink-tertiary": {
+        "role": "neutral",
+        "displayName": "ink tertiary",
+        "canonical": "#82867a",
+        "tonalRamp": [
+          "#0b0c09",
+          "#242620",
+          "#41433b",
+          "#60635a",
+          "#81847b",
+          "#a4a69f",
+          "#c8cac5",
+          "#eeefed"
+        ]
+      },
+      "action-lime": {
         "role": "primary",
-        "displayName": "Action Blue",
-        "canonical": "#0b6cf0",
-        "tonalRamp": ["#001a3d", "#00336e", "#004fa6", "#0b6cf0", "#3d8ff5", "#6fb1f9", "#a3cefc", "#d6e8fe"]
+        "displayName": "action lime",
+        "canonical": "#d4ff3a",
+        "tonalRamp": [
+          "#070f00",
+          "#1c2c00",
+          "#364c00",
+          "#536d00",
+          "#739000",
+          "#98b24e",
+          "#c0d295",
+          "#ebf2de"
+        ]
+      },
+      "action-hover": {
+        "role": "neutral",
+        "displayName": "action hover",
+        "canonical": "#e2ff74",
+        "tonalRamp": [
+          "#090e00",
+          "#202a00",
+          "#3b4a00",
+          "#596b00",
+          "#7a8d27",
+          "#9dae63",
+          "#c4d0a0",
+          "#ecf1e1"
+        ]
+      },
+      "lime-ink": {
+        "role": "neutral",
+        "displayName": "lime ink",
+        "canonical": "#111209",
+        "tonalRamp": [
+          "#0b0b08",
+          "#252620",
+          "#42433b",
+          "#616259",
+          "#82837a",
+          "#a5a69e",
+          "#c9cac5",
+          "#eeefed"
+        ]
+      },
+      "user-cobalt": {
+        "role": "secondary",
+        "displayName": "user cobalt",
+        "canonical": "#2b59ff",
+        "tonalRamp": [
+          "#010330",
+          "#05146b",
+          "#1330a2",
+          "#2a52d0",
+          "#4c78f2",
+          "#77a0ff",
+          "#abc8ff",
+          "#e5efff"
+        ]
+      },
+      "teal": {
+        "role": "secondary",
+        "displayName": "teal",
+        "canonical": "#1ec8a5",
+        "tonalRamp": [
+          "#001109",
+          "#003122",
+          "#00523d",
+          "#00755c",
+          "#29967d",
+          "#69b7a1",
+          "#a5d5c6",
+          "#e3f2ed"
+        ]
       },
       "positive": {
         "role": "secondary",
-        "displayName": "Floor Green",
-        "canonical": "#30d158",
-        "tonalRamp": ["#052b12", "#0a4d20", "#11722f", "#30d158", "#5fdd7e", "#8fe8a6", "#bff2cd", "#e6fbeb"]
+        "displayName": "positive",
+        "canonical": "#3ee07f",
+        "tonalRamp": [
+          "#001200",
+          "#003202",
+          "#005515",
+          "#007831",
+          "#289a56",
+          "#68ba81",
+          "#a5d8b2",
+          "#e3f3e7"
+        ]
       },
       "warning": {
-        "role": "tertiary",
-        "displayName": "Due Amber",
-        "canonical": "#ff9f0a",
-        "tonalRamp": ["#3d2400", "#6b3f00", "#9a5c00", "#ff9f0a", "#ffb84a", "#ffd08a", "#ffe6c1", "#fff5e6"]
+        "role": "secondary",
+        "displayName": "warning",
+        "canonical": "#ff8a3d",
+        "tonalRamp": [
+          "#1d0200",
+          "#470f00",
+          "#722600",
+          "#9a4500",
+          "#bd6934",
+          "#d99269",
+          "#edbea3",
+          "#fbebe2"
+        ]
+      },
+      "due": {
+        "role": "secondary",
+        "displayName": "due",
+        "canonical": "#ff6a2b",
+        "tonalRamp": [
+          "#210000",
+          "#4e0000",
+          "#7c1500",
+          "#a63700",
+          "#c95e35",
+          "#e48a69",
+          "#f6b9a3",
+          "#feeae2"
+        ]
+      },
+      "sun": {
+        "role": "secondary",
+        "displayName": "sun",
+        "canonical": "#ffd23a",
+        "tonalRamp": [
+          "#140900",
+          "#362100",
+          "#5a3d00",
+          "#7d5c00",
+          "#9e7e00",
+          "#bca356",
+          "#d9c899",
+          "#f3eedf"
+        ]
       },
       "negative": {
-        "role": "tertiary",
-        "displayName": "Overdraft Red",
-        "canonical": "#ff453a",
-        "tonalRamp": ["#3d0a06", "#6b1410", "#9a221a", "#ff453a", "#ff736b", "#ff9f99", "#ffc7c3", "#ffe8e6"]
+        "role": "secondary",
+        "displayName": "negative",
+        "canonical": "#ff5a4f",
+        "tonalRamp": [
+          "#220000",
+          "#510000",
+          "#7f060a",
+          "#aa2e28",
+          "#ce574d",
+          "#e98579",
+          "#f9b6ad",
+          "#ffe9e5"
+        ]
       }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Page titles and the spendable figure." },
-      "headline": { "displayName": "Headline", "purpose": "Panel sections and the receipt title." },
-      "body": { "displayName": "Body", "purpose": "Chat prose and panel descriptions, capped at 68ch." },
-      "label": { "displayName": "Label", "purpose": "Nav groups, field labels, metadata." },
-      "mono": { "displayName": "Mono", "purpose": "SQL, source IDs, serial-like identifiers only." }
+      "display": {
+        "displayName": "Bricolage display",
+        "purpose": "Ask greeting and expressive conclusions."
+      },
+      "mono": {
+        "displayName": "JetBrains Mono",
+        "purpose": "Identifiers, code, and measurements."
+      }
     },
     "shadows": [
-      { "name": "composer", "value": "0 12px 32px rgba(0,0,0,0.5)", "purpose": "The one persistent floating input." },
-      { "name": "sheet", "value": "0 -20px 60px rgba(0,0,0,0.6)", "purpose": "Phone area menu." }
+      {
+        "name": "floating",
+        "value": "0 24px 60px rgba(0, 0, 0, 0.5)",
+        "purpose": "Dialogs and floating surfaces."
+      }
     ],
     "motion": [
-      { "name": "settle", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "One 0.35s arrival on the Today strip." },
-      { "name": "state", "value": "120ms ease", "purpose": "Hover and focus transitions." }
+      {
+        "name": "settle",
+        "value": "180ms cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Movement drawer arrival; removed for reduced motion."
+      },
+      {
+        "name": "state",
+        "value": "150ms ease",
+        "purpose": "Hover and active states."
+      }
     ],
     "breakpoints": [
-      { "name": "phone", "value": "900px" },
-      { "name": "narrow-panel", "value": "620px" }
+      {
+        "name": "canvas-sheet",
+        "value": "1180px"
+      },
+      {
+        "name": "bottom-bar",
+        "value": "900px"
+      },
+      {
+        "name": "narrow-content",
+        "value": "620px"
+      }
     ]
   },
   "components": [
     {
-      "name": "Primary Button",
+      "name": "Primary pill",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "The only blue control on a screen.",
-      "html": "<button class=\"ds-btn-primary\">Send</button>",
-      "css": ".ds-btn-primary { background: #0b6cf0; color: #fff; border: 0; border-radius: 10px; padding: 9px 16px; font: 600 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 120ms ease; } .ds-btn-primary:hover { background: #2b82ff; } .ds-btn-primary:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: .45; cursor: not-allowed; }"
+      "description": "Lime actions with dark ink.",
+      "html": "<button class=\"ds-primary\">Ask the agent</button>",
+      "css": ".ds-primary{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);border:0;border-radius:999px;padding:10px 16px;font-size:13px;font-weight:750;background:var(--lime,#d4ff3a);color:var(--lime-ink,#111209);cursor:pointer}.ds-primary:hover{background:var(--lime-hover,#e2ff74)}.ds-primary:active{transform:scale(.98)}.ds-primary:focus-visible,.ds-secondary:focus-visible,.ds-input:focus-visible,.ds-nav button:focus-visible{outline:2px solid var(--lime-hover,#e2ff74);outline-offset:3px}"
     },
     {
-      "name": "Ghost Button",
+      "name": "Secondary pill",
       "kind": "button",
-      "refersTo": "button-ghost",
-      "description": "Secondary actions, retries, filters.",
-      "html": "<button class=\"ds-btn-ghost\">Refresh</button>",
-      "css": ".ds-btn-ghost { background: rgba(118,118,128,.16); color: #f5f5f7; border: 0; border-radius: 10px; padding: 9px 12px; min-height: 32px; font: 500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 120ms ease; } .ds-btn-ghost:hover { background: rgba(118,118,128,.28); } .ds-btn-ghost:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; }"
+      "refersTo": "button-secondary",
+      "description": "Quiet actions on an olive surface.",
+      "html": "<button class=\"ds-secondary\">Details</button>",
+      "css": ".ds-secondary{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);border:0;border-radius:999px;padding:10px 16px;font-size:13px;font-weight:700;background:var(--surface-2,#22241e);color:var(--text,#f6f7f0);cursor:pointer}.ds-secondary:hover{background:var(--surface-3,#2c2f27)}.ds-primary:focus-visible,.ds-secondary:focus-visible,.ds-input:focus-visible,.ds-nav button:focus-visible{outline:2px solid var(--lime-hover,#e2ff74);outline-offset:3px}"
     },
     {
-      "name": "Navigation Item",
-      "kind": "nav",
-      "refersTo": "nav-item",
-      "description": "One destination in the rail; the active row is a gray fill with white text.",
-      "html": "<button class=\"ds-nav-item\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"#9c9ca2\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M21 12a8 8 0 0 1-8 8H5l-2 2V12a8 8 0 1 1 16 0Z\"/></svg>Chat</button>",
-      "css": ".ds-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: #d6d6da; font: 500 13.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: left; cursor: pointer; } .ds-nav-item:hover { background: rgba(118,118,128,.14); color: #f5f5f7; } .ds-nav-item.on { background: rgba(118,118,128,.24); color: #fff; } .ds-nav-item:focus-visible { outline: 2px solid #5aa9ff; outline-offset: 2px; }"
-    },
-    {
-      "name": "Card",
-      "kind": "card",
-      "refersTo": "card",
-      "description": "The only raised surface; never nested.",
-      "html": "<div class=\"ds-card\"><strong style=\"font-size:15px\">SBI savings</strong><p style=\"margin:4px 0 0;color:#a1a1a6;font-size:13px\">Statement covers to 2 Nov</p><p style=\"margin:10px 0 0;font-size:27px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums\">₹1,42,000</p></div>",
-      "css": ".ds-card { background: #1c1c1e; color: #f5f5f7; border: 1px solid rgba(255,255,255,.10); border-radius: 18px; padding: 14px 16px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }"
-    },
-    {
-      "name": "Input",
+      "name": "Text field",
       "kind": "input",
       "refersTo": "input",
-      "description": "Search and form fields; the composer uses the same surface in a pill.",
-      "html": "<input class=\"ds-input\" placeholder=\"Search past messages\" />",
-      "css": ".ds-input { width: 100%; background: #1c1c1e; color: #f5f5f7; border: 1px solid rgba(255,255,255,.10); border-radius: 10px; padding: 9px 12px; font: 400 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; } .ds-input::placeholder { color: #a1a1a6; } .ds-input:focus-visible { outline: 0; border-color: rgba(90,169,255,.65); box-shadow: 0 0 0 3px rgba(11,108,240,.18); }"
+      "description": "Native labelled input and visible focus.",
+      "html": "<label class=\"ds-field\">Goal name<input class=\"ds-input\" placeholder=\"Name your goal\"></label>",
+      "css": ".ds-field{display:grid;gap:8px;font-family:var(--font,\"Bricolage Grotesque\",sans-serif);font-size:12px;color:var(--sub,#a3a79a)}.ds-input{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);padding:9px 12px;border:1px solid var(--line,rgba(255,255,255,.08));border-radius:14px;background:var(--surface,#171814);color:var(--text,#f6f7f0);font-size:15px}.ds-input::placeholder{color:var(--sub,#a3a79a)}.ds-primary:focus-visible,.ds-secondary:focus-visible,.ds-input:focus-visible,.ds-nav button:focus-visible{outline:2px solid var(--lime-hover,#e2ff74);outline-offset:3px}"
     },
     {
-      "name": "Badge",
+      "name": "Area tabs",
+      "kind": "navigation",
+      "description": "Round, compact subnavigation.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Money\"><button>Timeline</button><button aria-current=\"page\">Accounts</button><button>Goals</button></nav>",
+      "css": ".ds-nav{display:flex;width:max-content;padding:4px;border-radius:999px;background:var(--surface,#171814)}.ds-nav button{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);padding:10px 16px;border:0;border-radius:999px;background:transparent;color:var(--sub,#a3a79a);font-weight:700;cursor:pointer}.ds-nav button[aria-current]{background:var(--text,#f6f7f0);color:var(--bg,#0e0f0c)}.ds-nav button:hover{color:var(--text,#f6f7f0)}.ds-nav button[aria-current]:hover{color:var(--bg,#0e0f0c)}.ds-primary:focus-visible,.ds-secondary:focus-visible,.ds-input:focus-visible,.ds-nav button:focus-visible{outline:2px solid var(--lime-hover,#e2ff74);outline-offset:3px}"
+    },
+    {
+      "name": "Preference chip",
       "kind": "chip",
       "refersTo": "badge",
-      "description": "A quiet state label: kind, reversed, coverage.",
-      "html": "<span class=\"ds-badge\">expense</span>",
-      "css": ".ds-badge { display: inline-block; padding: 2px 8px; border: 1px solid rgba(255,255,255,.10); border-radius: 999px; color: #a1a1a6; font: 500 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-transform: lowercase; }"
+      "description": "Only preference is exposed by the current memory API.",
+      "html": "<span class=\"ds-chip\">Preference</span>",
+      "css": ".ds-chip{display:inline-block;padding:4px 10px;border-radius:999px;background:color-mix(in srgb,var(--lime,#d4ff3a) 12%,transparent);color:var(--lime,#d4ff3a);font:500 11px var(--mono,\"JetBrains Mono\",monospace)}"
     },
     {
-      "name": "User Bubble",
-      "kind": "custom",
-      "description": "The user's own voice; the only blue surface in conversation.",
-      "html": "<div class=\"ds-bubble\">Can I buy a ₹68,000 laptop on the Slice card?</div>",
-      "css": ".ds-bubble { max-width: 70%; margin-left: auto; background: #0b6cf0; color: #fff; padding: 9px 14px; border-radius: 18px 18px 4px 18px; font: 400 15px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }"
+      "name": "Account tile",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A ledger object with a named balance state.",
+      "html": "<article class=\"ds-card\"><strong>Cash wallet</strong><p class=\"ds-amount\">Unknown</p><p class=\"ds-note\">No statement balance recorded</p></article>",
+      "css": ".ds-card{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);padding:24px;border-radius:28px;background:var(--surface,#171814);color:var(--text,#f6f7f0)}.ds-amount{font-size:34px;font-weight:800;letter-spacing:-.035em;margin:24px 0 6px}.ds-note{font-size:12px;color:var(--sub,#a3a79a);margin:0}"
     },
     {
-      "name": "Computed Receipt",
+      "name": "User voice",
       "kind": "custom",
-      "description": "The signature card: verdict, probability against threshold, lowest median, sources.",
-      "html": "<figure class=\"ds-receipt\"><figcaption><strong>Affordability · card</strong><span>90 days · 3 sources · 1,000 runs</span></figcaption><div class=\"ds-receipt-head\"><span class=\"ds-receipt-prob\">91% above floor</span><span class=\"ds-receipt-threshold\">threshold 90%</span><span class=\"ds-receipt-verdict\">yes, with a change</span></div><p class=\"ds-receipt-fact\">Lowest median point ₹38,400 on 02 Dec 2026 · the median never crosses the floor</p><p class=\"ds-receipt-reason\">Paid as asked, the floor stays above 90%. Waiting until 21 Nov is safer.</p><details><summary>Open the curve, tradeoffs, and sources</summary></details></figure>",
-      "css": ".ds-receipt { margin: 10px 0 0; padding: 14px 16px; background: #1c1c1e; border: 1px solid rgba(255,255,255,.10); border-radius: 18px; color: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; } .ds-receipt figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; } .ds-receipt figcaption span { color: #8b8b90; font-size: 12px; } .ds-receipt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .ds-receipt-prob { background: rgba(48,209,88,.15); color: #30d158; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; } .ds-receipt-threshold { color: #8b8b90; font-size: 12px; } .ds-receipt-verdict { margin-left: auto; border: 1px solid #ff9f0a; color: #ff9f0a; border-radius: 999px; padding: 3px 10px; font-size: 12px; font-weight: 600; } .ds-receipt-fact { margin: 10px 0 0; color: #e5e5ea; font-size: 13px; } .ds-receipt-reason { margin: 6px 0 10px; color: #a1a1a6; font-size: 12px; } .ds-receipt summary { color: #a1a1a6; font-size: 13px; cursor: pointer; }"
+      "description": "Cobalt identifies the person speaking.",
+      "html": "<p class=\"ds-voice\">What is due next?</p>",
+      "css": ".ds-voice{font-family:var(--font,\"Bricolage Grotesque\",sans-serif);max-width:70%;padding:12px 17px;border-radius:24px 24px 6px 24px;background:var(--you,#2b59ff);color:white;font-size:16.5px;font-weight:600;line-height:1.4}"
+    },
+    {
+      "name": "Agent orb",
+      "kind": "custom",
+      "description": "The static iridescent agent presence; animation belongs to live states.",
+      "html": "<span class=\"ds-orb\" aria-label=\"Fin-Agent\"></span>",
+      "css": ".ds-orb{display:inline-block;width:72px;height:72px;border-radius:50%;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.9),transparent 55%),conic-gradient(#ff6a2b,#ffd23a,#d4ff3a,#3ee07f,#1ec8a5,#2b59ff,#ff6a2b)}"
     }
   ],
   "narrative": {
-    "northStar": "The Quiet Ledger",
-    "overview": "Fin-Agent looks like a first-party system app, not a finance dashboard. The ground is true black, surfaces are graphite, and the only saturated colours are the ones that mean something: blue for action, green for a floor that holds, amber for money that is due, red for money that is not there. Type is the platform's own face, so the interface feels installed rather than visited. The product's distinctive surface is the computed receipt: a verdict, the probability that the floor holds against its threshold, the lowest median with its date, the reason, the source count, and one disclosure that opens the curve, tradeoffs, and the rows behind it.",
+    "northStar": "The living agent",
+    "overview": "The agent is the product; money is what it works on. An iridescent orb, a generous composer, confident typography, and computed verdicts give the agent a recognizable presence. The dark olive ground holds a layered, expressive interface that stays precise about financial evidence.",
     "keyCharacteristics": [
-      "True-black ground; graphite surfaces; 1px hairline borders instead of shadows.",
-      "System type (SF on Apple, Segoe on Windows) with tabular numerals.",
-      "One action blue; semantic green, amber, red only where money state changes.",
-      "The receipt is the signature component; the chat is the shell.",
-      "Flat at rest; depth appears only on the composer and the phone sheet."
+      "Near-black olive ground and three tonal surfaces.",
+      "Self-hosted Bricolage Grotesque, with JetBrains Mono for identifiers and measurements.",
+      "Lime actions and verdicts, cobalt user messages, mesh figures, and one iridescent orb.",
+      "Large rounded objects with readable evidence and explicit unknown states.",
+      "Conversation remains mounted while the user explores their money."
     ],
     "rules": [
-      { "name": "The One Blue Rule", "body": "Blue is reserved for actions and the user's own voice. If a screen has two blues competing for attention, one of them is wrong.", "section": "colors" },
-      { "name": "The Meaning Rule", "body": "Green, amber, and red may only appear where they carry a money state.", "section": "colors" },
-      { "name": "The 68ch Rule", "body": "Assistant prose never exceeds 68 characters per line, even when the card beside it is wider.", "section": "typography" },
-      { "name": "The Hairline Rule", "body": "If a boundary needs to be visible, use a 1px rgba(255,255,255,0.10) line, not a shadow. Shadows lift; borders separate.", "section": "elevation" }
+      {
+        "name": "The two voices rule",
+        "body": "Primary actions use lime with dark ink; user message bubbles use cobalt with white text. Blue-looking compatibility variables such as `--blue` resolve to lime.",
+        "section": "colors"
+      },
+      {
+        "name": "The evidence rule",
+        "body": "Color can emphasize a result, but its amount, direction, date, and uncertainty must remain readable in text. Cash on hand never means money free to spend.",
+        "section": "colors"
+      },
+      {
+        "name": "The type floor rule",
+        "body": "Use weight and size to create hierarchy. Keep new tracking at or above -0.04em; smaller legacy label styles are not a template for future body text.",
+        "section": "typography"
+      }
     ],
     "dos": [
-      "Do keep the ground true black and put every surface on Graphite with a 1px hairline.",
-      "Do set every amount in tabular numerals at the largest size the hierarchy allows.",
-      "Do show the verdict, the probability, and the source count before any explanation.",
-      "Do keep the composer pinned and the last message visible above it.",
-      "Do use the platform's system font; never ship a display face for the interface.",
-      "Do pair every warning colour with the number and date that caused it."
+      "Do keep the orb as the agent's single visual presence.",
+      "Do pair every displayed amount with its meaning and source.",
+      "Do use dark ink on lime and mesh surfaces.",
+      "Do preserve keyboard focus, native controls, and reduced-motion behavior.",
+      "Do distinguish a projection range from individual simulated runs."
     ],
     "donts": [
-      "Don't nest cards. The assistant's surface is the page; the card is the only raised object.",
-      "Don't add a kicker or eyebrow above a heading; the heading carries its own weight.",
-      "Don't use blue for anything that is not actionable or the user's own voice.",
-      "Don't hide a destination behind horizontal scrolling on phone; the Areas sheet exists.",
-      "Don't add a gradient, glass, texture, or themed motif that is not data.",
-      "Don't state a number in prose without its receipt or its source chip.",
-      "Don't let a receipt's detail view become raw JSON as the first layer."
+      "Don't invent balances, completion dates, payment states, or memory types.",
+      "Don't add lasting writes or submit chat prompts as a styling shortcut.",
+      "Don't put real financial data in committed mockups or fixtures.",
+      "Don't restore the superseded system-font, blue-action, four-area design.",
+      "Don't add kicker labels above headings or decorative side stripes."
     ]
   }
 }

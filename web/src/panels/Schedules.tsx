@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatDate, formatPaise } from "../format";
+import { formatDate, formatPaise, isoDate } from "../format";
 import type { Schedule, Upcoming, UpcomingEvent } from "../types";
 import { useApi } from "../useApi";
 import {
@@ -22,7 +22,7 @@ type BucketFilter = "all" | Bucket;
 const PAGE_SIZE = 20;
 const PERIODS = [30, 90, 180, 365, 730];
 const SCHEDULES_DESCRIPTION =
-  "Income, obligations, family transfers, instalment plans, and goal contributions. Rules are iCalendar RRULEs, adjusted for Indian weekends and holidays.";
+  "Income, bills, and contributions coming up in your plan.";
 
 const KIND_LABEL: Record<string, string> = {
   income_fixed: "Fixed income",
@@ -89,7 +89,8 @@ function EventRow({ event }: { event: UpcomingEvent }) {
     .join(" · ");
 
   return (
-    <article className="moneyv-row">
+    <article className={`moneyv-row schedule-event${incoming ? " incoming" : ""}`}>
+      <time className="schedule-event-date" dateTime={event.date}>{formatDate(event.date)}</time>
       <div className="moneyv-row-main">
         <strong>{event.name}</strong>
         <span className="moneyv-meta">{detail}</span>
@@ -97,10 +98,36 @@ function EventRow({ event }: { event: UpcomingEvent }) {
       </div>
       <div className="moneyv-figures">
         <strong className={incoming ? "moneyv-positive" : undefined}>{amount}</strong>
-        <span className="moneyv-meta">{formatDate(event.date)}</span>
       </div>
       <MoneyAsk prompt={`Tell me about ${event.name} on ${formatDate(event.date)}.`} />
     </article>
+  );
+}
+
+function ScheduleCalendar({ start, events }: { start: string; events: UpcomingEvent[] }) {
+  const today = isoDate(new Date());
+  const first = new Date(`${start}T00:00:00`);
+  return (
+    <div className="schedule-calendar" role="region" aria-label="Next 30 days of schedules" tabIndex={0}>
+      {Array.from({ length: 30 }, (_, index) => {
+        const date = new Date(first);
+        date.setDate(first.getDate() + index);
+        const day = isoDate(date);
+        const scheduled = events.filter((event) => event.date === day);
+        return (
+          <div className={`schedule-day${day === today ? " today" : ""}`} key={day}>
+            <time dateTime={day}>{date.getDate()}<small>{date.toLocaleDateString("en-IN", { month: "short" })}</small></time>
+            {day === today && <span className="sr-only">Today.</span>}
+            <div className="schedule-day-marks">
+              {scheduled.slice(0, 3).map((event, eventIndex) => (
+                <span key={eventIndex} className={isIncoming(event.kind) ? "in" : "out"} title={event.name} />
+              ))}
+            </div>
+            <span className="sr-only">{scheduled.length ? scheduled.map((event) => event.name).join(", ") : "Nothing scheduled"}</span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -238,6 +265,9 @@ export function SchedulesPanel() {
           than one month.
         </p>
       )}
+
+      <ScheduleCalendar start={upcoming.data.from} events={events} />
+      <p className="moneyv-meta">Next 30 days · green: incoming · orange: outgoing. Scheduled does not mean paid.</p>
 
       <MoneySection
         title="Scheduled events"

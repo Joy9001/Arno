@@ -19,7 +19,7 @@ export function MoneyPageHeader({
   return (
     <header className="moneyv-head">
       <div className="moneyv-head-copy">
-        <h2>{title}</h2>
+        <h2 className="sr-only">{title}</h2>
         <p>{description}</p>
       </div>
       {aside && <div className="moneyv-head-aside">{aside}</div>}

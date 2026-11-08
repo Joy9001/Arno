@@ -42,6 +42,7 @@ import { RuntimeInfo } from "./RuntimeInfo";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
 import { Busy } from "../Loading";
+import { Orb } from "../Orb";
 import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
 import type {
   BackupStatus,
@@ -2110,10 +2111,16 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
   }
 
   return (
-    <div className="stg-card">
+    <div className="memory-workspace">
+      <div className="memory-intro">
+        <Orb size={56} />
+        <div>
+          <h3>What I remember about you</h3>
+          <p>{data.preferences.length} saved {data.preferences.length === 1 ? "preference" : "preferences"}. Review what shapes the agent’s answers.</p>
+        </div>
+      </div>
       <p className="stg-hint">
-        The agent saves these unprompted with a card and undo. Turning one off keeps it listed and
-        reversible; deleting it for good blanks the text in the audit log and cannot be undone.
+        Turning a preference off is reversible. Deleting it for good blanks the text in the audit log and cannot be undone.
       </p>
 
       {data.preferences.length > 0 && (
@@ -2159,7 +2166,8 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
         <>
           <div className="stg-list">
             {visible.map((item) => (
-              <div className={item.active ? "stg-list-row" : "stg-list-row off"} key={item.id}>
+              <div className={item.active ? "stg-list-row memory-row" : "stg-list-row memory-row off"} key={item.id}>
+                <span className="memory-type">Preference</span>
                 <div className="stg-list-body">
                   {editing?.id === item.id ? (
                     <>

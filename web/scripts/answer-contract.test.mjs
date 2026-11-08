@@ -136,6 +136,12 @@ test("an explicitly unknown starting balance suppresses forecast numbers on ever
   assert.match(chart, /Unknown bank/);
   assert.doesNotMatch(chart, /<svg/);
 
+  const evidence = renderToStaticMarkup(React.createElement(EvidencePanel, {
+    payload: { ...unknown, verdict: "yes", floor_set: true }, onClose: () => {},
+  }));
+  assert.match(evidence, /Unknown bank|A balance is missing/);
+  assert.doesNotMatch(evidence, /Lowest median balance|above floor|Yes\./);
+
   const home = {
     as_of: "2026-11-06",
     spendable_paise: 0,

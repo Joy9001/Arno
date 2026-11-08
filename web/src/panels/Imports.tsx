@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  FileUp,
   MessageCircle,
   RefreshCw,
 } from "lucide-react";
@@ -961,9 +962,8 @@ export function ImportsPanel({
         <div>
           <h2>Imports</h2>
           <p className="muted">
-            Upload a statement. A known layout reruns its saved parser with no model call. A new
-            layout starts a parse run, the checks gate it, and nothing reaches the ledger until
-            you commit.
+            Bring your statements together. Review the rows and resolve uncertain matches before
+            committing anything to your ledger.
           </p>
         </div>
         <button
@@ -1001,8 +1001,9 @@ export function ImportsPanel({
       )}
 
       <section className="subcard act-upload">
+        <FileUp size={36} strokeWidth={1.6} aria-hidden="true" />
         <div className="section-head">
-          <h3>Import a statement</h3>
+          <h3>Bring in a statement</h3>
           <span className="fine">PDF, spreadsheet, CSV, or text · 25 MB</span>
         </div>
         <div className="act-upload-fields">

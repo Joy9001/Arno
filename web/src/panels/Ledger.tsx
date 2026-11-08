@@ -712,6 +712,7 @@ export function LedgerPanel() {
                   </button>
                 </Dialog.Close>
               </div>
+              <p className="movement-hero-amount">{formatPaise(openMovement.amount_paise)}</p>
               <dl className="detail-grid">
                 <dt>ID</dt>
                 <dd>{openMovement.id}</dd>

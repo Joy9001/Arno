@@ -1,8 +1,38 @@
-# Handoff: agent-first web redesign (in progress)
+# Handoff: agent-first web redesign
 
 Written 2026-11-08 by the agent that ran the `/impeccable` redesign. Read this whole file before
 touching code. It tells you what the owner chose, what is built, what is left, how to see the app,
 and the traps that already cost time.
+
+## Completion update, November 9
+
+Codex continued the selected direction from this handoff. The remaining Money panels now use
+account/card tiles, a schedule calendar, goal rings and projection-backed completion dates, and
+People tiles. Accounts and Goals have API-derived agent notes. Ledger has the category queue and
+movement drawer treatment; Imports has the upload/history treatment; memory has an orb
+introduction and preference chips. The evidence canvas has an enlarged conclusion and sources
+beside its facts, before the curve and assumptions.
+
+The finish review ran on 6.1 Sol after the owner explicitly authorized that reviewer. Its first
+full review returned four fixes: hierarchy, source placement, active phone tab visibility, and
+summary tracking. The subsequent verdict scored all four resolved and returned `ship` for that
+fix batch. The final capture set covers 1440px, 1180px, and 390px; review artifacts remain ignored
+because some capture real instance data. Synthetic panel captures contain invented data only.
+
+`DESIGN.md`, `.impeccable/design.json`, the web surface brief, and the interface satellite now
+describe the built system. The detector returned no findings. Lint, typecheck, and all 21 answer
+contract cases passed, including an added assertion that an unknown balance suppresses a canvas
+verdict and forecast figures. Real-container checks opened the movement drawer at desktop and
+phone widths and opened the existing committed import without writing financial data.
+The final local web build and Docker image rebuild passed sequentially. The rebuilt container
+also passed the phone active-tab check. The `design-review-headless` session was revoked.
+
+Intentional limits: voice mode remains parked; schedules have no payment-state evidence, so they
+are not marked paid; the current memory API exposes preferences, so fact/rule chips are not
+invented. Goal completion dates beyond the forecast or unsupported by balances remain unknown.
+
+The historical remaining-work list below records the starting point and is superseded by this
+completion update.
 
 ## 1. Who you are working for and how
 
@@ -13,9 +43,10 @@ and the traps that already cost time.
 - Their correction that shaped everything: **the AI agent is the product; money is what it works
   on.** Every surface must feel agent-first (orb, conversation, "I noticed", agent notes), not a
   finance tracker with a chat bolted on.
-- Subagents: the owner allows **only `deepseek-v4.1-flash` at high effort** (via `delegate_task`
-  after `orchestrator_capabilities`). If that model is not offered, do the work in-thread and say
-  so. Never spawn Claude subagents.
+- Subagents: the owner originally allowed **only `deepseek-v4.1-flash` at high effort**. On
+  November 9 the owner explicitly authorized **6.1 Sol for review**. Other delegation retains
+  the original restriction. Use `delegate_task` after `orchestrator_capabilities`; never change
+  the requested provider or model without authorization.
 - House rules (AGENTS.md): commit straight to `main`, Conventional Commits, no co-author trailer;
   `uv run` / `pnpm --dir web`; never bare python/npm for project tasks (scratch scripts are fine).
   Keep `.impeccable/mocks/` **tracked** (owner said so).

@@ -46,26 +46,26 @@ Each view has one main job. Tables below describe what earns space and the main 
 
 | View | Information and layout | Primary action and details |
 | --- | --- | --- |
-| **Ask** | The orb, a greeting, the composer, starting questions, then cards for what the agent noticed: spendable from the projection, and unread notifications. | Ask, attach a photo, or record voice; act on a noticed item. |
+| **Ask** | The orb, a greeting, the composer, starting questions, then cards for cash on hand, forecast readiness, and unread notifications. | Ask, attach a photo, or record voice; act on a noticed item. |
 | **Conversation** | Conversation list beside the thread; Chat or Flow view; a canvas for big answers. | Ask, attach, stop, flag, open sources on the canvas. |
-| **Accounts** | Summary strip for cash on hand and the scope/as-of time; account rows grouped into bank/cash, cards, loans and assets. A card row distinguishes ledger and stated balances, their dates and any disagreement. | Open account details or Ask about the account. Never label liquid balance as safe-to-spend. |
+| **Accounts** | A cash-on-hand tile leads the bank/cash group; physical credit cards, loans, and holdings follow. Cards distinguish ledger and stated balances, their dates, and any disagreement. | Open account details or Ask about the account. Never label liquid balance as safe-to-spend. |
 | **Timeline** | Ledger spending behind today, the projection's median and P10–P90 band ahead, the floor, and dated schedule events. Below: goals, assumptions and data-quality notes, and the hypothetical purchase form. | Explore the projection; a purchase scenario clearly states payment method and EMI tenure, and offers sources. Missing floor and unsupported input have explicit guidance. |
-| **Schedules** | Summary of expected incoming and outgoing amounts over the displayed period, followed by dated income, obligations and subscriptions. Show the period on the totals. | Ask about a schedule; choose the supported time range. |
-| **Goals** | Summary of active goals, followed by each goal's name, target, current amount, deadline and progress. | Ask about a goal. Explain when a target or date is missing. |
-| **People** | Separate amounts others owe the user, amounts the user owes, and settled items. Identify the person and currency amount on each row. | Ask about a person or settlement; display enough context to distinguish the two directions. |
+| **Schedules** | Expected incoming and outgoing totals over the displayed period, a 30-day calendar strip, then dated income, obligations, and subscriptions. Scheduled events are not evidence of payment. | Ask about a schedule; choose the supported time range. |
+| **Goals** | Progress rings, saved and target amounts, deadlines, and completion dates from the existing 365-day projection. A slipping goal earns an agent note; a dated comparison follows the tiles. | Ask about a goal. Missing balances suppress forecasts; missing targets and dates remain explicit. |
+| **People** | Tiles grouped into owed-to-you, you-owe, and settled. A mesh surface marks receivables; each tile names its direction and offers Ask. | Ask about a person or settlement; display enough context to distinguish the two directions. |
 | **Ledger** | Date/search/filter controls above a bounded movement list. Each row shows date, payee, category, amount and status; explicit previous/next controls use the available cursor. | Open Details for evidence and balanced transfers, or Ask about a movement. Keep filters and list status visible during refresh. |
 | **Inbox** | Notifications by kind (proposal, reminder, risk, pattern, scheduled answer) with their actions; scheduled questions beside them. | Decide, open in chat, or mark read. |
 | **Recaps** | A list of recaps and a story viewer; each story is a sum over ledger rows with its row count. | Step through, open the rows, ask about the period. |
 | **Imports** | Upload/start and recent imports lead to the selected statement's status, counts, items needing decisions, then reviewed lines. Keep progress and any polling failure visible. | Resolve ambiguous matches and transfers, then commit or reject; show undo where supported. Do not let a persistent action conceal unresolved items. |
 | **Profile** | Name and financial floor with concise explanation of what the floor means. | Save changes with field-level feedback. |
 | **Categories** | Categories first; merchant rules below or in a clearly labelled subsection. | Edit supported categories/rules and explain any reducible setting in plain language. |
-| **Notifications** | Notification preferences and permission state. Unread updates remain discoverable from Today and the full list. | Change preferences or enable notifications where supported. Read and resolved remain distinct. |
+| **Notifications** | Notification preferences and permission state. Unread updates remain discoverable from Ask and the Inbox. | Change preferences or enable notifications where supported. Read and resolved remain distinct. |
 | **Passkeys** | Existing devices/passkeys, current session and clear enrollment guidance. | Add a passkey or remove an eligible one, with required re-authentication. |
 | **Scheduled questions** | User-defined questions, schedule, enabled state and any spend limit. | Create/edit or enable/disable an existing scheduled question with input validation. |
 | **Jobs** | Operational job status and recent results, grouped as advanced. | Inspect available job details and use only existing supported controls. |
 | **Backups** | Backup status, last successful backup and recovery guidance; distinguish unavailable status from no backup. | Follow the supported backup/recovery action or instructions. |
 | **Export** | Explain the available data formats and when to use each, with the required re-authentication made clear. | Choose and download CSV, JSON or database export. |
-| **Agent memory** | Saved memory entries with type, readable content and scope. | Review and use supported management actions; provide a clear empty state. |
+| **Agent memory** | An orb introduction and saved preferences with preference chips, readable content, source, scope, and enabled state. The current API does not expose separate fact or rule types. | Search, edit, turn off/on, or confirm permanent deletion; provide a clear empty state. |
 | **Sign in** | Fin-Agent name, a short explanation, one prominent passkey action, and relevant setup/recovery link. | Sign in with a passkey; offer actionable error recovery. |
 | **Set up** | Explain device enrollment, origin/token requirements and what happens next in a short sequence. | Enroll a passkey; report expiry or origin problems without losing the user's place. |
 
@@ -87,6 +87,10 @@ Use [TanStack Table](https://tanstack.com/table/v8/docs/guide/pagination) with R
 
 ## Design review material
 
-The [screen studies](./web-interface-screen-studies.html) show the chosen structure applied to representative Accounts, Projection, Ledger, Imports and Settings views. They are static design illustrations using fictional data, not a running app or API specification. The earlier [Home direction samples](./design-direction-samples.html) show the selected A composition and C evidence treatment. These patterns and the page table above cover the remaining views without a separate prototype for each one.
+The approved [final mocks](../../.impeccable/mocks/final/index.html) define the November 8 direction.
+They use fictional data and illustrate composition, rather than extending the API contract. The
+built interface preserves supported behavior: a scheduled event is not automatically paid, and
+memory entries are preferences until the API exposes other types. Earlier screen studies and
+Home direction samples predate the November 8 decision in plan.md and do not set the visual world.
 
 The detailed grouping of settings and any additional API fields are implementation decisions to check against existing behavior. Preserve existing supported actions, domain calculations, passkey/session behavior and undo. Do not touch the separate observability work.

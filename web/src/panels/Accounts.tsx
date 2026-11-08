@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { AlertTriangle, FileSearch, X } from "lucide-react";
+import { AlertTriangle, CreditCard, FileSearch, Landmark, X } from "lucide-react";
+import { Orb } from "../Orb";
 import { api, errorMessage } from "../api";
 import { formatDate, formatMoment, formatPaise } from "../format";
 import type { Account, AccountSummary } from "../types";
@@ -14,7 +15,6 @@ import {
   MoneyPager,
   MoneyRefreshing,
   MoneySection,
-  MoneySummary,
 } from "./MoneyBits";
 import { countLabel, pageSlice, safePage } from "./moneyView";
 
@@ -32,7 +32,7 @@ const KIND_LABEL: Record<Account["kind"], string> = {
 };
 
 const ACCOUNTS_DESCRIPTION =
-  "Balances across your financial accounts, with the last stated balance shown beside the ledger balance.";
+  "Ledger balances alongside the statements behind them.";
 
 function cardPosition(paise: number): string {
   if (paise < 0) return `${formatPaise(-paise)} owed`;
@@ -237,20 +237,20 @@ function AccountRow({ account }: { account: Account }) {
   const statement = statementNote(account, isCard);
 
   return (
-    <article className="moneyv-row">
-      <div className="moneyv-row-main">
+    <article className={`account-tile${isCard ? " is-card" : ""}`}>
+      <div className="account-identity">
+        <span className="account-symbol" aria-hidden="true">
+          {isCard ? <CreditCard size={22} /> : <Landmark size={20} />}
+        </span>
+        <div className="moneyv-row-main">
         <strong>{account.name}</strong>
         <span className="moneyv-meta">
           {KIND_LABEL[account.kind]}
           {meta ? ` · ${meta}` : ""}
         </span>
-        <span className="moneyv-meta">
-          {account.balance_as_of
-            ? `Ledger updated ${formatDate(account.balance_as_of)}`
-            : "No ledger activity recorded yet"}
-        </span>
+        </div>
       </div>
-      <div className="moneyv-figures">
+      <div className="account-balance">
         {isCard ? (
           <>
             <strong>{cardPosition(account.balance_paise)}</strong>
@@ -293,6 +293,11 @@ function AccountRow({ account }: { account: Account }) {
           </>
         )}
       </div>
+      <span className="moneyv-meta">
+        {account.balance_as_of
+          ? `Ledger updated ${formatDate(account.balance_as_of)}`
+          : "No ledger activity recorded yet"}
+      </span>
       <div className="moneyv-actions">
         <button
           type="button"
@@ -317,6 +322,7 @@ function AccountGroup({
   emptyPrompt,
   emptyAction,
   emptyCopy,
+  lead,
 }: {
   title: string;
   accounts: Account[];
@@ -324,12 +330,13 @@ function AccountGroup({
   emptyPrompt?: string;
   emptyAction?: string;
   emptyCopy?: string;
+  lead?: ReactNode;
 }) {
   const [page, setPage] = useState(0);
   const currentPage = safePage(page, accounts.length, ACCOUNT_PAGE_SIZE);
   return (
     <MoneySection title={title} note={accounts.length > 0 ? countLabel(accounts.length, noun) : undefined}>
-      {accounts.length === 0 ? (
+      {accounts.length === 0 && !lead ? (
         emptyPrompt && emptyAction && emptyCopy ? (
           <MoneyEmpty prompt={emptyPrompt} action={emptyAction}>
             {emptyCopy}
@@ -337,10 +344,14 @@ function AccountGroup({
         ) : null
       ) : (
         <>
-          <div className="moneyv-list">
+          <div className="account-grid">
+            {lead}
             {pageSlice(accounts, currentPage, ACCOUNT_PAGE_SIZE).map((account) => (
               <AccountRow key={account.id} account={account} />
             ))}
+            {accounts.length === 0 && emptyPrompt && emptyAction && emptyCopy && (
+              <MoneyEmpty prompt={emptyPrompt} action={emptyAction}>{emptyCopy}</MoneyEmpty>
+            )}
           </div>
           <MoneyPager
             page={currentPage}
@@ -393,18 +404,14 @@ export function AccountsPanel() {
   }
 
   const cards = data.accounts.filter((account) => account.kind === "card");
-  const cardsWithoutBalance = cards.filter(
-    (account) => account.card_outstanding_paise == null,
-  );
   const loans = data.accounts.filter((account) => account.kind === "loan");
   const banking = data.accounts.filter((account) =>
     ["bank", "cash", "wallet"].includes(account.kind),
   );
   const holdings = data.accounts.filter((account) => account.kind === "asset");
-  const liquidAccounts = banking.filter((account) => account.liquid && account.active);
   const cash = data.cash_quality;
-  const assets = holdings.reduce((total, account) => total + account.balance_paise, 0);
   const visibleAccountCount = cards.length + loans.length + banking.length + holdings.length;
+  const mismatch = cards.find((account) => cardDisagreement(account));
 
   return (
     <section className="panel">
@@ -416,6 +423,15 @@ export function AccountsPanel() {
           onRetry={reload}
         />
       )}
+      {mismatch && (
+        <div className="agent-note">
+          <Orb size={30} />
+          <p>
+            <strong>{mismatch.name}</strong>: {cardDisagreement(mismatch)}
+          </p>
+          <MoneyAsk prompt={`Help me reconcile the ledger and statement balances for ${mismatch.name}.`} label="Look into it" />
+        </div>
+      )}
 
       {visibleAccountCount === 0 ? (
         <MoneyEmpty prompt="Add a bank account: " action="Ask to add one">
@@ -424,62 +440,20 @@ export function AccountsPanel() {
         </MoneyEmpty>
       ) : (
         <>
-          <MoneySummary
-            label="Account summary"
-            cells={[
-              {
-                label: "Cash on hand",
-                value:
-                  cash.status === "known"
-                    ? formatPaise(data.liquid_total_paise)
-                    : cash.status === "no_accounts"
-                      ? "No accounts"
-                      : "Unknown",
-                tone: cash.status === "unknown" ? "warning" : undefined,
-                note:
-                  cash.status === "known"
-                    ? liquidAccounts.length
-                      ? `Sum of ${countLabel(liquidAccounts.length, "liquid balance")}`
-                      : "No liquid accounts"
-                    : cash.status === "no_accounts"
-                      ? "No liquid accounts"
-                      : `${countLabel(cash.unknown_count, "liquid account")} without a known balance`,
-              },
-              {
-                label: "Card balance",
-                value:
-                  data.card_owed_paise == null ? "Unknown" : formatPaise(data.card_owed_paise),
-                tone: cardsWithoutBalance.length ? "warning" : undefined,
-                note: cardsWithoutBalance.length
-                  ? `${countLabel(cardsWithoutBalance.length, "card")} without a known balance`
-                  : cards.length
-                    ? `Owed on ${countLabel(cards.length, "card")}`
-                    : "No cards",
-              },
-              {
-                label: "Loan outstanding",
-                value: formatPaise(data.loan_outstanding_paise),
-                note: loans.length ? `Across ${countLabel(loans.length, "loan")}` : "No loans",
-              },
-              {
-                label: "Holdings",
-                value: formatPaise(assets),
-                note: holdings.length
-                  ? countLabel(holdings.length, "hand-updated asset")
-                  : "No holdings",
-              },
-            ]}
-          />
-          <p className="moneyv-basis">
-            Cash on hand adds the ledger balances of your liquid bank, cash, and wallet accounts. It
-            shows as unknown when any of them has no recorded balance, and it does not deduct card
-            dues or upcoming bills, so it is not money free to spend.
-          </p>
-
           <AccountGroup
             title="Bank and cash"
             accounts={banking}
             noun="account"
+            lead={
+              <article className="account-tile cash-tile">
+                <strong>Cash on hand</strong>
+                <div className="account-balance">
+                  <strong>{cash.status === "known" ? formatPaise(data.liquid_total_paise) : cash.status === "no_accounts" ? "No accounts" : "Unknown"}</strong>
+                </div>
+                <p>Liquid balances before card dues and bills. Not money free to spend.</p>
+                {cash.status === "unknown" && <p>{countLabel(cash.unknown_count, "liquid account")} without a known balance.</p>}
+              </article>
+            }
             emptyPrompt="Add a bank account: "
             emptyAction="Ask to add one"
             emptyCopy="No bank, cash, or wallet accounts yet."

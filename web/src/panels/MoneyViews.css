@@ -42,7 +42,7 @@
   color: var(--text);
   font-size: clamp(24px, 2.4vw, 34px);
   font-weight: 800;
-  letter-spacing: -0.045em;
+  letter-spacing: -0.04em;
   line-height: 1.05;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
@@ -55,16 +55,19 @@
   line-height: 1.45;
 }
 
+.moneyv-summary .moneyv-positive,
 .moneyv-positive {
-  color: var(--green) !important;
+  color: var(--green);
 }
 
+.moneyv-summary .moneyv-negative,
 .moneyv-negative {
-  color: var(--red) !important;
+  color: var(--red);
 }
 
+.moneyv-summary .moneyv-warning,
 .moneyv-warning {
-  color: var(--orange) !important;
+  color: var(--orange);
 }
 
 .moneyv-basis {
@@ -76,7 +79,7 @@
 }
 
 .moneyv-section {
-  margin-top: 36px;
+  margin-top: 24px;
 }
 
 .moneyv-section-head {
@@ -89,8 +92,8 @@
 
 .moneyv-section-head h3 {
   margin: 0;
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 750;
   letter-spacing: -0.01em;
 }
 
@@ -193,14 +196,16 @@
 }
 
 .moneyv-empty {
-  padding: 18px 2px 4px;
-  border-top: 1px solid var(--line-soft);
+  padding: 28px;
+  border: 1px dashed var(--line);
+  border-radius: 24px;
+  background: var(--surface);
 }
 
 .moneyv-empty p {
   margin: 0 0 8px;
   color: var(--sub);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .moneyv-error-block {
@@ -460,9 +465,11 @@
 
 .moneyv-goal {
   display: grid;
-  gap: 3px;
-  padding: 14px 2px;
-  border-bottom: 1px solid var(--line-soft);
+  gap: 14px;
+  min-width: 0;
+  padding: 24px;
+  border-radius: 30px;
+  background: var(--surface);
 }
 
 .moneyv-goal-top {
@@ -481,8 +488,8 @@
 }
 
 .moneyv-goal-title strong {
-  font-size: 14.5px;
-  font-weight: 550;
+  font-size: 26px;
+  font-weight: 750;
   overflow-wrap: anywhere;
 }
 
@@ -490,6 +497,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
+  justify-content: center;
   gap: 6px;
   color: var(--sub);
   font-size: 12.5px;
@@ -512,7 +520,291 @@
 }
 
 .moneyv-goal-foot .moneyv-meta {
-  flex: 1 1 260px;
+  flex: 1 1 170px;
+}
+
+/* Money is the agent’s material: distinct objects with their actual ledger facts. */
+.account-grid,
+.people-grid,
+.goal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.account-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.people-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.people-groups .people-grid { grid-template-columns: minmax(0, 1fr); }
+
+@media (max-width: 900px) {
+  .people-groups { grid-template-columns: minmax(0, 1fr); }
+}
+
+.account-tile,
+.person-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  min-width: 0;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 28px;
+  background: var(--surface);
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-symbol,
+.person-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 15px;
+  background: var(--surface-2);
+  color: var(--lime);
+}
+
+.account-balance,
+.person-balance {
+  display: grid;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.account-balance > strong {
+  font-size: clamp(26px, 2.7vw, 38px);
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-tile .moneyv-actions {
+  flex-wrap: wrap;
+  align-self: flex-start;
+  margin-top: auto;
+  padding-top: 8px;
+  gap: 8px;
+}
+
+.account-tile.cash-tile { background: var(--mesh); color: var(--lime-ink); }
+.cash-tile p { margin: 0; font-size: 13px; line-height: 1.5; }
+.people-totals { display: flex; flex-wrap: wrap; gap: 20px 40px; margin: 0; }
+.people-totals dt { font-size: 12px; color: var(--sub); }
+.people-totals dd { margin: 3px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.03em; }
+
+.account-tile.is-card {
+  background: linear-gradient(125deg, #202b70, #2b59ff);
+  color: #fff;
+}
+
+.account-tile.is-card:nth-child(even) {
+  background: linear-gradient(125deg, #ff6a2b, #ffd23a);
+  color: var(--lime-ink);
+}
+
+.account-tile.is-card .moneyv-meta,
+.account-tile.is-card .moneyv-inline-warn {
+  color: inherit;
+}
+
+.account-tile.is-card .account-symbol {
+  background: linear-gradient(135deg, #f7e9a3, #baa254);
+  color: #40371a;
+}
+
+.account-tile.is-card .pill-button,
+.account-tile.is-card .ask-link {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.agent-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  margin: 0 0 24px;
+  border: 1px solid color-mix(in srgb, var(--lime) 24%, transparent);
+  border-radius: 24px;
+  background: linear-gradient(115deg, color-mix(in srgb, var(--lime) 8%, transparent), transparent);
+}
+
+.agent-note p {
+  flex: 1 1 230px;
+  margin: 0;
+  font-size: 15px;
+}
+
+.agent-note strong {
+  color: var(--lime);
+}
+
+.person-tile {
+  min-height: 280px;
+}
+
+.person-avatar {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.person-tile .moneyv-row-main strong {
+  font-size: 23px;
+  font-weight: 750;
+}
+
+.person-balance > strong {
+  font-size: clamp(34px, 4vw, 56px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  overflow-wrap: anywhere;
+}
+
+.person-tile > .ask-link {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.person-tile.owes_you {
+  color: var(--lime-ink);
+  background: var(--mesh);
+}
+
+.person-tile.owes_you .moneyv-meta {
+  color: inherit;
+}
+
+.person-tile.owes_you .person-avatar,
+.person-tile.owes_you > .ask-link {
+  background: var(--bg);
+  color: var(--lime);
+}
+
+.person-tile.you_owe .person-balance > strong {
+  color: var(--orange);
+}
+
+.person-tile.settled .person-balance > strong {
+  color: var(--sub);
+}
+
+.goal-identity {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.goal-ring {
+  position: relative;
+  width: 180px;
+  height: 180px;
+  margin: 8px auto 0;
+}
+
+.goal-ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  fill: none;
+  stroke-width: 8px;
+}
+
+.goal-ring-track { stroke: var(--surface-2); }
+.goal-ring-fill { stroke: var(--lime); stroke-linecap: round; }
+.goal-ring.late .goal-ring-fill { stroke: var(--orange); }
+.goal-ring.done .goal-ring-fill { stroke: var(--green); }
+
+.goal-ring > strong {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.goal-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin: 8px 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.goal-dates dt { color: var(--sub); font-size: 12px; }
+.goal-dates dd { margin: 3px 0 0; font-size: 16px; font-weight: 700; }
+
+.goal-landings {
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 28px;
+  background: var(--surface);
+}
+
+.goal-landing {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(80px, 3fr) minmax(100px, auto);
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.goal-landing-track { height: 12px; border-radius: 999px; background: var(--surface-2); }
+.goal-landing-track span { display: block; height: 100%; border-radius: inherit; background: var(--mesh); }
+.goal-landings p { margin: 0; }
+
+.schedule-calendar {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  padding: 6px 2px 12px;
+  margin-top: 28px;
+}
+
+.schedule-day {
+  display: flex;
+  flex: 1 0 36px;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 84px;
+  padding: 8px 5px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.schedule-day small { display: block; color: var(--sub); font-size: 10px; }
+.schedule-day.today { border-color: var(--text); }
+.schedule-day-marks { display: grid; gap: 3px; }
+.schedule-day-marks span { height: 5px; border-radius: 999px; }
+.schedule-day-marks .in { background: var(--green); }
+.schedule-day-marks .out { background: var(--orange); }
+
+.schedule-event { grid-template-columns: 90px minmax(0, 1fr) auto auto; }
+.schedule-event-date { color: var(--sub); font-family: var(--mono); font-size: 12px; }
+.schedule-event.incoming .schedule-event-date { color: var(--green); }
+
+@media (max-width: 620px) {
+  .goal-landing { grid-template-columns: 1fr auto; gap: 8px; }
+  .goal-landing-track { grid-row: 2; grid-column: 1 / -1; }
+  .agent-note { padding: 16px; }
+  .schedule-event .schedule-event-date { grid-column: 1 / -1; }
 }
 
 .moneyv-inline-control {

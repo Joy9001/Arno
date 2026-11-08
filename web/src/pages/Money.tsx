@@ -1,4 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
+import { useEffect, useRef } from "react";
 import { AccountsPanel } from "../panels/Accounts";
 import { GoalsPanel } from "../panels/Goals";
 import { PeoplePanel } from "../panels/People";
@@ -16,6 +17,23 @@ const TABS: Array<{ id: MoneyTab; label: string }> = [
 ];
 
 export function MoneyPage({ tab, onTab }: { tab: MoneyTab; onTab: (tab: MoneyTab) => void }) {
+  const tabList = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const list = tabList.current;
+    if (!list) return;
+    const revealSelected = () => {
+      const selected = list.querySelector<HTMLElement>('[data-state="active"]');
+      if (!selected) return;
+      const container = list.getBoundingClientRect();
+      const item = selected.getBoundingClientRect();
+      if (item.left < container.left) list.scrollLeft += item.left - container.left;
+      else if (item.right > container.right) list.scrollLeft += item.right - container.right;
+    };
+    revealSelected();
+    const observer = new ResizeObserver(revealSelected);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [tab]);
   return (
     <Tabs.Root
       value={tab}
@@ -24,7 +42,7 @@ export function MoneyPage({ tab, onTab }: { tab: MoneyTab; onTab: (tab: MoneyTab
     >
       <div className="area-head">
         <h2>Money</h2>
-        <Tabs.List className="subtabs" aria-label="Money">
+        <Tabs.List ref={tabList} className="subtabs" aria-label="Money">
           {TABS.map((item) => (
             <Tabs.Trigger key={item.id} value={item.id} className="subtab">
               {item.label}

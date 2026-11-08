@@ -24,7 +24,7 @@ the verdict lands as a lime card with its serial → open the canvas or the Flow
 
 FIRST VIEWPORT: Icon rail (orb, Ask, Chats, Money, Activity, Recaps, Settings). Ask: 120px orb,
 “Evening, <name>. What do you want to know about your money?” at 58px, an 820px composer with
-Photo/Talk/Statement, four starting questions, then a row of noticed cards (mesh spendable,
+Photo/Talk/Statement, starting questions, then a row of noticed cards (mesh cash on hand,
 orange due, dark proposals). Phone: same order, orb tab in the bottom bar.
 
 FORM: chosen by the owner across six rounds (r3 ask/thread/canvas/phone, r4 board as Flow, r5
@@ -37,9 +37,9 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 - Whole app: shell, Ask, Chats (Chat and Flow), canvas, Money (timeline and tabs), Activity
   (ledger, imports, inbox), Recaps, Settings, sign-in and setup; desktop and phone.
 - Keep product truth, data, behavior, and every PRODUCT.md constraint; every figure from the API.
-- Backend-gated, not built in this pass: the agent-built planner (needs a what-if projection
-  route) and voice mode (parked).
+- The purchase planner uses the existing what-if projection API. Voice mode remains parked.
 
 ## Open decisions
 
-- Recaps cadence beyond monthly and weekly sums computed in the client.
+- No open visual-direction decisions. Recaps provides yesterday, this week, last week, month so
+  far, and last month, computed from bounded movement reads.

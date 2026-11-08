@@ -11,14 +11,13 @@ import {
   MoneyPager,
   MoneyRefreshing,
   MoneySection,
-  MoneySummary,
 } from "./MoneyBits";
 import { countLabel, pageSlice, safePage } from "./moneyView";
 
 type People = { people: Person[]; as_of: string };
 const PAGE_SIZE = 20;
 const PEOPLE_DESCRIPTION =
-  "Every person and organisation has a ledger account. A positive balance means they owe you; a negative one means you owe them.";
+  "Shared balances, grouped by who owes whom.";
 
 const DIRECTION_LABEL: Record<Person["direction"], string> = {
   owes_you: "They owe you",
@@ -43,13 +42,16 @@ function PersonRow({ person }: { person: Person }) {
     .join(" · ");
 
   return (
-    <article className="moneyv-row">
+    <article className={`person-tile ${person.direction}`}>
+      <span className="person-avatar" aria-hidden="true">
+        {person.display_name.trim().charAt(0).toUpperCase()}
+      </span>
       <div className="moneyv-row-main">
         <strong>{person.display_name}</strong>
         <span className="moneyv-meta">{detail}</span>
       </div>
-      <div className="moneyv-figures">
-        <strong>{formatPaise(Math.abs(person.balance_paise))}</strong>
+      <div className="person-balance">
+        <strong>{person.direction === "settled" ? "Settled" : formatPaise(Math.abs(person.balance_paise))}</strong>
         <span className="moneyv-meta">{DIRECTION_LABEL[person.direction]}</span>
       </div>
       <MoneyAsk prompt={`Tell me about ${person.display_name} and what we owe each other.`} />
@@ -72,7 +74,7 @@ function PeopleGroup({
   const currentPage = safePage(page, people.length, PAGE_SIZE);
   return (
     <MoneySection title={title} note={countLabel(people.length, "person", "people")}>
-      <div className="moneyv-list">
+      <div className="people-grid">
         {pageSlice(people, currentPage, PAGE_SIZE).map((person) => (
           <PersonRow key={person.payee_id} person={person} />
         ))}
@@ -146,33 +148,11 @@ export function PeoplePanel() {
       {error && <MoneyError title="Couldn’t refresh people" message={error} onRetry={reload} />}
 
       {people.length > 0 && (
-        <MoneySummary
-          label="Balances with people and organisations"
-          cells={[
-            {
-              label: "Owed to you",
-              value: formatPaise(owed),
-              note: countLabel(theyOwe.length, "person", "people"),
-              tone: owed > 0 ? "positive" : undefined,
-            },
-            {
-              label: "You owe",
-              value: formatPaise(owe),
-              note: countLabel(youOwe.length, "person", "people"),
-              tone: owe > 0 ? "negative" : undefined,
-            },
-            {
-              label: "Net",
-              value: formatPaise(owed - owe),
-              note: `${countLabel(settled.length, "settled item")} · across ${countLabel(
-                people.length,
-                "person",
-                "people",
-              )}`,
-              tone: owed - owe < 0 ? "negative" : undefined,
-            },
-          ]}
-        />
+        <dl className="people-totals" aria-label="Balances with people and organizations">
+          <div><dt>Owed to you</dt><dd>{formatPaise(owed)}</dd></div>
+          <div><dt>You owe</dt><dd>{formatPaise(owe)}</dd></div>
+          <div><dt>Net</dt><dd>{formatPaise(owed - owe)}</dd></div>
+        </dl>
       )}
 
       {people.length === 0 ? (
@@ -180,7 +160,7 @@ export function PeoplePanel() {
           No people or organisations yet.
         </MoneyEmpty>
       ) : (
-        <>
+        <div className="people-groups">
           <PeopleGroup title="They owe you" people={theyOwe} page={owedPage} onPage={setOwedPage} />
           <PeopleGroup title="You owe them" people={youOwe} page={owePage} onPage={setOwePage} />
           <PeopleGroup
@@ -189,7 +169,7 @@ export function PeoplePanel() {
             page={settledPage}
             onPage={setSettledPage}
           />
-        </>
+        </div>
       )}
     </section>
   );
