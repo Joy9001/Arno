@@ -5,19 +5,6 @@
   container-name: stg-panel;
 }
 
-.stg-head {
-  margin-bottom: 20px;
-}
-
-.stg-head h2 {
-  font-size: 24px;
-  letter-spacing: -0.03em;
-}
-
-.stg-head p {
-  max-width: 64ch;
-}
-
 .stg-layout {
   display: grid;
   grid-template-columns: 188px minmax(0, 1fr);
@@ -780,9 +767,7 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
     font-size: 15px;
   }
 
-  .stg-head h2 {
-    font-size: 22px;
-  }
+  
 }
 
 /* Older browsers without container queries still get the phone selector. */

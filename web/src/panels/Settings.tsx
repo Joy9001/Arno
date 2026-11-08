@@ -18,6 +18,7 @@ import {
   FileJson,
   FileSpreadsheet,
   KeyRound,
+  LogOut,
   Pause,
   Pencil,
   Play,
@@ -2264,7 +2265,7 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
   );
 }
 
-export function SettingsPanel() {
+export function SettingsPanel({ onSignOut }: { onSignOut: () => void }) {
   const [section, chooseSection] = useHashSection();
   const settings = useApi<SettingsPayload>("/api/settings");
   const tree = useApi<CategoryTree>("/api/categories");
@@ -2355,6 +2356,14 @@ export function SettingsPanel() {
           </motion.div>
         </div>
       </div>
+
+      {/* Phones have no sidebar foot, so signing out closes the settings page instead. */}
+      <footer className="stg-signout-row">
+        <button type="button" className="ghost" onClick={onSignOut}>
+          <LogOut size={14} strokeWidth={1.8} aria-hidden="true" />
+          Sign out
+        </button>
+      </footer>
     </section>
   );
 }

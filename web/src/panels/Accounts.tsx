@@ -292,17 +292,19 @@ function AccountRow({ account }: { account: Account }) {
             )}
           </>
         )}
+      </div>
+      <div className="moneyv-actions">
         <button
           type="button"
-          className="inline-link"
+          className="ask-link moneyv-ask"
           onClick={() => setOpen(true)}
           aria-label={`Details for ${account.name}`}
         >
           <FileSearch size={13} strokeWidth={1.8} aria-hidden="true" />
           Details
         </button>
+        <MoneyAsk prompt={`Tell me about ${account.name}.`} />
       </div>
-      <MoneyAsk prompt={`Tell me about ${account.name}.`} />
       {open && <AccountDetailDialog account={account} onClose={() => setOpen(false)} />}
     </article>
   );

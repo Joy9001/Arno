@@ -646,7 +646,7 @@ function ParserLayouts() {
   }
 
   return (
-    <section className="subcard" aria-labelledby="parser-layouts-heading">
+    <section className="act-parsers" aria-labelledby="parser-layouts-heading">
       <div className="section-head">
         <h3 id="parser-layouts-heading">Parsers</h3>
         <span className="fine">{layouts.data?.items.length ?? 0} layouts</span>

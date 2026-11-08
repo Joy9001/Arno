@@ -41,14 +41,6 @@ const NAV: Array<{
   { id: "settings", label: "Settings", title: "Settings", Icon: Settings },
 ];
 
-function today(): string {
-  return new Date().toLocaleDateString("en-IN", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
-}
-
 function useCompactViewport(): boolean {
   const [compact, setCompact] = useState(
     () => window.matchMedia("(max-width: 1180px)").matches,
@@ -406,57 +398,50 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           </span>
           <span>{user?.display_name ? `${user.display_name} · ` : ""}Tailscale only</span>
           <span>No analytics</span>
+          <button type="button" className="side-signout" onClick={() => void signOut()}>
+            <LogOut size={14} strokeWidth={1.8} aria-hidden="true" />
+            Sign out
+          </button>
         </div>
       </aside>
 
       <div className="main">
-        <header className={page === "home" ? "topbar topbar-home" : "topbar"}>
+        {/* At 1181px and wider the sidebar names the area and the rail carries Today and the
+            assistant, so this bar keeps only the page's h1. Compact frames show it with one action. */}
+        <header className="topbar">
           <div className="topbar-title">
-            <div className="mobile-brand">
+            <span className="mobile-brand" aria-hidden="true">
               <Mark size={24} />
-              <span>Fin-Agent</span>
-            </div>
-            <div className="topbar-heading">
-              <h1>{current.title}</h1>
-              <p className="topbar-date">{today()}</p>
-            </div>
+            </span>
+            <h1>{current.title}</h1>
           </div>
-          <div className="topbar-actions">
-            {page === "home" && compact && (
-              <Button
-                variant="soft"
-                color="gray"
-                size="2"
-                className="topbar-button"
-                onClick={() => setTodayOpen(true)}
-              >
-                <CalendarDays size={15} strokeWidth={1.8} aria-hidden="true" />
-                Today
-              </Button>
-            )}
-            {page !== "home" && (
-              <Button
-                variant="soft"
-                color="gray"
-                size="2"
-                className="topbar-button"
-                onClick={() => ask("")}
-              >
-                <MessageCircle size={15} strokeWidth={1.8} aria-hidden="true" />
-                Ask
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              color="gray"
-              size="2"
-              className="topbar-button"
-              onClick={() => void signOut()}
-            >
-              <LogOut size={15} strokeWidth={1.8} aria-hidden="true" />
-              Sign out
-            </Button>
-          </div>
+          {compact && (
+            <div className="topbar-actions">
+              {page === "home" ? (
+                <Button
+                  variant="soft"
+                  color="gray"
+                  size="2"
+                  className="topbar-button"
+                  onClick={() => setTodayOpen(true)}
+                >
+                  <CalendarDays size={15} strokeWidth={1.8} aria-hidden="true" />
+                  Today
+                </Button>
+              ) : (
+                <Button
+                  variant="soft"
+                  color="gray"
+                  size="2"
+                  className="topbar-button"
+                  onClick={() => ask("")}
+                >
+                  <MessageCircle size={15} strokeWidth={1.8} aria-hidden="true" />
+                  Ask
+                </Button>
+              )}
+            </div>
+          )}
         </header>
 
         {error && (
@@ -508,7 +493,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               }}
             />
           )}
-          {page === "settings" && <SettingsPanel />}
+          {page === "settings" && <SettingsPanel onSignOut={() => void signOut()} />}
         </main>
       </div>
 

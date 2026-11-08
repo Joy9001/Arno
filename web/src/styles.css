@@ -271,9 +271,18 @@ a.button {
 
 /* Shell ---------------------------------------------------------------------------------- */
 
+/* One frame for every area. Wide (1181px and up): navigation rail, one scrolling column, and the
+   context rail (Today on Home, the assistant elsewhere). Compact (1180px and below): the rail
+   becomes a sheet and a top bar carries the page title with one action. Phone (900px and below):
+   the sidebar becomes a bottom bar. The 1180px edge must match useCompactViewport in Shell.tsx. */
+
 .app {
+  --nav-width: 232px;
+  --rail-width: 360px;
+  --gutter: 32px;
+  --column: 1120px;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 400px;
+  grid-template-columns: var(--nav-width) minmax(0, 1fr) var(--rail-width);
   height: 100%;
   min-height: 0;
   background: var(--bg);
@@ -283,53 +292,38 @@ a.button {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 20px 12px 14px;
-  background: var(--side);
+  padding: 20px 12px 16px;
   border-right: 1px solid var(--line-soft);
+  background: var(--side);
   overflow-y: auto;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 8px 16px;
+  gap: 10px;
+  height: 36px;
+  margin-bottom: 20px;
+  padding: 0 8px;
+}
+
+.brand-word {
   font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+  font-weight: 650;
+  letter-spacing: -0.03em;
 }
 
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--blue);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
-}
-
-.brand-mark svg {
-  width: 14px;
-  height: 14px;
-  stroke: #fff;
-  fill: none;
-  stroke-width: 2.3;
-  stroke-linecap: round;
-}
-
-.brand em {
+.brand-tag {
   margin-left: auto;
-  font-style: normal;
-  font-size: 12px;
-  font-weight: 500;
   color: var(--ter);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .nav-groups {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .nav-item {
@@ -337,13 +331,18 @@ a.button {
   align-items: center;
   gap: 10px;
   width: 100%;
+  min-height: 36px;
   padding: 7px 10px;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 10px;
   background: transparent;
   color: #d6d6da;
   font-size: 13.5px;
   font-weight: 500;
   text-align: left;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
 }
 
 .nav-item:hover {
@@ -358,17 +357,12 @@ a.button {
 
 .nav-item svg {
   flex: none;
-  width: 17px;
-  height: 17px;
-  stroke: #9c9ca2;
-  fill: none;
-  stroke-width: 1.7;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  color: var(--sub);
 }
 
+.nav-item:hover svg,
 .nav-item.on svg {
-  stroke: #fff;
+  color: currentColor;
 }
 
 .nav-badge {
@@ -381,18 +375,22 @@ a.button {
   font-size: 11px;
   font-weight: 600;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .side-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   margin-top: auto;
-  padding: 12px 10px 0;
+  padding: 14px 10px 0;
   border-top: 1px solid var(--line-soft);
-  font-size: 12px;
   color: var(--ter);
-  line-height: 1.7;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
-.side-foot b {
+.privacy-line {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -400,21 +398,24 @@ a.button {
   font-weight: 500;
 }
 
-.side-foot svg {
-  width: 12px;
-  height: 12px;
-  stroke: var(--sub);
-  fill: none;
-  stroke-width: 1.8;
+.side-signout {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 0 -8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 500;
 }
 
-.side-foot button {
-  margin-top: 8px;
-  padding: 6px 10px;
+.side-signout:hover {
   background: rgba(118, 118, 128, 0.16);
   color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .main {
@@ -424,64 +425,70 @@ a.button {
   min-height: 0;
 }
 
+/* Wide frames keep the top bar for assistive technology only; the compact rules show it. */
 .topbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 32px 12px;
-}
-
-.topbar h1 {
-  margin: 0;
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: -0.035em;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .topbar-title {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.topbar h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mobile-brand {
   display: none;
 }
 
-.page-sub {
-  margin: 5px 0 0;
-  font-size: 13px;
-  color: var(--sub);
-}
-
 .topbar-actions {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+.topbar-button.rt-Button {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.topbar-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 8px var(--gutter);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--red);
+  font-size: 12.5px;
 }
 
 .content {
   flex: 1;
   min-height: 0;
-  padding: 18px 32px 48px;
+  padding: 0 var(--gutter) 72px;
   overflow-y: auto;
   scrollbar-gutter: stable;
 }
 
-/* The assistant is global: a rail on wide screens, a sheet below 1180. */
-
-.assistant-rail {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--line-soft);
-  background: var(--side);
-}
-
-/* Home is the conversation. The overview lives in a rail, not the other way round. */
-
+/* Home is the conversation: one 900px column whose header is the thread's own. */
 .content.chat-main {
   display: flex;
   flex-direction: column;
@@ -503,7 +510,11 @@ a.button {
   margin-left: auto;
 }
 
+/* The head shares the thread's own 44rem column (thread.aui.tsx), so the title sits over the
+   first line of the conversation, not out at the column's edge. */
 .chat-main .assistant-head {
+  max-width: 44rem;
+  padding: 20px 16px 8px;
   border-bottom: 0;
 }
 
@@ -511,20 +522,318 @@ a.button {
   max-width: 560px;
 }
 
-.topbar-home {
-  width: 100%;
-  max-width: 900px;
-  margin-right: auto;
-  margin-left: auto;
-  padding-right: 16px;
-  padding-bottom: 10px;
-  padding-left: 16px;
+.context-rail {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line-soft);
+  background: var(--side);
 }
 
-.topbar-date {
-  margin: 0;
-  font-size: 13px;
+.rail-fill {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rail-fill > .assistant {
+  flex: 1;
+}
+
+/* Workspaces. Money and Activity open on their section tabs, pinned while the page scrolls;
+   Settings opens on its header. Every view then leads with the same header, then its figures. */
+
+.workspace,
+.content > .panel {
+  width: 100%;
+  max-width: var(--column);
+  margin: 0 auto;
+}
+
+.content > .panel {
+  padding-top: 28px;
+}
+
+.workspace-body {
+  min-width: 0;
+}
+
+.subtabs {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 24px;
+  margin: 0 0 28px;
+  padding-top: 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg);
+}
+
+.subtab {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  margin-bottom: -1px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--sub);
+  font-size: 14px;
+  font-weight: 500;
+  transition: color 140ms ease;
+}
+
+.subtab:hover {
+  background: transparent;
+  color: var(--text);
+}
+
+.subtab[data-state="active"] {
+  border-bottom-color: var(--text);
+  color: var(--text);
+}
+
+.subtab:focus-visible {
+  outline-offset: -3px;
+}
+
+.panel {
+  width: 100%;
+}
+
+.panel-head,
+.moneyv-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin: 0 0 28px;
+}
+
+.panel-head > div:first-child,
+.moneyv-head-copy {
+  min-width: 0;
+}
+
+.panel-head h2,
+.moneyv-head h2 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+}
+
+.panel-head p,
+.moneyv-head p {
+  max-width: 62ch;
+  margin: 8px 0 0;
+  color: var(--sub);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.panel-head > button {
+  flex: none;
+}
+
+.moneyv-head-aside {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 6px;
+  color: var(--ter);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Phones only; the sidebar foot carries Sign out everywhere else. */
+.stg-signout-row {
+  display: none;
+}
+
+/* Bottom navigation, phones only. */
+.tabbar {
+  display: none;
+}
+
+@media (max-width: 1180px) {
+  .app {
+    grid-template-columns: var(--nav-width) minmax(0, 1fr);
+  }
+
+  .topbar {
+    position: static;
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    width: auto;
+    height: auto;
+    min-height: 64px;
+    padding: 14px var(--gutter) 6px;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+
+  .subtabs {
+    padding-top: 0;
+  }
+
+  .content > .panel {
+    padding-top: 16px;
+  }
+
+  .chat-main .assistant-head {
+    padding-top: 6px;
+  }
+}
+
+@media (max-width: 900px) {
+  .app {
+    --gutter: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    min-height: 56px;
+    padding: max(8px, env(safe-area-inset-top)) var(--gutter) 6px;
+  }
+
+  .topbar h1 {
+    font-size: 17px;
+  }
+
+  .mobile-brand {
+    display: flex;
+    flex: none;
+  }
+
+  .topbar-button.rt-Button {
+    min-height: 36px;
+    padding: 6px 10px;
+  }
+
+  .content {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+
+  .content.chat-main {
+    padding: 0 0 calc(64px + env(safe-area-inset-bottom));
+  }
+
+  .chat-main .assistant-head {
+    padding: 4px 16px;
+  }
+
+  .subtabs {
+    column-gap: 18px;
+    margin-bottom: 20px;
+  }
+
+  .subtab {
+    height: 42px;
+    font-size: 13.5px;
+  }
+
+  .panel-head,
+  .moneyv-head {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+
+  .panel-head h2,
+  .moneyv-head h2 {
+    font-size: 24px;
+  }
+
+  .panel-head p,
+  .moneyv-head p {
+    margin-top: 6px;
+    font-size: 13.5px;
+  }
+
+  .moneyv-head-aside {
+    justify-content: flex-start;
+    padding-top: 0;
+  }
+
+  .stg-signout-row {
+    display: flex;
+    margin-top: 40px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .tabbar {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    display: flex;
+    align-items: stretch;
+    height: calc(60px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid var(--line-soft);
+    background: var(--side);
+  }
+
+  .tabbar-item {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--ter);
+    font-size: 11px;
+    font-weight: 500;
+    transition: color 140ms ease;
+  }
+
+  .tabbar-item:hover {
+    background: transparent;
+  }
+
+  .tabbar-item.on {
+    color: var(--text);
+  }
+
+  .tabbar-badge {
+    position: absolute;
+    top: 5px;
+    left: calc(50% + 6px);
+    min-width: 15px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--blue);
+    color: #fff;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
 }
 
 .home-rail {
@@ -700,10 +1009,6 @@ a.button {
   padding: 10px 12px 14px;
 }
 
-.ask-btn {
-  display: none;
-}
-
 .sr-only {
   position: absolute;
   width: 1px;
@@ -735,12 +1040,6 @@ a.button {
 
 .assistant-dialog .assistant {
   flex: 1;
-}
-
-/* Bottom navigation, phones only. */
-
-.tabbar {
-  display: none;
 }
 
 /* Home ----------------------------------------------------------------------------------- */
@@ -860,6 +1159,7 @@ a.button {
 
 .section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
@@ -1244,47 +1544,6 @@ input[type="file"]::file-selector-button:hover {
   font-weight: 500;
 }
 
-/* Money and Activity sub-navigation. */
-
-.workspace {
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.subtabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 22px;
-  margin-bottom: 18px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.subtab {
-  padding: 8px 0 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  color: var(--sub);
-  font-size: 14px;
-  font-weight: 500;
-}
-
-.subtab:hover {
-  background: transparent;
-  color: var(--text);
-}
-
-.subtab.on,
-.subtab[data-state="active"] {
-  border-bottom-color: var(--text);
-  color: var(--text);
-}
-
-.workspace-body {
-  min-width: 0;
-}
-
 /* Auth ------------------------------------------------------------------------------------ */
 
 .centered {
@@ -1414,30 +1673,6 @@ input[type="file"]::file-selector-button:hover {
 }
 
 /* Panels ---------------------------------------------------------------------------------- */
-
-.panel {
-  width: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-
-.panel-head h2 {
-  margin: 0 0 6px;
-  font-size: 18px;
-}
-
-.panel-head p {
-  margin: 0;
-  max-width: 68ch;
-}
 
 .section-title {
   margin: 26px 0 10px;
@@ -2337,119 +2572,32 @@ button.citation:hover {
 
 /* Responsive ----------------------------------------------------------------------------- */
 
-@media (max-width: 1180px) {
-  .app {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-
-  .assistant-rail {
-    display: none;
-  }
-
-  .ask-btn {
-    display: inline-flex;
-    align-items: center;
-  }
-}
-
 @media (max-width: 900px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
+  
 
-  .sidebar {
-    display: none;
-  }
+  
 
-  .topbar {
-    padding: 14px 16px 8px;
-  }
+  
 
-  .topbar h1 {
-    font-size: 26px;
-  }
+  
 
-  .mobile-brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 2px;
-    font-size: 13px;
-    font-weight: 600;
-  }
+  
 
-  .content {
-    padding: 12px 16px 84px;
-  }
+  
 
-  .content.chat-main {
-    padding: 0 0 calc(60px + env(safe-area-inset-bottom));
-  }
+  
 
-  .tabbar {
-    position: fixed;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 30;
-    display: flex;
-    align-items: stretch;
-    justify-content: space-around;
-    height: 60px;
-    padding-bottom: env(safe-area-inset-bottom);
-    border-top: 1px solid var(--line-soft);
-    background: var(--side);
-  }
+  
 
-  .tabbar-item {
-    position: relative;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    padding: 6px 0;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    color: var(--ter);
-    font-size: 10.5px;
-    font-weight: 500;
-  }
+  
 
-  .tabbar-item:hover {
-    background: transparent;
-  }
+  
 
-  .tabbar-item svg {
-    width: 20px;
-    height: 20px;
-    stroke: currentColor;
-    fill: none;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
+  
 
-  .tabbar-item.on {
-    color: var(--text);
-  }
+  
 
-  .tabbar-badge {
-    position: absolute;
-    top: 5px;
-    margin-left: 18px;
-    min-width: 15px;
-    padding: 0 4px;
-    border-radius: 8px;
-    background: var(--blue);
-    color: #fff;
-    font-size: 9px;
-    line-height: 14px;
-    text-align: center;
-  }
+  
 
   .today {
     padding: 0 0 8px;
@@ -2464,10 +2612,7 @@ button.citation:hover {
     height: 84px !important;
   }
 
-  .subtabs {
-    gap: 16px;
-    overflow-x: visible;
-  }
+  
 
   .assistant .messages {
     padding: 14px 16px;
@@ -2502,9 +2647,7 @@ button.citation:hover {
     padding: 8px 12px;
   }
 
-  .tabbar-item {
-    font-size: 11px;
-  }
+  
 
   .movement {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -2528,10 +2671,6 @@ button.citation:hover {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
-  }
-
-  .imports-layout {
-    grid-template-columns: 1fr;
   }
 
   .money-row,
@@ -2602,9 +2741,7 @@ button.citation:hover {
     grid-template-columns: 1fr;
   }
 
-  .panel-head {
-    flex-direction: column;
-  }
+  
 }
 
 /* Shared shell, Home, and evidence ------------------------------------------------------- */
@@ -2648,134 +2785,6 @@ button.icon-only {
   --accent-9: var(--blue);
   --accent-10: var(--blue-hover);
   --accent-11: var(--blue-text);
-}
-
-.app {
-  grid-template-columns: 232px minmax(0, 1fr) 360px;
-}
-
-.sidebar {
-  padding: 22px 12px 16px;
-  background: var(--side);
-}
-
-.brand {
-  gap: 10px;
-  padding: 0 8px 22px;
-}
-
-.brand-word {
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-}
-
-.brand-tag {
-  margin-left: auto;
-  color: var(--ter);
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.nav-groups {
-  gap: 3px;
-}
-
-.nav-item {
-  min-height: 38px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  font-size: 13.5px;
-}
-
-.nav-item.on {
-  background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--line-soft);
-}
-
-.nav-item svg {
-  stroke: currentColor;
-}
-
-.side-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 14px 10px 0;
-  line-height: 1.5;
-}
-
-.privacy-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--sub);
-  font-weight: 500;
-}
-
-.topbar {
-  align-items: center;
-  gap: 14px;
-  padding: 18px 28px 10px;
-}
-
-.topbar-home {
-  max-width: 900px;
-  padding: 16px 24px 8px;
-}
-
-.topbar h1 {
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-}
-
-.topbar-home h1 {
-  font-size: 20px;
-}
-
-.topbar-date {
-  margin-top: 2px;
-  color: var(--ter);
-  font-size: 12px;
-}
-
-.topbar-actions {
-  gap: 8px;
-}
-
-.topbar-button.rt-Button {
-  font-size: 12.5px;
-  font-weight: 500;
-}
-
-.topbar-error {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0;
-  padding: 6px 28px;
-  color: var(--red);
-  font-size: 12.5px;
-}
-
-.context-rail {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  border-left: 1px solid var(--line-soft);
-  background: var(--side);
-}
-
-.rail-fill {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
-
-.rail-fill > .assistant {
-  flex: 1;
 }
 
 .today-panel {
@@ -3167,13 +3176,6 @@ button.icon-only {
 
 .assistant-head {
   padding: 14px 20px 10px;
-}
-
-.chat-main .assistant-head {
-  width: 100%;
-  max-width: 900px;
-  padding: 10px 24px 4px;
-  border-bottom: 0;
 }
 
 .assistant-actions {
@@ -3705,42 +3707,6 @@ button.icon-only {
   }
 }
 
-/* Bottom navigation --------------------------------------------------------------------- */
-
-.tabbar {
-  height: 64px;
-  background: var(--side);
-}
-
-.tabbar-item {
-  position: relative;
-  gap: 4px;
-  padding: 7px 0;
-  color: var(--ter);
-  font-size: 10.5px;
-  transition: color 140ms ease;
-}
-
-.tabbar-item.on {
-  color: var(--text);
-}
-
-.tabbar-item.on::before {
-  position: absolute;
-  top: 0;
-  width: 22px;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: var(--blue);
-  content: "";
-}
-
-.tabbar-badge {
-  top: 5px;
-  left: calc(50% + 6px);
-  margin-left: 0;
-}
-
 .search-field {
   position: relative;
   display: flex;
@@ -3769,69 +3735,30 @@ button.icon-only {
 
 /* Responsive ---------------------------------------------------------------------------- */
 
-@media (max-width: 1180px) {
-  .app {
-    grid-template-columns: 232px minmax(0, 1fr);
-  }
-}
-
 @media (max-width: 900px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  
 
-  .topbar {
-    padding: 12px 16px 8px;
-  }
+  
 
-  .topbar-home {
-    max-width: none;
-    padding: 12px 16px 6px;
-  }
+  
 
-  .topbar h1 {
-    font-size: 19px;
-  }
+  
 
-  .topbar-home h1 {
-    font-size: 18px;
-  }
+  
 
-  .mobile-brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 3px;
-    color: var(--text);
-    font-size: 13px;
-    font-weight: 600;
-  }
+  
 
-  .topbar-date {
-    font-size: 11px;
-  }
+  
 
-  .topbar-actions {
-    flex: none;
-    gap: 6px;
-  }
+  
 
-  .topbar-button.rt-Button {
-    padding: 6px 9px;
-    font-size: 11.5px;
-  }
+  
 
-  .content {
-    padding: 12px 16px calc(82px + env(safe-area-inset-bottom));
-  }
+  
 
-  .content.chat-main {
-    padding: 0 0 calc(68px + env(safe-area-inset-bottom));
-  }
+  
 
-  .chat-main .assistant-head {
-    padding: 10px 16px 4px;
-  }
+  
 
   .messages {
     padding: 16px 16px 8px;
@@ -3853,36 +3780,19 @@ button.icon-only {
     font-size: 19px;
   }
 
-  .tabbar-item {
-    font-size: 10.5px;
-  }
+  
 }
 
 @media (max-width: 620px) {
-  .topbar-title {
-    min-width: 0;
-  }
+  
 
-  .topbar h1,
-  .topbar-home h1 {
-    overflow: hidden;
-    font-size: 17px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  
 
-  .topbar-date {
-    display: none;
-  }
+  
 
-  .topbar-button.rt-Button {
-    padding: 6px 8px;
-  }
+  
 
-  .topbar-button.rt-Button svg {
-    width: 14px;
-    height: 14px;
-  }
+  
 
   .sheet-dialog {
     border-radius: 18px 18px 0 0;

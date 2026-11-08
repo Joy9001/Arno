@@ -175,8 +175,18 @@ function LedgerSkeleton() {
   );
 }
 
-function UncategorizedSection({ onAnswered }: { onAnswered: () => void }) {
-  const list = useApi<UncategorizedList>("/api/uncategorized");
+// The queue can run to hundreds of payees; the ledger below must stay in reach.
+const UNCATEGORIZED_PREVIEW = 4;
+
+function UncategorizedSection({
+  onAnswered,
+  version,
+}: {
+  onAnswered: () => void;
+  version: number;
+}) {
+  const list = useApi<UncategorizedList>(`/api/uncategorized?v=${version}`);
+  const [expanded, setExpanded] = useState(false);
   const tree = useApi<CategoryTree>("/api/categories");
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -233,9 +243,6 @@ function UncategorizedSection({ onAnswered }: { onAnswered: () => void }) {
     <section className="act-uncat" aria-labelledby="uncat-title">
       <div className="act-uncat-head">
         <h3 id="uncat-title">Uncategorized ({list.data?.total ?? 0})</h3>
-        <button type="button" className="ghost small" onClick={list.reload}>
-          Refresh
-        </button>
       </div>
       <p className="muted">
         Rows the rules and the agent were not sure about. Answer a payee once and its future rows
@@ -267,7 +274,10 @@ function UncategorizedSection({ onAnswered }: { onAnswered: () => void }) {
       )}
       {(list.data?.groups.length ?? 0) > 0 && (
         <ul className="act-uncat-list">
-          {(list.data?.groups ?? []).map((group) => (
+          {(expanded
+            ? (list.data?.groups ?? [])
+            : (list.data?.groups ?? []).slice(0, UNCATEGORIZED_PREVIEW)
+          ).map((group) => (
             <li key={group.key} className="act-uncat-row">
               <div className="act-uncat-main">
                 <strong>{group.key.toUpperCase()}</strong>
@@ -309,6 +319,16 @@ function UncategorizedSection({ onAnswered }: { onAnswered: () => void }) {
             </li>
           ))}
         </ul>
+      )}
+      {(list.data?.groups.length ?? 0) > UNCATEGORIZED_PREVIEW && (
+        <button
+          type="button"
+          className="ghost small act-uncat-more"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? "Show fewer" : `Show all ${list.data?.groups.length}`}
+        </button>
       )}
     </section>
   );
@@ -460,7 +480,7 @@ export function LedgerPanel() {
         </button>
       </header>
 
-      <UncategorizedSection onAnswered={retry} />
+      <UncategorizedSection onAnswered={retry} version={request.version} />
 
       <form
         className="act-toolbar"

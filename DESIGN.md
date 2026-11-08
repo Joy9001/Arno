@@ -177,20 +177,30 @@ it is wider. Cards may be wide; reading is not.
 
 ## Layout
 
-A 220px navigation rail holds the four areas. Home is the agent: a 900px conversation column with a
-400px overview rail on the right at 1181px and wider, holding only the defaults (spendable,
-projection, unread, recent, quick actions). On every other area the assistant occupies that 400px
-rail, and panels sit inside a 1200px maximum. Below 1180px the overview becomes a Today sheet on
-Home and the assistant becomes a full-height dialog elsewhere; below 900px the navigation becomes a
-four-item bottom bar and the sidebar disappears.
+One frame serves every area, set in `styles.css` under Shell. A 232px navigation rail holds the
+four areas and, in its foot, the privacy line and Sign out. At 1181px and wider a 360px context rail
+sits on the right: Home's overview (spendable, projection, unread, recent, quick actions) on Home,
+the assistant everywhere else. Home's centre is the conversation, its header aligned to the
+thread's 44rem column. Other areas sit in a 1120px column with 32px gutters.
 
-Spacing follows a 4 / 8 / 12 / 16 / 24 / 32 rhythm. Tight groups sit inside cards; groups are
-separated by 16–24px. More space sits above a heading than below it.
+There is no page bar at wide widths: the active rail item names the area, so the page's h1 stays for
+assistive technology only. Money and Activity open on their section tabs, pinned to the top while
+the page scrolls; Settings opens on its header. Every view then follows one order: view header
+(28px title, one-line purpose under 62ch, one action or the as-of note on the right), the summary
+strip, then sections on the ground separated by hairlines.
 
-At 900px the phone top bar carries the Fin-Agent wordmark, the date, Today and Sign out on Home;
-other areas carry their page title, Ask and Sign out. The assistant opens from Ask, and Home's
-overview opens from Today; content clears the 60px bottom bar. The projection chart remains visible
-at 84px in the overview; it is never dropped from the daily surface.
+At 1180px and below the context rail leaves: Home's overview becomes a Today sheet and the assistant
+a full-height dialog. A top bar appears with the page title and that one action (Today on Home, Ask
+elsewhere). At 900px and below the sidebar becomes a four-item bottom bar, the top bar adds the mark,
+gutters drop to 16px, view headers stack, and the summary strip keeps two columns. Sign out moves to
+the foot of Settings. The 1180px edge is shared with `useCompactViewport` in `Shell.tsx`; change
+both together.
+
+Spacing follows a 4 / 8 / 12 / 16 / 24 / 32 rhythm. Tight groups sit inside rows; sections are
+separated by 32–40px. More space sits above a heading than below it. A queue that can run long, such
+as Uncategorized above the ledger, previews four rows and expands on request, so the page's main
+content stays in reach. The projection chart remains visible at 84px in the overview; it is never
+dropped from the daily surface.
 
 ## Elevation & Depth
 
@@ -242,12 +252,12 @@ the surface.
 - **Placeholder:** Ink Secondary (#a1a1a6), never tertiary.
 
 ### Navigation
-- **Desktop:** 220px rail, four areas — Home, Money, Activity, Settings — 13.5px items, 17px
+- **Desktop:** 232px rail, four areas — Home, Money, Activity, Settings — 13.5px items, 17px
   Lucide one-stroke icons, active = 24% gray fill + white.
 - **Phone:** a 60px bottom bar with four items and an 11px label; the assistant is not a tab.
-- **Sub-navigation:** Money and Activity use underline tabs on a 1px rule (Radix Tabs), active text
-  ink and a 2px ink indicator.
-- **Assistant:** 400px rail at desktop; a full-height Radix Dialog below 1180px with a 36–40px
+- **Sub-navigation:** Money and Activity open on underline tabs on a 1px rule (Radix Tabs), pinned
+  while the page scrolls; active text ink and a 2px ink indicator.
+- **Assistant:** 360px rail at desktop; a full-height Radix Dialog below 1180px with a 36–40px
   header (History, New, Close). History is a 320px Radix Popover over the thread list.
 
 ### Queue Row
@@ -268,7 +278,8 @@ one view, deep-linked as `#settings/<section>`. Section content is a single card
 ### Import Flow
 Upload card → a history row of import chips → the selected import's review: summary strip (Rows,
 New, Matched, Ambiguous, Logged elsewhere), the lines table, ambiguous lines and own-account
-transfers, then commit/reject. Full-width review; history wraps above it.
+transfers, then commit/reject. Full-width review; history wraps above it in a grid of rows, and
+Parsers follows as a section on the ground: one row per layout, its versions as lines inside it.
 
 ### Movement Dialog
 A Radix Dialog from a Ledger row's Details button: date, kind, category, payee, amount, state,
