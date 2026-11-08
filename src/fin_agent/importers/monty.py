@@ -81,24 +81,44 @@ async def run_script(
     *,
     with_prelude: bool = True,
     stage: str = "replay",
+    import_id: str | None = None,
 ) -> ScriptResult:
     context = context or ScriptContext()
     stats: dict[str, Any] = {"calls": {}, "bytes": 0}
     started = time.perf_counter()
+    # The gate passes the import it checks on the context; a replay leaves it None and accepts any.
+    expected_import = import_id or context.import_id
 
-    async def doc_info() -> dict[str, Any]:
+    def accept_import(value: Any) -> None:
+        """A script may name its import, but only the one this sandbox runs on."""
+        if expected_import is not None and value is not None and str(value) != expected_import:
+            raise ValueError(
+                "this parser script runs on one import at a time; "
+                f"import_id must be {expected_import} or omitted"
+            )
+
+    async def doc_info(*, import_id: Any = None) -> dict[str, Any]:
+        accept_import(import_id)
         return doc.info()
 
-    async def doc_words(page: Any = 0) -> list[dict[str, Any]]:
+    async def doc_words(page: Any = 0, *, import_id: Any = None) -> list[dict[str, Any]]:
+        accept_import(import_id)
         return doc.words(page)
 
-    async def doc_words_range(first: Any = 0, last: Any = 0) -> list[list[dict[str, Any]]]:
+    async def doc_words_range(
+        first: Any = 0, last: Any = 0, *, import_id: Any = None
+    ) -> list[list[dict[str, Any]]]:
+        accept_import(import_id)
         return doc.words_range(first, last)
 
-    async def doc_cells(sheet: Any = 0) -> list[list[Any]]:
+    async def doc_cells(sheet: Any = 0, *, import_id: Any = None) -> list[list[Any]]:
+        accept_import(import_id)
         return doc.cells(sheet)
 
-    async def ledger_opening(account: str | None = None) -> dict[str, Any] | None:
+    async def ledger_opening(
+        account: str | None = None, *, import_id: Any = None
+    ) -> dict[str, Any] | None:
+        accept_import(import_id)
         del account
         if context.ledger_opening_paise is None:
             return None
@@ -113,7 +133,10 @@ async def run_script(
         closing: Any = None,
         headers: Any = None,
         empty_statement: bool = False,
+        *,
+        import_id: Any = None,
     ) -> dict[str, Any]:
+        accept_import(import_id)
         return check_rows(
             rows,
             opening,
@@ -126,7 +149,8 @@ async def run_script(
             empty_statement=empty_statement,
         )
 
-    async def transcribe_page(page: Any = 0) -> dict[str, Any]:
+    async def transcribe_page(page: Any = 0, *, import_id: Any = None) -> dict[str, Any]:
+        accept_import(import_id)
         if not context.allow_vision:
             raise ValueError("vision is not available in this replay")
         return await vision_transcribe(doc, int(page))

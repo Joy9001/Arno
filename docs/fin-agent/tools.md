@@ -834,7 +834,7 @@ The task ends with a report: `ready` for review, `not_a_statement` with the kind
 | `saved_parser` | The bank's active parser version and its known header variants | `import_id` | `{"version", "script", "variants"}` or `null` |
 | `doc_info` | What the file is | `import_id` | `{"kind", "pages", "text_layer_pages", "sheets", "delimiter", "encoding"}` |
 | `doc_words` | One page's words with positions | `import_id`, `page` | `[{"text", "x0", "x1", "top", "bottom"}]` |
-| `doc_words_range` | Many pages at once; use this past a few pages | `import_id`, `first`, `last` | The same words, for each page |
+| `doc_words_range` | Many pages at once, any range; one call costs one step | `import_id`, `first`, `last` | The same words, for each page |
 | `doc_cells` | A sheet's rows. Text formats arrive as one-line cells | `import_id`, `sheet=0` | `[[cell, ...], ...]` |
 | `ledger_opening` | The account's ledger balance before this statement, for statements that print none | `import_id`, `account` | `{"paise", "as_of"}` or `null` on a first import |
 | `check_statement` | The checks, on rows a script produced. Call it as often as useful | `import_id`, `rows`, `opening`, `closing` | `{"status", "reason", "computed_closing", "chain_breaks", ...}` |

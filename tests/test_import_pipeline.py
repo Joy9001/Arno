@@ -373,7 +373,9 @@ async def test_a_failed_check_writes_no_rows(ledger):
 
     await submit_parser_code(ledger, import_ids=[row["id"]], code=broken)
     detail = await import_payload(ledger, row["id"])
-    assert detail["status"] == "failed"
+    # A failed submit mid-run leaves the card parsing and records why; the run's end is terminal.
+    assert detail["status"] == "parsing"
+    assert detail["reason"] == "DISCREPANCY"
     assert detail["lines"] == []
     with pytest.raises(InvalidLedgerError):
         await commit_import(ledger, row["id"])

@@ -60,6 +60,7 @@ logger = logging.getLogger("fin_agent.agent.parser")
 
 PASSWORD_WAIT_SECONDS = 600.0
 PARSE_USAGE_LIMITS = UsageLimits(request_limit=60, tool_calls_limit=120)
+MAX_DOC_PAGES = 150
 
 
 class ImportReport(BaseModel):
@@ -137,7 +138,8 @@ one task mixes banks, submit one script for each bank's imports.
 1. `open_imports()`. A locked file returns `locked: true`; call
    `wait_for_password(import_id)` and wait. The user types the password on the import card, not
    in chat, and you never see it. A result with no `import_id` means the turn has no statement
-   files: finish with `blocked` and say the upload did not arrive.
+   files: finish with `blocked` and say the upload did not arrive. A file with `too_large: true`
+   is not read: finish with `blocked` and pass its reason on unchanged.
 2. `saved_parser(import_id)`. If it returns a script, replay it first: pass its text to
    `submit_parser(import_ids, code)`.
 3. If the gate fails, read the reason and repair the script. Submit again. Only repair the
@@ -151,21 +153,44 @@ one task mixes banks, submit one script for each bank's imports.
 |---|---|
 | `doc_info(import_id)` | kind, pages, text-layer pages, sheets, delimiter, encoding |
 | `doc_words(import_id, page)` | positioned words on one page |
-| `doc_words_range(import_id, first, last)` | many pages at once; use past three pages |
+| `doc_words_range(import_id, first, last)` | many pages at once, any range; prefer one call |
 | `doc_cells(import_id, sheet=0)` | a sheet's rows by index or name |
 | `ledger_opening(import_id, account=None)` | the ledger balance before this statement, or null |
 | `check_statement(import_id, rows, opening, closing, headers=...)` | preview the checks |
 | `transcribe_page(import_id, page)` | an isolated VISION call for a page with no text layer |
 | `suggest_transfers(import_id, suggestions)` | suggest moves between the user's own accounts |
 
-Text formats arrive as one-line cells.
+Text formats arrive as one-line cells. Every host call, and every nested call inside a script, uses
+one step, so one `doc_words_range` costs less than many single-page reads.
 
-The helper block is prepended automatically. `money`, `money_float`, `to_iso`, `date_any`,
-`serial_to_iso`, `lines_of`, `join`, `line_text`, and `find_col` are available. Use integer
-paise, not `round(x, 2)`, which differs from CPython in Monty.
+The helper block is prepended to the script you submit, and only to it. There, `money`,
+`money_float`, `to_iso`, `date_any`, `serial_to_iso`, `lines_of`, `join`, `line_text`, and
+`find_col` are available. An exploration script does not have them: define what it needs, or test
+the helpers by submitting. Use integer paise, not `round(x, 2)`, which differs from CPython in
+Monty.
 
-Scripts use `await` for every host call and keyword arguments, for example
-`rows = await doc_cells(import_id="imp_1", sheet=0)`.
+Scripts call every host function with `await`. Exploration scripts and the script you submit call
+them the same way, for example `words = await doc_words(import_id="imp_1", page=0)`. The submitted
+script runs on one import at a time, so it may omit `import_id`. It gets no other variables: no
+`files`, no `imports`, and no `import_id` global. It reads the pages itself, and its last
+expression is the result dict:
+
+```python
+# Read every page and build the rows
+rows = []
+for page in range((await doc_info())["pages"]):
+    for line in lines_of(await doc_words(page)):
+        cells = [word["text"] for word in line]
+        rows.append({"date": to_iso(cells[0]), "description": join(line), "debit": 0,
+                     "credit": 0})
+{"accounts": [{"name": "SBI savings", "headers": [...], "rows": rows}]}
+```
+
+That is the shape, not a finished parser: the checks say what to fix once it runs.
+
+Start every script you run with one comment line saying what it is for, in plain words, for
+example `# Read the header rows on page 1`. Keep it under 80 characters. It is shown to the user
+as your note.
 
 `transcribe_page` returns `{"is_statement", "opening_paise", "closing_paise", "rows", "note"}`,
 where each row has `date`, `description`, `debit_paise`, `credit_paise`, `balance_paise`, and
@@ -262,6 +287,22 @@ async def _data(conn: Connection, import_id: str) -> tuple[str, bytes]:
     if row is None:
         raise ValueError(f"Import {import_id} has no stored statement file")
     return str(row["id"]), bytes(row["data"])
+
+
+async def _too_large(conn: Connection, import_id: str, doc: Doc) -> dict[str, Any] | None:
+    """A PDF past MAX_DOC_PAGES is not read: mark it failed and say how to split it."""
+    if doc.kind != "pdf":
+        return None
+    pages = doc.page_count()
+    if pages <= MAX_DOC_PAGES:
+        return None
+    reason = (
+        f"This statement has {pages} pages; one import reads at most {MAX_DOC_PAGES}. "
+        "Download it from your bank in shorter date ranges, such as one quarter at a time, "
+        "and upload each one."
+    )
+    await _set_status(conn, import_id, "failed", reason=reason)
+    return {"too_large": True, "pages": pages, "reason": reason}
 
 
 async def _load_doc(ctx: RunContext[AgentDeps], import_id: str) -> Doc:
@@ -428,6 +469,19 @@ async def open_imports(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
                     )
                 continue
             doc = docs[0]
+            too_large = await _too_large(conn, row["id"], doc)
+            if too_large:
+                opened.append(
+                    {
+                        "import_id": row["id"],
+                        "kind": doc.kind,
+                        "locked": False,
+                        "institution": None,
+                        "variant": None,
+                        **too_large,
+                    }
+                )
+                continue
             info = await _context(conn, row, doc)
             await _set_status(conn, row["id"], "parsing")
             await set_progress(conn, row["id"], "reading the statement")
@@ -453,6 +507,10 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
         if exc.code not in ("password_required", "wrong_password"):
             return {"status": "timed_out", "reason": f"could not open the file: {exc.code}"}
     else:
+        async with connect() as conn:
+            too_large = await _too_large(conn, import_id, docs[0])
+        if too_large:
+            return {"status": "failed", **too_large}
         ctx.deps.parse_docs[import_id] = docs[0]
         async with connect() as conn:
             await _set_status(conn, import_id, "parsing", reason=None)
@@ -477,6 +535,10 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
                     reason="That password didn't open the file. Try again.",
                 )
                 await set_progress(conn, import_id, "waiting for the password")
+    async with connect() as conn:
+        too_large = await _too_large(conn, import_id, docs[0])
+    if too_large:
+        return {"status": "failed", **too_large}
     await _store_unlocked(attachment_id, data, docs)
     ctx.deps.parse_docs[import_id] = docs[0]
     async with connect() as conn:
@@ -671,10 +733,11 @@ async def submit_parser_code(
                 )
             else:
                 reason = gate.get("reason") or "the checks did not pass"
+                # A repair is still in flight, so the card stays parsing; the run's end decides.
                 await _set_status(
                     conn,
                     import_id,
-                    "needs_input" if reason in INPUT_REASONS else "failed",
+                    "needs_input" if reason in INPUT_REASONS else "parsing",
                     reason=reason,
                 )
             return {
@@ -726,7 +789,7 @@ async def submit_parser_code(
             await _set_status(
                 conn,
                 import_id,
-                "needs_input" if reason in INPUT_REASONS else "failed",
+                "needs_input" if reason in INPUT_REASONS else "parsing",
                 reason=reason,
                 check_result=check,
             )

@@ -439,8 +439,6 @@ class Doc:
         first, last = int(first), int(last)
         if last < first:
             raise DocError("bad_range", "last is before first")
-        if last - first > 50:
-            raise DocError("bad_range", "at most 50 pages at once")
         return [self.words(page) for page in range(first, min(last, self.page_count()) + 1)]
 
     def page_count(self) -> int:

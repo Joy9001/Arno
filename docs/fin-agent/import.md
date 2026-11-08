@@ -46,8 +46,10 @@ Each stage works as follows:
    ID: the parser's first tool reads the turn's files from the host. One upload is one task, so 12 monthly PDFs from a new bank get one parser, written once
    and replayed on the rest, with no two runs racing to save it.
 2. **Open.** The subagent's first tool creates the import rows, so the card appears within seconds.
-   The reader finds each file's type from its contents. If a file is locked, the import card shows a
-   password field, and the subagent calls `wait_for_password`, a host tool that waits on the vault.
+   The reader finds each file's type from its contents. A PDF with more than 150 pages isn't read:
+   the card asks you to download it in shorter date ranges, one quarter at a time, and upload each
+   one. If a file is locked, the import card shows a password field, and the subagent calls
+   `wait_for_password`, a host tool that waits on the vault.
    The password goes over REST into the vault, stays in memory, is never stored, and never reaches
    either model or the chat. It doesn't go through `ask_parent`: a question there can reach the main
    agent while you're chatting, and the password must never be asked for in chat.
@@ -61,8 +63,11 @@ Each stage works as follows:
    itself as often as it likes ([`tools.md`](tools.md#parser-subagent-functions)). A page with no
    text layer goes to the `VISION` model.
 4. **The gate** (described later). `submit_parser` reruns the script from its text in a fresh
-   sandbox, runs the checks, and replays it on every stored statement from that bank. A failure
-   returns the reason to the subagent as the tool result, and it repairs. Only a pass moves the
+   sandbox. That sandbox holds the same host functions and nothing else—no `files`, no `imports`,
+   no document already open—so the script reads its pages itself and ends with the result. The gate
+   runs the checks and replays the script on every stored statement from that bank. A failure
+   returns the reason to the subagent as the tool result, and it repairs; the card stays in
+   `parsing` meanwhile, because the end of the run sets the terminal status. Only a pass moves the
    import to review.
 5. **Ask or report.** A fact the file can't give—which account, an opening balance that isn't
    printed—goes up through `ask_parent`. The main agent answers from the ledger when it can and asks
