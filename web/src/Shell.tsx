@@ -17,11 +17,12 @@ import { ASK_EVENT, ATTACH_EVENT } from "./ask";
 import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
 import { EvidencePanel } from "./EvidencePanel";
-import { EVIDENCE_EVENT } from "./evidence";
+import { EVIDENCE_EVENT, PLANNER_EVENT } from "./evidence";
 import { NAVIGATE_EVENT, UserContext, type PageId } from "./nav";
 import { Orb } from "./Orb";
 import { ActivityPage, type ActivityTab } from "./pages/Activity";
 import { MoneyPage, type MoneyTab } from "./pages/Money";
+import { PlannerPanel } from "./panels/Planner";
 import { RecapsPage } from "./pages/Recaps";
 import { SettingsPanel } from "./panels/Settings";
 import type { ProjectionPayload } from "./projection";
@@ -136,11 +137,13 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [attachments, setAttachments] = useState<{ id: number; files: File[] } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
+  const [planner, setPlanner] = useState<ProjectionPayload | null>(null);
   const compact = useCompactViewport();
   const talking = page === "ask" || page === "chats";
 
   const go = useCallback((next: PageId, sub?: string) => {
     setEvidence(null);
+    setPlanner(null);
     setPage(next);
     if (!(next === "activity" && sub?.startsWith("imports/"))) {
       setFocusImportId(null);
@@ -265,10 +268,21 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     const onEvidence = (event: Event) => {
       const payload = (event as CustomEvent<ProjectionPayload>).detail;
       if (!payload || !Array.isArray(payload.curve)) return;
+      setPlanner(null);
       setEvidence(payload);
     };
+    const onPlanner = (event: Event) => {
+      const payload = (event as CustomEvent<ProjectionPayload>).detail;
+      if (!payload || !Array.isArray(payload.curve)) return;
+      setEvidence(null);
+      setPlanner(payload);
+    };
     window.addEventListener(EVIDENCE_EVENT, onEvidence);
-    return () => window.removeEventListener(EVIDENCE_EVENT, onEvidence);
+    window.addEventListener(PLANNER_EVENT, onPlanner);
+    return () => {
+      window.removeEventListener(EVIDENCE_EVENT, onEvidence);
+      window.removeEventListener(PLANNER_EVENT, onPlanner);
+    };
   }, []);
 
   useEffect(() => {
@@ -297,6 +311,10 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     void refreshUnread();
   }
 
+  const plannerPanel = planner ? (
+    <PlannerPanel key={JSON.stringify(planner.hypothetical ?? null)} seed={planner} onClose={() => setPlanner(null)} />
+  ) : null;
+
   const evidencePanel = evidence ? (
     <EvidencePanel
       payload={evidence}
@@ -313,6 +331,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     />
   ) : null;
 
+  const canvasPanel = plannerPanel ?? evidencePanel;
   const current = PAGES.find((item) => item.id === page) ?? NAV[0];
 
   return (
@@ -370,7 +389,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           <div
             className={talking ? "talk" : "talk talk-hidden"}
             data-mode={page === "chats" ? "chats" : "ask"}
-            data-canvas={evidencePanel && !compact ? "open" : undefined}
+            data-canvas={canvasPanel && !compact ? "open" : undefined}
             hidden={!talking}
           >
             <Assistant
@@ -394,7 +413,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               onEvidence={setEvidence}
             />
             <AnimatePresence initial={false}>
-              {talking && !compact && evidencePanel && (
+              {talking && !compact && canvasPanel && (
                 <motion.aside
                   key="canvas"
                   className="canvas"
@@ -404,7 +423,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
                   exit={{ opacity: 0, x: 16 }}
                   transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  {evidencePanel}
+                  {canvasPanel}
                 </motion.aside>
               )}
             </AnimatePresence>
@@ -440,8 +459,15 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           {page === "settings" && <SettingsPanel onSignOut={() => void signOut()} />}
         </div>
 
-        {compact && evidencePanel && (
-          <Dialog.Root open onOpenChange={(open) => !open && setEvidence(null)}>
+        {compact && canvasPanel && (
+          <Dialog.Root
+            open
+            onOpenChange={(open) => {
+              if (open) return;
+              setEvidence(null);
+              setPlanner(null);
+            }}
+          >
             <Dialog.Portal>
               <Dialog.Overlay className="dialog-overlay sheet-overlay" />
               <Dialog.Content className="sheet-dialog evidence-sheet" aria-describedby={undefined}>
@@ -454,7 +480,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
                   hasBackground={false}
                   className="sheet-theme"
                 >
-                  {evidencePanel}
+                  {canvasPanel}
                 </Theme>
               </Dialog.Content>
             </Dialog.Portal>

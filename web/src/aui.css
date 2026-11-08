@@ -410,27 +410,15 @@
 .aui-chat .aui-welcome {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  align-items: center;
   padding: 4px 2px 18px;
-}
-
-.aui-chat .aui-welcome h3 {
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.aui-welcome-copy {
-  max-width: 62ch;
-  color: var(--muted-foreground);
-  font-size: 14px;
-  line-height: 1.5;
 }
 
 .aui-starters {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   margin-top: 6px;
 }
 

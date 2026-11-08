@@ -225,7 +225,7 @@ h3 {
   opacity: 0.32;
 }
 
-.ask-title {
+.aui-chat .ask-title {
   max-width: 17ch;
   margin: 26px 0 6px;
   font-size: clamp(34px, 4.2vw, 58px);
@@ -235,12 +235,12 @@ h3 {
   text-wrap: balance;
 }
 
-.ask-title span {
+.aui-chat .ask-title span {
   color: var(--sub);
   font-weight: 500;
 }
 
-.aui-starters {
+.aui-chat .aui-starters {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
@@ -1324,4 +1324,472 @@ h3 {
 .tl-zero {
   stroke: rgba(246, 247, 240, 0.28);
   stroke-dasharray: 2 5;
+}
+
+.aui-chat .aui-starters .aui-starter {
+  width: auto;
+}
+
+/* On the agent's home the composer is the centrepiece. */
+.talk[data-mode="ask"] [data-slot="aui_composer-shell"] {
+  border: 1.5px solid rgba(212, 255, 58, 0.25);
+  border-radius: 30px;
+  padding: 14px 12px 10px 16px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5), 0 0 0 6px rgba(212, 255, 58, 0.04);
+}
+
+.talk[data-mode="ask"] .aui-composer-input {
+  font-size: 19px;
+}
+
+/* The agent's mark beside each reply: a still orb. */
+[data-slot="aui_assistant-message-root"]::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: -40px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 34%),
+    radial-gradient(circle at 70% 82%, rgba(14, 15, 12, 0.45), transparent 55%),
+    var(--iris);
+  box-shadow: 0 0 14px rgba(212, 255, 58, 0.18);
+}
+
+@media (max-width: 900px) {
+  [data-slot="aui_assistant-message-root"]::before {
+    display: none;
+  }
+}
+
+.aui-chat [data-slot="aui_assistant-message-text"] {
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+/* Chat or Flow */
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 99px;
+  background: var(--surface);
+}
+
+.view-toggle button {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  color: var(--sub);
+  font: 700 13px/1 var(--font);
+  cursor: pointer;
+}
+
+.view-toggle button.on {
+  background: var(--text);
+  color: #111;
+}
+
+/* Flow --------------------------------------------------------------------------------------- */
+
+.flow {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 28px 32px 48px;
+  background: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1.2px) 0 0 / 22px 22px;
+}
+
+.flow-turn {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.8fr) minmax(220px, 1fr) minmax(240px, 1.1fr);
+  gap: 64px;
+  align-items: center;
+  margin-bottom: 44px;
+}
+
+.flow-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.flow-node {
+  position: relative;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+.flow-node p {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.flow-k {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--sub);
+  font: 600 11px/1.2 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.flow-q {
+  border: 0;
+  background: var(--you);
+}
+
+.flow-q .flow-k {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.flow-q p {
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.flow-tool .flow-k i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+}
+
+.flow-tool.running .flow-k i {
+  background: var(--sun);
+  box-shadow: 0 0 8px var(--sun);
+}
+
+.flow-tool.failed .flow-k i {
+  background: var(--red);
+  box-shadow: none;
+}
+
+.flow-node p.flow-detail {
+  color: #cfd1c8;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.flow-a.verdict {
+  border: 0;
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.flow-a.verdict .flow-k {
+  color: rgba(17, 18, 9, 0.62);
+}
+
+.flow-a strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.045em;
+}
+
+/* Wires: each node reaches into the 64px gutter; a bus joins the tool column. */
+.flow-q::after,
+.flow-tool::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -33px;
+  width: 32px;
+  height: 2px;
+  background: linear-gradient(90deg, #2b59ff, #1ec8a5);
+}
+
+.flow-tool::before,
+.flow-a::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -33px;
+  width: 32px;
+  height: 2px;
+  background: linear-gradient(90deg, #1ec8a5, #d4ff3a);
+}
+
+.flow-tools::before,
+.flow-tools::after {
+  content: "";
+  position: absolute;
+  top: 24px;
+  bottom: 24px;
+  width: 2px;
+  background: linear-gradient(#2b59ff, #d4ff3a);
+}
+
+.flow-tools::before {
+  left: -34px;
+}
+
+.flow-tools::after {
+  right: -34px;
+}
+
+.flow-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  color: var(--sub);
+}
+
+@media (max-width: 900px) {
+  .flow-turn {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .flow-q::after,
+  .flow-tool::after,
+  .flow-tool::before,
+  .flow-a::before,
+  .flow-tools::before,
+  .flow-tools::after {
+    display: none;
+  }
+}
+
+/* Canvas: planner and evidence --------------------------------------------------------------- */
+
+.canvas .evidence {
+  padding: 20px 24px;
+}
+
+.planner {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 22px 26px 28px;
+}
+
+.planner-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.planner-head h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.planner-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.planner-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.planner-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  color: var(--sub);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.planner-field > span:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.planner-field b {
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.planner-field input[type="range"] {
+  width: 100%;
+  height: 10px;
+  margin: 4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #2b59ff, #1ec8a5, #d4ff3a);
+  appearance: none;
+  accent-color: var(--lime);
+}
+
+.planner-field input[type="range"]::-webkit-slider-thumb {
+  width: 26px;
+  height: 26px;
+  border: 5px solid var(--lime);
+  border-radius: 50%;
+  background: var(--text);
+  appearance: none;
+  cursor: grab;
+}
+
+.planner-field input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 5px solid var(--lime);
+  border-radius: 50%;
+  background: var(--text);
+}
+
+.planner-ticks {
+  display: flex;
+  justify-content: space-between;
+  color: var(--ter);
+  font-size: 11px;
+}
+
+.planner-ticks i {
+  font-style: normal;
+}
+
+.planner-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+
+.planner-seg button {
+  flex: 1;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--sub);
+  font: 700 13px/1 var(--font);
+  cursor: pointer;
+}
+
+.planner-seg button.on {
+  background: var(--text);
+  color: #111;
+}
+
+.planner-seg.small button {
+  flex: none;
+}
+
+.planner-gate {
+  color: var(--sun);
+  font-weight: 600;
+}
+
+.planner-result {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.planner-gauge {
+  position: relative;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  width: 190px;
+  height: 190px;
+  margin: 0 auto;
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, var(--surface) 78%, transparent 79%),
+    conic-gradient(#2b59ff, #1ec8a5, #d4ff3a var(--arc), var(--surface-2) var(--arc));
+}
+
+.planner-gauge strong {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.06em;
+}
+
+.planner-gauge span {
+  max-width: 120px;
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.planner-verdict {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  text-align: center;
+}
+
+.planner-verdict span {
+  display: block;
+  margin-top: 6px;
+  color: var(--sub);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.planner-facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.planner-facts div {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: var(--surface-2);
+}
+
+.planner-facts dt {
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.planner-facts dd {
+  margin: 4px 0 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.planner-foot {
+  margin: 0;
+  color: var(--ter);
+  font-size: 12px;
+  font-weight: 600;
 }

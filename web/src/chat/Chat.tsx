@@ -20,6 +20,7 @@ import {
   useRemoteThreadListRuntime,
   type AssistantClient,
 } from "@assistant-ui/react";
+import { FlowView } from "./FlowView";
 import { useChatRuntime } from "@assistant-ui/ai-sdk";
 import {
   APICallError,
@@ -205,12 +206,14 @@ function ChatHeader({
   title,
   running,
   historyControl,
+  viewControl,
   onNew,
   onClose,
 }: {
   title: string;
   running: boolean;
   historyControl: ReactNode;
+  viewControl?: ReactNode;
   onNew: () => void;
   onClose?: () => void;
 }) {
@@ -224,6 +227,7 @@ function ChatHeader({
         </p>
       </div>
       <div className="assistant-actions">
+        {viewControl}
         {historyControl}
         <Button
           type="button"
@@ -686,6 +690,7 @@ function ChatShell({
   const historyLoading = useAuiState((state) => state.thread.isLoading);
   const firstThreadId = useAuiState((state) => state.threads.threadIds[0]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [view, setView] = useState<"chat" | "flow">("chat");
   const [query, setQuery] = useState("");
   const [listError, setListError] = useState<string | null>(null);
   const pendingPhoto = useRef(new Map<string, File>());
@@ -999,6 +1004,30 @@ function ChatShell({
         <ChatHeader
           title={title ?? (activeId ? "Conversation" : "New conversation")}
           running={running}
+          viewControl={
+            messageCount > 0 ? (
+              <div className="view-toggle" role="radiogroup" aria-label="Conversation view">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={view === "chat"}
+                  className={view === "chat" ? "on" : ""}
+                  onClick={() => setView("chat")}
+                >
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={view === "flow"}
+                  className={view === "flow" ? "on" : ""}
+                  onClick={() => setView("flow")}
+                >
+                  Flow
+                </button>
+              </div>
+            ) : null
+          }
           historyControl={
             listInline ? null : (
             <Popover.Trigger asChild>
@@ -1048,6 +1077,8 @@ function ChatShell({
                 onNew();
               }}
             />
+          ) : view === "flow" && messageCount > 0 ? (
+            <FlowView />
           ) : (
             <Thread components={THREAD_COMPONENTS} autoFocus={false} />
           )}

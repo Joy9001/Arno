@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { FileSearch } from "lucide-react";
+import { FileSearch, SlidersHorizontal } from "lucide-react";
+import { openPlanner } from "./evidence";
 import {
   Area,
   CartesianGrid,
@@ -487,14 +488,22 @@ export function ProjectionCard({
           {!gated && floorSet && floorText ? ` · floor ${floorText}` : ""}
         </span>
         {onEvidence && (
-          <button
-            type="button"
-            className="ghost small"
-            onClick={() => onEvidence(payload)}
-          >
-            <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
-            Sources and assumptions
-          </button>
+          <span className="receipt-actions">
+            {!gated && (
+              <button type="button" className="ghost small" onClick={() => openPlanner(payload)}>
+                <SlidersHorizontal size={14} strokeWidth={2} aria-hidden="true" />
+                Planner
+              </button>
+            )}
+            <button
+              type="button"
+              className="ghost small"
+              onClick={() => onEvidence(payload)}
+            >
+              <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
+              Sources and assumptions
+            </button>
+          </span>
         )}
       </div>
 
