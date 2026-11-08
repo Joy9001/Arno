@@ -181,6 +181,38 @@ async def test_a_model_failure_saves_a_plain_note(app, db, monkeypatch):
         )
 
 
+async def test_a_failed_turn_saves_only_itself_not_the_history_before_it(app, db, monkeypatch):
+    calls = {"n": 0}
+
+    async def first_ok_then_broken(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield "The first answer."
+            return
+        raise RuntimeError("provider dropped the stream")
+        yield ""  # pragma: no cover
+
+    model = FunctionModel(stream_function=first_ok_then_broken)
+    async with live_server(app, monkeypatch, model) as client:
+        for message, text in (("msg-a", "first"), ("msg-b", "second")):
+            async with client.stream(
+                "POST", "/api/chat", json=_body("thread-twice", message, text)
+            ) as response:
+                [line async for line in response.aiter_lines()]
+        thread = (await client.get("/api/threads/thread-twice/messages")).json()
+
+    texts = [
+        part.get("text")
+        for message in thread["messages"]
+        for part in message.get("parts", [])
+        if part.get("type") == "text"
+    ]
+    # The failure saved its own turn only: the first answer is not copied a second time.
+    assert texts.count("The first answer.") == 1
+    history = await db.fetchval("SELECT model_history FROM conversations WHERE id = 'thread-twice'")
+    assert json.dumps(history).count("The first answer.") == 1
+
+
 async def test_crash_recovery_leaves_a_note_and_clears_the_marker(db):
     await db.execute(
         "INSERT INTO conversations (id, title, run_started_at, active_run_id) "

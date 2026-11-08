@@ -326,6 +326,21 @@ class TurnManager:
         turn.ending = ending
         turn.saved = True
 
+    async def _save_failed(self, turn: ChatTurn, captured: list[Any], *, note: str) -> None:
+        """Save what a failed run added, never the history it started from.
+
+        The captured list is every message of the run, history included, so it is cut to this
+        turn the same way a finished turn is.
+        """
+        messages = list(captured)
+        await self._save(
+            turn,
+            _this_turn(messages, turn.history, turn.run_id, turn.message_id),
+            ending="failed",
+            note=note,
+            all_messages=messages or None,
+        )
+
     async def _run(self, turn: ChatTurn, adapter: VercelAIAdapter[Any, Any]) -> None:
         captured: list[Any] = []
         captured_ref = [captured]
@@ -391,10 +406,9 @@ class TurnManager:
                         WHERE id = 1
                         """
                     )
-                await self._save(
+                await self._save_failed(
                     turn,
-                    list(captured_ref[0]),
-                    ending="failed",
+                    captured_ref[0],
                     note="Couldn't answer: the model failed. Nothing was lost; try again.",
                 )
                 await turn.push(
@@ -407,10 +421,9 @@ class TurnManager:
                 )
         except asyncio.CancelledError:
             if not turn.saved:
-                await self._save(
+                await self._save_failed(
                     turn,
-                    list(captured_ref[0]),
-                    ending="failed",
+                    captured_ref[0],
                     note="The turn stopped before it could save normally.",
                 )
             raise
@@ -428,10 +441,9 @@ class TurnManager:
                     type(exc).__name__[:200],
                 )
             if not turn.saved:
-                await self._save(
+                await self._save_failed(
                     turn,
-                    list(captured_ref[0]),
-                    ending="failed",
+                    captured_ref[0],
                     note="Couldn't answer: the model failed. Nothing was lost; try again.",
                 )
             await turn.push(

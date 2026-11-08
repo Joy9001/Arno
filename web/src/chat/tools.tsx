@@ -197,6 +197,7 @@ export const CHAT_TOOLKIT = defineToolkit({
   preference: { type: "backend", render: knownTool("preference") },
   import_document: { type: "backend", render: knownTool("import_document") },
   undo: { type: "backend", render: knownTool("undo") },
-  delegate_task: { type: "backend", render: DelegateTaskCard },
+  // The task card stands on its own, not folded into the reasoning trace.
+  delegate_task: { type: "backend", display: "standalone", render: DelegateTaskCard },
   write_plan: { type: "backend", render: WritePlan },
 });
