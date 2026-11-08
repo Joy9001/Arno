@@ -336,7 +336,8 @@ h3 {
 
 .ask-card-fig {
   margin-top: auto;
-  font-size: 46px;
+  font-size: clamp(28px, 2.9vw, 46px);
+  white-space: nowrap;
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.05em;
@@ -344,7 +345,8 @@ h3 {
 }
 
 .ask-card-fig.small {
-  font-size: 30px;
+  font-size: clamp(22px, 2vw, 30px);
+  white-space: normal;
   letter-spacing: -0.035em;
 }
 
