@@ -25,6 +25,7 @@ from fin_agent.agent import capabilities as caps
 from fin_agent.agent.cards import cards_from_messages, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import save_records
+from fin_agent.agent.models import opencode_conversation
 from fin_agent.agent.number_check import check_messages
 from fin_agent.db.conn import connect
 
@@ -364,7 +365,7 @@ class TurnManager:
                     else []
                 )
                 bound = self.tasks.bind() if self.tasks is not None else nullcontext()
-                with bound:
+                with bound, opencode_conversation(turn.thread_id):
                     stream = adapter.run_stream(
                         message_history=turn.history,
                         conversation_id=turn.thread_id,

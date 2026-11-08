@@ -10,8 +10,11 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any
 
 from pydantic_ai.exceptions import ModelContextWindowExceededError
@@ -25,6 +28,18 @@ DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_FALLBACK_CONTEXT_WINDOW = 32_000
 
 logger = logging.getLogger("fin_agent.agent.models")
+_conversation_session: ContextVar[str | None] = ContextVar("opencode_conversation", default=None)
+
+
+@contextmanager
+def opencode_conversation(conversation_id: str) -> Iterator[None]:
+    """Bind a stable, header-safe session to this conversation's async task."""
+    digest = sha256(conversation_id.encode("utf-8")).hexdigest()
+    token = _conversation_session.set(f"fin-agent-{digest}")
+    try:
+        yield
+    finally:
+        _conversation_session.reset(token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,16 +95,17 @@ def build_model(config: RoleConfig, *, session_id: str | None = None) -> Model:
     """One code path for local and cloud: an OpenAI-compatible endpoint."""
     http_client = None
     if "opencode.ai" in config.base_url:
-        # OpenCode Go asks clients to identify themselves and keep a stable session for routing
-        # and prompt caching. Override OPENCODE_SESSION_ID to share one across restarts.
+        # A shared client serves many turns, so select the session per request, not per client.
         import httpx2
 
         session = session_id or os.environ.get("OPENCODE_SESSION_ID") or f"fin-agent-{uuid.uuid4()}"
+
+        async def set_session(request: httpx2.Request) -> None:
+            request.headers["x-opencode-session"] = _conversation_session.get() or session
+
         http_client = httpx2.AsyncClient(
-            headers={
-                "User-Agent": "fin-agent/0.1",
-                "x-opencode-session": session,
-            }
+            headers={"User-Agent": "fin-agent/0.1"},
+            event_hooks={"request": [set_session]},
         )
     if "ollama" in config.base_url or os.environ.get("CHAT_PROVIDER", "").lower() == "ollama":
         from pydantic_ai.providers.ollama import OllamaProvider
