@@ -31,6 +31,9 @@ let nextAttachment = 1;
 let nextImport = 1;
 let nextMessage = 1;
 let contractAnswer = null;
+// The synthetic parser run behind the "statement" scenario: running, paused, or done.
+let taskState = "running";
+const TASK_ID = "5ad1e0c0ffee4b6e9e7a3c2d1f0b9a87";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -660,6 +663,71 @@ const EMPTY_ANSWER_CARD = {
   results: [EMPTY_RESULT],
 };
 
+
+function fixtureTask() {
+  const at = (minute, second) => `2026-11-08T22:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}+00:00`;
+  const step = (id, stage, title, status, calls, extra = {}) => ({
+    id, stage, segment: 0, title, status, calls, error: null, purpose: null, reasoning: null, code: null,
+    started_at: at(36, 44), seconds: 4, ...extra,
+  });
+  const fn = (name, count = 1, failed = false) => ({ name, count, failed });
+  const paused = taskState === "paused";
+  const steps = [
+    step("s1", "open", "Opened the statement files and waited for your password", "ok", [fn("open_imports"), fn("wait_for_password")], { seconds: 38, purpose: "Open this turn's files" }),
+    step("s2", "saved", "Read the file’s details and looked for a saved parser", "ok", [fn("doc_info"), fn("saved_parser")], { seconds: 2 }),
+    step("s3", "read", "Read 2 pages", "ok", [fn("doc_words", 2)], { purpose: "Find the column headers and where the rows start", reasoning: "The header row sits on page 1; rows start below the account summary." }),
+    step("s4", "read", "Read a range of pages", "failed", [fn("doc_words_range", 1, true)], { seconds: 1, error: "last is before first" }),
+    step("s5", "read", paused ? "Read 74 pages" : "Read 50 pages", paused ? "ok" : "running", [fn("doc_words", paused ? 74 : 50)], { seconds: 58, purpose: "Collect every page so the parser can be tested on all of them" }),
+  ];
+  if (paused) {
+    steps.push(
+      step("s6", "submit", "Submitted the parser · attempt 1", "failed", [fn("submit_parser")], {
+        seconds: 6, error: "NameError: name 'files' is not defined", purpose: "Build the final SBI parser from the line grouping that worked",
+        code: "# Build the final SBI parser from the line grouping that worked\nfor f in files:\n    pages = await doc_words_range(import_id=f[\"import_id\"], first=0, last=73)\n    rows = parse_pages(pages)",
+      }),
+      step("s7", "submit", "Submitted the parser · attempt 2", "cut_off", [fn("submit_parser")], { seconds: null, purpose: "Try again without the files list" }),
+    );
+  }
+  const stageStatus = (key) => {
+    const order = ["open", "saved", "read", "submit", "moves", "report"];
+    const reached = paused ? 3 : 2;
+    const i = order.indexOf(key);
+    if (i < reached) return "done";
+    if (i === reached) return paused ? "stopped" : "running";
+    return paused ? "not_reached" : "todo";
+  };
+  const titles = [["open", "Open the statement"], ["saved", "Check for a saved parser"], ["read", "Read the statement and write a parser"], ["submit", "Submit the parser and fix it until the checks pass"], ["moves", "Suggest moves between your own accounts"], ["report", "Report back"]];
+  const stages = titles.map(([key, title]) => {
+    const own = steps.filter((item) => item.stage === key);
+    return { key, title, status: stageStatus(key), steps: own.map((item) => item.id), seconds: own.reduce((sum, item) => sum + (item.seconds ?? 0), 0) };
+  });
+  const used = paused ? 120 : 96;
+  return {
+    task_id: TASK_ID,
+    agent_name: "parser",
+    state: paused ? "finished" : "running",
+    outcome: paused ? "budget" : null,
+    started_at: Date.now() / 1000 - (paused ? 260 : 134),
+    finished_at: paused ? Date.now() / 1000 : null,
+    report: null,
+    question: null,
+    plan: [],
+    imports: [{
+      import_id: "imp_fixture_sbi", filename: "AccountStatement_Asha.pdf",
+      status: paused ? "paused" : "parsing",
+      reason: paused ? "The parser ran out of steps. Continue to give it another 120." : null,
+      progress: paused ? null : "reading page 52 of 74", counts: null,
+    }],
+    messages: [],
+    model: "deepseek-v4.1-flash",
+    run: {
+      stages, steps,
+      segments: [{ run_id: "run_a", used, limit: 120, started_at: at(36, 41), ended_at: paused ? at(40, 59) : null, stop: paused ? "budget" : null }],
+      used, limit: 120, stop: paused ? "budget" : null,
+    },
+  };
+}
+
 function seedShowcase() {
   const now = Date.now();
   const history = [
@@ -778,6 +846,27 @@ function chunksForScenario(thread, scenario, text, messageId, approved = true) {
         approvalDescriptor: { prompt: "Transfer ₹12,500 to Asha from HDFC Savings?" },
       },
       { type: "finish", finishReason: "tool-calls" },
+    ];
+  }
+
+  if (scenario === "statement") {
+    return [
+      start,
+      { type: "text-start", id: "txt_stmt" },
+      { type: "text-delta", id: "txt_stmt", delta: "Got it. The parser is reading it now; follow each step from the card." },
+      { type: "text-end", id: "txt_stmt" },
+      {
+        type: "tool-input-available",
+        toolCallId: "call_parse",
+        toolName: "delegate_task",
+        input: { agent: "parser", task: "Import the statement files from this turn.", background: true },
+      },
+      {
+        type: "tool-output-available",
+        toolCallId: "call_parse",
+        output: `Task ${TASK_ID} is running in the background. You'll get its report when it finishes.`,
+      },
+      { type: "finish", finishReason: "stop" },
     ];
   }
 
@@ -1104,6 +1193,7 @@ async function handleChat(req, res) {
       "composed",
       "malformed-answer",
       "empty-answer",
+      "statement",
     ].includes(scenario)
       ? scenario
       : {
@@ -1261,6 +1351,15 @@ const server = createServer(async (req, res) => {
     return;
   }
   // Test-only: exercise Python-produced cards through the real chat stream and saved history.
+  if (path === "/__fixture/task" && req.method === "POST") {
+    taskState = String((await readJson(req)).state ?? "running");
+    json(res, 200, { ok: true });
+    return;
+  }
+  if (path === `/api/tasks/${TASK_ID}`) {
+    json(res, 200, fixtureTask());
+    return;
+  }
   if (path === "/__fixture/answer" && req.method === "POST") {
     contractAnswer = await readJson(req);
     json(res, 200, {ok: true});

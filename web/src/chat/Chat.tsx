@@ -337,7 +337,7 @@ type AssistantProps = {
   focusThreadId?: string | null;
   focusMessageId?: string | null;
   onFocusHandled?: () => void;
-  seed?: { id: number; text: string } | null;
+  seed?: { id: number; text: string; send?: boolean } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
   attachments?: { id: number; files: File[] } | null;
@@ -639,7 +639,7 @@ type ChatShellProps = {
   surfaceErrors: Record<string, string | undefined>;
   focusMessage: { id: string; token: number } | null;
   bootError: string | null;
-  seed?: { id: number; text: string } | null;
+  seed?: { id: number; text: string; send?: boolean } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
   attachments?: { id: number; files: File[] } | null;
@@ -783,6 +783,10 @@ function ChatShell({
     if (!seed?.text) return;
     aui.composer.setText(seed.text);
     onSeedConsumed?.();
+    if (seed.send) {
+      aui.composer.send();
+      return;
+    }
     requestAnimationFrame(() => {
       document.querySelector<HTMLTextAreaElement>(".aui-composer-input")?.focus();
     });

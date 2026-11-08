@@ -51,7 +51,7 @@ function StatusBadge({ status }: { status: ImportRecord["status"] }) {
   const tone =
     status === "committed"
       ? "good"
-      : ["review", "parsing", "needs_password", "needs_input"].includes(status)
+      : ["review", "parsing", "needs_password", "needs_input", "paused"].includes(status)
         ? "warn"
         : status === "failed" || status === "not_a_statement"
           ? "danger"

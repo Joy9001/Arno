@@ -1,0 +1,780 @@
+/* Subagent run: the canvas panel (A), the full page (B), and the chat card. */
+
+.run-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.run-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 28px 32px;
+}
+
+.run-head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-close {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.run-close:hover {
+  background: var(--surface-3);
+}
+
+.run-head h2 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+
+.run-head.compact h2 {
+  font-size: 21px;
+}
+
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 6px 0 0;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.run-model {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.run-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 800;
+}
+
+.run-state.live {
+  color: var(--lime);
+}
+
+.run-state.live::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 0 4px rgba(212, 255, 58, 0.18);
+}
+
+.run-state.paused {
+  color: var(--due);
+}
+
+.run-state.failed {
+  color: var(--red);
+}
+
+.run-state.done {
+  color: var(--green);
+}
+
+/* How the run ended, in plain words, with what to do next. */
+.run-ending {
+  margin-bottom: 16px;
+  padding: 18px 18px 16px;
+  border-radius: 22px;
+}
+
+.run-ending.paused {
+  background: rgba(255, 106, 43, 0.08);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 106, 43, 0.35);
+}
+
+.run-ending.failed {
+  background: rgba(255, 90, 79, 0.08);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 90, 79, 0.35);
+}
+
+.run-ending h3 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.run-ending p {
+  margin: 6px 0 0;
+  color: #e9e2db;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Step budget */
+.run-budget {
+  margin-bottom: 14px;
+}
+
+.run-budget-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.run-budget-row b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-budget-track {
+  height: 8px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-2);
+}
+
+.run-budget-track i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--lime);
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.run-budget.warn .run-budget-track i {
+  background: var(--due);
+}
+
+.run-budget.over .run-budget-track i {
+  background: var(--red);
+}
+
+.run-now {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--surface-2);
+  font-weight: 700;
+}
+
+/* The spine: the parser's stages, with each step under the stage it belongs to. */
+.run-spine,
+.run-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.run-stage {
+  position: relative;
+  padding: 0 0 8px 40px;
+}
+
+.run-stage::before {
+  content: "";
+  position: absolute;
+  top: 32px;
+  bottom: 0;
+  left: 13px;
+  width: 2px;
+  background: var(--surface-3);
+}
+
+.run-stage:last-child::before {
+  display: none;
+}
+
+.run-stage.done::before {
+  background: rgba(212, 255, 58, 0.35);
+}
+
+.run-node {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.run-stage.done .run-node {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.run-stage.running .run-node {
+  background: transparent;
+}
+
+.run-stage.stopped .run-node {
+  background: var(--red);
+  color: #111;
+}
+
+.run-stage.todo .run-node,
+.run-stage.not_reached .run-node {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--surface-3);
+}
+
+.run-stage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 32px;
+  padding-top: 5px;
+}
+
+.run-stage-head b {
+  font-size: 15.5px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.run-stage.todo .run-stage-head b,
+.run-stage.not_reached .run-stage-head b {
+  color: var(--sub);
+  font-weight: 700;
+}
+
+.run-stage-head span {
+  margin-left: auto;
+  color: var(--sub);
+  font: 600 12px var(--mono);
+  white-space: nowrap;
+}
+
+.run-steps {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+
+.run-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 10px;
+  padding: 11px 12px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.run-step[tabindex] {
+  cursor: pointer;
+}
+
+.run-step[tabindex]:hover {
+  background: var(--surface-2);
+}
+
+.run-step:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 2px;
+}
+
+.run-step.selected {
+  box-shadow: inset 0 0 0 1.5px var(--lime);
+}
+
+.run-step.failed,
+.run-step.cut_off {
+  background: rgba(255, 90, 79, 0.07);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 90, 79, 0.3);
+}
+
+.run-step.failed.selected,
+.run-step.cut_off.selected {
+  box-shadow: inset 0 0 0 1.5px var(--lime);
+}
+
+.run-step-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--lime);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.run-step.failed .run-step-icon,
+.run-step.cut_off .run-step-icon {
+  background: var(--red);
+  color: #111;
+}
+
+.run-step-title {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.run-step-time {
+  padding-top: 2px;
+  color: var(--sub);
+  font: 600 12px var(--mono);
+  white-space: nowrap;
+}
+
+.run-calls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+}
+
+.run-step .run-calls,
+.run-step-error,
+.run-note,
+.run-reasoning {
+  grid-column: 2 / 4;
+}
+
+.run-fn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: #dfe2d6;
+  font: 500 11.5px/1.3 var(--mono);
+}
+
+.run-fn b {
+  color: var(--lime);
+  font-weight: 600;
+}
+
+.run-fn.failed {
+  background: rgba(255, 90, 79, 0.14);
+  color: #ffb3ad;
+}
+
+.run-fn.failed b {
+  color: var(--red);
+}
+
+.run-step-error {
+  color: #ffb3ad;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.run-note {
+  color: var(--sub);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.run-note em {
+  margin-right: 6px;
+  color: var(--ter);
+  font-style: normal;
+  font-weight: 700;
+}
+
+.run-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.run-fold svg {
+  transition: transform 0.2s ease;
+}
+
+.run-fold[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.run-reasoning-text {
+  display: block;
+  margin-top: 6px;
+  color: #c9ccbf;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.run-continued {
+  padding: 6px 4px;
+  color: var(--lime);
+  font: 600 11.5px var(--mono);
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+
+/* Direction B: the full page. */
+.run-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.run-page .area-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-back {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.run-crumb {
+  color: var(--sub);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.run-page-cols {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 520px) minmax(0, 1fr);
+  gap: 28px;
+  min-height: 0;
+  padding: 8px 32px 24px;
+}
+
+.run-page-main,
+.run-page-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.run-page-main .run-head {
+  margin-bottom: 16px;
+}
+
+.run-page-detail {
+  padding: 22px 24px;
+  border-radius: 28px;
+  background: var(--surface);
+}
+
+.run-detail h3 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.run-detail h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 8px;
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.run-detail .run-calls {
+  margin-top: 10px;
+}
+
+.run-tag {
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.run-quote {
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: #c9ccbf;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.run-code,
+.run-result {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  border-radius: 16px;
+  font: 500 12.5px/1.65 var(--mono);
+  white-space: pre;
+}
+
+.run-code {
+  background: #0b0c09;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: #cfd3c6;
+}
+
+.run-result {
+  background: rgba(255, 90, 79, 0.08);
+  color: #ffcdc8;
+  white-space: pre-wrap;
+}
+
+.run-thinking {
+  margin-top: 20px;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.run-thinking summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.run-thinking p {
+  margin: 8px 0 0;
+  color: #c9ccbf;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.run-pager {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.run-loading {
+  padding: 24px 32px;
+}
+
+/* The chat card: one line of host status and a way into the run. */
+.run-card {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  max-width: 560px;
+  margin: 6px 0;
+  padding: 14px 16px;
+  border-radius: 22px;
+  background: var(--surface);
+}
+
+.run-card.paused {
+  background: rgba(255, 106, 43, 0.07);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 106, 43, 0.3);
+}
+
+.run-card.failed {
+  background: rgba(255, 90, 79, 0.07);
+  box-shadow: inset 0 0 0 1.5px rgba(255, 90, 79, 0.3);
+}
+
+.run-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 14px;
+}
+
+.run-card-glyph {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  font-weight: 800;
+}
+
+.run-card.paused .run-card-glyph {
+  background: var(--due);
+  color: #111;
+}
+
+.run-card.failed .run-card-glyph {
+  background: var(--red);
+  color: #111;
+}
+
+.run-card.done .run-card-glyph {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.run-card-body {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.run-card-body b {
+  display: block;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.run-card-body span {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-card.paused .run-card-body span {
+  color: #ffc7a8;
+}
+
+.run-card.failed .run-card-body span {
+  color: #ffb3ad;
+}
+
+.run-card-bar {
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-3);
+}
+
+.run-card-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--lime);
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.run-card-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Chat styles reset plain buttons, so the card's primary action names its colors. */
+.run-primary {
+  min-height: 34px;
+  padding: 7px 15px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font-size: 13.5px;
+  font-weight: 800;
+}
+
+.run-primary:hover {
+  background: var(--lime-hover);
+}
+
+.run-card-extra {
+  display: grid;
+  gap: 10px;
+  font-size: 13.5px;
+}
+
+@media (max-width: 1180px) {
+  .run-page-cols {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .run-page-main,
+  .run-page-detail {
+    min-height: auto;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 640px) {
+  .run-scroll {
+    padding: 14px 16px 28px;
+  }
+
+  .run-page-cols {
+    padding: 8px 16px 24px;
+  }
+
+  .run-crumb,
+  .run-open-label {
+    display: none;
+  }
+
+  .run-card-row {
+    flex-wrap: wrap;
+  }
+
+  .run-card-actions {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-budget-track i,
+  .run-card-bar i,
+  .run-fold svg {
+    transition: none;
+  }
+}

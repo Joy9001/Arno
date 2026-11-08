@@ -65,9 +65,33 @@ Each view has one main job. Tables below describe what earns space and the main 
 | **Jobs** | Operational job status and recent results, grouped as advanced. | Inspect available job details and use only existing supported controls. |
 | **Backups** | Backup status, last successful backup and recovery guidance; distinguish unavailable status from no backup. | Follow the supported backup/recovery action or instructions. |
 | **Export** | Explain the available data formats and when to use each, with the required re-authentication made clear. | Choose and download CSV, JSON or database export. |
-| **Agent memory** | An orb introduction and saved preferences with preference chips, readable content, source, scope, and enabled state. The current API does not expose separate fact or rule types. | Search, edit, turn off/on, or confirm permanent deletion; provide a clear empty state. |
+| **Agent memory** | An orb introduction and saved memories, each a preference, fact, or rule with a kind chip the owner can change, plus readable content, source, scope, and enabled state. | Search, edit, turn off/on, or confirm permanent deletion; provide a clear empty state. |
 | **Sign in** | Fin-Agent name, a short explanation, one prominent passkey action, and relevant setup/recovery link. | Sign in with a passkey; offer actionable error recovery. |
 | **Set up** | Explain device enrollment, origin/token requirements and what happens next in a short sequence. | Enroll a passkey; report expiry or origin problems without losing the user's place. |
+
+## Subagent runs
+
+A subagent's work never fills the chat. The thread shows one run card: a host-made status line,
+a progress bar while it runs, the unlock and account actions it needs, **Watch** or **Open run**,
+and **Continue** when the run is paused. The run itself opens in two places:
+
+- **The canvas** beside the conversation (a sheet at 1180px and narrower), for following a live run.
+- **A full page** at `#activity/run/<task>`, with one step in detail: what it means, the agent's
+  note, the script, the result, and folded reasoning.
+
+Both read `GET /api/tasks/{id}`, whose `run` field is built from the step store
+(`src/fin_agent/api/run_view.py`):
+
+| Part | Source | Rule |
+| --- | --- | --- |
+| Stages | The parser's fixed order of work | A step joins the stage of the host calls it made, so the spine is right even when the model never updates its own plan. |
+| Step title | The host calls inside the script, counted | Host-made: "Read 74 pages", "Submitted the parser · attempt 2". Never model text. |
+| Agent's note | The script's first `#` line | Labeled as the agent's own words. |
+| Status | The step's events and result | A script that returned an error is failed; a step the run ended inside is cut off. |
+| Step budget | Calls started in each run | One meter per run; a continued task shows a divider and a fresh budget. |
+| Ending | The task outcome and import status | Paused (out of steps) offers Continue; failed names the reason; both say nothing reached the ledger. |
+
+Mocks `23` to `27` in `.impeccable/mocks/final/` are the reference.
 
 ## Responsive and state rules
 

@@ -295,6 +295,7 @@ export type ImportRecord = {
     | "review"
     | "not_a_statement"
     | "failed"
+    | "paused"
     | "committed"
     | "rejected";
   attachment: {
@@ -488,6 +489,54 @@ export type ImportTask = {
   plan: ImportTaskPlanItem[];
   imports: ImportTaskImport[];
   messages: ImportTaskMessage[];
+  model: string | null;
+  run: RunView;
+};
+
+export type RunStepStatus = "ok" | "failed" | "running" | "cut_off";
+
+export type RunStep = {
+  id: string;
+  stage: RunStage["key"];
+  segment: number;
+  /** Host-made from the calls the script made. */
+  title: string;
+  status: RunStepStatus;
+  calls: { name: string; count: number; failed: boolean }[];
+  error: string | null;
+  /** The script's first comment line: the agent's own words. */
+  purpose: string | null;
+  /** The model's reasoning for this step: its own words. */
+  reasoning: string | null;
+  code: string | null;
+  started_at: string;
+  seconds: number | null;
+};
+
+export type RunStage = {
+  key: "open" | "saved" | "read" | "submit" | "moves" | "report";
+  title: string;
+  status: "done" | "running" | "stopped" | "todo" | "not_reached";
+  steps: string[];
+  seconds: number;
+};
+
+export type RunSegment = {
+  run_id: string;
+  used: number;
+  limit: number;
+  started_at: string;
+  ended_at: string | null;
+  stop: "budget" | "error" | null;
+};
+
+export type RunView = {
+  stages: RunStage[];
+  steps: RunStep[];
+  segments: RunSegment[];
+  used: number;
+  limit: number;
+  stop: "budget" | "error" | null;
 };
 
 export type ParserVersion = {

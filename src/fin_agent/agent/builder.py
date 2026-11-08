@@ -71,6 +71,17 @@ Uploaded statement files
   `delegate_task(..., resume=<task_id>)` when the user asks to continue. Never ask for a
   statement password in chat; it goes on the import card.
 """
+    paused = getattr(getattr(ctx, "deps", None), "paused_parser_tasks", ())
+    if paused and not read_only:
+        ids = ", ".join(f"`{task_id}`" for task_id in paused)
+        text += f"""
+
+Paused statement import
+- The parser stopped on its step budget in this thread: task {ids}. Nothing reached the ledger.
+  When the user asks to continue, resume it with
+  `delegate_task("parser", "Continue reading the statement.", resume="<task_id>",
+  background=True)` and end your turn. Each resume has a fresh step budget.
+"""
     return text + READ_ONLY_SUFFIX if read_only else text
 
 

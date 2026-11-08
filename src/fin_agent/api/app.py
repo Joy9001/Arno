@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 
 import asyncpg
 from fastapi import FastAPI, Request
@@ -30,6 +31,8 @@ from fin_agent.db.conn import connect
 from fin_agent.db.migrate import run_migrations
 from fin_agent.db.pre_migration import dump_before_migrating
 from fin_agent.importers.seed_rules import ensure_seed_rules
+from fin_agent.importers.task_status import reconcile as reconcile_imports
+from fin_agent.importers.task_status import settle_imports
 from fin_agent.jobs.runner import JobRunner, recover_interrupted_jobs
 from fin_agent.jobs.schedules import ensure_builtin_schedules, sync_scheduled_questions
 from fin_agent.ledger.accounts import ensure_system_accounts
@@ -101,10 +104,18 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 - the app still serves read-only panels
         logger.exception("subagent store pool did not start")
     step_store = PostgresStepStore(tasks_pool) if tasks_pool is not None else None
-    tasks = DelegationTasks(directory=app.state.settings.tasks_dir, step_store=step_store)
+    tasks = DelegationTasks(
+        directory=app.state.settings.tasks_dir, step_store=step_store, observer=_settle_parser
+    )
     parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)
     app.state.tasks = tasks
     async with tasks.opened():
+        try:
+            async with connect() as conn:
+                if settled := await reconcile_imports(conn, tasks.records):
+                    logger.warning("settled %d import(s) left parsing", settled)
+        except Exception:  # noqa: BLE001 - a stale status must not stop the app
+            logger.exception("import status reconcile failed")
         app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
         app.state.turns = TurnManager(app.state.agent, tasks=tasks)
         app.state.jobs = JobRunner()
@@ -123,6 +134,18 @@ async def lifespan(app: FastAPI):
                 if tasks_pool is not None:
                     await tasks_pool.close()
                 shutdown_observability()
+
+
+async def _settle_parser(event: Any) -> None:
+    """When a parser task ends, give its still-parsing imports their terminal state."""
+    task = event.task
+    if event.event is not None or task.agent_name != "parser" or task.status != "finished":
+        return
+    try:
+        async with connect() as conn:
+            await settle_imports(conn, task_id=task.id, outcome=task.outcome, output=task.output)
+    except Exception:  # noqa: BLE001 - an observer that raises would abort the parent run
+        logger.exception("could not settle imports for task %s", task.id)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

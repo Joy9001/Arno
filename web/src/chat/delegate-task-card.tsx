@@ -1,133 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowUpRight, KeyRound, RotateCcw } from "lucide-react";
-import type {
-  ThreadAssistantMessagePart,
-  ThreadMessage,
-  ThreadUserMessagePart,
-  ToolCallMessagePartProps,
-  ToolCallMessagePartStatus,
-} from "@assistant-ui/react";
+import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
-import { TaskCard, type TaskPart } from "@/components/assistant-ui/elements/task-card.aui";
 import { api, errorMessage } from "../api";
-import type {
-  AccountSummary,
-  ImportTask,
-  ImportTaskImport,
-  ImportTaskMessage,
-} from "../types";
+import { askAgent } from "../ask";
+import { openRun } from "../evidence";
+import { Orb } from "../Orb";
+import { CONTINUE_PROMPT, runEnding, useRun } from "../run/runData";
+import type { AccountSummary, ImportTask, ImportTaskImport } from "../types";
 import { displayText } from "./display-text";
 import { ChatToolFallback } from "./parts";
 
 const RECEIPT = /^Task ([0-9a-f]{32}) is running in the background\./;
 const ACCOUNT_QUESTION = "Which account is this statement for?";
-const STOPPED_NOTE = "The parser stopped before it finished. Ask me to continue.";
 const ACCOUNT_KINDS = new Set(["bank", "card", "wallet"]);
-const SETTLED = new Set([
-  "review",
-  "committed",
-  "rejected",
-  "failed",
-  "not_a_statement",
-]);
-
-const IMPORT_LABEL: Record<string, string> = {
-  parsing: "Reading",
-  needs_password: "Locked",
-  needs_input: "Waiting on you",
-  review: "Ready for review",
-  not_a_statement: "Not a statement",
-  failed: "Failed",
-  committed: "Committed",
-  rejected: "Rejected",
-};
-
-/** Host-made: the arguments the bound card reads its label and meta from. */
-const CARD_ARGS = { description: "Reading your statement", agent: "parser" };
-
-function importLabel(status: string, stopped: boolean): string {
-  if (stopped) return "Stopped";
-  return IMPORT_LABEL[status] ?? status.replaceAll("_", " ");
-}
-
-function taskStatus(task: ImportTask): ToolCallMessagePartStatus {
-  if (task.state === "running") {
-    return task.question
-      ? { type: "requires-action", reason: "interrupt" }
-      : { type: "running" };
-  }
-  // A run that crashed after its imports reached review still did its work.
-  const done =
-    task.imports.length > 0 &&
-    task.imports.every((item) => item.status === "review" || item.status === "committed");
-  if (task.outcome === "ok" || done) return { type: "complete" };
-  if (task.outcome === "cancelled") return { type: "incomplete", reason: "cancelled" };
-  return { type: "incomplete", reason: "error" };
-}
-
-function threadMessage(message: ImportTaskMessage): ThreadMessage {
-  const createdAt = new Date(message.createdAt);
-  if (message.role === "user") {
-    return {
-      id: message.id,
-      role: "user",
-      createdAt,
-      content: message.content as ThreadUserMessagePart[],
-      attachments: [],
-      metadata: { custom: {} },
-    };
-  }
-  return {
-    id: message.id,
-    role: "assistant",
-    createdAt,
-    status: { type: "complete", reason: "stop" },
-    content: message.content as ThreadAssistantMessagePart[],
-    metadata: {
-      unstable_state: null,
-      unstable_annotations: [],
-      unstable_data: [],
-      steps: [],
-      custom: {},
-    },
-  };
-}
-
-function useImportTask(taskId: string) {
-  const [task, setTask] = useState<ImportTask | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [retry, setRetry] = useState(0);
-  const reload = useCallback(() => setRetry((value) => value + 1), []);
-
-  useEffect(() => {
-    let active = true;
-    let timer: number | undefined;
-    const load = async () => {
-      try {
-        const next = await api<ImportTask>(`/api/tasks/${encodeURIComponent(taskId)}`);
-        if (!active) return;
-        setTask(next);
-        setError(null);
-        if (next.state === "running") {
-          timer = window.setTimeout(() => void load(), 2000);
-        }
-      } catch (caught) {
-        if (!active) return;
-        setError(errorMessage(caught));
-      }
-    };
-    void load();
-    return () => {
-      active = false;
-      if (timer) window.clearTimeout(timer);
-    };
-  }, [taskId, retry]);
-
-  return { task, error, reload };
-}
-
 function LockedImport({
   importId,
   onUnlocked,
@@ -332,81 +220,93 @@ function ImportLink({ item }: { item: ImportTaskImport }) {
   );
 }
 
-function TaskResult({ task }: { task: ImportTask }) {
-  if (task.state === "running") return undefined;
-  const stopped = task.imports.some((item) => !SETTLED.has(item.status));
-  if (task.imports.length === 0 && !stopped) return undefined;
+function ReviewLinks({ task }: { task: ImportTask }) {
+  const ready = task.imports.filter((item) => item.status === "review");
+  if (!ready.length) return null;
   return (
-    <div className="flex flex-col gap-1.5">
-      {task.imports.map((item) => (
-        <div key={item.import_id} className="flex items-center justify-between gap-2">
-          <span className="min-w-0 truncate">
-            {displayText(item.filename ?? "Statement")} ·{" "}
-            {importLabel(item.status, !SETTLED.has(item.status))}
-          </span>
-          {item.status === "review" && <ImportLink item={item} />}
-        </div>
+    <div className="flex flex-wrap gap-2">
+      {ready.map((item) => (
+        <ImportLink key={item.import_id} item={item} />
       ))}
-      {stopped && <span>{STOPPED_NOTE}</span>}
     </div>
   );
 }
 
-function ImportTaskCard({ taskId, toolCallId, toolName, argsText }: {
-  taskId: string;
-  toolCallId: string;
-  toolName: string;
-  argsText: string;
-}) {
-  const { task, error, reload } = useImportTask(taskId);
-  const part: TaskPart = {
-    type: "tool-call",
-    toolCallId,
-    toolName,
-    args: CARD_ARGS,
-    argsText,
-    status: task
-      ? taskStatus(task)
-      : error
-        ? { type: "incomplete", reason: "error" }
-        : { type: "running" },
-    messages: task ? task.messages.map(threadMessage) : [],
-    ...(task && {
-      timing: {
-        startedAt: task.started_at * 1000,
-        ...(task.finished_at !== null && { completedAt: task.finished_at * 1000 }),
-      },
-    }),
-  };
-  const waiting = task ? <TaskActions task={task} taskId={taskId} reload={reload} /> : undefined;
-
+function RunCardBody({ task, taskId, reload }: { task: ImportTask; taskId: string; reload: () => void }) {
+  const ending = runEnding(task);
+  const stage = task.run.stages.findIndex((item) => item.status === "running");
+  const pct = task.state === "running" ? Math.max(6, ((stage + 1) / task.run.stages.length) * 100) : 100;
+  const glyph =
+    ending.tone === "live" ? (
+      <Orb size={38} live thinking />
+    ) : (
+      <span className="run-card-glyph" aria-hidden="true">
+        {ending.tone === "done" ? "✓" : "!"}
+      </span>
+    );
+  const waiting =
+    Boolean(task.question) || task.imports.some((item) => item.status === "needs_password");
   return (
-    <TaskCard
-      part={part}
-      actions={
-        waiting || error ? (
-          <div className="flex flex-col gap-2">
-            {waiting}
-            {error && (
-              <div className="aui-import-error" role="alert">
-                <span>{error}</span>
-                <Button type="button" variant="link" size="xs" className="h-auto" onClick={reload}>
-                  <RotateCcw size={13} aria-hidden="true" />
-                  Retry
-                </Button>
-              </div>
-            )}
+    <div className={`run-card ${ending.tone}`}>
+      <div className="run-card-row">
+        {glyph}
+        <div className="run-card-body">
+          <b>Reading your statement</b>
+          <span>{displayText(ending.tone === "failed" ? ending.body : ending.line)}</span>
+          {ending.tone === "live" && (
+            <div className="run-card-bar" aria-hidden="true">
+              <i style={{ width: `${pct}%` }} />
+            </div>
+          )}
+        </div>
+        <div className="run-card-actions">
+          {ending.tone === "paused" && (
+            <button
+              type="button"
+              className="run-primary"
+              onClick={() => askAgent(CONTINUE_PROMPT, { send: true })}
+            >
+              Continue
+            </button>
+          )}
+          <button type="button" className="pill-button" onClick={() => openRun(taskId)}>
+            {ending.tone === "live" ? "Watch" : "Open run"}
+          </button>
+        </div>
+      </div>
+      {(waiting || task.imports.some((item) => item.status === "review")) && (
+        <div className="run-card-extra">
+          {waiting && <TaskActions task={task} taskId={taskId} reload={reload} />}
+          <ReviewLinks task={task} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ImportTaskCard({ taskId }: { taskId: string }) {
+  const { task, error, reload } = useRun(taskId);
+  if (task) return <RunCardBody task={task} taskId={taskId} reload={reload} />;
+  return (
+    <div className="run-card">
+      {error ? (
+        <div className="aui-import-error" role="alert">
+          <span>{error}</span>
+          <Button type="button" variant="link" size="xs" className="h-auto" onClick={reload}>
+            <RotateCcw size={13} aria-hidden="true" />
+            Retry
+          </Button>
+        </div>
+      ) : (
+        <div className="run-card-row">
+          <Orb size={38} live thinking />
+          <div className="run-card-body">
+            <b>Reading your statement</b>
+            <span>Starting…</span>
           </div>
-        ) : undefined
-      }
-      result={
-        task ? (
-          <TaskResult task={task} />
-        ) : error ? (
-          error
-        ) : undefined
-      }
-    />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -415,12 +315,5 @@ export function DelegateTaskCard(props: ToolCallMessagePartProps) {
   const receipt =
     typeof props.result === "string" ? RECEIPT.exec(props.result) : null;
   if (receipt === null) return <ChatToolFallback {...props} />;
-  return (
-    <ImportTaskCard
-      taskId={receipt[1]!}
-      toolCallId={props.toolCallId}
-      toolName={props.toolName}
-      argsText={JSON.stringify(CARD_ARGS)}
-    />
-  );
+  return <ImportTaskCard taskId={receipt[1]!} />;
 }

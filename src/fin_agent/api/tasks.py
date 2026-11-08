@@ -23,7 +23,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from fin_agent.agent.parser import PARSE_USAGE_LIMITS
 from fin_agent.api.deps import Database, current_session
+from fin_agent.api.run_view import run_view
 from fin_agent.importers.layouts import rollback_layout
 
 router = APIRouter(prefix="/api", tags=["tasks"], dependencies=[Depends(current_session)])
@@ -191,6 +193,7 @@ async def task_payload(
     conn: Database, tasks: Any, task_id: str, *, answered: str | None = None
 ) -> dict[str, Any]:
     record = _record(tasks, task_id)
+    history = tasks.history(task_id)
     pending = tasks.pending_question(task_id)
     if pending is not None and pending[0] != answered:
         question = {"question_id": pending[0], "text": pending[1]}
@@ -210,7 +213,16 @@ async def task_payload(
         "question": question,
         "plan": await _plan(conn, task_id),
         "imports": await _imports(conn, task_id, running=record.status == "running"),
-        "messages": _transcript(record, tasks.history(task_id)),
+        "messages": _transcript(record, history),
+        "model": record.model,
+        "run": await run_view(
+            conn,
+            task_id=task_id,
+            messages=history,
+            running=record.status == "running",
+            outcome=record.outcome,
+            limit=PARSE_USAGE_LIMITS.tool_calls_limit or 0,
+        ),
     }
 
 

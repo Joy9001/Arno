@@ -27,6 +27,8 @@ class AgentDeps:
     # Server-set: statement attachment IDs uploaded with this turn. Filenames stay out: they are
     # outside text and these go into the instructions. No import starts here.
     statement_attachments: tuple[str, ...] = ()
+    # Server-set: parser tasks in this thread that stopped on their step budget and can continue.
+    paused_parser_tasks: tuple[str, ...] = ()
     # Opened statement documents for the parser subagent, keyed by import id. Lives for one run.
     parse_docs: dict[str, Any] = field(default_factory=dict)
     # Charts and cards a tool produced inside this turn, for the post-run extractor.

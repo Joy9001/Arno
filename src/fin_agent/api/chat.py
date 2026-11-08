@@ -201,6 +201,21 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
     return StreamingResponse(iterator, media_type="text/event-stream", headers=headers)
 
 
+def _paused_parser_tasks(app: Any, thread_id: str) -> tuple[str, ...]:
+    """This thread's parser tasks that stopped on their step budget, so a reply can continue one."""
+    tasks = getattr(app.state, "tasks", None)
+    if tasks is None:
+        return ()
+    return tuple(
+        record.id
+        for record in tasks.records.values()
+        if record.conversation_id == thread_id
+        and record.agent_name == "parser"
+        and record.status == "finished"
+        and record.outcome == "budget"
+    )
+
+
 @router.post("/chat")
 async def post_chat(request: Request, session: Session, preparation: PreparationDep) -> Response:
     # `preparation` is a function-scoped dependency: it holds the thread's preparation guard
@@ -374,6 +389,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         capture_kind=capture_kind,
         capture_ref=capture_ref,
         statement_attachments=statement_attachments,
+        paused_parser_tasks=_paused_parser_tasks(app, thread_id),
     )
     adapter = await VercelAIAdapter.from_request(
         request,

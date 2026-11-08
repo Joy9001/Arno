@@ -394,6 +394,11 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     keeps the scheduled work. Redesigned November 7, 2026 ([`import.md`](import.md#the-pipeline)).
 23. The parser subagent: its instructions, host functions, `ask_parent`, and `Planning`; parser
     versions saved after commit, statement files kept, and every new version replayed on them.
+    Every run is visible step by step: each script is titled from the host calls it made, with
+    the script's first comment line shown as the agent's own note. A run that uses its 120-step
+    budget pauses instead of failing, and Continue resumes the same task with a fresh budget.
+    One import reads at most 150 PDF pages; a longer statement is downloaded in shorter date
+    ranges. Decided November 9, 2026 ([run view](web-interface-design.md#subagent-runs)).
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)

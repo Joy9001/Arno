@@ -7,6 +7,13 @@ export function openEvidence(payload: ProjectionPayload): void {
   window.dispatchEvent(new CustomEvent<ProjectionPayload>(EVIDENCE_EVENT, { detail: payload }));
 }
 
+export const RUN_EVENT = "fin-agent:run";
+
+/** Open a subagent run on the canvas beside the conversation. */
+export function openRun(taskId: string): void {
+  window.dispatchEvent(new CustomEvent<string>(RUN_EVENT, { detail: taskId }));
+}
+
 export const PLANNER_EVENT = "fin-agent:planner";
 
 /** Open the purchase planner on the canvas, starting from this projection's purchase. */

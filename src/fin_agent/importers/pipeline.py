@@ -108,7 +108,8 @@ async def create_import(
         FROM imports i
         JOIN attachments a ON a.id = i.attachment_id
         WHERE a.sha256 = $1
-          AND i.status IN ('parsing', 'needs_password', 'needs_input', 'review', 'committed')
+          AND i.status IN ('parsing', 'needs_password', 'needs_input', 'paused', 'review',
+                           'committed')
         ORDER BY i.created_at DESC
         LIMIT 1
         """,

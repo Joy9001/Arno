@@ -6,7 +6,7 @@ Things left for you to run or decide. Each item has the exact steps. Run command
 ## 1. Rebuild the running app (do this first)
 
 The Docker app still serves an older build. Rebuilding ships the latest web fixes and applies any
-new migration (0017 memory kinds, once it is committed).
+new migrations (0017 memory kinds, 0018 paused imports).
 
 ```bash
 docker compose up -d --build api

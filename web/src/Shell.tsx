@@ -13,11 +13,12 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, errorMessage } from "./api";
-import { ASK_EVENT, ATTACH_EVENT } from "./ask";
+import { ASK_EVENT, ATTACH_EVENT, type AskDetail } from "./ask";
 import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
 import { EvidencePanel } from "./EvidencePanel";
-import { EVIDENCE_EVENT, PLANNER_EVENT } from "./evidence";
+import { EVIDENCE_EVENT, PLANNER_EVENT, RUN_EVENT } from "./evidence";
+import { RunPage, RunPanel } from "./run/Run";
 import { NAVIGATE_EVENT, UserContext, type PageId } from "./nav";
 import { Orb } from "./Orb";
 import { ActivityPage, type ActivityTab } from "./pages/Activity";
@@ -76,6 +77,7 @@ function readHash(): {
   thread: string | null;
   message: string | null;
   importId: string | null;
+  runId: string | null;
 } {
   const [rawPage, rawTab, rawMessage] = window.location.hash.slice(1).split("/");
   const legacyHome = rawPage === "home";
@@ -100,8 +102,14 @@ function readHash(): {
     THREAD_ID.test(rawMessage)
       ? rawMessage
       : null;
-  return { page, money, activity, thread, message, importId };
+  const runId =
+    page === "activity" && rawTab === "run" && rawMessage && TASK_ID.test(rawMessage)
+      ? rawMessage
+      : null;
+  return { page, money, activity, thread, message, importId, runId };
 }
+
+const TASK_ID = /^[0-9a-f]{32}$/;
 
 function openThreadDetail(detail: OpenThreadDetail): {
   thread: string;
@@ -133,17 +141,21 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const [focusImportId, setFocusImportId] = useState<string | null>(initial.importId);
   const [newChatSignal, setNewChatSignal] = useState(initial.page === "ask" ? 1 : 0);
-  const [seed, setSeed] = useState<{ id: number; text: string } | null>(null);
+  const [seed, setSeed] = useState<{ id: number; text: string; send?: boolean } | null>(null);
   const [attachments, setAttachments] = useState<{ id: number; files: File[] } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
   const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
   const [planner, setPlanner] = useState<ProjectionPayload | null>(null);
+  const [runTask, setRunTask] = useState<string | null>(null);
+  const [runPage, setRunPage] = useState<string | null>(initial.runId);
   const compact = useCompactViewport();
   const talking = page === "ask" || page === "chats";
 
   const go = useCallback((next: PageId, sub?: string) => {
     setEvidence(null);
     setPlanner(null);
+    setRunTask(null);
+    setRunPage(next === "activity" && sub?.startsWith("run/") ? sub.slice(4) : null);
     setPage(next);
     if (!(next === "activity" && sub?.startsWith("imports/"))) {
       setFocusImportId(null);
@@ -161,6 +173,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       setMoneyTab(next.money);
       setActivityTab(next.activity);
       setFocusImportId(next.importId);
+      setRunPage(next.runId);
       setEvidence(null);
       if (next.thread) {
         void threadExists(next.thread).then((exists) => {
@@ -241,8 +254,9 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   // Asking from a data page carries the question into the conversation.
   useEffect(() => {
     const onAsk = (event: Event) => {
-      const detail = (event as CustomEvent<string>).detail ?? "";
-      setSeed(detail ? { id: Date.now(), text: detail } : null);
+      const detail = (event as CustomEvent<AskDetail | string>).detail ?? "";
+      const ask = typeof detail === "string" ? { text: detail, send: false } : detail;
+      setSeed(ask.text ? { id: Date.now(), ...ask } : null);
       setFocusSignal((value) => value + 1);
       setEvidence(null);
       if (page !== "ask" && page !== "chats") go("chats");
@@ -269,19 +283,30 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       const payload = (event as CustomEvent<ProjectionPayload>).detail;
       if (!payload || !Array.isArray(payload.curve)) return;
       setPlanner(null);
+      setRunTask(null);
       setEvidence(payload);
     };
     const onPlanner = (event: Event) => {
       const payload = (event as CustomEvent<ProjectionPayload>).detail;
       if (!payload || !Array.isArray(payload.curve)) return;
       setEvidence(null);
+      setRunTask(null);
       setPlanner(payload);
+    };
+    const onRun = (event: Event) => {
+      const taskId = (event as CustomEvent<string>).detail;
+      if (!TASK_ID.test(taskId ?? "")) return;
+      setEvidence(null);
+      setPlanner(null);
+      setRunTask(taskId);
     };
     window.addEventListener(EVIDENCE_EVENT, onEvidence);
     window.addEventListener(PLANNER_EVENT, onPlanner);
+    window.addEventListener(RUN_EVENT, onRun);
     return () => {
       window.removeEventListener(EVIDENCE_EVENT, onEvidence);
       window.removeEventListener(PLANNER_EVENT, onPlanner);
+      window.removeEventListener(RUN_EVENT, onRun);
     };
   }, []);
 
@@ -331,7 +356,11 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     />
   ) : null;
 
-  const canvasPanel = plannerPanel ?? evidencePanel;
+  const runPanel = runTask ? (
+    <RunPanel key={runTask} taskId={runTask} onClose={() => setRunTask(null)} />
+  ) : null;
+
+  const canvasPanel = plannerPanel ?? evidencePanel ?? runPanel;
   const current = PAGES.find((item) => item.id === page) ?? NAV[0];
 
   return (
@@ -438,7 +467,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               }}
             />
           )}
-          {page === "activity" && (
+          {page === "activity" && runPage && <RunPage key={runPage} taskId={runPage} />}
+          {page === "activity" && !runPage && (
             <ActivityPage
               tab={activityTab}
               importId={focusImportId}
@@ -466,6 +496,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               if (open) return;
               setEvidence(null);
               setPlanner(null);
+              setRunTask(null);
             }}
           >
             <Dialog.Portal>

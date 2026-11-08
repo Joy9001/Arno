@@ -28,8 +28,8 @@
     </div></div>
     <div class="ag" style="margin-top:22px"><span class="orb" style="--s:30px"><i></i></span><div style="flex:1">
       <p class="say">The import stopped, and <b>nothing reached your ledger</b>. The parser used all 120 of its steps: reading the 74 pages one at a time took most of them, and its parser script failed three times before it could finish the checks.</p>
-      <p class="say" style="margin-top:10px">I can run it again with a bigger budget, or you can upload the CSV export from SBI, which reads in a single step.</p>
-      <div class="acts"><span class="btn lime">Run again</span><span class="btn">Upload a CSV</span><span class="btn ask">Why did it fail?</span></div>
+      <p class="say" style="margin-top:10px">Continue gives it another 120 steps from where it stopped, or you can upload the CSV export from SBI.</p>
+      <div class="acts"><span class="btn lime">Continue</span><span class="btn">Upload a CSV</span><span class="btn ask">Why did it fail?</span></div>
     </div></div>
   </div>
   <div class="comp"><p>Ask a follow-up…</p><div class="row"><span class="tool"><span data-icon="camera"></span></span><span class="tool"><span data-icon="mic"></span></span><span class="tool"><span data-icon="file"></span></span><span class="send">↑</span></div></div>
@@ -43,10 +43,10 @@
   </div></div>
 
   <div class="verdictbox">
-    <h3>Stopped: it ran out of steps</h3>
+    <h3>Paused: it ran out of steps</h3>
     <p>The parser has 120 steps per run. Reading 74 pages one at a time used 74 of them, and three parser attempts failed on the same mistake, so it never reached the checks.</p>
     <span class="safe">✓ Nothing was written to your ledger</span>
-    <div class="acts"><span class="btn lime">Run again with 240 steps</span><span class="btn">Upload a CSV</span><span class="btn ask">Ask why</span></div>
+    <div class="acts"><span class="btn lime">Continue · 120 more steps</span><span class="btn">Upload a CSV</span><span class="btn ask">Ask why</span></div>
   </div>
 
   <div class="budget over"><div class="row"><span>Step budget</span><span><b>120</b> of 120 used</span></div><div class="track"><i></i></div></div>
