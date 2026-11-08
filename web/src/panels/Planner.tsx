@@ -16,7 +16,7 @@ const METHODS: Array<{ id: Method; label: string }> = [
 ];
 const EMI_TENURES = [3, 6, 9, 12, 18, 24];
 const MAX_DAYS = 60;
-const VERDICT: Record<string, string> = { yes: "Yes", "yes-but": "Yes, with a change", no: "No" };
+const VERDICT: Record<string, string> = { yes: "Yes", "yes-but": "Yes, with some caution", no: "No" };
 
 type Purchase = { amount_paise?: number; date?: string; method?: string; emi_months?: number | null };
 

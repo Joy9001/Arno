@@ -25,7 +25,7 @@ type Turn = {
   running: boolean;
 };
 
-const VERDICT: Record<string, string> = { yes: "Yes", "yes-but": "Yes, with a change", no: "No" };
+const VERDICT: Record<string, string> = { yes: "Yes", "yes-but": "Yes, with some caution", no: "No" };
 
 function brief(value: unknown): string {
   if (value === undefined || value === null) return "";
