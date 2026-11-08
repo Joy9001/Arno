@@ -55,19 +55,32 @@
   min-width: 0;
 }
 
-.act-check {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: 0 0 3px;
-  font-size: 12.5px;
+/* Reversed movements: an icon toggle that sits with the filters it changes. */
+.act-toggle {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
   color: var(--sub);
-  white-space: nowrap;
 }
 
-.act-check input {
-  width: auto;
-  margin: 0;
+.act-toggle:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.act-toggle.on {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+
+.act-toolbar-actions .act-toggle {
+  flex: none;
 }
 
 .act-toolbar-actions {
@@ -705,10 +718,6 @@
   }
 
   .act-search {
-    flex-basis: 100%;
-  }
-
-  .act-check {
     flex-basis: 100%;
   }
 

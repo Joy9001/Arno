@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { formatDate, formatPaise, isoDate } from "../format";
 import type { Schedule, Upcoming, UpcomingEvent } from "../types";
 import { useApi } from "../useApi";
@@ -107,30 +108,93 @@ function EventRow({ event }: { event: UpcomingEvent }) {
   );
 }
 
-function ScheduleCalendar({ start, events }: { start: string; events: UpcomingEvent[] }) {
-  const today = isoDate(new Date());
-  const first = new Date(`${start}T00:00:00`);
+const LOOK_BACK = 7;
+const LOOK_AHEAD = 30;
+
+/**
+ * A week-wide strip: the last week (where a due may still need its payment matched) and the next
+ * 30 days. It scrolls a week at a time and opens on today.
+ */
+function ScheduleCalendar({ asOf, events }: { asOf: string; events: UpcomingEvent[] }) {
+  const strip = useRef<HTMLDivElement>(null);
+  const todayCell = useRef<HTMLDivElement>(null);
+  const first = new Date(`${asOf}T00:00:00`);
+  first.setDate(first.getDate() - LOOK_BACK);
+
+  useEffect(() => {
+    const list = strip.current;
+    const cell = todayCell.current;
+    if (list && cell) list.scrollLeft = cell.offsetLeft - list.offsetLeft;
+  }, [asOf]);
+
+  function page(direction: 1 | -1) {
+    const list = strip.current;
+    if (!list) return;
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    list.scrollBy({ left: direction * list.clientWidth, behavior: smooth ? "smooth" : "auto" });
+  }
+
   return (
-    <div className="schedule-calendar" role="region" aria-label="Next 30 days of schedules" tabIndex={0}>
-      {Array.from({ length: 30 }, (_, index) => {
-        const date = new Date(first);
-        date.setDate(first.getDate() + index);
-        const day = isoDate(date);
-        const scheduled = events.filter((event) => event.date === day);
-        return (
-          <div className={`schedule-day${day === today ? " today" : ""}`} key={day}>
-            <time dateTime={day}>{date.getDate()}<small>{date.toLocaleDateString("en-IN", { month: "short" })}</small></time>
-            {day === today && <span className="sr-only">Today.</span>}
-            <div className="schedule-day-marks">
-              {scheduled.slice(0, 3).map((event, eventIndex) => (
-                <span key={eventIndex} className={isIncoming(event.kind) ? "in" : "out"} title={event.name} />
-              ))}
+    <section className="schedule-calendar" aria-label="Schedules by day">
+      <div className="schedule-calendar-head">
+        <p className="moneyv-meta">
+          <span className="schedule-key in" aria-hidden="true" /> Incoming
+          <span className="schedule-key out" aria-hidden="true" /> Outgoing
+          <span className="schedule-calendar-range">· Last 7 days and next 30</span>
+        </p>
+        <div className="schedule-calendar-nav">
+          <button type="button" className="icon-pill" aria-label="Earlier days" onClick={() => page(-1)}>
+            <ChevronLeft size={16} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon-pill" aria-label="Later days" onClick={() => page(1)}>
+            <ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+      <div className="schedule-strip" ref={strip} role="list" tabIndex={0} aria-label="Days">
+        {Array.from({ length: LOOK_BACK + LOOK_AHEAD }, (_, index) => {
+          const date = new Date(first);
+          date.setDate(first.getDate() + index);
+          const day = isoDate(date);
+          const scheduled = events.filter((event) => event.date === day);
+          const isToday = day === asOf;
+          const past = day < asOf;
+          const showMonth = index === 0 || date.getDate() === 1;
+          return (
+            <div
+              key={day}
+              ref={isToday ? todayCell : undefined}
+              role="listitem"
+              className={`schedule-day${isToday ? " today" : ""}${past ? " past" : ""}`}
+            >
+              <time dateTime={day}>
+                <small>
+                  {isToday ? "Today" : date.toLocaleDateString("en-IN", { weekday: "short" })}
+                </small>
+                <b>{date.getDate()}</b>
+                {showMonth && <small>{date.toLocaleDateString("en-IN", { month: "short" })}</small>}
+              </time>
+              {scheduled.length > 0 ? (
+                <ul className="schedule-day-events">
+                  {scheduled.slice(0, 2).map((event, eventIndex) => (
+                    <li
+                      key={`${event.schedule_id ?? event.account_id}-${eventIndex}`}
+                      className={`${isIncoming(event.kind) ? "in" : "out"}${event.payment_status === "paid" ? " done" : ""}`}
+                    >
+                      <span>{event.name}</span>
+                      <span className="sr-only">, {paymentLabel(event)}</span>
+                    </li>
+                  ))}
+                  {scheduled.length > 2 && <li className="more">+{scheduled.length - 2} more</li>}
+                </ul>
+              ) : (
+                <span className="sr-only">Nothing scheduled</span>
+              )}
             </div>
-            <span className="sr-only">{scheduled.length ? scheduled.map((event) => event.name).join(", ") : "Nothing scheduled"}</span>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -271,8 +335,7 @@ export function SchedulesPanel() {
         </p>
       )}
 
-      <ScheduleCalendar start={upcoming.data.as_of} events={events} />
-      <p className="moneyv-meta">Next 30 days · green: incoming · orange: outgoing. Payment status comes from matched ledger movements.</p>
+      <ScheduleCalendar asOf={upcoming.data.as_of} events={events} />
 
       <MoneySection
         title="Scheduled events"

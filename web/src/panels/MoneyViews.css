@@ -767,34 +767,93 @@
 .goal-landing-track span { display: block; height: 100%; border-radius: inherit; background: var(--mesh); }
 .goal-landings p { margin: 0; }
 
-.schedule-calendar {
+.schedule-calendar { margin-top: 28px; }
+.schedule-calendar-head {
   display: flex;
-  gap: 5px;
-  overflow-x: auto;
-  padding: 6px 2px 12px;
-  margin-top: 28px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 10px;
 }
+.schedule-calendar-head .moneyv-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0; }
+.schedule-key { width: 8px; height: 8px; margin-left: 4px; border-radius: 50%; }
+.schedule-key:first-child { margin-left: 0; }
+.schedule-key.in { background: var(--green); }
+.schedule-key.out { background: var(--orange); }
+.schedule-calendar-nav { display: flex; gap: 6px; }
+
+.icon-pill {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+}
+.icon-pill:hover { background: var(--surface-3); }
+
+/* Seven days fill the width; the rest scrolls a week at a time. */
+.schedule-strip {
+  --days: 7;
+  display: grid;
+  grid-auto-columns: calc((100% - (var(--days) - 1) * 8px) / var(--days));
+  grid-auto-flow: column;
+  gap: 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+.schedule-strip::-webkit-scrollbar { display: none; }
+.schedule-strip:focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; border-radius: 16px; }
 
 .schedule-day {
   display: flex;
-  flex: 1 0 36px;
   flex-direction: column;
-  justify-content: space-between;
-  min-height: 84px;
-  padding: 8px 5px;
+  gap: 10px;
+  min-width: 0;
+  min-height: 112px;
+  padding: 12px;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: 16px;
   background: var(--surface);
-  font-size: 12px;
-  font-weight: 700;
+  scroll-snap-align: start;
 }
+.schedule-day time { display: flex; align-items: baseline; gap: 6px; }
+.schedule-day time b { font-size: 20px; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.schedule-day time small { color: var(--sub); font-size: 12px; font-weight: 600; }
+.schedule-day.today { border-color: var(--lime); }
+.schedule-day.today time small:first-child { color: var(--lime); }
+.schedule-day.past { background: transparent; border-color: var(--line-soft); }
+.schedule-day.past time b { color: var(--sub); }
 
-.schedule-day small { display: block; color: var(--sub); font-size: 10px; }
-.schedule-day.today { border-color: var(--text); }
-.schedule-day-marks { display: grid; gap: 3px; }
-.schedule-day-marks span { height: 5px; border-radius: 999px; }
-.schedule-day-marks .in { background: var(--green); }
-.schedule-day-marks .out { background: var(--orange); }
+.schedule-day-events { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.schedule-day-events li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.schedule-day-events li::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.schedule-day-events li.in::before { background: var(--green); }
+.schedule-day-events li.out::before { background: var(--orange); }
+.schedule-day-events li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-day-events li.done > span:first-child { color: var(--sub); text-decoration: line-through; }
+.schedule-day-events li.more { color: var(--sub); font-weight: 500; }
+.schedule-day-events li.more::before { display: none; }
+
+@media (max-width: 1180px) { .schedule-strip { --days: 5; } }
+@media (max-width: 640px) {
+  .schedule-strip { --days: 3; }
+  .schedule-calendar-range { display: none; }
+}
 
 .schedule-event { grid-template-columns: 90px minmax(0, 1fr) auto auto; }
 .schedule-event-date { color: var(--sub); font-family: var(--mono); font-size: 12px; }

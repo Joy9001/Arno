@@ -13,6 +13,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_PROPS } from "./chartTheme";
 import { formatPaise } from "./format";
 import { Orb } from "./Orb";
 import {
@@ -191,11 +192,11 @@ export function ProjectionChart({
             tickFormatter={(value: number) => formatPaise(value).replace(".00", "")}
           />
           <Tooltip
+            {...TOOLTIP_PROPS}
             formatter={(value: unknown) => {
-              if (Array.isArray(value)) {
-                return `${formatPaise(Number(value[0]))} – ${formatPaise(Number(value[1]))}`;
-              }
-              return formatPaise(Number(value));
+              // Simulated balances: whole rupees, so the tooltip doesn't imply paise precision.
+              const whole = (paise: unknown) => formatPaise(Math.round(Number(paise) / 100) * 100);
+              return Array.isArray(value) ? `${whole(value[0])} to ${whole(value[1])}` : whole(value);
             }}
             labelFormatter={(_label, entry) => {
               const row = entry?.[0]?.payload as { date?: string } | undefined;

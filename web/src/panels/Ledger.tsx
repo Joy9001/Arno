@@ -8,6 +8,7 @@ import {
   FileSearch,
   MessageCircle,
   RefreshCw,
+  Undo2,
   X,
 } from "lucide-react";
 import { askAgent } from "../ask";
@@ -544,17 +545,17 @@ export function LedgerPanel() {
             onChange={(event) => setDraft({ ...draft, end: event.target.value })}
           />
         </label>
-        <label className="act-check">
-          <input
-            type="checkbox"
-            checked={draft.includeReversed}
-            onChange={(event) =>
-              setDraft({ ...draft, includeReversed: event.target.checked })
-            }
-          />
-          Show reversed
-        </label>
         <div className="act-toolbar-actions">
+          <button
+            type="button"
+            className={draft.includeReversed ? "act-toggle on" : "act-toggle"}
+            aria-pressed={draft.includeReversed}
+            aria-label="Show reversed movements"
+            title="Show reversed movements"
+            onClick={() => setDraft({ ...draft, includeReversed: !draft.includeReversed })}
+          >
+            <Undo2 size={17} strokeWidth={2} aria-hidden="true" />
+          </button>
           <button type="submit" disabled={loading || Boolean(rangeError)}>
             Apply filters
           </button>

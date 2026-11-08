@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_PROPS } from "../chartTheme";
 import { displayText } from "./display-text";
 import { formatRupees } from "./format";
 import { formatMoment } from "../format";
@@ -87,7 +88,7 @@ export function ChartCard({
                   <Cell key={point.x} fill={COLORS[index % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip formatter={(value) => tick(Number(value))} />
+              <Tooltip {...TOOLTIP_PROPS} formatter={(value) => tick(Number(value))} />
               <Legend />
             </PieChart>
           ) : type === "bar" || type === "stacked_bar" ? (
@@ -95,7 +96,7 @@ export function ChartCard({
               <CartesianGrid stroke="#22241e" vertical={false} />
               <XAxis dataKey="x" stroke="#82867a" fontSize={12} />
               <YAxis stroke="#82867a" fontSize={12} tickFormatter={tick} width={80} />
-              <Tooltip formatter={(value) => tick(Number(value))} />
+              <Tooltip {...TOOLTIP_PROPS} formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Bar
                   key={line.name}
@@ -112,7 +113,7 @@ export function ChartCard({
               <CartesianGrid stroke="#22241e" vertical={false} />
               <XAxis dataKey="x" stroke="#82867a" fontSize={12} />
               <YAxis stroke="#82867a" fontSize={12} tickFormatter={tick} width={80} />
-              <Tooltip formatter={(value) => tick(Number(value))} />
+              <Tooltip {...TOOLTIP_PROPS} formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Line
                   key={line.name}

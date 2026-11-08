@@ -23,10 +23,10 @@ export type HomePayload = {
 };
 
 function partOfDay(hour: number): string {
-  if (hour < 5) return "Late night";
-  if (hour < 12) return "Morning";
-  if (hour < 17) return "Afternoon";
-  return "Evening";
+  if (hour < 5) return "Still up";
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
 }
 
 /** The agent's home: the new-conversation view, above the composer. */
@@ -38,13 +38,13 @@ export function AskGreeting() {
   return (
     <div className="ask-hero">
       <div className="ask-halo">
-        <Orb size={120} live />
+        <Orb size={88} live />
       </div>
       <h3 className="ask-title">
         {partOfDay(new Date().getHours())}
-        {name ? `, ${name}.` : "."}{" "}
-        <span>What do you want to know about your money?</span>
+        {name ? `, ${name}` : ""}
       </h3>
+      <p className="ask-sub">Ask me anything about your money.</p>
     </div>
   );
 }
