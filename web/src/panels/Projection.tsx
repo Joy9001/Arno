@@ -12,6 +12,7 @@ import {
   projectionReadiness,
 } from "../projectionData";
 import { useApi } from "../useApi";
+import { Timeline } from "./Timeline";
 import {
   MoneyAsk,
   MoneyError,
@@ -47,7 +48,7 @@ const MIN_HORIZON_DAYS = 90;
 const MAX_HORIZON_DAYS = 3650;
 const EMI_TENURES = [3, 6, 9, 12, 18, 24, 36, 48];
 const PROJECTION_DESCRIPTION =
-  "A seeded walk over liquid balances: income, obligations, instalments, card dues, goal contributions, and variable spend. The band is the P10–P90 spread; the floor probability is not a guarantee.";
+  "The ledger behind today and a seeded walk ahead of it: income, obligations, instalments, card dues, goal contributions, and variable spend. The band is the P10–P90 spread; the floor probability is not a guarantee.";
 
 const VERDICT: Record<string, { text: string; tone: string }> = {
   yes: { text: "Yes", tone: "good" },
@@ -79,6 +80,7 @@ function validateHorizon(value: string): number | null {
   return days;
 }
 
+/** Money's first view: the timeline, then the projection's figures, assumptions, and a purchase scenario. */
 export function ProjectionPanel() {
   const [horizonDraft, setHorizonDraft] = useState(String(MIN_HORIZON_DAYS));
   const [horizon, setHorizon] = useState(MIN_HORIZON_DAYS);
@@ -149,7 +151,7 @@ export function ProjectionPanel() {
   if (loading && !data) {
     return (
       <MoneyPageSkeleton
-        title="Projection"
+        title="Timeline"
         description={PROJECTION_DESCRIPTION}
         chart
         rows={0}
@@ -159,7 +161,7 @@ export function ProjectionPanel() {
 
   const header = (
     <MoneyPageHeader
-      title="Projection"
+      title="Timeline"
       description={PROJECTION_DESCRIPTION}
       aside={
         data ? (
@@ -214,6 +216,8 @@ export function ProjectionPanel() {
               {data.verdict_reason && <p className="moneyv-verdict-note">{data.verdict_reason}</p>}
             </div>
           )}
+
+          {!gated && <Timeline payload={data} />}
 
           {gated && (
             <MoneySection title="Why there is no forecast" note="A required balance is missing">

@@ -13,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import { formatPaise } from "./format";
-import { Mark } from "./Mark";
+import { Orb } from "./Orb";
 import {
   dataQualityNotes,
   lowAmount,
@@ -181,10 +181,10 @@ export function ProjectionChart({
     >
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
-          <CartesianGrid stroke="#2a2a2c" vertical={false} />
-          <XAxis dataKey="label" stroke="#8b8b90" fontSize={12} minTickGap={28} />
+          <CartesianGrid stroke="#22241e" vertical={false} />
+          <XAxis dataKey="label" stroke="#82867a" fontSize={12} minTickGap={28} />
           <YAxis
-            stroke="#8b8b90"
+            stroke="#82867a"
             fontSize={12}
             width={78}
             tickFormatter={(value: number) => formatPaise(value).replace(".00", "")}
@@ -205,8 +205,8 @@ export function ProjectionChart({
             type="monotone"
             dataKey="band"
             stroke="none"
-            fill="#0b6cf0"
-            fillOpacity={0.16}
+            fill="#1ec8a5"
+            fillOpacity={0.22}
             name="P10–P90"
             isAnimationActive={!reducedMotion}
             animationDuration={550}
@@ -215,7 +215,7 @@ export function ProjectionChart({
           <Line
             type="monotone"
             dataKey="median"
-            stroke="#0b6cf0"
+            stroke="#d4ff3a"
             strokeWidth={2}
             dot={false}
             name="Median"
@@ -226,9 +226,9 @@ export function ProjectionChart({
           {showFloor && (
             <ReferenceLine
               y={floor}
-              stroke="#ff453a"
+              stroke="#ff6a2b"
               strokeDasharray="4 4"
-              label={{ value: "floor", fill: "#ff453a", fontSize: 12, position: "insideBottomRight" }}
+              label={{ value: "floor", fill: "#ff6a2b", fontSize: 12, position: "insideBottomRight" }}
             />
           )}
         </ComposedChart>
@@ -444,7 +444,7 @@ export function ProjectionCard({
     >
       <div className="receipt-top">
         <div className="receipt-title">
-          <Mark size={20} />
+          <Orb size={20} />
           <strong>{gated ? title : (verdict?.text ?? title)}</strong>
         </div>
         <span className={`badge ${badgeTone}`}>

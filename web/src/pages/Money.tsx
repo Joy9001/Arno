@@ -5,11 +5,11 @@ import { PeoplePanel } from "../panels/People";
 import { ProjectionPanel } from "../panels/Projection";
 import { SchedulesPanel } from "../panels/Schedules";
 
-export type MoneyTab = "accounts" | "people" | "goals" | "schedules" | "projection";
+export type MoneyTab = "timeline" | "accounts" | "people" | "goals" | "schedules";
 
 const TABS: Array<{ id: MoneyTab; label: string }> = [
+  { id: "timeline", label: "Timeline" },
   { id: "accounts", label: "Accounts" },
-  { id: "projection", label: "Projection" },
   { id: "schedules", label: "Schedules" },
   { id: "goals", label: "Goals" },
   { id: "people", label: "People" },
@@ -22,13 +22,16 @@ export function MoneyPage({ tab, onTab }: { tab: MoneyTab; onTab: (tab: MoneyTab
       onValueChange={(value) => onTab(value as MoneyTab)}
       className="workspace"
     >
-      <Tabs.List className="subtabs" aria-label="Money">
-        {TABS.map((item) => (
-          <Tabs.Trigger key={item.id} value={item.id} className="subtab">
-            {item.label}
-          </Tabs.Trigger>
-        ))}
-      </Tabs.List>
+      <div className="area-head">
+        <h2>Money</h2>
+        <Tabs.List className="subtabs" aria-label="Money">
+          {TABS.map((item) => (
+            <Tabs.Trigger key={item.id} value={item.id} className="subtab">
+              {item.label}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
+      </div>
       <Tabs.Content value="accounts" className="workspace-body">
         <AccountsPanel />
       </Tabs.Content>
@@ -41,7 +44,7 @@ export function MoneyPage({ tab, onTab }: { tab: MoneyTab; onTab: (tab: MoneyTab
       <Tabs.Content value="schedules" className="workspace-body">
         <SchedulesPanel />
       </Tabs.Content>
-      <Tabs.Content value="projection" className="workspace-body">
+      <Tabs.Content value="timeline" className="workspace-body">
         <ProjectionPanel />
       </Tabs.Content>
     </Tabs.Root>

@@ -2,7 +2,7 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { useState, type FormEvent } from "react";
 import { errorMessage } from "./api";
 import { Busy } from "./Loading";
-import { Mark } from "./Mark";
+import { Orb } from "./Orb";
 import {
   beginEnrollment,
   verifyEnrollment,
@@ -62,7 +62,7 @@ export function Setup({ authState }: { authState: AuthState }) {
       <main className="centered">
         <section className="card">
           <div className="auth-brand">
-            <Mark size={28} />
+            <Orb size={56} live />
             Fin-Agent
           </div>
           <h1>Open this page at the passkey origin</h1>
@@ -85,7 +85,7 @@ export function Setup({ authState }: { authState: AuthState }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <Mark size={28} />
+          <Orb size={56} live />
           Fin-Agent
         </div>
         <h1>{addDevice ? "Add this device" : "Set up Fin-Agent"}</h1>

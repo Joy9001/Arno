@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { Button, Theme } from "@radix-ui/themes";
+import { Theme } from "@radix-ui/themes";
 import {
   AlertCircle,
-  CalendarDays,
-  Home as HomeIcon,
+  CirclePlay,
   List,
-  LogOut,
-  MessageCircle,
+  MessageSquare,
   Settings,
-  ShieldCheck,
+  Sparkle,
   Wallet,
+  type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { api, errorMessage } from "./api";
@@ -19,28 +18,31 @@ import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
 import { EvidencePanel } from "./EvidencePanel";
 import { EVIDENCE_EVENT } from "./evidence";
-import { Mark } from "./Mark";
+import { NAVIGATE_EVENT, UserContext, type PageId } from "./nav";
+import { Orb } from "./Orb";
 import { ActivityPage, type ActivityTab } from "./pages/Activity";
-import { HomeRail } from "./pages/Home";
 import { MoneyPage, type MoneyTab } from "./pages/Money";
+import { RecapsPage } from "./pages/Recaps";
 import { SettingsPanel } from "./panels/Settings";
 import type { ProjectionPayload } from "./projection";
 import type { NotificationList } from "./types";
 
-type PageId = "home" | "money" | "activity" | "settings";
-
-const NAV: Array<{
-  id: PageId;
-  label: string;
-  title: string;
-  Icon: typeof HomeIcon;
-}> = [
-  { id: "home", label: "Home", title: "Conversation", Icon: HomeIcon },
+const NAV: Array<{ id: PageId; label: string; title: string; Icon: LucideIcon }> = [
+  { id: "ask", label: "Ask", title: "Ask", Icon: Sparkle },
+  { id: "chats", label: "Chats", title: "Chats", Icon: MessageSquare },
   { id: "money", label: "Money", title: "Money", Icon: Wallet },
   { id: "activity", label: "Activity", title: "Activity", Icon: List },
-  { id: "settings", label: "Settings", title: "Settings", Icon: Settings },
+  { id: "recaps", label: "Recaps", title: "Recaps", Icon: CirclePlay },
 ];
+const SETTINGS = { id: "settings" as const, label: "Settings", title: "Settings", Icon: Settings };
+const PAGES = [...NAV, SETTINGS];
+// Phones keep four areas and More; Chats lives in the conversation's own History.
+const TABBAR: PageId[] = ["ask", "money", "activity", "recaps", "settings"];
 
+const MONEY_TABS: MoneyTab[] = ["timeline", "accounts", "schedules", "goals", "people"];
+const ACTIVITY_TABS: ActivityTab[] = ["ledger", "imports", "inbox"];
+
+/** The 1180px edge is where the canvas leaves the side of the conversation for a sheet. */
 function useCompactViewport(): boolean {
   const [compact, setCompact] = useState(
     () => window.matchMedia("(max-width: 1180px)").matches,
@@ -61,6 +63,11 @@ type OpenThreadDetail =
   | { threadId?: unknown; messageId?: unknown }
   | null;
 
+/**
+ * Routes: #ask, #chats/<thread>/<message>, #money/<tab>, #activity/<tab>[/<import>], #recaps,
+ * #settings/<section>. Older links keep working: #home and #home/<thread>/<message> open the
+ * conversation, and #money/projection opens the timeline.
+ */
 function readHash(): {
   page: PageId;
   money: MoneyTab;
@@ -70,14 +77,19 @@ function readHash(): {
   importId: string | null;
 } {
   const [rawPage, rawTab, rawMessage] = window.location.hash.slice(1).split("/");
-  const page = NAV.some((item) => item.id === rawPage) ? (rawPage as PageId) : "home";
-  const money = ["accounts", "projection", "schedules", "goals", "people"].includes(rawTab)
-    ? (rawTab as MoneyTab)
-    : "accounts";
-  const activity = ["ledger", "imports"].includes(rawTab)
+  const legacyHome = rawPage === "home";
+  const threadLike = Boolean(rawTab && THREAD_ID.test(rawTab));
+  let page: PageId = PAGES.some((item) => item.id === rawPage) ? (rawPage as PageId) : "ask";
+  if (legacyHome) page = threadLike ? "chats" : "ask";
+  const money = rawTab === "projection"
+    ? "timeline"
+    : MONEY_TABS.includes(rawTab as MoneyTab)
+      ? (rawTab as MoneyTab)
+      : "timeline";
+  const activity = ACTIVITY_TABS.includes(rawTab as ActivityTab)
     ? (rawTab as ActivityTab)
     : "ledger";
-  const thread = page === "home" && rawTab && THREAD_ID.test(rawTab) ? rawTab : null;
+  const thread = page === "chats" && threadLike ? rawTab : null;
   const message =
     thread && rawMessage && THREAD_ID.test(rawMessage) ? rawMessage : null;
   const importId =
@@ -119,14 +131,13 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [focusThreadId, setFocusThreadId] = useState<string | null>(null);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const [focusImportId, setFocusImportId] = useState<string | null>(initial.importId);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [newChatSignal, setNewChatSignal] = useState(initial.page === "ask" ? 1 : 0);
   const [seed, setSeed] = useState<{ id: number; text: string } | null>(null);
   const [attachments, setAttachments] = useState<{ id: number; files: File[] } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
-  const [todayOpen, setTodayOpen] = useState(false);
-  const [homeVersion, setHomeVersion] = useState(0);
   const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
   const compact = useCompactViewport();
+  const talking = page === "ask" || page === "chats";
 
   const go = useCallback((next: PageId, sub?: string) => {
     setEvidence(null);
@@ -166,17 +177,20 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     };
   }, []);
 
-  // A deep link such as #home/cnv_… opens that conversation, but only when the thread really
-  // exists; otherwise the current page and navigation stay untouched.
+  // A deep link such as #chats/cnv_… opens that conversation, but only when the thread really
+  // exists; otherwise the link falls back to the conversation list.
   useEffect(() => {
     const { thread, message } = readHash();
+    if (window.location.hash.startsWith("#home")) {
+      window.history.replaceState(null, "", thread ? `#chats/${thread}` : "#ask");
+    }
     if (!thread) return;
     void threadExists(thread).then((exists) => {
       if (exists) {
         setFocusThreadId(thread);
         setFocusMessageId(message);
-      } else if (window.location.hash.startsWith("#home/")) {
-        window.history.replaceState(null, "", "#home");
+      } else {
+        window.history.replaceState(null, "", "#chats");
       }
     });
   }, []);
@@ -191,38 +205,48 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
         if (!exists) return;
         setFocusThreadId(thread);
         setFocusMessageId(message);
-        setTodayOpen(false);
-        setEvidence(null);
-        if (compact && page !== "home") setAssistantOpen(true);
-        go("home", message ? `${thread}/${message}` : thread);
+        go("chats", message ? `${thread}/${message}` : thread);
       });
     };
     window.addEventListener("fin-agent:open-thread", onOpenThread);
     return () => window.removeEventListener("fin-agent:open-thread", onOpenThread);
-  }, [compact, page, go]);
+  }, [go]);
+
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const { page: next, sub } = (event as CustomEvent<{ page: PageId; sub?: string }>).detail;
+      if (!PAGES.some((item) => item.id === next)) return;
+      if (next === "money" && MONEY_TABS.includes(sub as MoneyTab)) setMoneyTab(sub as MoneyTab);
+      if (next === "activity" && ACTIVITY_TABS.includes(sub as ActivityTab)) {
+        setActivityTab(sub as ActivityTab);
+      }
+      go(next, sub);
+    };
+    window.addEventListener(NAVIGATE_EVENT, onNavigate);
+    return () => window.removeEventListener(NAVIGATE_EVENT, onNavigate);
+  }, [go]);
 
   const refreshUnread = useCallback(async () => {
     try {
       const inbox = await api<NotificationList>("/api/notifications?limit=1");
       setUnread(inbox.unread_count);
     } catch {
-      // The badge is best effort; Today shows the queue's own error.
+      // The badge is best effort; the inbox shows its own error.
     }
   }, []);
 
+  // Asking from a data page carries the question into the conversation.
   useEffect(() => {
     const onAsk = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail ?? "";
       setSeed(detail ? { id: Date.now(), text: detail } : null);
       setFocusSignal((value) => value + 1);
-      // On Home the conversation is already the page; elsewhere the sheet must open for it.
-      if (compact && page !== "home") setAssistantOpen(true);
-      setTodayOpen(false);
       setEvidence(null);
+      if (page !== "ask" && page !== "chats") go("chats");
     };
     window.addEventListener(ASK_EVENT, onAsk);
     return () => window.removeEventListener(ASK_EVENT, onAsk);
-  }, [compact, page]);
+  }, [page, go]);
 
   useEffect(() => {
     const onAttach = (event: Event) => {
@@ -230,20 +254,18 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       if (!files.length) return;
       setAttachments({ id: Date.now(), files });
       setFocusSignal((value) => value + 1);
-      if (compact && page !== "home") setAssistantOpen(true);
-      setTodayOpen(false);
       setEvidence(null);
+      if (page !== "ask" && page !== "chats") go("chats");
     };
     window.addEventListener(ATTACH_EVENT, onAttach);
     return () => window.removeEventListener(ATTACH_EVENT, onAttach);
-  }, [compact, page]);
+  }, [page, go]);
 
   useEffect(() => {
     const onEvidence = (event: Event) => {
       const payload = (event as CustomEvent<ProjectionPayload>).detail;
       if (!payload || !Array.isArray(payload.curve)) return;
       setEvidence(payload);
-      setTodayOpen(false);
     };
     window.addEventListener(EVIDENCE_EVENT, onEvidence);
     return () => window.removeEventListener(EVIDENCE_EVENT, onEvidence);
@@ -267,76 +289,13 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     }
   }
 
-  function ask(text: string) {
-    setSeed(text ? { id: Date.now(), text } : null);
-    setFocusSignal((value) => value + 1);
-    setTodayOpen(false);
-    if (compact && page !== "home") setAssistantOpen(true);
-  }
-
-  function showEvidence(payload: ProjectionPayload) {
-    setEvidence(payload);
-    setTodayOpen(false);
-  }
-
-  function openChat(threadId: string) {
-    setFocusThreadId(threadId);
-    setFocusMessageId(null);
-    setTodayOpen(false);
-    if (compact && page !== "home") setAssistantOpen(true);
-    go("home");
+  function navigate(id: PageId) {
+    if (id === "ask") setNewChatSignal((value) => value + 1);
+    if (id === "money") go("money", moneyTab);
+    else if (id === "activity") go("activity", activityTab);
+    else go(id);
     void refreshUnread();
   }
-
-  function openActivity(tab: ActivityTab) {
-    setTodayOpen(false);
-    setActivityTab(tab);
-    go("activity", tab);
-  }
-
-  function openProjection() {
-    setTodayOpen(false);
-    setMoneyTab("projection");
-    go("money", "projection");
-  }
-
-  function openSettings() {
-    setTodayOpen(false);
-    go("settings", "profile");
-  }
-
-  const current = NAV.find((item) => item.id === page) ?? NAV[0];
-  const assistant = (
-    <Assistant
-      seed={seed}
-      focusSignal={focusSignal}
-      onSeedConsumed={() => setSeed(null)}
-      attachments={attachments}
-      onAttachmentsConsumed={() => setAttachments(null)}
-      focusThreadId={focusThreadId}
-      focusMessageId={focusMessageId}
-      onFocusHandled={() => {
-        setFocusThreadId(null);
-        setFocusMessageId(null);
-      }}
-      onClose={compact ? () => setAssistantOpen(false) : undefined}
-      onActivity={() => setHomeVersion((value) => value + 1)}
-    />
-  );
-
-  const renderHomeRail = (onClose?: () => void) => (
-    <HomeRail
-      onOpenChat={openChat}
-      onAsk={ask}
-      onOpenActivity={openActivity}
-      onInboxChanged={() => void refreshUnread()}
-      onOpenProjection={openProjection}
-      onOpenEvidence={showEvidence}
-      onOpenSettings={openSettings}
-      onClose={onClose}
-      version={homeVersion}
-    />
-  );
 
   const evidencePanel = evidence ? (
     <EvidencePanel
@@ -344,115 +303,76 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       onClose={() => setEvidence(null)}
       onOpenProjection={() => {
         setEvidence(null);
-        openProjection();
+        setMoneyTab("timeline");
+        go("money", "timeline");
       }}
       onAsk={() => {
         setEvidence(null);
-        ask("");
+        setFocusSignal((value) => value + 1);
       }}
     />
   ) : null;
 
-  const railLabel = evidence
-    ? "Sources and assumptions"
-    : page === "home"
-      ? "Today"
-      : "Assistant";
+  const current = PAGES.find((item) => item.id === page) ?? NAV[0];
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand">
-          <Mark size={30} />
-          <span className="brand-word">Fin-Agent</span>
-          <span className="brand-tag">Private</span>
-        </div>
-
-        <nav className="nav-groups" aria-label="Primary">
+    <UserContext.Provider value={user}>
+      <div className="app" data-page={page}>
+        <nav className="rail" aria-label="Primary">
+          <button
+            type="button"
+            className="rail-brand"
+            aria-label="Fin-Agent, ask"
+            onClick={() => navigate("ask")}
+          >
+            <Orb size={38} live />
+          </button>
           {NAV.map(({ id, label, Icon }) => (
             <button
               key={id}
               type="button"
-              className={page === id ? "nav-item on" : "nav-item"}
+              className={page === id ? "rail-item on" : "rail-item"}
               aria-current={page === id ? "page" : undefined}
-              onClick={() => {
-                go(id);
-                if (id === "home") void refreshUnread();
-              }}
+              aria-label={id === "activity" && unread > 0 ? `${label}, ${unread} unread` : label}
+              onClick={() => navigate(id)}
             >
-              <Icon size={17} strokeWidth={1.7} aria-hidden="true" />
-              <span>{label}</span>
-              {id === "home" && unread > 0 && (
-                <span className="nav-badge" aria-label={`${unread} unread`}>
+              {id === "activity" && unread > 0 && (
+                <span className="rail-badge" aria-hidden="true">
                   {unread > 99 ? "99+" : unread}
                 </span>
               )}
+              <Icon size={21} strokeWidth={1.9} aria-hidden="true" />
+              <span>{label}</span>
             </button>
           ))}
+          <button
+            type="button"
+            className={page === "settings" ? "rail-item rail-foot on" : "rail-item rail-foot"}
+            aria-current={page === "settings" ? "page" : undefined}
+            onClick={() => navigate("settings")}
+          >
+            <Settings size={21} strokeWidth={1.9} aria-hidden="true" />
+            <span>Settings</span>
+          </button>
         </nav>
 
-        <div className="side-foot">
-          <span className="privacy-line">
-            <ShieldCheck size={13} strokeWidth={1.8} aria-hidden="true" />
-            Private instance
-          </span>
-          <span>{user?.display_name ? `${user.display_name} · ` : ""}Tailscale only</span>
-          <span>No analytics</span>
-          <button type="button" className="side-signout" onClick={() => void signOut()}>
-            <LogOut size={14} strokeWidth={1.8} aria-hidden="true" />
-            Sign out
-          </button>
-        </div>
-      </aside>
-
-      <div className="main">
-        {/* At 1181px and wider the sidebar names the area and the rail carries Today and the
-            assistant, so this bar keeps only the page's h1. Compact frames show it with one action. */}
-        <header className="topbar">
-          <div className="topbar-title">
-            <span className="mobile-brand" aria-hidden="true">
-              <Mark size={24} />
-            </span>
-            <h1>{current.title}</h1>
-          </div>
-          {compact && (
-            <div className="topbar-actions">
-              {page === "home" ? (
-                <Button
-                  variant="soft"
-                  color="gray"
-                  size="2"
-                  className="topbar-button"
-                  onClick={() => setTodayOpen(true)}
-                >
-                  <CalendarDays size={15} strokeWidth={1.8} aria-hidden="true" />
-                  Today
-                </Button>
-              ) : (
-                <Button
-                  variant="soft"
-                  color="gray"
-                  size="2"
-                  className="topbar-button"
-                  onClick={() => ask("")}
-                >
-                  <MessageCircle size={15} strokeWidth={1.8} aria-hidden="true" />
-                  Ask
-                </Button>
-              )}
-            </div>
+        <div className="stage">
+          <h1 className="sr-only">{current.title}</h1>
+          {error && (
+            <p className="topbar-error" role="alert">
+              <AlertCircle size={15} strokeWidth={1.8} aria-hidden="true" />
+              {error}
+            </p>
           )}
-        </header>
 
-        {error && (
-          <p className="topbar-error" role="alert">
-            <AlertCircle size={15} strokeWidth={1.8} aria-hidden="true" />
-            {error}
-          </p>
-        )}
-
-        <main className={page === "home" ? "content chat-main" : "content"}>
-          {page === "home" && (
+          {/* One conversation, always mounted, so a reply keeps streaming while you look
+              at your money. Ask shows it as the agent's home; Chats adds the list. */}
+          <div
+            className={talking ? "talk" : "talk talk-hidden"}
+            data-mode={page === "chats" ? "chats" : "ask"}
+            data-canvas={evidencePanel && !compact ? "open" : undefined}
+            hidden={!talking}
+          >
             <Assistant
               seed={seed}
               focusSignal={focusSignal}
@@ -465,10 +385,31 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
                 setFocusThreadId(null);
                 setFocusMessageId(null);
               }}
-              onActivity={() => setHomeVersion((value) => value + 1)}
-              onEvidence={showEvidence}
+              newChatSignal={newChatSignal}
+              listInline={page === "chats" && !compact}
+              onConversationStarted={() => {
+                if (page === "ask") go("chats");
+              }}
+              onActivity={() => void refreshUnread()}
+              onEvidence={setEvidence}
             />
-          )}
+            <AnimatePresence initial={false}>
+              {talking && !compact && evidencePanel && (
+                <motion.aside
+                  key="canvas"
+                  className="canvas"
+                  aria-label="Canvas"
+                  initial={{ opacity: 0, x: 24 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 16 }}
+                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {evidencePanel}
+                </motion.aside>
+              )}
+            </AnimatePresence>
+          </div>
+
           {page === "money" && (
             <MoneyPage
               tab={moneyTab}
@@ -482,6 +423,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
             <ActivityPage
               tab={activityTab}
               importId={focusImportId}
+              unread={unread}
+              onInboxChanged={() => void refreshUnread()}
               onTab={(tab) => {
                 setActivityTab(tab);
                 setFocusImportId(null);
@@ -493,117 +436,57 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               }}
             />
           )}
+          {page === "recaps" && <RecapsPage />}
           {page === "settings" && <SettingsPanel onSignOut={() => void signOut()} />}
-        </main>
+        </div>
+
+        {compact && evidencePanel && (
+          <Dialog.Root open onOpenChange={(open) => !open && setEvidence(null)}>
+            <Dialog.Portal>
+              <Dialog.Overlay className="dialog-overlay sheet-overlay" />
+              <Dialog.Content className="sheet-dialog evidence-sheet" aria-describedby={undefined}>
+                <Dialog.Title className="sr-only">Canvas</Dialog.Title>
+                <Theme
+                  appearance="dark"
+                  accentColor="lime"
+                  grayColor="olive"
+                  radius="large"
+                  hasBackground={false}
+                  className="sheet-theme"
+                >
+                  {evidencePanel}
+                </Theme>
+              </Dialog.Content>
+            </Dialog.Portal>
+          </Dialog.Root>
+        )}
+
+        <nav className="tabbar" aria-label="Primary">
+          {TABBAR.map((id) => {
+            const item = PAGES.find((entry) => entry.id === id) ?? NAV[0];
+            const on = page === id || (id === "ask" && page === "chats");
+            const label = id === "settings" ? "More" : item.label;
+            return (
+              <button
+                key={id}
+                type="button"
+                className={on ? "tabbar-item on" : "tabbar-item"}
+                aria-current={on ? "page" : undefined}
+                aria-label={id === "activity" && unread > 0 ? `Activity, ${unread} unread` : label}
+                onClick={() => navigate(id)}
+              >
+                {id === "ask" ? (
+                  <Orb size={24} />
+                ) : (
+                  <item.Icon size={22} strokeWidth={1.9} aria-hidden="true" />
+                )}
+                <span>{label}</span>
+                {id === "activity" && unread > 0 && <span className="tabbar-badge">{unread}</span>}
+              </button>
+            );
+          })}
+        </nav>
       </div>
-
-      {!compact && (
-        <aside className="context-rail" aria-label={railLabel}>
-          <AnimatePresence mode="wait" initial={false}>
-            {page === "home" && evidencePanel ? (
-              <motion.div
-                key="evidence"
-                className="rail-fill"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 8 }}
-                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {evidencePanel}
-              </motion.div>
-            ) : page === "home" ? (
-              <motion.div
-                key="today"
-                className="rail-fill"
-                initial={{ opacity: 0, x: 8 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {renderHomeRail()}
-              </motion.div>
-            ) : (
-              <div key="assistant" className="rail-fill">
-                {assistant}
-              </div>
-            )}
-          </AnimatePresence>
-        </aside>
-      )}
-
-      {compact && page === "home" && (
-        <Dialog.Root open={todayOpen} onOpenChange={setTodayOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay sheet-overlay" />
-            <Dialog.Content className="sheet-dialog today-sheet" aria-describedby={undefined}>
-              <Dialog.Title className="sr-only">Today</Dialog.Title>
-              <div className="sheet-grip" aria-hidden="true" />
-              <Theme
-                appearance="dark"
-                accentColor="blue"
-                grayColor="slate"
-                radius="large"
-                hasBackground={false}
-                className="sheet-theme"
-              >
-                {renderHomeRail(() => setTodayOpen(false))}
-              </Theme>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      )}
-
-      {compact && evidencePanel && (
-        <Dialog.Root open onOpenChange={(open) => !open && setEvidence(null)}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay sheet-overlay" />
-            <Dialog.Content className="sheet-dialog evidence-sheet" aria-describedby={undefined}>
-              <Dialog.Title className="sr-only">Sources and assumptions</Dialog.Title>
-              <Theme
-                appearance="dark"
-                accentColor="blue"
-                grayColor="slate"
-                radius="large"
-                hasBackground={false}
-                className="sheet-theme"
-              >
-                {evidencePanel}
-              </Theme>
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      )}
-
-      {compact && page !== "home" && (
-        <Dialog.Root open={assistantOpen} onOpenChange={setAssistantOpen}>
-          <Dialog.Portal>
-            <Dialog.Overlay className="dialog-overlay sheet-overlay" />
-            <Dialog.Content className="sheet-dialog assistant-sheet" aria-describedby={undefined}>
-              <Dialog.Title className="sr-only">Assistant</Dialog.Title>
-              {assistant}
-            </Dialog.Content>
-          </Dialog.Portal>
-        </Dialog.Root>
-      )}
-
-      <nav className="tabbar" aria-label="Primary">
-        {NAV.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            className={page === id ? "tabbar-item on" : "tabbar-item"}
-            aria-current={page === id ? "page" : undefined}
-            aria-label={id === "home" && unread > 0 ? `Home, ${unread} unread` : label}
-            onClick={() => {
-              go(id);
-              if (id === "home") void refreshUnread();
-            }}
-          >
-            <Icon size={20} strokeWidth={1.8} aria-hidden="true" />
-            <span>{label}</span>
-            {id === "home" && unread > 0 && <span className="tabbar-badge">{unread}</span>}
-          </button>
-        ))}
-      </nav>
-    </div>
+    </UserContext.Provider>
   );
 }

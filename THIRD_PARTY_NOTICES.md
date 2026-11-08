@@ -167,6 +167,16 @@ The build writes the complete license text of every resolved web package to
 the application's Python and web dependencies. It does not audit the base image's Debian
 packages or the separate container images.
 
+## Web fonts
+
+The web app self-hosts two fonts, subset to Latin plus the rupee sign, from the Google Fonts
+sources. Each ships beside its file in `web/public/fonts/` with its full license text.
+
+| Font | License |
+|---|---|
+| Bricolage Grotesque (`bricolage-grotesque.woff2`) | SIL Open Font License 1.1 |
+| JetBrains Mono (`jetbrains-mono.woff2`) | SIL Open Font License 1.1 |
+
 ## Compose service images
 
 These images run as separate Compose services. They are not part of the Fin-Agent application

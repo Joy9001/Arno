@@ -435,7 +435,7 @@
 
 .act-import-item[aria-current="true"] {
   border-color: var(--blue);
-  background: rgba(11, 108, 240, 0.1);
+  background: rgba(212, 255, 58, 0.08);
 }
 
 .act-import-item:disabled {

@@ -45,6 +45,7 @@ import {
   ChatDataRenderers,
   ChatToolFallback,
   ChatWelcome,
+  ChatWelcomeAfter,
   FIN_SUGGESTIONS,
 } from "./parts";
 import { ChatSurfaceContext, type ChatSurfaceState } from "./surface";
@@ -191,6 +192,7 @@ function StopRunButton() {
 
 const THREAD_COMPONENTS: ThreadComponents = {
   Welcome: ChatWelcome,
+  WelcomeAfter: ChatWelcomeAfter,
   ToolFallback: ChatToolFallback,
   ComposerExtra: ComposerAddAttachment,
   ComposerCancel: StopRunButton,
@@ -339,6 +341,12 @@ type AssistantProps = {
   onClose?: () => void;
   onActivity?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
+  /** Each increment opens a fresh conversation (the Ask home). */
+  newChatSignal?: number;
+  /** Show the conversation list beside the thread instead of behind History. */
+  listInline?: boolean;
+  /** A reply started; Ask hands the conversation over to Chats. */
+  onConversationStarted?: () => void;
 };
 
 export function Assistant(props: AssistantProps) {
@@ -508,6 +516,9 @@ function AssistantChat({
   onClose,
   onActivity,
   onEvidence,
+  newChatSignal,
+  listInline,
+  onConversationStarted,
 }: AssistantChatProps) {
   const queryRef = useRef("");
   const voice = useMemo(() => new VoiceAttachments(), []);
@@ -599,6 +610,9 @@ function AssistantChat({
         onClose={onClose}
         onActivity={onActivity}
         onEvidence={onEvidence}
+        newChatSignal={newChatSignal}
+        listInline={listInline}
+        onConversationStarted={onConversationStarted}
         onNew={() => {
           onActiveId(undefined);
           sessionStorage.removeItem(THREAD_STORAGE);
@@ -629,6 +643,9 @@ type ChatShellProps = {
   onClose?: () => void;
   onActivity?: () => void;
   onEvidence?: (payload: ProjectionPayload) => void;
+  newChatSignal?: number;
+  listInline?: boolean;
+  onConversationStarted?: () => void;
   onNew: () => void;
 };
 
@@ -653,6 +670,9 @@ function ChatShell({
   onClose,
   onActivity,
   onEvidence,
+  newChatSignal,
+  listInline = false,
+  onConversationStarted,
   onNew,
 }: ChatShellProps) {
   const aui = useAui();
@@ -664,6 +684,7 @@ function ChatShell({
   const switchError = useAuiState((state) => state.threads.switchError);
   const messageCount = useAuiState((state) => state.thread.messages.length);
   const historyLoading = useAuiState((state) => state.thread.isLoading);
+  const firstThreadId = useAuiState((state) => state.threads.threadIds[0]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [listError, setListError] = useState<string | null>(null);
@@ -706,6 +727,26 @@ function ChatShell({
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setHistoryOpen(false);
   }, [activeId]);
+
+  // Ask opens a fresh conversation each time; its empty state is the agent's home.
+  useEffect(() => {
+    if (!newChatSignal) return;
+    aui.threads.switchToNewThread();
+    onNew();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newChatSignal]);
+
+  // Chats opens on the latest conversation rather than an empty one.
+  useEffect(() => {
+    if (!listInline || messageCount > 0 || historyLoading || !firstThreadId) return;
+    aui.threads.switchToThread(firstThreadId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listInline, firstThreadId]);
+
+  useEffect(() => {
+    if (running) onConversationStarted?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
 
   useEffect(() => {
     queryRef.current = query;
@@ -947,18 +988,26 @@ function ChatShell({
   const switchDetail = switchError ? errorMessage(switchError.error) : "";
 
   return (
-    <section className="assistant aui-chat dark">
+    <section className={listInline ? "assistant aui-chat dark with-list" : "assistant aui-chat dark"}>
+      {listInline && (
+        <div className="chat-list">
+          <ChatHistory query={query} onQuery={setQuery} error={listError} />
+        </div>
+      )}
+      <div className="chat-main-col">
       <Popover.Root open={historyOpen} onOpenChange={setHistoryOpen}>
         <ChatHeader
           title={title ?? (activeId ? "Conversation" : "New conversation")}
           running={running}
           historyControl={
+            listInline ? null : (
             <Popover.Trigger asChild>
               <Button type="button" variant="ghost" size="sm" className="ghost small">
                 <History size={14} strokeWidth={1.8} aria-hidden="true" />
                 History
               </Button>
             </Popover.Trigger>
+            )
           }
           onNew={() => {
             setHistoryOpen(false);
@@ -1004,6 +1053,7 @@ function ChatShell({
           )}
         </div>
       </ChatSurfaceContext.Provider>
+      </div>
     </section>
   );
 }

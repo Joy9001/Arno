@@ -24,7 +24,7 @@ const { markdownRemarkPlugins } = await server.ssrLoadModule("/src/chat/markdown
 const { buildSupportingPlan, coveredByNativeCard, fallbackViews, messageCoverage } =
   await server.ssrLoadModule("/src/chat/supporting-data.ts");
 const { ProjectionBody, ProjectionChart, ProjectionSummary } = await server.ssrLoadModule("/src/projection.tsx");
-const { TodaySummary } = await server.ssrLoadModule("/src/Today.tsx");
+const { NoticedView } = await server.ssrLoadModule("/src/chat/AskHome.tsx");
 const { EvidencePanel } = await server.ssrLoadModule("/src/EvidencePanel.tsx");
 const render = (Component, data) => renderToStaticMarkup(React.createElement(Component, { data }));
 const cardPart = (data) => ({ type: "data", name: "card", data });
@@ -152,18 +152,13 @@ test("an explicitly unknown starting balance suppresses forecast numbers on ever
     recent: [],
   };
   const homeHtml = renderToStaticMarkup(
-    React.createElement(TodaySummary, {
-      data: home,
-      horizon: 90,
-      onHorizon: () => {},
-      onOpenProjection: () => {},
-    }),
+    React.createElement(NoticedView, { data: home }),
   );
   assert.match(homeHtml, /Unknown bank/);
   assert.match(homeHtml, /statement balance/);
-  assert.doesNotMatch(homeHtml, /chance the floor holds/);
-  assert.doesNotMatch(homeHtml, /Lowest median balance/);
-  assert.match(homeHtml, /Projection/);
+  assert.doesNotMatch(homeHtml, /Floor holds/);
+  assert.doesNotMatch(homeHtml, /Lowest median/);
+  assert.match(homeHtml, /No forecast yet/);
 });
 
 test("a known zero, a stale-but-stated balance and an unset floor still support a forecast", () => {

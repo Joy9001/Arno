@@ -18,7 +18,7 @@ import { displayText } from "./display-text";
 import { formatRupees } from "./format";
 import { formatMoment } from "../format";
 
-const COLORS = ["#0b6cf0", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff"];
+const COLORS = ["#d4ff3a", "#1ec8a5", "#2b59ff", "#ff6a2b", "#ffd23a", "#3ee07f"];
 
 function unitValue(value: number, unit: string): string {
   if (unit === "paise") return formatRupees(value);
@@ -92,9 +92,9 @@ export function ChartCard({
             </PieChart>
           ) : type === "bar" || type === "stacked_bar" ? (
             <BarChart data={rows}>
-              <CartesianGrid stroke="#2a2a2c" vertical={false} />
-              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
-              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
+              <CartesianGrid stroke="#22241e" vertical={false} />
+              <XAxis dataKey="x" stroke="#82867a" fontSize={12} />
+              <YAxis stroke="#82867a" fontSize={12} tickFormatter={tick} width={80} />
               <Tooltip formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Bar
@@ -109,9 +109,9 @@ export function ChartCard({
             </BarChart>
           ) : (
             <LineChart data={rows}>
-              <CartesianGrid stroke="#2a2a2c" vertical={false} />
-              <XAxis dataKey="x" stroke="#8b8b90" fontSize={12} />
-              <YAxis stroke="#8b8b90" fontSize={12} tickFormatter={tick} width={80} />
+              <CartesianGrid stroke="#22241e" vertical={false} />
+              <XAxis dataKey="x" stroke="#82867a" fontSize={12} />
+              <YAxis stroke="#82867a" fontSize={12} tickFormatter={tick} width={80} />
               <Tooltip formatter={(value) => tick(Number(value))} />
               {series.map((line, index) => (
                 <Line

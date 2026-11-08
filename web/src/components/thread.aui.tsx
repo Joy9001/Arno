@@ -259,6 +259,8 @@ const RunActivityGroup: FC<{
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
+  /** Rendered under the composer while the conversation is new. */
+  WelcomeAfter?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
   ComposerExtra?: ComponentType | undefined;
   ComposerCancel?: ComponentType | undefined;
@@ -327,7 +329,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
   isEmpty,
   autoFocus,
 }) => {
-  const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
+  const { Welcome = ThreadWelcome, WelcomeAfter } = useContext(ThreadComponentsContext);
 
   return (
     <ScrollAreaPrimitive.Root asChild>
@@ -335,7 +337,7 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
         className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
         style={{
           ["--thread-max-width" as string]: "44rem",
-          ["--composer-bg" as string]: "#1c1c1e",
+          ["--composer-bg" as string]: "#171814",
           ["--composer-radius" as string]: "22px",
           ["--composer-padding" as string]: "8px",
         }}
@@ -393,6 +395,11 @@ const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
                   <ThreadScrollToBottom />
                   <ThreadFollowupSuggestions />
                   <Composer autoFocus={autoFocus} />
+                  {WelcomeAfter && (
+                    <AuiIf condition={isNewChatView}>
+                      <WelcomeAfter />
+                    </AuiIf>
+                  )}
                 </ThreadPrimitive.ViewportFooter>
               </div>
             </ScrollAreaPrimitive.Content>

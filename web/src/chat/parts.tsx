@@ -1,3 +1,4 @@
+import { AskBelow, AskGreeting } from "./AskHome";
 import {
   createElement,
   useContext,
@@ -320,18 +321,24 @@ function StarterSuggestion({
   );
 }
 
-/** The thread's new-chat slot; starter prompts fill the composer for review. */
+/** The thread's new-chat slot: the agent's home. Starter prompts fill the composer for review. */
 export function ChatWelcome() {
   return (
     <div className="aui-welcome">
-      <h3>Ask anything about your money.</h3>
-      <p className="aui-welcome-copy">
-        Answers use your ledger, plan, and projection. Every figure comes with its sources.
-      </p>
+      <AskGreeting />
+    </div>
+  );
+}
+
+/** Under the composer on a new conversation: starters, then what the agent noticed. */
+export function ChatWelcomeAfter() {
+  return (
+    <>
       <div className="aui-starters">
         <ThreadPrimitive.Suggestions>{renderStarter}</ThreadPrimitive.Suggestions>
       </div>
-    </div>
+      <AskBelow />
+    </>
   );
 }
 

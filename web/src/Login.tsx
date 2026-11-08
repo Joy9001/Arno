@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { errorMessage } from "./api";
 import { loginWithPasskey } from "./auth";
 import { Busy } from "./Loading";
-import { Mark } from "./Mark";
+import { Orb } from "./Orb";
 
 export function Login({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -26,7 +26,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <Mark size={28} />
+          <Orb size={56} live />
           Fin-Agent
         </div>
         <h1>Sign in</h1>
