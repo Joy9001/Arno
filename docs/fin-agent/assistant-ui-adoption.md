@@ -18,7 +18,7 @@ server calls, and finance-specific parts; it does not fork the primitives.
 | Attachments | `ComposerAttachments`, `UserMessageAttachments` | `web/src/components/attachment.aui.tsx` |
 | History | `ThreadListPrimitive` through `useRemoteThreadListRuntime` | `web/src/components/thread-list.aui.tsx` |
 | Markdown | `StreamdownTextPrimitive` from `@assistant-ui/react-streamdown` with `@streamdown/code` | `web/src/components/markdown-text.tsx` |
-| Reasoning and tools | `ReasoningRoot`, `ReasoningTrigger`, `ReasoningContent`, `ReasoningText`, `ToolFallback` in one grouped technical trace | `reasoning.aui.tsx`, `tool-fallback.aui.tsx` |
+| Reasoning and tools | `MessagePrimitive.GroupedParts` as in the [chain-of-thought guide](https://www.assistant-ui.com/docs/guides/chain-of-thought): reasoning in `ReasoningRoot`, tool calls in `ToolGroupRoot` with a `ToolFallback` row each | `thread.aui.tsx`, `reasoning.aui.tsx`, `tool-group.aui.tsx`, `tool-fallback.aui.tsx` |
 | Data parts | `useAssistantDataUI` registrations for card, chart, statement, photo, model, flags, ending | `web/src/chat/parts.tsx` |
 | Approval | App `ApprovalCard` rendered from the tool call's `approval` state | `web/src/components/approval-card.tsx`, `parts.tsx` |
 | Charts | `recharts` inside the app card | `web/src/chat/cards.tsx` |
@@ -141,12 +141,14 @@ another import. The existing `#home/<thread>/<message>` route is unchanged.
 
 ## Reasoning presentation
 
-Adjacent reasoning and routine tool calls render as one ghost, collapsed technical trace built from
-the library's reasoning primitives. The trace stays collapsed while streaming and does not open
-itself; the reader's manual expansion persists. Answer text, financial cards, and an unanswered
-approval render outside the trace, so a pending approval is never hidden until the trace is opened.
-Inside an expanded trace, each tool row still opens to its full input and output, including the
-query script.
+Grouping follows assistant-ui's [chain-of-thought guide](https://www.assistant-ui.com/docs/guides/chain-of-thought)
+and the registry's `thread` element. `group-chainOfThought` is only a wrapper. Inside it, each run
+of reasoning is its own collapsible "Reasoning" block and each run of adjacent tool calls is its
+own collapsed tool group ("2 steps"), with one row per call that opens to its full input and
+output. Reasoning and tools are never folded into one block. Answer text, financial cards, and an
+unanswered approval render outside the groups; a group holding a call that waits on you opens
+itself. A tool whose toolkit entry sets `display: "standalone"`, such as the parser's task card
+on `delegate_task`, renders on its own.
 
 ## Markdown presentation
 

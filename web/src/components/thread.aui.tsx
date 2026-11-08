@@ -21,6 +21,11 @@ import {
   ReasoningTrigger,
 } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
+import {
+  ToolGroupContent,
+  ToolGroupRoot,
+  ToolGroupTrigger,
+} from "@/components/tool-group.aui";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { ScrollBar } from "@/components/ui/scroll-area";
@@ -63,6 +68,7 @@ import {
   useContext,
   useLayoutEffect,
   useRef,
+  useState,
   type ComponentType,
   type FC,
   type PropsWithChildren,
@@ -78,26 +84,25 @@ const reasoningDuration = (timing: ThreadGroupPart["timing"]) =>
     ? undefined
     : Math.round((timing.completedAt - timing.startedAt) / 1000);
 
-/**
- * One collapsed trace for adjacent reasoning and routine tool calls. Answer
- * text, financial cards, and unanswered approvals stay outside this group.
- */
-const TechnicalTrace: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
+/** The registry's tool group: one collapsible row per run of adjacent tool calls. */
+const DefaultToolGroup: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
   group,
   children,
 }) => {
-  const running = group.status.type === "running";
+  const [open, setOpen] = useState(false);
 
   return (
-    <ReasoningRoot streaming={running}>
-      <ReasoningTrigger
-        active={running}
-        duration={reasoningDuration(group.timing)}
+    <ToolGroupRoot
+      variant="ghost"
+      open={open || group.counts.requiresAction > 0}
+      onOpenChange={setOpen}
+    >
+      <ToolGroupTrigger
+        count={group.indices.length}
+        active={group.status.type === "running"}
       />
-      <ReasoningContent aria-busy={running}>
-        <ReasoningText>{children}</ReasoningText>
-      </ReasoningContent>
-    </ReasoningRoot>
+      <ToolGroupContent>{children}</ToolGroupContent>
+    </ToolGroupRoot>
   );
 };
 
@@ -698,22 +703,27 @@ const AssistantMessage: FC = () => {
           {({ part, children }) => {
             switch (part.type) {
               case "group-chainOfThought":
-                return <TechnicalTrace group={part}>{children}</TechnicalTrace>;
+                return <div data-slot="aui_chain-of-thought">{children}</div>;
               case "group-task":
                 return TaskGroupComponent ? (
                   <TaskGroupComponent group={part} />
                 ) : null;
               case "group-tool":
+                return <DefaultToolGroup group={part}>{children}</DefaultToolGroup>;
+              case "group-reasoning": {
+                const running = part.status.type === "running";
                 return (
-                  <div
-                    data-slot="aui-trace-tools"
-                    className="aui-trace-tools flex flex-col gap-1"
-                  >
-                    {children}
-                  </div>
+                  <ReasoningRoot streaming={running}>
+                    <ReasoningTrigger
+                      active={running}
+                      duration={reasoningDuration(part.timing)}
+                    />
+                    <ReasoningContent aria-busy={running}>
+                      <ReasoningText>{children}</ReasoningText>
+                    </ReasoningContent>
+                  </ReasoningRoot>
                 );
-              case "group-reasoning":
-                return <>{children}</>;
+              }
               case "text":
                 return (
                   <div
