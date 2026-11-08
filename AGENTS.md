@@ -87,6 +87,18 @@ full set.
 - `fin-agent eval` is the only path that enables real model requests and it spends money. Don't run
   it unless asked; `--dry-run` lists cases for free.
 
+## assistant-ui
+
+This project uses assistant-ui for chat interfaces.
+
+Documentation: https://www.assistant-ui.com/llms-full.txt
+
+Key patterns:
+- Use AssistantRuntimeProvider at the app root
+- Thread component for full chat interface
+- AssistantModal for floating chat widget
+- useChatRuntime hook with AI SDK transport
+
 ## Local-only data
 
 `private/`, `statements/`, `.env`, `evals/results/`, and the HackerRank dataset are real or
