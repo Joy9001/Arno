@@ -123,6 +123,8 @@ async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
         assert (await conn.fetchrow("SELECT current_user AS who"))["who"] == "agent_ro"
         assert (await conn.fetchrow("SELECT count(*) AS n FROM accounts"))["n"] == 0
         assert (await conn.fetchrow("SELECT count(*) AS n FROM v_balances"))["n"] == 0
+        assert await conn.fetchval("SELECT count(*) FROM schedule_occurrences") == 0
+        assert await conn.fetchval("SELECT count(*) FROM schedule_payments") == 0
 
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await conn.execute("SELECT count(*) FROM users")

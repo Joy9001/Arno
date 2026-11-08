@@ -16,6 +16,7 @@ from fin_agent.india.workdays import HOLIDAY_ADJUSTMENTS, calendar_for
 from fin_agent.ledger.audit import write_group
 from fin_agent.ledger.common import get_account_row, ledger_balance, today
 from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
+from fin_agent.ledger.schedule_payments import payment_evidence, payment_status
 
 SCHEDULE_KINDS = (
     "income_fixed",
@@ -274,7 +275,7 @@ async def archive_schedule(
 
 
 async def expand_schedule(
-    conn: Connection, row: dict[str, Any], start: date, end: date
+    conn: Connection, row: dict[str, Any], start: date, end: date, *, as_of: date | None = None
 ) -> list[dict[str, Any]]:
     dates = expand_rule(
         row["rule"],
@@ -295,22 +296,46 @@ async def expand_schedule(
         if row["category_id"]
         else None
     )
-    return [
-        {
-            "date": day.isoformat(),
-            "schedule_id": row["id"],
-            "name": row["name"],
-            "kind": row["kind"],
-            "subtype": row["subtype"],
-            "amount_paise": row["amount_paise"],
-            "confirmed": row["confirmed"],
-            "account_id": row["account_id"],
-            "account_name": account["name"] if account else None,
-            "category_id": row["category_id"],
-            "category_name": category["name"] if category else None,
-        }
-        for day in dates
-    ]
+    evidence = await payment_evidence(conn, row["id"], start, end, as_of=as_of)
+    days = sorted(set(dates) | set(evidence))
+    events: list[dict[str, Any]] = []
+    for day in days:
+        saved = evidence.get(day)
+        terms = saved or row
+        occurrence_account = account
+        occurrence_category = category
+        if terms["account_id"] != row["account_id"]:
+            occurrence_account = await conn.fetchrow(
+                "SELECT name FROM accounts WHERE id = $1", terms["account_id"]
+            )
+        if terms["category_id"] != row["category_id"]:
+            occurrence_category = await conn.fetchrow(
+                "SELECT name FROM categories WHERE id = $1", terms["category_id"]
+            )
+        expected = saved["amount_paise"] if saved else row["amount_paise"]
+        paid = saved["paid_paise"] if saved else 0
+        events.append(
+            {
+                "date": day.isoformat(),
+                "schedule_id": row["id"],
+                "occurrence_id": saved["id"] if saved else None,
+                "name": saved["name"] if saved else row["name"],
+                "kind": saved["kind"] if saved else row["kind"],
+                "subtype": terms["subtype"],
+                "outside_text": terms["outside_text"],
+                "amount_paise": expected,
+                "paid_paise": paid,
+                "remaining_paise": max(0, expected - paid) if expected is not None else None,
+                "payment_status": payment_status(expected, paid, day, as_of or today()),
+                "payments": saved["payments"] if saved else [],
+                "confirmed": row["confirmed"],
+                "account_id": saved["account_id"] if saved else row["account_id"],
+                "account_name": occurrence_account["name"] if occurrence_account else None,
+                "category_id": terms["category_id"],
+                "category_name": occurrence_category["name"] if occurrence_category else None,
+            }
+        )
+    return events
 
 
 def _card_due_dates(card: dict[str, Any], start: date, end: date) -> list[date]:
@@ -331,16 +356,34 @@ def _card_due_dates(card: dict[str, Any], start: date, end: date) -> list[date]:
     return dates
 
 
+async def get_occurrence(conn: Connection, schedule_id: str, due_date: date) -> dict[str, Any]:
+    schedule = await _schedule_row(conn, schedule_id)
+    events = await expand_schedule(conn, schedule, due_date, due_date)
+    if not events:
+        raise NotFoundLedgerError("No occurrence on that date")
+    return events[0]
+
+
 async def upcoming(
-    conn: Connection, *, days: int = 30, start: date | None = None
+    conn: Connection, *, days: int = 30, start: date | None = None, past_days: int = 0
 ) -> dict[str, Any]:
     if days < 1 or days > 730:
         raise InvalidLedgerError("days must be between 1 and 730")
+    if not 0 <= past_days <= 366:
+        raise InvalidLedgerError("past_days must be between 0 and 366")
     start = start or today()
     end = start + timedelta(days=days)
+    first = start - timedelta(days=past_days)
     events: list[dict[str, Any]] = []
-    for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name"):
-        events.extend(await expand_schedule(conn, row, start, end))
+    for row in await conn.fetch(
+        """SELECT * FROM schedules WHERE active OR id IN
+           (SELECT schedule_id FROM schedule_occurrences WHERE due_date BETWEEN $1 AND $2)
+           ORDER BY name""",
+        first,
+        end,
+    ):
+        expanded = await expand_schedule(conn, row, first, end, as_of=start)
+        events.extend(event for event in expanded if row["active"] or event["occurrence_id"])
 
     for card in await conn.fetch(
         "SELECT * FROM accounts WHERE kind = 'card' AND active ORDER BY name"
@@ -358,6 +401,10 @@ async def upcoming(
                     "subtype": None,
                     "amount_paise": outstanding,
                     "confirmed": True,
+                    "payment_status": "untracked",
+                    "paid_paise": None,
+                    "remaining_paise": outstanding,
+                    "payments": [],
                     "account_id": card["id"],
                     "account_name": card["name"],
                     "category_id": None,
@@ -367,7 +414,7 @@ async def upcoming(
     events.sort(key=lambda event: (event["date"], event["name"]))
     return {
         "events": events,
-        "from": start.isoformat(),
+        "from": first.isoformat(),
         "to": end.isoformat(),
         "as_of": today().isoformat(),
     }

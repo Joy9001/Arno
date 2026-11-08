@@ -693,6 +693,24 @@ write_group:
 queue the risk check if the money picture changed
 ```
 
+### `schedule_payment`
+
+**Tier:** everyday, instant and undoable. Associates existing money with one occurrence; never
+creates a payment. The model first finds the actual movement with `query_movements`.
+
+**Input:** `schedule` (unique name or ID), `due_date` (holiday-adjusted ISO date), `movement_id`,
+`action` (`link` or `unlink`), and optional `amount_rupees` for a partial allocation. Omitting the
+amount assigns the movement's remaining eligible amount. Ambiguous schedule names are rejected.
+
+**Output:** status, payment ID, undo ID, and occurrence evidence: expected, matched, remaining,
+status, and linked movements with reversal state. An inline result card provides undo. Reading
+outside descriptions marks and flags the conversation before any later lasting write.
+
+`get_financial_context.upcoming` also returns payment status, matched and remaining `Money`
+values, and movement IDs. `confirmed` confirms an expectation; it is never payment evidence.
+The plain service, REST API, and agent wrapper share validation and audit behavior. See
+[schedule payment evidence](design.md#schedule-payment-evidence).
+
 ### `preference`
 
 **Tier:** lasting.

@@ -75,6 +75,11 @@ export const TOOL_COPY: Record<string, ToolCopy> = {
     running: "Saving the setup change…",
     done: "Saved the setup change.",
   },
+  schedule_payment: {
+    label: "Matching a schedule payment",
+    running: "Updating the payment match…",
+    done: "Updated the payment match.",
+  },
   preference: {
     label: "Saving a preference",
     running: "Saving the preference…",

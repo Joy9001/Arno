@@ -27,9 +27,14 @@ phone widths and opened the existing committed import without writing financial 
 The final local web build and Docker image rebuild passed sequentially. The rebuilt container
 also passed the phone active-tab check. The `design-review-headless` session was revoked.
 
-Intentional limits: voice mode remains parked; schedules have no payment-state evidence, so they
-are not marked paid; the current memory API exposes preferences, so fact/rule chips are not
-invented. Goal completion dates beyond the forecast or unsupported by balances remain unknown.
+Paid schedule tracking was subsequently added at the owner's request: individual occurrences
+can be matched to existing ledger movements, with partial amounts, reversal-aware status, undo,
+and remaining amounts in the projection. Schedules shows payment evidence and recent history.
+Generated card-due entries remain forecasts, not individual statement bills.
+
+Intentional limits: voice mode remains parked; the current memory API exposes preferences, so
+fact/rule chips are not invented. Goal completion dates beyond the forecast or unsupported by
+balances remain unknown.
 
 The historical remaining-work list below records the starting point and is superseded by this
 completion update.

@@ -346,6 +346,11 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
    splits, lending, and reimbursements through payees' ledger accounts.
 9. Schedules: income (fixed, variable, one-off), obligations, family transfers, installment
    plans—recurrence rules, holiday-aware "last working day."
+   Payment status comes from explicit allocations of recorded ledger movements to individual
+   occurrences, with partial payments, reversal-aware evidence, and undo. Matching never records
+   another transaction or infers payment from a date or confirmation flag. Future projections
+   reserve only the amount still expected. Generated card-due forecasts remain separate from
+   statement-bill settlement; see [schedule payment evidence](design.md#schedule-payment-evidence).
 10. Goals with fenced savings; categories with a reducible flag; learned categorization rules.
 11. Audit log with undo for every write; full export (CSV, JSON, and `pg_dump`).
 12. Backup sidecar: `pg_dump` shipped off-site by restic whenever the last success is over 24 hours

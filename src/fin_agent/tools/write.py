@@ -20,12 +20,14 @@ from fin_agent.ledger import categories as categories_mod
 from fin_agent.ledger import goals as goals_mod
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger import payees as payees_mod
+from fin_agent.ledger import schedule_payments
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger import settings as settings_mod
 from fin_agent.ledger.audit import undo_group, undo_latest, write_group
 from fin_agent.ledger.common import ledger_balance
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.errors import InvalidLedgerError
+from fin_agent.tools.mark import mark
 
 
 class ToolInputError(ValueError):
@@ -1107,6 +1109,59 @@ async def update_setup_item(
         }
 
     raise ToolInputError(f"unknown setup entity {entity!r}")
+
+
+async def schedule_payment(
+    conn: Connection,
+    *,
+    schedule: str,
+    due_date: date,
+    movement_id: str,
+    action: str = "link",
+    amount_rupees: Any = None,
+    message_id: str | None = None,
+) -> dict[str, Any]:
+    """Link existing money to one expected occurrence; never log or infer a payment here."""
+    row = await conn.fetchrow("SELECT * FROM schedules WHERE id = $1", schedule)
+    if row is None:
+        matches = await conn.fetch(
+            "SELECT * FROM schedules WHERE lower(name) = lower($1) LIMIT 2", schedule
+        )
+        if len(matches) != 1:
+            raise ToolInputError("Use a unique schedule ID; that name is missing or ambiguous")
+        row = matches[0]
+    arguments = {
+        "schedule_id": row["id"],
+        "due_date": due_date,
+        "movement_id": movement_id,
+        "actor": "agent",
+        "message_id": message_id,
+    }
+    if action == "link":
+        amount = _rupees(amount_rupees, "amount_rupees") if amount_rupees is not None else None
+        result = await schedule_payments.link_payment(conn, **arguments, amount_paise=amount)
+    elif action == "unlink":
+        result = await schedule_payments.unlink_payment(conn, **arguments)
+    else:
+        raise ToolInputError("action must be link or unlink")
+    occurrence = await schedules_mod.get_occurrence(conn, row["id"], due_date)
+    outside = occurrence.pop("outside_text", False)
+    if outside:
+        occurrence["name"] = mark(occurrence["name"])
+    for payment in occurrence["payments"]:
+        if payment["description"]:
+            payment["description"] = mark(payment["description"])
+            outside = True
+    summary = (
+        f"{result['status'].replace('_', ' ').capitalize()}: {occurrence['name']} · {due_date}"
+    )
+    return result | {
+        "outside_text": outside,
+        "occurrence": occurrence,
+        "card": _card(
+            "setup", title="Schedule payment", summary=summary, undo_id=result.get("undo_id")
+        ),
+    }
 
 
 async def preference(

@@ -370,16 +370,10 @@ async def load_inputs(
     schedule_sources: dict[str, dict[str, Any]] = {}
     covered_categories: set[str] = set()
     for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name"):
-        if row["starts"] > end:
-            continue
-        if row["ends"] is not None and row["ends"] < as_of:
-            continue
         amount = row["amount_paise"]
-        if not amount:
-            continue
-        if row["kind"] in {"obligation", "instalment"} and row["category_id"]:
-            covered_categories.add(str(row["category_id"]))
-        occurrences = await schedules_mod.expand_schedule(conn, row, as_of + timedelta(days=1), end)
+        occurrences = await schedules_mod.expand_schedule(
+            conn, row, as_of + timedelta(days=1), end, as_of=as_of
+        )
         if not occurrences:
             continue
         schedule_sources[str(row["id"])] = {
@@ -387,17 +381,29 @@ async def load_inputs(
             "id": row["id"],
             "name": mark(row["name"]) if row["outside_text"] else row["name"],
             "detail": f"{row['kind']} · {row['rule']}",
-            "amount_paise": int(amount),
+            "amount_paise": int(amount) if amount else None,
         }
         display_name = mark(row["name"]) if row["outside_text"] else row["name"]
         for occurrence in occurrences:
+            if (
+                occurrence["kind"] in {"obligation", "instalment"}
+                and occurrence["amount_paise"] is not None
+                and occurrence["category_id"]
+            ):
+                covered_categories.add(str(occurrence["category_id"]))
+            remaining = occurrence["remaining_paise"]
+            if remaining is None or remaining <= 0:
+                continue
             when = date.fromisoformat(occurrence["date"])
-            kind = row["kind"]
+            kind = occurrence["kind"]
+            display_name = (
+                mark(occurrence["name"]) if occurrence["outside_text"] else occurrence["name"]
+            )
             if kind.startswith("income"):
                 events.append(
                     CashEvent(
                         date=when,
-                        amount_paise=int(amount),
+                        amount_paise=int(remaining),
                         name=display_name,
                         kind=kind,
                         source_id=str(row["id"]),
@@ -405,11 +411,11 @@ async def load_inputs(
                     )
                 )
             elif kind in {"obligation", "instalment"}:
-                card = card_by_account.get(row["account_id"])
+                card = card_by_account.get(occurrence["account_id"])
                 events.append(
                     CashEvent(
                         date=when,
-                        amount_paise=-int(amount),
+                        amount_paise=-int(remaining),
                         name=display_name,
                         kind=kind,
                         source_id=str(row["id"]),
@@ -421,7 +427,7 @@ async def load_inputs(
                 events.append(
                     CashEvent(
                         date=when,
-                        amount_paise=-int(amount),
+                        amount_paise=-int(remaining),
                         name=display_name,
                         kind=kind,
                         source_id=str(row["id"]),

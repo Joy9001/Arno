@@ -14,6 +14,8 @@ import {
   MoneySummary,
 } from "./MoneyBits";
 import { countLabel, pageSlice, safePage } from "./moneyView";
+import { SchedulePaymentDetails } from "./SchedulePaymentDetails";
+import { paymentLabel, remainingAmount } from "./scheduleView";
 
 type ScheduleList = { items: Schedule[]; as_of: string };
 type Bucket = "income" | "bills" | "subscriptions" | "cards" | "goals" | "other";
@@ -22,7 +24,7 @@ type BucketFilter = "all" | Bucket;
 const PAGE_SIZE = 20;
 const PERIODS = [30, 90, 180, 365, 730];
 const SCHEDULES_DESCRIPTION =
-  "Income, bills, and contributions coming up in your plan.";
+  "Income, bills, and contributions, with payments matched to your ledger.";
 
 const KIND_LABEL: Record<string, string> = {
   income_fixed: "Fixed income",
@@ -89,17 +91,18 @@ function EventRow({ event }: { event: UpcomingEvent }) {
     .join(" · ");
 
   return (
-    <article className={`moneyv-row schedule-event${incoming ? " incoming" : ""}`}>
+    <article className={`moneyv-row schedule-event${incoming ? " incoming" : ""}${event.payment_status === "paid" ? " paid" : ""}`}>
       <time className="schedule-event-date" dateTime={event.date}>{formatDate(event.date)}</time>
       <div className="moneyv-row-main">
-        <strong>{event.name}</strong>
+        <strong className="schedule-event-name">{event.name}</strong>
         <span className="moneyv-meta">{detail}</span>
-        <span className="moneyv-meta">{incoming ? "Expected in" : "Expected out"}</span>
+        <span className={`schedule-payment-status ${event.payment_status ?? "scheduled"}`}>{paymentLabel(event)}</span>
+        {event.payment_status === "partial" && <span className="moneyv-meta">{formatPaise(event.paid_paise)} matched · {formatPaise(event.remaining_paise)} remaining</span>}
       </div>
       <div className="moneyv-figures">
-        <strong className={incoming ? "moneyv-positive" : undefined}>{amount}</strong>
+        <strong className={`schedule-event-amount${incoming ? " moneyv-positive" : ""}`}>{amount}</strong>
       </div>
-      <MoneyAsk prompt={`Tell me about ${event.name} on ${formatDate(event.date)}.`} />
+      {event.schedule_id ? <SchedulePaymentDetails event={event} /> : <MoneyAsk prompt={`Tell me about ${event.name} on ${formatDate(event.date)}.`} />}
     </article>
   );
 }
@@ -136,7 +139,7 @@ export function SchedulesPanel() {
   const [bucket, setBucket] = useState<BucketFilter>("all");
   const [page, setPage] = useState(0);
   const [schedulePage, setSchedulePage] = useState(0);
-  const upcoming = useApi<Upcoming>(`/api/schedules/upcoming?days=${days}`);
+  const upcoming = useApi<Upcoming>(`/api/schedules/upcoming?days=${days}&past_days=31`);
   const schedules = useApi<ScheduleList>("/api/schedules");
 
   if (upcoming.loading && !upcoming.data) {
@@ -151,12 +154,13 @@ export function SchedulesPanel() {
   }
 
   const events = upcoming.data?.events ?? [];
-  const incoming = events
+  const future = events.filter((event) => event.date >= (upcoming.data?.as_of ?? isoDate(new Date())));
+  const incoming = future
     .filter((event) => isIncoming(event.kind))
-    .reduce((total, event) => total + (event.amount_paise ?? 0), 0);
-  const outgoing = events
+    .reduce((total, event) => total + remainingAmount(event), 0);
+  const outgoing = future
     .filter((event) => !isIncoming(event.kind))
-    .reduce((total, event) => total + (event.amount_paise ?? 0), 0);
+    .reduce((total, event) => total + remainingAmount(event), 0);
   const net = incoming - outgoing;
   const filtered = bucket === "all" ? events : events.filter((event) => bucketOf(event) === bucket);
   const currentPage = safePage(page, filtered.length, PAGE_SIZE);
@@ -166,13 +170,13 @@ export function SchedulesPanel() {
       ? Math.max(
           1,
           Math.round(
-            (Date.parse(upcoming.data.to) - Date.parse(upcoming.data.from)) / 86_400_000,
+            (Date.parse(upcoming.data.to) - Date.parse(upcoming.data.as_of)) / 86_400_000,
           ),
         )
       : days;
   const period =
     upcoming.data?.from && upcoming.data?.to
-      ? `${formatDate(upcoming.data.from)} – ${formatDate(upcoming.data.to)}`
+      ? `${formatDate(upcoming.data.as_of)} – ${formatDate(upcoming.data.to)}`
       : undefined;
 
   const header = (
@@ -199,6 +203,7 @@ export function SchedulesPanel() {
             </select>
           </label>
           {upcoming.data && <span>As of {formatDate(upcoming.data.as_of)}</span>}
+          <button type="button" className="ghost small" disabled={upcoming.loading} onClick={() => { upcoming.reload(); schedules.reload(); }}>Refresh</button>
           {upcoming.loading && <MoneyRefreshing />}
         </>
       }
@@ -231,7 +236,7 @@ export function SchedulesPanel() {
 
       {events.length > 0 && (
         <MoneySummary
-          label={`Scheduled amounts for the next ${loadedDays} days`}
+          label={`Remaining scheduled amounts for the next ${loadedDays} days`}
           cells={[
             {
               label: "Money in",
@@ -247,13 +252,13 @@ export function SchedulesPanel() {
             {
               label: "Net",
               value: formatPaise(net),
-              note: "Expected movement over the period",
+              note: "Remaining expected movement",
               tone: net < 0 ? "negative" : net > 0 ? "positive" : undefined,
             },
           ]}
         />
       )}
-      {events.length > 0 && period && <p className="moneyv-basis">The totals cover {period}.</p>}
+      {events.length > 0 && period && <p className="moneyv-basis">Totals show amounts still expected over {period}, after matched payments.</p>}
       {events.some((event) => event.amount_paise === null) && (
         <p className="moneyv-basis">
           Events without an amount are shown but not included in the totals.
@@ -261,18 +266,19 @@ export function SchedulesPanel() {
       )}
       {events.some((event) => event.kind === "card_due") && (
         <p className="moneyv-basis">
-          Card dues use today’s outstanding for each due date, so the same bill can appear in more
-          than one month.
+          Card forecasts use today’s outstanding for each due date, so the same bill can appear in
+          more than one month. They do not track individual statement payments.
         </p>
       )}
 
-      <ScheduleCalendar start={upcoming.data.from} events={events} />
-      <p className="moneyv-meta">Next 30 days · green: incoming · orange: outgoing. Scheduled does not mean paid.</p>
+      <ScheduleCalendar start={upcoming.data.as_of} events={events} />
+      <p className="moneyv-meta">Next 30 days · green: incoming · orange: outgoing. Payment status comes from matched ledger movements.</p>
 
       <MoneySection
         title="Scheduled events"
         note={filtered.length ? countLabel(filtered.length, "event") : undefined}
       >
+        <p className="moneyv-basis">Includes the past 31 days. Unmatched means no payment is linked; it does not mean unpaid.</p>
         {events.length > 0 && (
           <div className="moneyv-controls">
             <label className="moneyv-inline-control">

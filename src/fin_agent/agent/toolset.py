@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import date
+from decimal import Decimal
 from typing import Any, Literal
 
 import asyncpg
@@ -610,6 +611,37 @@ async def update_setup(
     return _write_return(payload)
 
 
+async def schedule_payment(
+    ctx: RunContext[AgentDeps],
+    schedule: str,
+    due_date: date,
+    movement_id: str,
+    action: Literal["link", "unlink"] = "link",
+    amount_rupees: Decimal | None = None,
+) -> ToolReturn:
+    """Match a recorded movement to one schedule occurrence, or remove that match. This never
+    records new money. Use the schedule name or ID and its holiday-adjusted ISO due date. Find
+    the actual movement with query_movements first; do not invent a payment from an elapsed date
+    or a confirmed schedule. A partial payment accepts amount_rupees; omit it to use the
+    movement's remaining eligible amount. Existing matches are idempotent. Matching and
+    unmatching each have undo; reversed movements never count as paid."""
+    payload = await _call_write(
+        lambda conn: write_tools.schedule_payment(
+            conn,
+            schedule=schedule,
+            due_date=due_date,
+            movement_id=movement_id,
+            action=action,
+            amount_rupees=amount_rupees,
+            message_id=ctx.deps.message_id,
+        )
+    )
+    if payload.pop("outside_text", False):
+        async with connect() as conn:
+            await flag_outside_text(conn, ctx.deps.conversation_id)
+    return _write_return(payload)
+
+
 async def preference(
     ctx: RunContext[AgentDeps],
     action: Literal["remember", "forget"],
@@ -652,6 +684,7 @@ def build_write_toolset() -> FunctionToolset[AgentDeps]:
             record_movement,
             correct_movement,
             update_setup,
+            schedule_payment,
             preference,
             undo,
         ]

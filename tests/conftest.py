@@ -104,6 +104,8 @@ from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 models.ALLOW_MODEL_REQUESTS = False
 
 RESET_TABLES = (
+    "schedule_payments",
+    "schedule_occurrences",
     "users",
     "setup_tokens",
     "webauthn_challenges",

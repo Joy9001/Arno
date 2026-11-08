@@ -91,7 +91,9 @@ def _transfer_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _reversal_state(conn: Connection, movement_ids: list[str]) -> dict[str, dict[str, Any]]:
+async def _reversal_state(
+    conn: Connection, movement_ids: list[str], *, as_of: date | None = None
+) -> dict[str, dict[str, Any]]:
     """Whether each movement is effectively reversed, following undo-of-undo chains.
 
     A movement is reversed when its reversal is active. Reversing that reversal makes the original
@@ -105,16 +107,20 @@ async def _reversal_state(conn: Connection, movement_ids: list[str]) -> dict[str
             SELECT m.id AS root, m.id AS node, 0 AS depth
             FROM movements m
             WHERE m.id = ANY($1::text[])
+              AND ($2::date IS NULL OR m.date <= $2)
             UNION ALL
             SELECT d.root, child.id, d.depth + 1
             FROM descendants d
             JOIN movements child ON child.reverses_id = d.node
+            WHERE $2::date IS NULL OR child.date <= $2
         )
         SELECT d.root, d.node, d.depth,
-               (SELECT count(*) FROM movements x WHERE x.reverses_id = d.node) AS child_count
+               (SELECT count(*) FROM movements x WHERE x.reverses_id = d.node
+                AND ($2::date IS NULL OR x.date <= $2)) AS child_count
         FROM descendants d
         """,
         movement_ids,
+        as_of,
     )
     by_root: dict[str, list[dict[str, Any]]] = {}
     for row in rows:

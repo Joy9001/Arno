@@ -20,6 +20,7 @@ from fin_agent.ledger import (
     movements,
     payees,
     preference_edits,
+    schedule_payments,
     schedules,
     settings,
     uncategorized,
@@ -222,6 +223,11 @@ class ScheduleUpdate(ApiModel):
     ends: Date | None = None
     holiday_adjust: Literal["none", "next", "previous"] | None = None
     active: bool | None = None
+
+
+class SchedulePaymentCreate(ApiModel):
+    movement_id: str = Field(min_length=1)
+    amount_paise: int | None = Field(default=None, gt=0)
 
 
 # Goals -------------------------------------------------------------------------------------
@@ -472,9 +478,11 @@ async def post_uncategorized_answer(body: UncategorizedAnswer, conn: Database) -
 
 @router.get("/schedules/upcoming")
 async def get_upcoming(
-    conn: Database, days: int = Query(default=30, ge=1, le=730)
+    conn: Database,
+    days: int = Query(default=30, ge=1, le=730),
+    past_days: int = Query(default=0, ge=0, le=366),
 ) -> dict[str, Any]:
-    return await schedules.upcoming(conn, days=days)
+    return await schedules.upcoming(conn, days=days, past_days=past_days)
 
 
 @router.get("/schedules")
@@ -490,6 +498,46 @@ async def post_schedule(body: ScheduleCreate, conn: Database) -> dict[str, Any]:
 @router.get("/schedules/{schedule_id}")
 async def get_schedule(schedule_id: str, conn: Database) -> dict[str, Any]:
     return await schedules.get_schedule(conn, schedule_id)
+
+
+@router.get("/schedules/{schedule_id}/occurrences/{due_date}")
+async def get_schedule_occurrence(
+    schedule_id: str,
+    due_date: Date,
+    conn: Database,
+) -> dict[str, Any]:
+    return await schedules.get_occurrence(conn, schedule_id, due_date)
+
+
+@router.post("/schedules/{schedule_id}/occurrences/{due_date}/payments", status_code=201)
+async def post_schedule_payment(
+    schedule_id: str,
+    due_date: Date,
+    body: SchedulePaymentCreate,
+    conn: Database,
+) -> dict[str, Any]:
+    result = await schedule_payments.link_payment(
+        conn,
+        schedule_id=schedule_id,
+        due_date=due_date,
+        **body.model_dump(),
+    )
+    return result | {"occurrence": await schedules.get_occurrence(conn, schedule_id, due_date)}
+
+
+@router.delete("/schedules/{schedule_id}/occurrences/{due_date}/payments/{movement_id}")
+async def delete_schedule_payment(
+    schedule_id: str,
+    due_date: Date,
+    movement_id: str,
+    conn: Database,
+) -> dict[str, Any]:
+    return await schedule_payments.unlink_payment(
+        conn,
+        schedule_id=schedule_id,
+        due_date=due_date,
+        movement_id=movement_id,
+    )
 
 
 @router.patch("/schedules/{schedule_id}")

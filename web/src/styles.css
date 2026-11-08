@@ -388,6 +388,9 @@ a.button {
 
 .moneyv-head .sr-only + p { margin: 0; }
 
+.moneyv-head { flex-wrap: wrap; }
+.moneyv-head-copy { flex: 1 1 260px; }
+
 .panel-head h2,
 .moneyv-head h2 {
   margin: 0;
@@ -412,7 +415,8 @@ a.button {
 
 .moneyv-head-aside {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 100%;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;

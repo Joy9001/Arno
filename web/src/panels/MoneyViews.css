@@ -800,6 +800,19 @@
 .schedule-event-date { color: var(--sub); font-family: var(--mono); font-size: 12px; }
 .schedule-event.incoming .schedule-event-date { color: var(--green); }
 
+.schedule-event.paid .schedule-event-name,
+.schedule-event.paid .schedule-event-amount {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+.schedule-payment-status { font-size: 12px; color: var(--sub); }
+.schedule-payment-status.paid { color: var(--green); }
+.schedule-payment-status.partial { color: var(--due); }
+.schedule-payments { list-style: none; padding: 0; margin: 12px 0; }
+.schedule-payments li { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line-soft); }
+.schedule-payment-copy { display: grid; gap: 5px; flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.schedule-payments li > strong { font-variant-numeric: tabular-nums; }
+
 @media (max-width: 620px) {
   .goal-landing { grid-template-columns: 1fr auto; gap: 8px; }
   .goal-landing-track { grid-row: 2; grid-column: 1 / -1; }

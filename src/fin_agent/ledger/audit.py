@@ -38,6 +38,8 @@ RISK_TABLES = frozenset(
         "movements",
         "payees",
         "schedules",
+        "schedule_occurrences",
+        "schedule_payments",
         "settings",
         "transfer_labels",
     }
@@ -278,13 +280,25 @@ async def _restore_before(
         )
 
     if before is None:
+        if table == "schedule_occurrences" and await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM schedule_payments WHERE occurrence_id = $1)", row_id
+        ):
+            # A later match can share the frozen terms. Undo only this group's allocation.
+            return
         if table == "accounts":
             await _update_row(conn, group, table, row_id, {"active": False})
         elif table in {"payees", "categories", "schedules"}:
             await _update_row(conn, group, table, row_id, {"active": False})
         elif table == "goals":
             await _update_row(conn, group, table, row_id, {"status": "abandoned"})
-        elif table in {"category_rules", "transfer_labels", "captures", "users"}:
+        elif table in {
+            "category_rules",
+            "transfer_labels",
+            "captures",
+            "users",
+            "schedule_occurrences",
+            "schedule_payments",
+        }:
             if current is not None:
                 await conn.execute(
                     f"DELETE FROM {quote_ident(table)} WHERE {quote_ident(key)}::text = $1",
@@ -296,6 +310,10 @@ async def _restore_before(
         return
 
     if current is None:
+        if table == "schedule_payments":
+            from fin_agent.ledger.schedule_payments import validate_restored_payment
+
+            await validate_restored_payment(conn, before)
         await _insert_row(conn, group, table, before)
         return
     await _update_row(conn, group, table, row_id, before)
@@ -365,6 +383,10 @@ async def undo_group(
     ordered = [entry for entry in entries if entry["table_name"] == "movements"]
     ordered += [entry for entry in reversed(entries) if entry["table_name"] != "movements"]
     async with write_group(conn, actor=actor, message_id=message_id) as undo:
+        if touched & {"schedule_occurrences", "schedule_payments"}:
+            from fin_agent.ledger.schedule_payments import lock_payment_undo
+
+            await lock_payment_undo(conn, entries)
         for entry in ordered:
             table = entry["table_name"]
             row_id = entry["row_id"]

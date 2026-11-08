@@ -56,7 +56,14 @@ DAILY_CEILING_USD = Decimal("20")
 SHARED_DAILY_BUDGET = "shared daily"
 
 WRITE_TOOLS = frozenset(
-    {"record_movement", "correct_movement", "update_setup", "preference", "undo"}
+    {
+        "record_movement",
+        "correct_movement",
+        "update_setup",
+        "schedule_payment",
+        "preference",
+        "undo",
+    }
 )
 
 SUMMARY_PROMPT = (

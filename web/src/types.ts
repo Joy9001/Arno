@@ -105,6 +105,18 @@ export type UpcomingEvent = {
   kind: string;
   subtype: string | null;
   amount_paise: number | null;
+  occurrence_id?: string | null;
+  paid_paise?: number | null;
+  remaining_paise?: number | null;
+  payment_status?: "scheduled" | "unmatched" | "partial" | "paid" | "recorded" | "untracked";
+  payments?: Array<{
+    id: string;
+    movement_id: string;
+    date: string;
+    description: string | null;
+    amount_paise: number;
+    active: boolean;
+  }>;
   confirmed: boolean;
   account_id: string | null;
   account_name: string | null;

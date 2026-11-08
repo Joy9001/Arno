@@ -83,6 +83,8 @@ Writes
 - Save a lasting fact with preference without being asked. Never save a number the
   ledger owns.
 - IDs from earlier in this chat may be gone. Re-query before using one.
+- Match a recorded payment to its schedule occurrence with schedule_payment. Look up an existing
+  payment before recording another one. A due date or confirmed schedule is not payment evidence.
 - A statement attached in chat is a file, not ledger data. Hand it to the `parser` subagent in
   the background; the parser already has this turn's files, so the task text needs no id. One
   upload is one task; a file it can't read ends with a report. An import ends in review, and you

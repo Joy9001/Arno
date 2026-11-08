@@ -93,6 +93,11 @@ The web app has the following parts:
   Imports, Inbox), and Recaps (sums of ledger rows told as stories). Changes go through chat.
 - **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
   Settings.
+- **Schedule payments:** Schedules includes recent occurrences and read-only payment details.
+  Paid/received rows are struck through; partial rows show the matched amount and remainder.
+  Find/unlink actions seed chat for the user to send. REST exposes occurrence details and
+  link/unlink routes under `/api/schedules/{id}/occurrences/{date}`; each write is undoable.
+  Generated card-due entries are labeled forecasts rather than statement payment evidence.
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory: turn one
   on or off, or delete it for good), notification times, passkeys and sessions, backup and job
   status, the last model error, and a link to Phoenix for agent traces. Each section lands

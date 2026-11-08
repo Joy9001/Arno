@@ -172,13 +172,9 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     for event in upcoming_rows:
         name = event["name"]
         schedule_id = event["schedule_id"]
-        if schedule_id:
-            schedule = await conn.fetchrow(
-                "SELECT outside_text FROM schedules WHERE id = $1", schedule_id
-            )
-            if schedule and schedule["outside_text"]:
-                name = mark(name) or name
-                outside = True
+        if event.get("outside_text"):
+            name = mark(name) or name
+            outside = True
         upcoming.append(
             {
                 "date": event["date"],
@@ -186,6 +182,18 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
                 "kind": event["kind"],
                 "subtype": event["subtype"],
                 "amount": money(event["amount_paise"]),
+                "schedule_id": schedule_id,
+                "payment_status": event["payment_status"],
+                "paid": money(event["paid_paise"]),
+                "remaining": money(event["remaining_paise"]),
+                "payment_movements": [
+                    {
+                        "movement_id": payment["movement_id"],
+                        "amount": money(payment["amount_paise"]),
+                        "active": payment["active"],
+                    }
+                    for payment in event["payments"]
+                ],
                 "confirmed": event["confirmed"],
                 "source_id": schedule_id or event["account_id"],
             }

@@ -161,6 +161,35 @@ because the account isn't `liquid`.
 RRULE), `spend_limit` (US cents; $1.00 by default), `last_run_at`, and `active`. The agent runs
 them read-only and answers into the inbox.
 
+### Schedule payment evidence
+
+Following `plan.md` §3, a recurrence is an expectation; a movement is evidence of money recorded.
+The first explicit match freezes an occurrence's name, kind, subtype, expected amount, account,
+category, and text provenance in `schedule_occurrences`, uniquely keyed by schedule and adjusted
+due date. Reads expand recurrence rules without creating rows. Later rule or amount changes do
+not rewrite matched occurrences. Archived schedules retain their materialized history.
+
+`schedule_payments` assigns a positive integer-paise amount from an existing movement to that
+occurrence. Multiple movements can cover one occurrence, and a movement can be split across
+occurrences within its eligible amount. Matching validates direction and the schedule account;
+goal contributions require a transfer to the linked goal. Bank-to-card transfers can cover an
+explicit bill schedule. Matching creates no ledger money. There is no automatic date, amount,
+or payee matching, and duplicate matches are idempotent.
+
+Status is derived from evidence: `paid` when active matches cover the known expected amount,
+`partial` below it, and `recorded` when money is matched but the expected amount is unknown.
+Without a match, future occurrences are `scheduled` and past ones `unmatched`, which does not
+claim they are unpaid. Reversed movements contribute nothing; undoing the reversal restores their
+contribution. Correcting an amount creates a replacement movement that must be matched explicitly.
+Matches and unmatches have audit groups and undo; restoring an old match cannot reuse money that
+was assigned elsewhere afterward. Undoing an early match preserves terms used by later matches.
+
+The projection reserves only the remaining expected amount of a future occurrence, using
+payments and reversal state as of its calculation date. Past unmatched amounts are not silently
+reintroduced as arrears. Generated `card_due` entries are `untracked` forecasts of today's card
+outstanding, not individual statement bills. They do not acquire a paid flag from these matches.
+Both tables are included in exports and backups, and readable by `agent_ro`.
+
 ### People
 
 **`payees`:** anyone money goes to or comes from: Swiggy, ramesh@okaxis, an employer. The following
@@ -212,7 +241,7 @@ The following tables hold memory, conversations, and provenance:
 
 _"Answers any question" is a property of the tool surface._ Few wide tools over complete data. Eight
 read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools: `run_code`
-and the six write tools. See [Code Mode](#code-mode). Each tool's description, input, output, and
+and the write tools. See [Code Mode](#code-mode). Each tool's description, input, output, and
 logic are in [`tools.md`](tools.md).
 
 ![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
@@ -237,12 +266,13 @@ The agent has eight read tools:
 
 ### Write
 
-The agent has six write tools:
+The agent exposes these write tools:
 
 | Tool | Does |
 |---|---|
 | `record_movement(movement)` | Expense, income, transfer, split, loan EMI, refund, or settlement in one call. Code works out the transfers. Returns an inline card with undo |
 | `correct_movement(id, changes, scope)` | Conversational repair. A label change edits the label; an amount fix or a delete appends a reversal. `scope` says how far a category or payee change goes: `this`, `future` (a rule), or `all` (a rule and past rows) |
+| `schedule_payment(schedule, due_date, movement_id, action, amount_rupees)` | Match or unmatch existing ledger money to one schedule occurrence. Partial allocations, movement reversals, and undo determine the resulting status |
 | `update_setup(entity, action, data)` | Accounts, balances, schedules, goals, categories, payees, settings, and scheduled questions. One discriminated-union tool, shaped for a frontier model (`plan.md` §3) |
 | `preference(action, text or id)` | Remember or forget a typed preference. Called unprompted when the agent notices a lasting fact |
 | `delegate_task` and the task tools | From the harness. The main agent hands an upload to the parser subagent in the background, and can steer, answer, resume, or cancel it. An import ends in `review` state; committing is a separate, explicit step on the review screen. No password passes through them: it goes in a field on the import card, over REST ([`tools.md`](tools.md#delegation-delegate_task-and-the-task-tools)) |

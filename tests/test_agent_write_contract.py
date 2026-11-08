@@ -309,3 +309,45 @@ async def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
     assert row["from_name"] == "HDFC Savings"
     assert row["to_name"] == "Slice card"
     assert row["amount_paise"] == 500_000
+
+
+async def test_schedule_payment_tool_matches_existing_money_and_returns_undo(ledger):
+    from fin_agent.ledger.accounts import create_account
+    from fin_agent.ledger.common import today
+    from fin_agent.ledger.movements import record_expense
+    from fin_agent.ledger.schedules import create_schedule
+
+    bank = await create_account(ledger, kind="bank", name="Match bank")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        name="Rent matching",
+        amount_paise=100_000,
+        rule="FREQ=MONTHLY",
+        starts=today(),
+        account_id=bank["id"],
+    )
+    movement = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=100_000,
+        description="Rent receipt",
+    )
+    deps = await _deps(ledger, "cnv_wr_match", "msg_wr_match")
+    script = _one_tool_script(
+        "schedule_payment",
+        {
+            "schedule": schedule["id"],
+            "due_date": today().isoformat(),
+            "movement_id": movement["id"],
+            "amount_rupees": "600.00",
+        },
+    )
+    result = await _run(script, "Match this recorded payment to rent.", deps)
+    payload = _tool_return(result.all_messages(), "schedule_payment")
+    assert payload["occurrence"]["remaining_paise"] == 40_000
+    assert payload["undo_id"]
+    assert await ledger.fetchval("SELECT count(*) FROM schedule_payments") == 1
+    assert await ledger.fetchval(
+        "SELECT outside_text_at IS NOT NULL FROM conversations WHERE id=$1", deps.conversation_id
+    )
