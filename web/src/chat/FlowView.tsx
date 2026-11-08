@@ -41,11 +41,29 @@ function brief(value: unknown): string {
   }
 }
 
+/** Finds a projection verdict in a card or tool result, including one nested in a composed answer. */
+function findVerdict(value: unknown, depth = 0): string | null {
+  if (!value || typeof value !== "object" || depth > 4) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findVerdict(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.verdict === "string" && VERDICT[record.verdict]) return VERDICT[record.verdict];
+  for (const item of Object.values(record)) {
+    const found = findVerdict(item, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
 function verdictOf(parts: readonly Part[]): string | null {
   for (const part of parts) {
-    const data = (part.type === "data" ? part.data : part.result) as Record<string, unknown> | undefined;
-    const verdict = data && typeof data === "object" ? (data.verdict as string | undefined) : undefined;
-    if (verdict && VERDICT[verdict]) return VERDICT[verdict];
+    const found = findVerdict(part.type === "data" ? part.data : part.result);
+    if (found) return found;
   }
   return null;
 }

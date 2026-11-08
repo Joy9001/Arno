@@ -1408,6 +1408,7 @@ h3 {
   grid-template-columns: minmax(200px, 0.8fr) minmax(220px, 1fr) minmax(240px, 1.1fr);
   gap: 64px;
   align-items: center;
+  min-width: 760px;
   margin-bottom: 44px;
 }
 
@@ -1556,6 +1557,7 @@ h3 {
   .flow-turn {
     grid-template-columns: minmax(0, 1fr);
     gap: 18px;
+    min-width: 0;
   }
 
   .flow-q::after,
