@@ -1,0 +1,75 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>24 · Run stopped, explained (A)</title>
+<link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="run.css">
+<style>
+.app{grid-template-columns:76px 600px 1fr}
+.chat{display:flex;flex-direction:column;padding:20px 28px;border-right:1px solid var(--line)}
+.chat .h{display:flex;justify-content:space-between;align-items:center}.chat .h b{font-size:18px;font-weight:800;letter-spacing:-.02em}
+.th{flex:1;padding-top:24px}
+.file{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12.5px;font-weight:700;opacity:.85}
+.cv{overflow:hidden;padding:20px 30px}
+.ck{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.ck .t{font-weight:700;font-size:13px;color:var(--sub)}.ck .t b{color:var(--t)}
+.say.sm{font-size:17px}
+.acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.collapsed .pih{opacity:.85}
+</style></head>
+<body data-active="chats"><div class="app"><nav id="rail"></nav>
+<section class="chat">
+  <div class="h"><b>One year of SBI</b><span class="tabs"><span class="on">Chat</span><span>Flow</span></span></div>
+  <div class="th">
+    <div class="me">Here is my one year SBI bank statement.<span class="file"><span data-icon="file"></span>AccountStatement_Asha.pdf</span></div>
+    <div class="ag" style="margin-top:22px"><span class="orb" style="--s:30px"><i></i></span><div style="flex:1">
+      <p class="say sm">Got it. The parser is reading it now.</p>
+      <div class="runcard failed">
+        <span class="glyph">!</span>
+        <span class="body"><b>Reading your SBI statement</b><span class="line">Stopped at step 4 of 6 · out of steps</span></span>
+        <span class="btn open">Open run</span>
+      </div>
+    </div></div>
+    <div class="ag" style="margin-top:22px"><span class="orb" style="--s:30px"><i></i></span><div style="flex:1">
+      <p class="say">The import stopped, and <b>nothing reached your ledger</b>. The parser used all 120 of its steps: reading the 74 pages one at a time took most of them, and its parser script failed three times before it could finish the checks.</p>
+      <p class="say" style="margin-top:10px">I can run it again with a bigger budget, or you can upload the CSV export from SBI, which reads in a single step.</p>
+      <div class="acts"><span class="btn lime">Run again</span><span class="btn">Upload a CSV</span><span class="btn ask">Why did it fail?</span></div>
+    </div></div>
+  </div>
+  <div class="comp"><p>Ask a follow-up…</p><div class="row"><span class="tool"><span data-icon="camera"></span></span><span class="tool"><span data-icon="mic"></span></span><span class="tool"><span data-icon="file"></span></span><span class="send">↑</span></div></div>
+</section>
+
+<section class="cv">
+  <div class="ck"><span class="t">Run · <b>Parser</b></span><span><span class="btn ghost">Open full page</span> <span class="btn" style="margin-left:6px">✕</span></span></div>
+  <div class="runhead"><div style="flex:1">
+    <h2>Reading your SBI statement</h2>
+    <div class="meta"><span class="stopped">Stopped · 4m 20s</span><span>AccountStatement_Asha.pdf · 74 pages</span><span class="mono">deepseek-v4.1-flash</span></div>
+  </div></div>
+
+  <div class="verdictbox">
+    <h3>Stopped: it ran out of steps</h3>
+    <p>The parser has 120 steps per run. Reading 74 pages one at a time used 74 of them, and three parser attempts failed on the same mistake, so it never reached the checks.</p>
+    <span class="safe">✓ Nothing was written to your ledger</span>
+    <div class="acts"><span class="btn lime">Run again with 240 steps</span><span class="btn">Upload a CSV</span><span class="btn ask">Ask why</span></div>
+  </div>
+
+  <div class="budget over"><div class="row"><span>Step budget</span><span><b>120</b> of 120 used</span></div><div class="track"><i></i></div></div>
+
+  <div class="spine">
+    <div class="pi done collapsed"><span class="node">✓</span><div class="pih"><b>Open the statement</b><span>2 steps · 0:42</span></div></div>
+    <div class="pi done collapsed"><span class="node">✓</span><div class="pih"><b>Check for a saved SBI parser</b><span>1 step · 0:04</span></div></div>
+    <div class="pi done collapsed"><span class="node">✓</span><div class="pih"><b>Read the layout and write a parser</b><span>96 steps · 2:51</span></div></div>
+    <div class="pi failed"><span class="node">✕</span>
+      <div class="pih"><b>Submit the parser and fix it until the checks pass</b><span>0:43</span></div>
+      <div class="steps">
+        <div class="step bad sel"><span class="ic">✕</span><span class="t">Submitted the parser · attempt 1</span><span class="tm">6s</span>
+          <span class="d"><span class="fn bad">submit_parser <b>error</b></span></span>
+          <span class="err">The script looked for a list called <span class="mono">files</span>. Submitted scripts don’t get one; they read pages with <span class="mono">doc_words(page)</span>.</span></div>
+        <div class="step bad"><span class="ic">✕</span><span class="t">Submitted the parser · attempt 2</span><span class="tm">5s</span>
+          <span class="d"><span class="fn bad">submit_parser <b>error</b></span></span>
+          <span class="err">Same mistake: it guessed at variable names instead of reading pages.</span></div>
+        <div class="step bad"><span class="ic">✕</span><span class="t">Submitted the parser · attempt 3</span><span class="tm">—</span>
+          <span class="err">Cut off: no steps left.</span></div>
+      </div>
+    </div>
+    <div class="pi todo"><span class="node">5</span><div class="pih"><b>Suggest moves between your own accounts</b><span>Not reached</span></div></div>
+    <div class="pi todo"><span class="node">6</span><div class="pih"><b>Report back</b><span>Not reached</span></div></div>
+  </div>
+</section></div>
+<script src="shell.js"></script></body></html>

@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>27 · Phone · run sheet</title>
+<link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="run.css">
+<style>
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+.sheet{position:absolute;left:0;right:0;top:64px;bottom:0;padding:10px 16px 24px;border-radius:28px 28px 0 0;background:var(--bg);box-shadow:0 -12px 40px rgba(0,0,0,.5);overflow:hidden}
+.grab{width:40px;height:5px;margin:0 auto 14px;border-radius:99px;background:var(--s3)}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.runhead h2{font-size:22px}
+.pi{padding-left:36px}
+.step{padding:10px 11px}
+.step .t{font-size:13.5px}
+.now{margin-top:12px}
+</style></head>
+<body class="phone">
+<div class="pbar"><span class="pic">‹</span><b>One year of SBI</b></div>
+<div class="dim"></div>
+<div class="sheet">
+  <div class="grab"></div>
+  <div class="top"><span class="k">Run · <b style="color:var(--t)">Parser</b></span><span class="btn" style="padding:6px 11px">✕</span></div>
+  <div class="runhead"><div>
+    <h2>Reading your SBI statement</h2>
+    <div class="meta"><span class="live">Running · 2m 14s</span><span>74 pages</span></div>
+  </div></div>
+  <div class="budget warn"><div class="row"><span>Step budget</span><span><b>96</b> of 120</span></div><div class="track"><i style="width:80%"></i></div></div>
+  <div class="now"><span class="orb think"><i></i></span>Reading page 52 of 74</div>
+  <div class="spine">
+    <div class="pi done"><span class="node">✓</span><div class="pih"><b>Open the statement</b><span>0:42</span></div></div>
+    <div class="pi done"><span class="node">✓</span><div class="pih"><b>Check for a saved parser</b><span>0:04</span></div></div>
+    <div class="pi active"><span class="node"><span class="orb think"><i></i></span></span>
+      <div class="pih"><b>Read the layout, write a parser</b></div>
+      <div class="steps">
+        <div class="step ok"><span class="ic">✓</span><span class="t">Read the header and first page</span><span class="tm">4s</span><span class="d"><span class="fn">doc_words <b>×2</b></span></span></div>
+        <div class="step bad"><span class="ic">✕</span><span class="t">Tried all 74 pages at once</span><span class="tm">1s</span><span class="err">Range reads stop at 50 pages.</span></div>
+        <div class="step run"><span class="ic"><span class="orb think"><i></i></span></span><span class="t">Reading pages one by one · 52 of 74</span><span class="tm">58s</span><span class="d"><span class="fn">doc_words <b>×50</b></span></span></div>
+      </div>
+    </div>
+    <div class="pi todo"><span class="node">4</span><div class="pih"><b>Submit and fix until checks pass</b></div></div>
+  </div>
+</div>
+<script src="shell.js"></script></body></html>

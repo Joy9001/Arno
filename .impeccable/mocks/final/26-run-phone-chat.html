@@ -1,0 +1,29 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>26 · Phone · run in chat</title>
+<link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="run.css">
+<style>
+.wrap{padding:6px 16px 0}
+.me{font-size:15.5px;max-width:300px}
+.file{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px;font-weight:700;opacity:.85}
+.say{font-size:16.5px}
+.runcard{padding:12px 13px;gap:11px}
+.runcard .glyph{width:34px;height:34px}
+.acts{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.acts .btn{font-size:13px;padding:8px 13px}
+</style></head>
+<body class="phone" data-active="ask">
+<div class="pbar"><span class="pic">‹</span><b>One year of SBI</b><span class="pic"><span data-icon="menu"></span></span></div>
+<div class="wrap">
+  <div class="me">Here is my one year SBI bank statement.<span class="file"><span data-icon="file"></span>AccountStatement_Asha.pdf</span></div>
+  <div class="ag" style="margin-top:18px;gap:10px"><span class="orb" style="--s:26px"><i></i></span><div style="flex:1;min-width:0">
+    <div class="runcard failed">
+      <span class="glyph">!</span>
+      <span class="body"><b>Reading your SBI statement</b><span class="line">Stopped at step 4 of 6</span></span>
+      <span class="btn open" style="padding:7px 12px;font-size:13px">Open</span>
+    </div>
+    <p class="say" style="margin-top:14px">The import stopped, and <b>nothing reached your ledger</b>. The parser used all 120 of its steps reading the 74 pages one at a time, and its script failed three times.</p>
+    <p class="say" style="margin-top:8px">Run it again with a bigger budget, or upload SBI’s CSV export.</p>
+    <div class="acts"><span class="btn lime">Run again</span><span class="btn">Upload a CSV</span><span class="btn ask">Why?</span></div>
+  </div></div>
+</div>
+<nav id="tabbar"></nav>
+<script src="shell.js"></script></body></html>
