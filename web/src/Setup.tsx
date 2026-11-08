@@ -62,7 +62,7 @@ export function Setup({ authState }: { authState: AuthState }) {
       <main className="centered">
         <section className="card">
           <div className="auth-brand">
-            <Orb size={56} live />
+            <Orb size={120} live />
             Fin-Agent
           </div>
           <h1>Open this page at the passkey origin</h1>
@@ -85,7 +85,7 @@ export function Setup({ authState }: { authState: AuthState }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <Orb size={56} live />
+          <Orb size={120} live />
           Fin-Agent
         </div>
         <h1>{addDevice ? "Add this device" : "Set up Fin-Agent"}</h1>

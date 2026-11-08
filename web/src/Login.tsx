@@ -26,7 +26,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     <main className="centered">
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
-          <Orb size={56} live />
+          <Orb size={120} live />
           Fin-Agent
         </div>
         <h1>Sign in</h1>

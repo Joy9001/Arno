@@ -77,7 +77,7 @@ body {
 
 ::selection {
   background: var(--blue);
-  color: #fff;
+  color: var(--lime-ink);
 }
 
 :focus-visible {
@@ -245,7 +245,7 @@ select {
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--blue);
-  color: #fff;
+  color: var(--lime-ink);
   font: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -288,7 +288,7 @@ a.button {
   padding: 9px 14px;
   border-radius: var(--radius-sm);
   background: var(--blue);
-  color: #fff;
+  color: var(--lime-ink);
   text-decoration: none;
   font-weight: 600;
   font-size: 14px;
@@ -925,13 +925,61 @@ input[type="file"]::file-selector-button:hover {
   grid-template-columns: 1fr;
 }
 
+/* Sign in and set up: the orb, the name, one lime action, on an iridescent glow. */
 .auth-brand {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 9px;
-  margin-bottom: 14px;
-  font-size: 14px;
-  font-weight: 600;
+  gap: 22px;
+  margin-bottom: 18px;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--sub);
+}
+
+.centered:has(.auth-brand) {
+  position: relative;
+  overflow: hidden;
+}
+
+.centered:has(.auth-brand)::before {
+  content: "";
+  position: absolute;
+  width: 900px;
+  height: 900px;
+  border-radius: 50%;
+  background: var(--iris);
+  filter: blur(160px);
+  opacity: 0.16;
+  pointer-events: none;
+}
+
+.card:has(.auth-brand) {
+  position: relative;
+  width: min(460px, 100%);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+
+.card:has(.auth-brand) h1 {
+  font-size: 46px;
+  letter-spacing: -0.045em;
+}
+
+.card:has(.auth-brand) p {
+  margin-inline: auto;
+}
+
+.card:has(.auth-brand) button[type="submit"] {
+  width: 100%;
+  min-height: 52px;
+  margin-top: 18px;
+  border-radius: 99px;
+  font-size: 16px;
+  font-weight: 800;
 }
 
 .movement-open {
