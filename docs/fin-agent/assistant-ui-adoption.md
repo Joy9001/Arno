@@ -18,7 +18,7 @@ server calls, and finance-specific parts; it does not fork the primitives.
 | Attachments | `ComposerAttachments`, `UserMessageAttachments` | `web/src/components/attachment.aui.tsx` |
 | History | `ThreadListPrimitive` through `useRemoteThreadListRuntime` | `web/src/components/thread-list.aui.tsx` |
 | Markdown | `StreamdownTextPrimitive` from `@assistant-ui/react-streamdown` with `@streamdown/code` | `web/src/components/markdown-text.tsx` |
-| Reasoning and tools | `MessagePrimitive.GroupedParts` as in the [chain-of-thought guide](https://www.assistant-ui.com/docs/guides/chain-of-thought): reasoning in `ReasoningRoot`, tool calls in `ToolGroupRoot` with a `ToolFallback` row each | `thread.aui.tsx`, `reasoning.aui.tsx`, `tool-group.aui.tsx`, `tool-fallback.aui.tsx` |
+| Reasoning and tools | One `RunActivity` per run (`MessagePrimitive.PartByIndex` recipe), `Reasoning` and `ToolFallback` rows inside | `thread.aui.tsx`, `elements/run-activity.tsx`, `reasoning.aui.tsx`, `tool-fallback.aui.tsx` |
 | Data parts | `useAssistantDataUI` registrations for card, chart, statement, photo, model, flags, ending | `web/src/chat/parts.tsx` |
 | Approval | App `ApprovalCard` rendered from the tool call's `approval` state | `web/src/components/approval-card.tsx`, `parts.tsx` |
 | Charts | `recharts` inside the app card | `web/src/chat/cards.tsx` |
@@ -141,14 +141,19 @@ another import. The existing `#home/<thread>/<message>` route is unchanged.
 
 ## Reasoning presentation
 
-Grouping follows assistant-ui's [chain-of-thought guide](https://www.assistant-ui.com/docs/guides/chain-of-thought)
-and the registry's `thread` element. `group-chainOfThought` is only a wrapper. Inside it, each run
-of reasoning is its own collapsible "Reasoning" block and each run of adjacent tool calls is its
-own collapsed tool group ("2 steps"), with one row per call that opens to its full input and
-output. Reasoning and tools are never folded into one block. Answer text, financial cards, and an
-unanswered approval render outside the groups; a group holding a call that waits on you opens
-itself. A tool whose toolkit entry sets `display: "standalone"`, such as the parser's task card
-on `delegate_task`, renders on its own.
+Each assistant run renders as one [Run activity](https://www.assistant-ui.com/elements/run-activity)
+disclosure, following its `PartByIndex` recipe so one run is always one row. Collapsed, it reads
+"Working" with the latest activity while the run goes, then "Worked for 2m 13s" from the run's
+recorded start and finish (saved in the message's `metadata.timing`). Open, it lists the
+reasoning, commentary and routine tool calls in order, one row each, every tool row opening to its
+full input and output.
+
+Outside the disclosure: the answer, cards, standalone tool UIs such as the parser's task card on
+`delegate_task` (`display: "standalone"`), and `attention`: an unanswered approval, an interrupted
+call or a failed step. The answer is the text after the run's last tool call. A run ends only on a
+model reply with no tool calls, so that text is the final reply; reasoning in the same reply folds
+into the row. A run is saved as one assistant message, as the element's docs require, so a reload
+shows the same single row.
 
 ## Markdown presentation
 

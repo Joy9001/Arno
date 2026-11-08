@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
@@ -140,6 +141,97 @@ async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
         )
         == 2
     )
+
+
+async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
+    from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+    from fin_agent.agent.history import record_user_message
+
+    thread = await create_thread(demo_ledger, title="steps")
+    history, _ = await ensure_history(demo_ledger, thread)
+    await record_user_message(
+        demo_ledger, thread_id=thread["id"], client_id="client-steps", text="balance"
+    )
+    started = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    finished = datetime(2026, 1, 1, 10, 2, 13, tzinfo=UTC)
+    call = ToolCallPart("run_code", {"code": "print(1)"})
+    turn = [
+        ModelRequest(parts=[UserPromptPart("balance")]),
+        ModelResponse(parts=[TextPart("Let me check."), call], timestamp=started),
+        ModelRequest(parts=[ToolReturnPart("run_code", "1", tool_call_id=call.tool_call_id)]),
+        ModelResponse(parts=[TextPart("Your balance is 1.")], timestamp=finished),
+    ]
+    await save_records(
+        demo_ledger,
+        thread_id=thread["id"],
+        run_id="run_steps",
+        ui_message_id="client-steps",
+        history=history,
+        turn_messages=turn,
+        ending="complete",
+        reply_id="msg_live_steps",
+    )
+    rows = await demo_ledger.fetch(
+        "SELECT client_id, content FROM messages WHERE conversation_id = $1 AND role = 'assistant'",
+        thread["id"],
+    )
+    assert len(rows) == 1
+    stored = rows[0]["content"]
+    assert rows[0]["client_id"] == "msg_live_steps"
+    assert stored["id"] == "msg_live_steps"
+    assert [part["type"] for part in stored["parts"]] == [
+        "text",
+        "tool-run_code",
+        "text",
+    ]
+    timing = stored["metadata"]["timing"]
+    assert timing["streamStartTime"] == int(started.timestamp() * 1000)
+    assert timing["totalStreamTime"] == 133_000
+    assert timing["toolCallCount"] == 1
+    assert stored["metadata"]["custom"]["runStatus"] == "complete"
+
+
+async def test_a_reloaded_multi_step_turn_is_one_assistant_message(authed_client, demo_ledger):
+    def script(messages, info: AgentInfo) -> ModelResponse:
+        done = any(
+            getattr(part, "tool_name", None) == "run_code"
+            for message in messages
+            for part in getattr(message, "parts", [])
+        )
+        if done:
+            return ModelResponse(parts=[TextPart("All done.")])
+        return ModelResponse(
+            parts=[TextPart("Checking."), ToolCallPart("run_code", {"code": "print(1)"})]
+        )
+
+    body = {
+        "id": "thread-steps",
+        "trigger": "submit-message",
+        "messages": [
+            {"id": "client-steps", "role": "user", "parts": [{"type": "text", "text": "balance"}]}
+        ],
+    }
+    with authed_client.app.state.agent.override(model=streaming_model(script)):
+        response = authed_client.post("/api/chat", json=body)
+    assert response.status_code == 200
+    start = next(
+        event
+        for event in response.text.splitlines()
+        if event.startswith("data: ") and '"type":"start"' in event
+    )
+    live_id = json.loads(start[len("data: ") :])["messageId"]
+
+    thread = authed_client.get("/api/threads/thread-steps/messages").json()
+    assert [message["role"] for message in thread["messages"]] == ["user", "assistant"]
+    assistant = thread["messages"][1]
+    assert assistant["id"] == live_id
+    assert [
+        part["type"] for part in assistant["parts"] if not part["type"].startswith("data-")
+    ] == ["text", "tool-run_code", "text"]
+    assert assistant["metadata"]["timing"]["streamStartTime"] > 0
+    assert assistant["metadata"]["timing"]["totalStreamTime"] >= 0
+    assert assistant["metadata"]["custom"]["runStatus"] == "complete"
 
 
 async def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_ledger):

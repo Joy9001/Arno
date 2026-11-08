@@ -14,19 +14,15 @@ import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.au
 import { Image } from "@/components/image";
 import { MarkdownText } from "@/components/markdown-text";
 import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/reasoning.aui";
+  RunActivity,
+  type RunActivityEntry,
+  type RunActivityStatus,
+} from "@/components/assistant-ui/elements/run-activity";
+import { Reasoning } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/tool-group.aui";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { formatElapsed, useTaskElapsed } from "@/components/assistant-ui/utils/task";
+import { toolLabel } from "@/chat/tool-copy";
 import { Button } from "@/components/ui/button";
 import { ScrollBar } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,14 +34,16 @@ import {
   BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
-  groupPartByType,
   MessagePrimitive,
   ThreadPrimitive,
   type FileMessagePartComponent,
   type ImageMessagePartComponent,
+  type MessageStatus,
+  type PartState,
   type TextMessagePartComponent,
   type ToolCallMessagePartComponent,
   useAuiState,
+  useScrollLock,
 } from "@assistant-ui/react";
 import {
   ArrowDownIcon,
@@ -67,42 +65,186 @@ import {
   createContext,
   useContext,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
   type FC,
-  type PropsWithChildren,
+  type ReactNode,
 } from "react";
 
-export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
 const shouldShowComposerResume = (s: AssistantState) =>
   !!s.thread.canResume && s.composer.type === "thread" && s.composer.isEmpty;
 
-const reasoningDuration = (timing: ThreadGroupPart["timing"]) =>
-  timing?.completedAt === undefined
-    ? undefined
-    : Math.round((timing.completedAt - timing.startedAt) / 1000);
+const isPendingApproval = (part: PartState): boolean =>
+  part.type === "tool-call" &&
+  part.approval !== undefined &&
+  part.approval.approved === undefined &&
+  part.approval.resolution === undefined &&
+  part.approval.isAutomatic !== true;
 
-/** The registry's tool group: one collapsible row per run of adjacent tool calls. */
-const DefaultToolGroup: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
-  group,
+/** A decision, an interruption, or a broken step stays visible instead of folding into the run row. */
+const isAttentionTool = (part: PartState): boolean =>
+  part.type === "tool-call" &&
+  (part.status.type === "requires-action" ||
+    part.status.type === "incomplete" ||
+    part.isError === true ||
+    isPendingApproval(part) ||
+    part.interrupt !== undefined);
+
+/**
+ * The answer is the text after the run's last tool call: a run ends only on a model reply with no
+ * tool calls, so that text is the final reply. Reasoning in the same reply (some models emit it
+ * after the text) is commentary and folds into the run row; it never moves the boundary.
+ */
+const runActivityStartsAt = (parts: readonly PartState[]): number =>
+  parts.reduce(
+    (last, part, index) => (part.type === "tool-call" ? index : last),
+    -1,
+  );
+
+type ToolUIs = Record<string, readonly { standalone?: boolean }[] | undefined>;
+
+/**
+ * Where each part of a run goes, following the Run activity recipe: commentary and routine tools
+ * fold into the one disclosure, a decision or a broken step stays in `attention`, and the answer,
+ * cards and standalone tool UIs (the parser's task card) stay visible below.
+ */
+const classifyParts = (
+  parts: readonly PartState[],
+  answerFrom: number,
+  toolUIs: ToolUIs,
+) => {
+  const activity: number[] = [];
+  const attention: number[] = [];
+  const visible: number[] = [];
+  parts.forEach((part, index) => {
+    if (part.type === "tool-call") {
+      if (isAttentionTool(part)) attention.push(index);
+      else if (toolUIs[part.toolName]?.[0]?.standalone || part.messages !== undefined)
+        visible.push(index);
+      else activity.push(index);
+    } else if (part.type === "reasoning") {
+      activity.push(index);
+    } else if (part.type === "text" && index < answerFrom) {
+      activity.push(index);
+    } else {
+      visible.push(index);
+    }
+  });
+  return { activity, attention, visible };
+};
+
+type RunTiming = { startedAt: number; completedAt?: number };
+
+const activityStatus = (status: MessageStatus): RunActivityStatus => {
+  if (status.type !== "incomplete") return status.type;
+  if (status.reason === "cancelled" || status.reason === "error") {
+    return status.reason;
+  }
+  return "incomplete";
+};
+
+const STATUS_LABELS: Record<RunActivityStatus, string> = {
+  running: "Working",
+  "requires-action": "Needs your input",
+  complete: "Completed",
+  cancelled: "Stopped",
+  incomplete: "Incomplete",
+  error: "Failed",
+};
+
+const TIMED_LABELS: Partial<Record<RunActivityStatus, string>> = {
+  complete: "Worked for",
+  cancelled: "Stopped after",
+  error: "Failed after",
+};
+
+const firstLine = (text: string): string => {
+  const line = text.trim().split("\n")[0]?.trim() ?? "";
+  return line.length > 80 ? `${line.slice(0, 77)}…` : line;
+};
+
+const RunDuration: FC<{ timing: RunTiming | undefined; running: boolean }> = ({
+  timing,
+  running,
+}) => {
+  const elapsed = useTaskElapsed(timing, running);
+  return elapsed === undefined ? null : <>{formatElapsed(elapsed)}</>;
+};
+
+const RunActivityGroup: FC<{
+  indices: readonly number[];
+  parts: readonly PartState[];
+  components: MessagePrimitive.Parts.Props["components"];
+  status: RunActivityStatus;
+  timing: RunTiming | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  attention?: ReactNode;
+  children?: ReactNode;
+}> = ({
+  indices,
+  parts,
+  components,
+  status,
+  timing,
+  open,
+  onOpenChange,
+  attention,
   children,
 }) => {
-  const [open, setOpen] = useState(false);
+  const timed = status === "running" || timing?.completedAt !== undefined;
+  const entries = indices.flatMap((index): RunActivityEntry[] => {
+    const part = parts[index];
+    if (part === undefined) return [];
+    const content = (
+      <MessagePrimitive.PartByIndex index={index} components={components} />
+    );
+    if (part.type === "tool-call") {
+      return [
+        {
+          id: `tool-${part.toolCallId}`,
+          kind: "tool",
+          label: toolLabel(part.toolName),
+          content,
+        },
+      ];
+    }
+    if (part.type === "reasoning" || part.type === "text") {
+      return [
+        {
+          id: `part-${index}`,
+          kind: "commentary",
+          label: firstLine(part.text),
+          content,
+        },
+      ];
+    }
+    return [];
+  });
 
   return (
-    <ToolGroupRoot
-      variant="ghost"
-      open={open || group.counts.requiresAction > 0}
-      onOpenChange={setOpen}
+    <RunActivity
+      status={status}
+      statusLabel={
+        timed
+          ? (TIMED_LABELS[status] ?? STATUS_LABELS[status])
+          : STATUS_LABELS[status]
+      }
+      durationLabel={
+        timed ? (
+          <RunDuration timing={timing} running={status === "running"} />
+        ) : undefined
+      }
+      entries={entries}
+      open={open}
+      onOpenChange={onOpenChange}
+      attention={attention}
     >
-      <ToolGroupTrigger
-        count={group.indices.length}
-        active={group.status.type === "running"}
-      />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
+      {children}
+    </RunActivity>
   );
 };
 
@@ -111,69 +253,17 @@ const DefaultToolGroup: FC<PropsWithChildren<{ group: ThreadGroupPart }>> = ({
  * `Welcome` replace whole sections; the remaining slots override how the
  * assistant message renders tool calls and task groups. Tool UIs registered
  * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
- * `ToolFallback`. When `TaskGroup` is set, tool calls that carry a nested
- * conversation and have no registered UI render through it; without it they
- * render like any other tool call. `ComposerExtra` renders on the start side
+ * `ToolFallback`. `ComposerExtra` renders on the start side
  * of the composer's action row.
  */
 export type ThreadComponents = {
   AssistantMessage?: ComponentType | undefined;
   Welcome?: ComponentType | undefined;
   ToolFallback?: ToolCallMessagePartComponent | undefined;
-  TaskGroup?: ComponentType<{ group: ThreadGroupPart }> | undefined;
   ComposerExtra?: ComponentType | undefined;
   ComposerCancel?: ComponentType | undefined;
   ComposerStatus?: ComponentType | undefined;
   AssistantActions?: ComponentType | undefined;
-};
-
-const messageGroupBy = groupPartByType({
-  reasoning: ["group-chainOfThought", "group-reasoning"],
-  "tool-call": ["group-chainOfThought", "group-tool"],
-  "standalone-tool-call": [],
-});
-
-type ThreadGroupKey =
-  | "group-chainOfThought"
-  | "group-reasoning"
-  | "group-tool"
-  | "group-task";
-
-const TASK_GROUP_PATH: readonly ThreadGroupKey[] = [
-  "group-chainOfThought",
-  "group-task",
-];
-
-const isPendingApproval = (
-  part: Parameters<typeof messageGroupBy>[0],
-): boolean =>
-  part.type === "tool-call" &&
-  part.approval !== undefined &&
-  part.approval.approved === undefined &&
-  part.approval.resolution === undefined &&
-  part.approval.isAutomatic !== true;
-
-// An approval the user has not answered must never sit inside a folded trace.
-const traceAwareGroupBy = (
-  part: Parameters<typeof messageGroupBy>[0],
-  context?: Parameters<typeof messageGroupBy>[1],
-): readonly ThreadGroupKey[] => {
-  if (isPendingApproval(part)) return [];
-  return messageGroupBy(part, context);
-};
-
-const taskAwareGroupBy = (
-  part: Parameters<typeof messageGroupBy>[0],
-  context?: Parameters<typeof messageGroupBy>[1],
-): readonly ThreadGroupKey[] => {
-  if (isPendingApproval(part)) return [];
-  const path = messageGroupBy(part, context);
-  return part.type === "tool-call" &&
-    part.messages !== undefined &&
-    path.length > 0 &&
-    !context?.toolUIs?.[part.toolName]?.length
-    ? TASK_GROUP_PATH
-    : path;
 };
 
 export type ThreadProps = {
@@ -671,15 +761,73 @@ const MessageError: FC = () => {
   );
 };
 
+const AssistantTextPart: FC = () => (
+  <div data-slot="aui_assistant-message-text" data-aui-quote-selectable="true">
+    <MarkdownText />
+  </div>
+);
+
 const AssistantMessage: FC = () => {
   const {
     ToolFallback: ToolFallbackComponent = ToolFallback,
-    TaskGroup: TaskGroupComponent,
     AssistantActions,
   } = useContext(ThreadComponentsContext);
-  const groupBy = TaskGroupComponent ? taskAwareGroupBy : traceAwareGroupBy;
   const serverId = useAuiState(
     (s) => s.message.metadata.custom?.server_id as string | undefined,
+  );
+  const messageParts = useAuiState((s) => s.message.parts);
+  const messageStatus = useAuiState((s) => s.message.status);
+  const messageTiming = useAuiState((s) => s.message.metadata.timing);
+  const recordedStatus = useAuiState(
+    (s) => s.message.metadata.custom?.runStatus as RunActivityStatus | undefined,
+  );
+  const createdAt = useAuiState((s) => s.message.createdAt);
+  const [runOpen, setRunOpen] = useState(false);
+  const runRef = useRef<HTMLDivElement>(null);
+  const lockScroll = useScrollLock(runRef, 200);
+
+  const answerFrom = useMemo(
+    () => runActivityStartsAt(messageParts),
+    [messageParts],
+  );
+  const toolUIs = useAuiState((s) => s.tools.toolUIs) as unknown as ToolUIs;
+  const { activity, attention, visible } = useMemo(
+    () => classifyParts(messageParts, answerFrom, toolUIs),
+    [messageParts, answerFrom, toolUIs],
+  );
+  const savedTiming = useMemo<RunTiming | undefined>(() => {
+    if (
+      messageTiming === undefined ||
+      !Number.isFinite(messageTiming.streamStartTime)
+    ) {
+      return undefined;
+    }
+    return {
+      startedAt: messageTiming.streamStartTime,
+      ...(messageTiming.totalStreamTime !== undefined && {
+        completedAt:
+          messageTiming.streamStartTime + messageTiming.totalStreamTime,
+      }),
+    };
+  }, [messageTiming]);
+  const createdTiming = useMemo<RunTiming | undefined>(() => {
+    const startedAt = createdAt instanceof Date ? createdAt.getTime() : Number.NaN;
+    return Number.isFinite(startedAt) ? { startedAt } : undefined;
+  }, [createdAt]);
+  const liveStatus = messageStatus ? activityStatus(messageStatus) : undefined;
+  // A live decision or a running clock outranks the saved ending; a saved
+  // cancellation or failure outranks the runtime's generic "complete".
+  const status =
+    liveStatus === "running" || liveStatus === "requires-action"
+      ? liveStatus
+      : (recordedStatus ?? liveStatus ?? "complete");
+  const components = useMemo<MessagePrimitive.Parts.Props["components"]>(
+    () => ({
+      Text: AssistantTextPart,
+      Reasoning,
+      tools: { Fallback: ToolFallbackComponent },
+    }),
+    [ToolFallbackComponent],
   );
 
   const ACTION_BAR_PT = "pt-1.5";
@@ -696,63 +844,27 @@ const AssistantMessage: FC = () => {
       className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 scroll-mt-24 pb-7.5 duration-150 outline-none [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
     >
       <div
+        ref={runRef}
         data-slot="aui_assistant-message-content"
         className="text-foreground px-2 leading-relaxed wrap-break-word"
       >
-        <MessagePrimitive.GroupedParts groupBy={groupBy}>
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-chainOfThought":
-                return <div data-slot="aui_chain-of-thought">{children}</div>;
-              case "group-task":
-                return TaskGroupComponent ? (
-                  <TaskGroupComponent group={part} />
-                ) : null;
-              case "group-tool":
-                return <DefaultToolGroup group={part}>{children}</DefaultToolGroup>;
-              case "group-reasoning": {
-                const running = part.status.type === "running";
-                return (
-                  <ReasoningRoot streaming={running}>
-                    <ReasoningTrigger
-                      active={running}
-                      duration={reasoningDuration(part.timing)}
-                    />
-                    <ReasoningContent aria-busy={running}>
-                      <ReasoningText>{children}</ReasoningText>
-                    </ReasoningContent>
-                  </ReasoningRoot>
-                );
-              }
-              case "text":
-                return (
-                  <div
-                    data-slot="aui_assistant-message-text"
-                    data-aui-quote-selectable="true"
-                  >
-                    <MarkdownText />
-                  </div>
-                );
-              case "reasoning":
-                return <Reasoning {...part} />;
-              case "tool-call":
-                return part.toolUI ?? <ToolFallbackComponent {...part} />;
-              case "data":
-                return part.dataRendererUI;
-              case "file":
-                return (
-                  <div data-slot="aui_assistant-message-file" className="py-1">
-                    <MessageFile {...part} />
-                  </div>
-                );
-              case "image":
-                return (
-                  <div data-slot="aui_assistant-message-image" className="py-1">
-                    <Image {...part} />
-                  </div>
-                );
-              case "indicator":
-                return (
+        {(() => {
+          const byIndex = (indices: readonly number[]) =>
+            indices.map((index) => (
+              <MessagePrimitive.PartByIndex
+                key={index}
+                index={index}
+                components={components}
+              />
+            ));
+          const shown = byIndex(visible);
+          const waiting = attention.length > 0 ? byIndex(attention) : undefined;
+          if (activity.length === 0) {
+            return (
+              <>
+                {waiting}
+                {shown}
+                {status === "running" && visible.length === 0 && (
                   <span
                     data-slot="aui_assistant-message-indicator"
                     className="animate-pulse font-sans"
@@ -760,12 +872,28 @@ const AssistantMessage: FC = () => {
                   >
                     {"●"}
                   </span>
-                );
-              default:
-                return null;
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
+                )}
+              </>
+            );
+          }
+          return (
+            <RunActivityGroup
+              indices={activity}
+              parts={messageParts}
+              components={components}
+              status={status}
+              timing={savedTiming ?? createdTiming}
+              open={runOpen}
+              onOpenChange={(nextOpen) => {
+                lockScroll();
+                setRunOpen(nextOpen);
+              }}
+              attention={waiting}
+            >
+              {shown.length > 0 ? <div className="flex flex-col">{shown}</div> : null}
+            </RunActivityGroup>
+          );
+        })()}
         <MessageError />
       </div>
 

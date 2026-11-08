@@ -563,10 +563,14 @@ async def get_thread_messages(request: Request, conn: Database, thread_id: str) 
     messages = []
     for row in rows:
         content = row["content"] or {}
+        # The reply keeps the id the live stream used, so a reload matches it; `server_id`
+        # stays the row id for Flag and deep links.
+        message_id = content.get("id") or (
+            row["id"] if row["role"] == "assistant" else row["client_id"]
+        )
         content = {
             **content,
-            # The assistant's UI id is the server row id, so Flag needs no second lookup.
-            "id": row["id"] if row["role"] == "assistant" else content.get("id", row["client_id"]),
+            "id": message_id,
             "server_id": row["id"],
             "metadata": {
                 **(content.get("metadata") or {}),

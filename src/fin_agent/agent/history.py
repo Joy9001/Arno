@@ -11,7 +11,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from fin_agent.agent.cards import cards_from_messages
+from fin_agent.agent.cards import cards_from_messages, run_timing
 from fin_agent.agent.redaction import redact_text
 from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import new_id
@@ -19,6 +19,8 @@ from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
 
 SNAPSHOT_REPLY = "Snapshot read."
+
+RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error"}
 
 
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
@@ -317,6 +319,9 @@ async def save_records(
 
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
     ui = ui_messages(turn_messages)
+    run_started_at = await conn.fetchval(
+        "SELECT run_started_at FROM conversations WHERE id = $1", thread_id
+    )
 
     stored = await conn.fetchrow(
         "SELECT content, body_text FROM messages WHERE client_id = $1 AND conversation_id = $2",
@@ -405,6 +410,23 @@ async def save_records(
             with_data(last_assistant, "data-ending", {"note": "Stopped."})
         if trace_id:
             last_assistant["trace_id"] = trace_id
+
+    if last_assistant is not None:
+        timing = run_timing(
+            turn_messages,
+            started_at=run_started_at,
+            # A finished run ends at its last response; a stopped or failed one ends now.
+            finished_at=None if ending == "complete" else datetime.now(UTC),
+        )
+        metadata = last_assistant.setdefault("metadata", {})
+        if timing is not None:
+            timing["toolCallCount"] = sum(
+                1
+                for part in last_assistant.get("parts", [])
+                if isinstance(part, dict) and str(part.get("type", "")).startswith("tool-")
+            )
+            metadata["timing"] = {**timing, "totalChunks": 0}
+        metadata.setdefault("custom", {})["runStatus"] = RUN_STATUS.get(ending, "incomplete")
 
     inserted: list[str] = []
     for message in ui:
