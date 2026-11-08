@@ -73,7 +73,9 @@ in the API ([why](system-design.md#web-stack)).
 
 The web app has the following parts:
 
-- **Chat (home):** Vercel AI SDK `useChat`, with `resume` on, shadcn/ui's chat patterns, and Streamdown
+- **Ask and Chats:** Ask is the agent's home (a new conversation with what it noticed); Chats adds
+  the conversation list, a Chat or Flow view of each conversation, and a canvas for sources and the
+  purchase planner. Vercel AI SDK `useChat`, with `resume` on, shadcn/ui's chat patterns, and Streamdown
   for markdown. You see your threads, as in ChatGPT or
   Claude: open an old one, or start a new chat at any time. Tool-return metadata renders as cards:
   a logged transaction with undo, a "Remembered" memory card, a projection chart showing the
@@ -87,8 +89,8 @@ The web app has the following parts:
   The AI SDK's major version, 7, is pinned to match the adapter's `sdk_version`, because with the
   adapter's default, 5, approvals are silently ignored and the card just comes back
   ([tested](system-design.md#the-safety-tests-october-31-2026)). Changing it means rerunning that test.
-- **Panels (read-only):** Ledger, Accounts and cards, Schedules, Goals, People, Projection, Inbox.
-  Changes go through chat.
+- **Panels (read-only):** Money (Timeline, Accounts, Schedules, Goals, People), Activity (Ledger,
+  Imports, Inbox), and Recaps (sums of ledger rows told as stories). Changes go through chat.
 - **Editable screens:** Imports (upload, password, review, history, undoing a committed import) and
   Settings.
 - **Settings:** profile and floor, categories and rules, preferences (the agent's memory: turn one

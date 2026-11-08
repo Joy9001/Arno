@@ -119,50 +119,41 @@ Visual system (also in `.impeccable/surfaces/web.md` direction contract and
 - Fonts: `web/public/fonts/{bricolage-grotesque,jetbrains-mono}.woff2` + OFL texts;
   `THIRD_PARTY_NOTICES.md` has a "Web fonts" section. theme-color `#0e0f0c` (index.html, vite).
 
-## 4. What is NOT done (do these in order)
+## 4. Progress since the first handoff, and what is NOT done
 
-1. **Verify the lime receipt renders** (it was fixed right before this handoff: a duplicate,
-   older `.receipt` block in styles.css had overridden it; I restored styles.css from HEAD and
-   reapplied only the receipt block). Check with the fixture (section 5). Text on lime must be
-   dark ink; the metric boxes, badge, and foot buttons should read clearly.
-2. **Flow polish**: `verdictOf` only finds a top-level `verdict`; composed answers nest it
-   (`data.results[i].receipt.verdict`) — search nested objects (depth ≤4). With the canvas open
-   Flow is cramped; consider closing the canvas when switching to Flow or letting Flow scroll
-   horizontally with a min-width.
-3. **Restyle the remaining panels to the mocks** (they currently inherit the new tokens but keep
-   old layouts): Accounts (cards as physical cards: `07-money-accounts`), Schedules
-   (`08`, calendar strip + struck-through paid rows), Goals (`09`, rings + "when each goal lands"),
-   People (`10`, mesh card for who owes you), Ledger (`11`, uncategorized queue, detail drawer),
-   Imports (`12`), Settings (`15`, `16` agent memory), Sign in/Setup (`17`; Login.tsx/Setup.tsx
-   already use a 56px live orb but layout is old). Keep every existing behavior and API call;
-   change markup/CSS only. Panels live in `web/src/panels/*.tsx` with CSS in
-   `panels/MoneyViews.css`, `Activity.css`, `Settings.css`.
-4. **Agent notes** (one line from the agent at the top of each area, `.agent-note` CSS exists):
-   only where code can derive the sentence from API data (e.g. accounts: statement vs ledger
-   mismatch; goals: a goal that slips). Omit otherwise. Never invent.
-5. **Canvas restyle**: `EvidencePanel` in `.canvas` still has the old look; make it the
-   `04-canvas` style (giant verdict, gradient text, sources chips, generative projection field —
-   the field may only draw bands/lines between P10/P90; label it as the range, not as runs).
-6. **Phone pass** at 390px: Ask hero sizes, noticed cards scroll-snap, chats via History popover,
-   timeline compactness, recaps full-screen story (list hidden on phone — needs a way to pick a
-   recap on phone, e.g. a horizontal chip row above the story).
-7. **1180px check**: canvas becomes a sheet; rail stays; verify nothing overlaps.
-8. **Finish steps (impeccable skill requires them)**:
-   - `C:/Users/joymr/.claude/skills/impeccable/scripts/impeccable detect --json web/src` once;
-     fix mechanical findings.
-   - Finish review via `delegate_task` with deepseek (packet: request, direction contract from
-     `.impeccable/surfaces/web.md`, screenshot paths, mocks as the critique reference, craft-floor
-     path `C:/Users/joymr/.claude/skills/impeccable/reference/craft-floor.md`). If unavailable,
-     run `reference/degraded/finish-reviewer.md` in-thread and disclose.
-   - Rewrite **DESIGN.md** + `.impeccable/design.json` from the built world (documenter, or
-     `reference/degraded/documenter.md` + `reference/document.md`). Current DESIGN.md still
-     describes the old Apple-quiet system — it is stale.
-   - Update `docs/fin-agent/platform.md` "Web app" bullets (still says "Chat (home)", "Inbox"
-     panel) to match the six areas.
-   - Revoke the review session:
-     `UPDATE sessions SET revoked_at=now() WHERE user_agent='design-review-headless';`
-     (dev DB `fin_agent` on 127.0.0.1:5433, creds in `.env`).
-9. Voice mode (`18-voice`) is **parked** — do not build.
+Done after the first handoff (commits `4081ea3` … `34bde95`):
+- Lime receipt verified on screen (fixture). Flow finds nested verdicts and scrolls (min-width
+  760px) beside the canvas. Planner verified against the **real** `/api/projection`.
+- Summary strips are separate cards with big figures (mesh on the lead cell); every `.ask-link`
+  is an iridescent-dot pill (Details/"Show all types" moved to `.pill-button`); Settings sits in
+  the area frame. Sign-in/Setup: 120px live orb, glow, full-width lime pill. Global buttons on
+  lime now use dark ink (they were white on lime).
+- Phone: money tabs scroll on one line, timeline hides the past tag and left label under 640px,
+  inbox rows stack, recaps periods become a chip row above the story; the greeting skips the
+  default display name "You".
+- `platform.md` web-app bullets updated to the six areas.
+
+Still to do, in order:
+1. **Restyle the remaining panels to the mocks** (tokens apply; layouts are still the old
+   list style): Accounts as physical-card tiles for cards (`07`), Schedules calendar strip and
+   struck-through paid rows (`08`), Goals rings + "when each goal lands" (`09`), People mesh card
+   for who owes you (`10`), Ledger uncategorized queue + detail drawer look (`11`), Imports
+   (`12`), Agent memory list with type chips (`16`). Change markup/CSS only; keep behavior.
+   The dev DB is sparse (most panels show empty states), so verify layouts with demo-like data
+   by reading the components, or check the empty states look intentional.
+2. **Agent notes** (`.agent-note`) at the top of areas, only where code derives the sentence
+   from API data (accounts: stated vs ledger balance mismatch; goals: a slipping goal).
+3. **Canvas restyle**: `EvidencePanel` inside `.canvas` still has the old look; bring it to
+   `04-canvas` (giant verdict, gradient text, source chips). Any line field may only fill the
+   P10–P90 band; label it as the range, not as runs.
+4. **1180px check**: canvas becomes a sheet; nothing overlaps.
+5. **Finish steps (impeccable)**: run the detector
+   (`C:/Users/joymr/.claude/skills/impeccable/scripts/impeccable detect --json web/src`), the
+   finish review (deepseek via `delegate_task`, or the degraded in-thread review, disclosed), and
+   rewrite **DESIGN.md** + `.impeccable/design.json` (still describe the old Apple-quiet system).
+6. Revoke the review session:
+   `UPDATE sessions SET revoked_at=now() WHERE user_agent='design-review-headless';`
+7. Voice mode (`18-voice`) stays **parked**.
 
 ## 5. How to see the app (this is how I worked)
 
