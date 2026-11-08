@@ -7,38 +7,39 @@ related_targets: []
 
 # Web app
 
-Mode: Operate. Whole shell and ten areas; desktop 1280–1600 and phone 390.
+Mode: Operate. Whole shell and every area; desktop 1280–1600, the 1180 edge, and phone 390.
 
 ## Direction contract
 
-THESIS: A quiet, platform-native money console — one column, one answer, and a receipt you can
-open — not a dashboard of themed cards.
+THESIS: The agent is the product and money is its material: an Ask home led by a living orb and a
+large composer, not a dashboard with a chat bolted to its side.
 
-OWN-WORLD: True black ground, layered graphite surfaces (#1c1c1e), hairline borders; system type
-(SF on Apple, Segoe on Windows) with tabular numerals, 34–46 display, 15 body, 12 meta; one system
-blue for action, semantic green/amber/red only for money states; 18–24px radii; no ornament.
+OWN-WORLD: Near-black olive ground (#0e0f0c) with layered surfaces; Bricolage Grotesque heavy and
+tight for figures, JetBrains Mono for serials; lime (#d4ff3a) for actions and verdicts, cobalt
+(#2b59ff) for the user's voice, a lime-teal-cobalt mesh for the headline figure, orange for due;
+20–34px radii; an iridescent conic orb as the agent's single presence.
 
-STORY: Open → spendable and the 90-day shape → ask → the verdict lands as a receipt (probability,
-floor, serial) → open the rows behind it. Success is an answer in seconds that can be audited.
+STORY: Open → the agent greets you and says what it noticed → ask → the steps it ran tick in →
+the verdict lands as a lime card with its serial → open the canvas or the Flow graph → the rows.
 
-FIRST VIEWPORT: 236px sidebar; a 900px column: Today + date; Spendable ₹1,84,200 directly over the
-projection chart (median, P10–P90, floor rule, 8 Nov purchase pin); the laptop question answered by
-a "Yes, but" receipt with floor 91%, lowest median ₹38,400, serial FA·68P·0911; one follow-up; the
-composer pinned at the bottom. Phone: same order, single column, toolbar grouped, composer pinned.
+FIRST VIEWPORT: Icon rail (orb, Ask, Chats, Money, Activity, Recaps, Settings). Ask: 120px orb,
+“Evening, <name>. What do you want to know about your money?” at 58px, an 820px composer with
+Photo/Talk/Statement, four starting questions, then a row of noticed cards (mesh spendable,
+orange due, dark proposals). Phone: same order, orb tab in the bottom bar.
 
-FORM: user-pinned canon (Apple-quiet), not a rolled world. seed: none (unavailable)
+FORM: chosen by the owner across six rounds (r3 ask/thread/canvas/phone, r4 board as Flow, r5
+tool and timeline and story); expressive fintech fused with generative fields. seed:9ed473e87fbc4383
 
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the
-verdict, DESIGN.md, and every shipping raster carrying its provenance.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
 
 ## Scope
 
-- Whole app: sidebar, ten areas, chat, panels, auth screens; desktop and phone.
-- Keep product truth, data, behaviour, and every constraint in PRODUCT.md.
-- Anti-goals: metaphor, themed skin, trading-terminal, gamification, decorative glass or gradients,
-  nested cards, eyebrows above headings.
+- Whole app: shell, Ask, Chats (Chat and Flow), canvas, Money (timeline and tabs), Activity
+  (ledger, imports, inbox), Recaps, Settings, sign-in and setup; desktop and phone.
+- Keep product truth, data, behavior, and every PRODUCT.md constraint; every figure from the API.
+- Backend-gated, not built in this pass: the agent-built planner (needs a what-if projection
+  route) and voice mode (parked).
 
 ## Open decisions
 
-- Exact panel compositions (ledger, imports, settings) inherit this system; no new tokens.
-- One authored motion: the projection draws once on first paint; the receipt settles in.
+- Recaps cadence beyond monthly and weekly sums computed in the client.

@@ -50,8 +50,8 @@ probability, and every figure is cited back to ledger rows.
   Backups run in a restic sidecar and are restorable with `fin-agent restore`.
 - Daily capture is chat, voice notes, and photos (receipts, UPI screenshots); monthly statement
   imports reconcile what daily capture missed.
-- The web app is chat-first, with read-only ledger, accounts, schedules, goals, people, projection,
-  and inbox panels. Writes go through chat with undo; imports and settings are the editable screens.
+- The web app is agent-first, with read-only ledger, accounts, schedules, goals, people, timeline,
+  recap, and inbox panels. Writes go through chat with undo; imports and settings are the editable screens.
 - A CLI covers administration, evaluation, backtests, and demo seeding.
 - Local model, speech-to-text, and trace profiles are optional Compose profiles for owners who want
   nothing to leave the machine.
@@ -87,9 +87,11 @@ Durable constraints:
 ## Brand Commitments
 
 - Name: **Fin-Agent**. License: **MIT**, open source.
-- The interface bar is mainstream platform polish, Apple-quiet in register, dark by default. No
-  thematic metaphor and no decorative world: the product's distinctive surface is the computed
-  receipt — verdict, probability, and a source chip that opens its row.
+- The interface is agent-first and expressive (owner's decision, November 8, 2026, replacing the
+  earlier Apple-quiet canon): the agent is a living iridescent orb, answers land as bold verdict
+  cards, and money is what the agent works on. Dark, lime for actions and verdicts, cobalt for the
+  user's voice. The computed receipt stays the distinctive surface — verdict, probability, and the
+  rows behind it.
 - The product speaks plainly and precisely: facts, tradeoffs, and measured results, with no hype
   and no invented proof.
 - Chat replies render links as plain text; external images never load.

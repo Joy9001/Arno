@@ -1,30 +1,44 @@
 # Fin-Agent web interface design
 
-**Status:** implementation direction based on the selected conversation-first design with on-demand evidence. The accompanying studies use illustrative data; actual behavior and available fields are defined by the working app and API.
+**Status:** implementation direction for the agent-first redesign of November 8, 2026
+([plan](plan.md)). The [final mocks](../../.impeccable/mocks/final/index.html) show every page with
+demo data; actual behavior and fields come from the working app and API.
 
 ## Navigation and page count
 
-Use **four primary destinations**: Home, Money, Activity, and Settings. Home is the agent; the other three group related views so the top level stays small. The proposal has **17 signed-in views** (Home; five Money views; two Activity views; nine Settings views) and **two access screens** (sign-in and setup). A movement, an import, a source, a conversation, and the Today overview open as contextual details, not additional top-level destinations.
+The agent is the product; money is what it works on. Use **six primary destinations** on a slim
+icon rail: **Ask** (the agent's home), **Chats**, **Money**, **Activity**, **Recaps**, and
+**Settings**. The agent's orb sits at the top of the rail.
 
 | Destination | Views | Purpose |
 | --- | --- | --- |
-| Home | Conversation | Ask, capture, see answers, and check today's summary and unread updates. |
-| Money | Accounts, Projection, Schedules, Goals, People | Understand the financial picture and ask the agent about any item. |
-| Activity | Ledger, Imports | Inspect recorded movements and review statements. |
-| Settings | Profile, Categories, Notifications, Passkeys, Scheduled questions, Jobs, Backups, Export, Agent memory | Configure the instance, with operational tools grouped after everyday settings. |
+| Ask | Agent home | Greeting, a large composer, starting questions, and what the agent noticed (notifications and the projection). |
+| Chats | Conversation list and a conversation in **Chat** or **Flow** view | Ask, capture, read answers; Flow draws the agent's tool calls for an answer as a graph. A big answer opens a **canvas** beside the conversation. |
+| Money | Timeline, Accounts, Schedules, Goals, People | The timeline joins the ledger behind today with the projection ahead. `#money/projection` stays an alias for it. |
+| Activity | Ledger, Imports, Inbox | Recorded movements, statement review, and the notification inbox with scheduled questions. |
+| Recaps | Daily, weekly and monthly recaps | Stories built in code from ledger movements; every figure is a sum of rows. |
+| Settings | Profile and floor, Categories, Notifications, Passkeys, Scheduled questions, Agent memory, Jobs, Backups, Export | Unchanged sections. |
 | Outside the shell | Sign in, Set up | Unlock the instance or enroll a passkey. |
 
-On desktop, the primary navigation is a labelled left rail. Money and Activity use a short, visible second-level tab row. Settings uses a local section list when there is enough space. On phones, primary destinations become a labelled bottom bar; section navigation wraps or uses an explicitly labelled selector, never a hidden off-screen tab. The current route and section stay clear. The assistant is available from a labelled **Ask** action on data pages, opening a full-height conversation on smaller screens; it never consumes the width needed for the task.
+On phones the rail becomes a bottom bar (Ask, Money, Activity, Recaps, More); the orb is the Ask
+tab. Old links keep working: `#home/<thread>/<message>` opens that conversation.
 
 ## Shared composition
 
-The app keeps the quiet dark identity: true-black canvas, layered graphite surfaces, system type, crisp dividers, and a deliberate blue accent for primary actions, focus and the product mark. Green, amber and red communicate states; they are not decoration. Test text and controls against their actual backgrounds, including disabled and hover states. Content is left aligned in a comfortable reading width; page headers contain the page title, a brief useful explanation when needed, and one primary action. Information is grouped by meaning, not by equal-sized cards. Amounts use Indian formatting and tabular numerals. Lists retain a clear row identity and open details without making all content clickable.
+The visual system: a near-black olive ground (`#0e0f0c`), layered surfaces, Bricolage Grotesque for
+everything and JetBrains Mono for serials and machine text, both self-hosted. **Lime** (`#d4ff3a`)
+marks actions and verdicts, **cobalt** (`#2b59ff`) is the user's own voice, and a lime-to-cobalt
+mesh carries the headline figure. Orange means due, green means positive or holding, red means
+negative. Large radii (20–34px), tabular numerals, and Indian number grouping throughout.
 
-The [proposed Fin-Agent mark](./fin-agent-mark.svg) replaces the temporary letter F in the design studies. Its two paths suggest a connected flow of money and evidence; the wordmark remains legible beside it. This is a design proposal to review at navigation, small icon and app-icon sizes, not a claim that the shipped logo has changed.
+The agent has one presence: the **orb**, a living iridescent sphere. It animates only where the
+agent is present and working (the rail mark, the Ask hero, a reply in progress) and stands still
+under reduced motion. Each area page opens with one line from the agent only when code can derive
+it from API data; otherwise the line is omitted.
 
-The **agent remains the main workspace**. On wide screens, Home pairs conversation with a compact Today column. Other pages give their content priority and open the agent on demand. The conversation has a persistent composer, attachment/photo and voice entry points, thread history, and a visible stop/retry state while a response is running. On a phone, Today is a labelled action opening a full-height overview; the composer remains reachable above the bottom bar and keyboard.
-
-An answer shows its conclusion, supporting explanation, computed figures and assumptions in the conversation. The evidence view opens from **Sources**; on wide screens it occupies a contextual right panel, and on phones it opens a full-height sheet. It presents calculation/run, source names and meaningful facts first, with raw data only as a secondary disclosure. Closing it returns to the same point in the conversation. For a projection, show the probability above the configured floor, the lowest **median** balance and its date, the horizon, and payment/EMI assumptions. Clearly distinguish a probability from a guarantee and an account balance from money safe to spend. Show a missing floor or stale data rather than implying certainty.
+An answer shows its conclusion, the steps the agent ran, its computed figures and a verdict card;
+the evidence opens on the canvas, with sources first and raw data second. A missing floor
+suppresses the probability and says so.
 
 ## Page specifications
 
@@ -32,13 +46,16 @@ Each view has one main job. Tables below describe what earns space and the main 
 
 | View | Information and layout | Primary action and details |
 | --- | --- | --- |
-| **Home** | Conversation occupies the main column. Today contains cash on hand and scope, a 90-day projection preview, unread updates and a short recent list. Thread history is accessible from the conversation header. | Ask, attach a photo, or record voice. Open a result's sources without leaving the thread; open Today on phone. An empty conversation offers a few useful starting questions. |
+| **Ask** | The orb, a greeting, the composer, starting questions, then cards for what the agent noticed: spendable from the projection, and unread notifications. | Ask, attach a photo, or record voice; act on a noticed item. |
+| **Conversation** | Conversation list beside the thread; Chat or Flow view; a canvas for big answers. | Ask, attach, stop, flag, open sources on the canvas. |
 | **Accounts** | Summary strip for cash on hand and the scope/as-of time; account rows grouped into bank/cash, cards, loans and assets. A card row distinguishes ledger and stated balances, their dates and any disagreement. | Open account details or Ask about the account. Never label liquid balance as safe-to-spend. |
-| **Projection** | Current floor and horizon, readable projection chart with median/range and floor, then goals, assumptions and data-quality notes. A hypothetical purchase form is below the current picture. | Explore the projection; a purchase scenario clearly states payment method and EMI tenure, and offers sources. Missing floor and unsupported input have explicit guidance. |
+| **Timeline** | Ledger spending behind today, the projection's median and P10–P90 band ahead, the floor, and dated schedule events. Below: goals, assumptions and data-quality notes, and the hypothetical purchase form. | Explore the projection; a purchase scenario clearly states payment method and EMI tenure, and offers sources. Missing floor and unsupported input have explicit guidance. |
 | **Schedules** | Summary of expected incoming and outgoing amounts over the displayed period, followed by dated income, obligations and subscriptions. Show the period on the totals. | Ask about a schedule; choose the supported time range. |
 | **Goals** | Summary of active goals, followed by each goal's name, target, current amount, deadline and progress. | Ask about a goal. Explain when a target or date is missing. |
 | **People** | Separate amounts others owe the user, amounts the user owes, and settled items. Identify the person and currency amount on each row. | Ask about a person or settlement; display enough context to distinguish the two directions. |
 | **Ledger** | Date/search/filter controls above a bounded movement list. Each row shows date, payee, category, amount and status; explicit previous/next controls use the available cursor. | Open Details for evidence and balanced transfers, or Ask about a movement. Keep filters and list status visible during refresh. |
+| **Inbox** | Notifications by kind (proposal, reminder, risk, pattern, scheduled answer) with their actions; scheduled questions beside them. | Decide, open in chat, or mark read. |
+| **Recaps** | A list of recaps and a story viewer; each story is a sum over ledger rows with its row count. | Step through, open the rows, ask about the period. |
 | **Imports** | Upload/start and recent imports lead to the selected statement's status, counts, items needing decisions, then reviewed lines. Keep progress and any polling failure visible. | Resolve ambiguous matches and transfers, then commit or reject; show undo where supported. Do not let a persistent action conceal unresolved items. |
 | **Profile** | Name and financial floor with concise explanation of what the floor means. | Save changes with field-level feedback. |
 | **Categories** | Categories first; merchant rules below or in a clearly labelled subsection. | Edit supported categories/rules and explain any reducible setting in plain language. |
@@ -54,7 +71,7 @@ Each view has one main job. Tables below describe what earns space and the main 
 
 ## Responsive and state rules
 
-- Desktop shows the full primary rail and uses the available content width; the assistant/evidence panel appears only when sufficient space remains. Tablet and phone use a full-height overlay for conversation or evidence, with a labelled close control and return focus. Phone layouts stack rows and summaries, keeping amounts and primary actions visible; large tables may scroll within a labelled table region, while page text never clips.
+- Data pages use the full content width. Their **Ask** actions open the conversation with the question seeded; there is no side assistant. The canvas sits beside the conversation on wide screens and opens full-height on phones, with a labelled close control and return focus. Phone layouts stack rows and summaries, keeping amounts and primary actions visible; large tables may scroll within a labelled table region, while page text never clips.
 - Use layout-matched skeletons for first loads: conversation lines and receipt, account rows, chart frame, tables, and settings fields. Skeletons reserve the final space, have a subtle shimmer, and remain identifiable to assistive technology. Refreshes keep existing data visible with a compact progress indicator. Each view explains an empty result, suggests its next useful action, and shows a recoverable error near the affected section. A failed backup-status read must not hide passkeys, export, or unrelated settings. Session expiry offers sign-in and returns the user to their work where feasible; interrupted writes are not silently replayed.
 - During an import, show the current stage and unresolved decisions. Keep the user's selections and explain failures. Do not imply a commit or undo succeeded before the server confirms it.
 - Use Lucide icons with text for actions, navigation and status where the icon improves recognition; give compact icon-only controls such as close an accessible name and a tooltip. Icons have consistent size and stroke, while the label remains the source of meaning.

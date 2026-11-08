@@ -31,6 +31,13 @@ extra briefings, anomaly detection, editable panels. Depth goes where it can be 
 shown: a probabilistic projection, a backtest of its accuracy, citations, and published eval
 scores. Database decided: Postgres, plain SQL.
 
+**Interface redesign on November 8, 2026.** The web app presents the agent as the product and the
+money as what it works on. Six areas: Ask (the agent's home), Chats, Money, Activity, Recaps, and
+Settings. A conversation has a Chat and a Flow view; big answers open a canvas. Money opens on a
+timeline (ledger behind, projection ahead), Activity gains the inbox, and the context rail goes.
+Every figure on these surfaces still comes from an API return. Layout and visual system:
+[`web-interface-design.md`](web-interface-design.md).
+
 ---
 
 ## 1. The product
@@ -46,7 +53,7 @@ anything the data supports. The following table answers the basic questions:
 |---|---|
 | Who uses it? | One person for each instance. Others self-host their own copy |
 | Where does it run? | Anywhere Docker runs—laptop, mini PC, VPS. Reached over a private Tailscale network, never the open internet |
-| What's its main face? | Web app (PWA): chat first, with read-only live panels. CLI for administration and development |
+| What's its main face? | Web app (PWA): the agent first, with read-only live panels around it. CLI for administration and development |
 | Who is it for first? | Me. India-first; everything India-specific lives in one folder |
 | What license does it use? | Open source, permissive (MIT or Apache-2.0). No GPL or AGPL in the shipped image |
 
