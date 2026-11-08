@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent home</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0f0c;--s:#171814;--s2:#22241e;--t:#f6f7f0;--sub:#9fa396;--lime:#d4ff3a;--cob:#2b59ff;--org:#ff6a2b;--grn:#3ee07f;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:400 15px/1.45 "Bricolage Grotesque",sans-serif;display:grid;grid-template-columns:76px 1fr;-webkit-font-smoothing:antialiased}
+.orb{border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff 0 5%,#d4ff3a 22%,#1ec8a5 52%,#2b59ff 84%)}
+nav{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 0;border-right:1px solid var(--line)}
+nav .orb{width:36px;height:36px;margin-bottom:14px}
+.ni{width:46px;height:46px;border-radius:16px;display:grid;place-items:center;color:var(--sub);font-size:18px;position:relative}
+.ni.on{background:var(--s2);color:var(--t)}.ni b{position:absolute;top:4px;right:4px;width:15px;height:15px;border-radius:50%;background:var(--org);font-size:10px;color:#fff;display:grid;place-items:center}
+main{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:70px;overflow:hidden}
+main:before{content:"";position:absolute;width:900px;height:600px;top:-300px;left:50%;transform:translateX(-50%);background:radial-gradient(closest-side,rgba(43,89,255,.28),rgba(30,200,165,.12) 50%,transparent);pointer-events:none}
+.big.orb{width:96px;height:96px;box-shadow:0 0 80px rgba(212,255,58,.35),0 0 160px rgba(43,89,255,.35);position:relative;animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{50%{transform:scale(1.06)}}
+h1{font-size:60px;font-weight:800;letter-spacing:-.045em;line-height:1;margin-top:30px;text-align:center}
+h1 span{color:var(--sub);font-weight:500}
+.comp{width:820px;margin-top:34px;background:var(--s);border-radius:32px;padding:20px 18px 16px 26px;border:1.5px solid rgba(212,255,58,.25);box-shadow:0 30px 80px rgba(0,0,0,.5),0 0 0 6px rgba(212,255,58,.04)}
+.comp p{font-size:21px;color:var(--sub)}
+.comp .row{display:flex;gap:8px;margin-top:18px;align-items:center}
+.tool{background:var(--s2);border-radius:99px;padding:7px 13px;font-weight:700;font-size:13px}
+.send{margin-left:auto;width:50px;height:50px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800;font-size:20px}
+.sug{display:flex;gap:8px;margin-top:16px}
+.sug span{border:1.5px solid var(--line);border-radius:99px;padding:8px 15px;font-weight:700;font-size:14px;color:#dfe2d6}
+.noticed{width:1060px;margin-top:44px}
+.noticed .h{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--sub);font-size:14px}
+.noticed .h .orb{width:16px;height:16px}
+.cards{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:14px;margin-top:14px}
+.c{border-radius:28px;padding:22px;display:flex;flex-direction:column;min-height:220px;position:relative;overflow:hidden}
+.c .k{font-weight:700;font-size:13px;opacity:.8}
+.c .v{font-size:58px;font-weight:800;letter-spacing:-.055em;line-height:1;margin-top:auto}
+.c p{font-size:16px;font-weight:600;margin-top:10px;line-height:1.35}
+.c .act{display:flex;gap:8px;margin-top:16px}
+.btn{border-radius:99px;padding:8px 15px;font-weight:800;font-size:14px}
+.mesh{background:radial-gradient(120% 120% at 0% 0%,#d4ff3a 0%,#7ef06b 28%,#1ec8a5 55%,#2b59ff 100%);color:#0e0f0c}
+.mesh .btn{background:#0e0f0c;color:var(--lime)}
+.due{background:var(--org);color:#111}.due .btn{background:#111;color:#fff}
+.dark{background:var(--s);}.dark .btn{background:var(--t);color:#111}.dark .btn.g{background:var(--s2);color:var(--t)}
+.dark .v{font-size:44px}
+.top{position:absolute;top:20px;right:28px;display:flex;gap:8px;color:var(--sub);font-size:13px;align-items:center}
+.top b{background:var(--s);color:var(--t);border-radius:99px;padding:6px 12px;font-size:13px}
+</style></head><body>
+<nav><span class="orb"></span><span class="ni on">✦</span><span class="ni">☰</span><span class="ni">₹<b>1</b></span><span class="ni">⇪</span><span class="ni" style="margin-top:auto">⚙</span></nav>
+<main>
+<div class="top">Private · on your machine <b>History</b></div>
+<span class="big orb"></span>
+<h1>Evening, Asha. <span>What do you<br>want to know about your money?</span></h1>
+<div class="comp"><p>Ask anything — “can I afford…”, “where did it go…”, “Ravi paid me back”</p>
+<div class="row"><span class="tool">📷 Photo a bill</span><span class="tool">🎙 Talk</span><span class="tool">📄 Drop a statement</span><span class="send">↑</span></div></div>
+<div class="sug"><span>Can I afford a ₹68,000 laptop?</span><span>Where did October go?</span><span>When do I hit my goal?</span><span>Who owes me?</span></div>
+<div class="noticed">
+<div class="h"><span class="orb"></span>I noticed three things since this morning</div>
+<div class="cards">
+<div class="c mesh"><span class="k">You can spend till 5 Feb</span><span class="v">₹1,84,200</span><p>Your floor holds in 94% of 1,000 futures.</p><div class="act"><span class="btn">Why this number?</span></div></div>
+<div class="c due"><span class="k">Due in 10 days · 18 Nov</span><span class="v">₹12,400</span><p>Slice card. SBI covers it with ₹2,948 to spare.</p><div class="act"><span class="btn">Remind me 16 Nov</span></div></div>
+<div class="c dark"><span class="k">New recurring charge</span><span class="v">₹299/mo</span><p>STREAMBOX, 3 months running. Track it as a subscription?</p><div class="act"><span class="btn">Yes, track</span><span class="btn g">Ignore</span></div></div>
+</div></div>
+</main>
+</body></html>

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent Workboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b0b0d;--s:#151518;--s2:#1e1e22;--t:#f4f4f1;--sub:#8e8e96;--line:rgba(255,255,255,.09);--lime:#d4ff3a;--cob:#2b59ff;--org:#ff6a2b;--grn:#3ee07f;--cy:#1ec8a5}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg) radial-gradient(rgba(255,255,255,.07) 1px,transparent 1.2px) 0 0/22px 22px;color:var(--t);font:400 14px/1.45 "Bricolage Grotesque",sans-serif;position:relative;-webkit-font-smoothing:antialiased}
+.mono{font-family:"JetBrains Mono",monospace}
+.bar{position:absolute;top:16px;left:16px;right:16px;display:flex;align-items:center;gap:8px}
+.bar b{font-weight:800;font-size:17px;margin-right:12px;display:flex;align-items:center;gap:8px}
+.bar b i{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff 0 6%,#d4ff3a 24%,#1ec8a5 55%,#2b59ff)}
+.t{background:var(--s);border:1px solid var(--line);border-radius:10px;padding:7px 12px;font-weight:600;color:var(--sub)}.t.on{color:var(--t)}
+.bar .r{margin-left:auto}
+svg.wires{position:absolute;inset:0}
+.node{position:absolute;background:var(--s);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+.node .h{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;font:600 11px "JetBrains Mono";letter-spacing:.06em;color:var(--sub);border-bottom:1px solid var(--line)}
+.node .b{padding:12px 14px}
+.q{left:40px;top:300px;width:280px;background:var(--cob);border:0}.q .h{color:rgba(255,255,255,.7);border-color:rgba(255,255,255,.18)}.q .b{font-size:20px;font-weight:700;line-height:1.25}
+.tool .b{font:500 12px/1.7 "JetBrains Mono";color:#cfcfd4}.tool .b b{color:var(--t);font-weight:600}
+.tool .h:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--grn);margin-right:8px;box-shadow:0 0 8px var(--grn)}
+.tool .h{justify-content:flex-start}.tool .h span{margin-left:auto}
+.n1{left:400px;top:120px;width:250px}.n2{left:400px;top:320px;width:250px}.n3{left:400px;top:520px;width:250px}
+.ans{left:740px;top:170px;width:400px;border:0;background:var(--lime);color:#0b0b0d}
+.ans .h{color:rgba(11,11,13,.6);border-color:rgba(11,11,13,.12)}
+.ans .v{font-size:40px;font-weight:800;letter-spacing:-.045em;line-height:1}
+.ans p{font-size:15px;font-weight:600;margin-top:10px}
+.ans .f{display:flex;gap:18px;margin-top:14px}.ans small{display:block;font-size:11px;font-weight:700;opacity:.6}.ans .f b{font-size:22px;font-weight:800}
+.ans svg{width:100%;height:60px;margin-top:10px}
+.fu{left:1200px;width:210px;background:transparent;border:1.5px dashed rgba(255,255,255,.2);box-shadow:none}
+.fu .b{font-weight:700;font-size:15px}.fu .h{border:0;padding-bottom:0}
+.f1{top:150px}.f2{top:290px}.f3{top:430px}
+.live{left:740px;top:560px;width:400px}
+.live .b{display:flex;gap:10px;align-items:center}.live .b span{font-weight:700}
+.live .sl{flex:1;height:6px;border-radius:99px;background:var(--s2);position:relative}.live .sl i{position:absolute;left:0;width:62%;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--cob),var(--cy),var(--lime))}.live .sl u{position:absolute;left:62%;top:-6px;width:18px;height:18px;border-radius:50%;background:#fff;margin-left:-9px}
+.comp{position:absolute;left:50%;transform:translateX(-50%);bottom:22px;width:760px;display:flex;align-items:center;gap:10px;background:var(--s);border:1px solid var(--line);border-radius:22px;padding:10px 10px 10px 20px;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.comp span{flex:1;color:var(--sub);font-size:16px}.send{width:44px;height:44px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800}
+.mini{position:absolute;right:16px;bottom:22px;width:170px;height:100px;border-radius:14px;background:var(--s);border:1px solid var(--line);padding:8px}
+.mini i{position:absolute;border-radius:3px;background:var(--s2)}
+</style></head><body>
+<div class="bar"><b><i></i>Fin-Agent</b><span class="t on">Board · Laptop on the Slice card</span><span class="t">Conversations</span><span class="t">Money</span><span class="t">Activity · 1</span><span class="t">Settings</span><span class="t r mono">FA·68P·0911</span></div>
+<svg class="wires" viewBox="0 0 1440 900" fill="none" stroke-width="2">
+<defs><linearGradient id="w" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs>
+<path d="M320 350 C360 350 360 160 400 160" stroke="url(#w)"/><path d="M320 350 C360 350 360 360 400 360" stroke="url(#w)"/><path d="M320 350 C360 350 360 560 400 560" stroke="url(#w)"/>
+<path d="M650 160 C700 160 690 260 740 260" stroke="url(#w)"/><path d="M650 360 C700 360 690 290 740 290" stroke="url(#w)"/><path d="M650 560 C700 560 690 320 740 320" stroke="url(#w)"/>
+<path d="M1140 250 C1170 250 1170 180 1200 180" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"/><path d="M1140 290 C1170 290 1170 320 1200 320" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"/><path d="M1140 330 C1170 330 1170 460 1200 460" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"/>
+<path d="M940 490 V560" stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"/>
+</svg>
+<div class="node q"><div class="h"><span>YOU · 21:40</span></div><div class="b">Can I buy a ₹68,000 laptop on the Slice card?</div></div>
+<div class="node tool n1"><div class="h">READ ACCOUNTS<span>0.3s</span></div><div class="b">SBI Savings <b>₹1,46,800</b><br>Slice card <b>₹12,400 due 18 Nov</b><br>floor <b>₹25,000</b></div></div>
+<div class="node tool n2"><div class="h">PROJECTION<span>2.8s</span></div><div class="b">runs <b>1,000</b> · horizon <b>90d</b><br>floor holds <b>91%</b> (was 94%)<br>lowest median <b>₹38,400 · 2 Dec</b></div></div>
+<div class="node tool n3"><div class="h">COMPARE DATES<span>1.1s</span></div><div class="b">buy 8 Nov <b>91%</b><br>wait 21 Nov <b>96%</b><br>3 EMIs <b>93%</b></div></div>
+<div class="node ans"><div class="h"><span>ANSWER</span><span>3 SOURCES</span></div><div class="b"><div class="v">Yes, with a change</div><p>Clear it on the due date. Waiting till 21 Nov lifts the floor to 96%.</p>
+<div class="f"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Safer</small><b>21 Nov</b></div></div>
+<svg viewBox="0 0 370 60" preserveAspectRatio="none"><path d="M0,12 C80,14 130,34 185,42 S300,34 370,24" fill="none" stroke="#0b0b0d" stroke-width="3"/><line x1="0" x2="370" y1="56" y2="56" stroke="#0b0b0d" stroke-dasharray="3 4" opacity=".4"/></svg></div></div>
+<div class="node fu f1"><div class="h mono">BRANCH</div><div class="b">What if I wait till 21 Nov?</div></div>
+<div class="node fu f2"><div class="h mono">BRANCH</div><div class="b">Split into 3 EMIs?</div></div>
+<div class="node fu f3"><div class="h mono">BRANCH</div><div class="b">Show the 3 source rows</div></div>
+<div class="node live"><div class="h"><span>TRY IT · LIVE</span><span>re-runs on release</span></div><div class="b"><span>Price</span><div class="sl"><i></i><u></u></div><span>₹68,000</span></div></div>
+<div class="comp"><span>Ask, or drag a branch to explore…</span>📷 🎙 <b class="send">↑</b></div>
+<div class="mini"><i style="left:10px;top:40px;width:24px;height:14px;background:#2b59ff"></i><i style="left:46px;top:22px;width:28px;height:10px"></i><i style="left:46px;top:42px;width:28px;height:10px"></i><i style="left:46px;top:62px;width:28px;height:10px"></i><i style="left:88px;top:30px;width:40px;height:30px;background:#d4ff3a"></i><i style="left:138px;top:24px;width:22px;height:8px"></i><i style="left:138px;top:46px;width:22px;height:8px"></i></div>
+</body></html>

@@ -1,0 +1,57 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>05 · Agent-built tool</title><link rel="stylesheet" href="shell.css">
+<style>
+.app{grid-template-columns:76px 430px minmax(0,1fr)}
+.chat{display:flex;flex-direction:column;padding:20px 26px;border-right:1px solid var(--line)}
+.chat .h b{font-size:18px;font-weight:800}
+.th{flex:1;padding-top:24px}
+.built{margin-top:14px;display:flex;align-items:center;gap:12px;background:var(--s);border-radius:20px;padding:12px 14px;box-shadow:inset 0 0 0 1.5px rgba(212,255,58,.4)}
+.built i{width:42px;height:42px;border-radius:14px;background:var(--lime);color:#111;display:grid;place-items:center;font-style:normal;font-weight:900}
+.built b{display:block}.built span{font-size:13px;color:var(--sub)}
+.steps{margin-top:12px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.comp p{font-size:16px}
+.tl{margin:14px 14px 14px 0;background:var(--s);border-radius:30px;padding:24px 30px;display:grid;grid-template-columns:330px minmax(0,1fr);gap:34px;position:relative;min-width:0;grid-template-rows:auto 1fr;align-content:start}
+.tt{grid-column:1/-1;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);padding-bottom:16px}
+.tt h1{font-size:24px;font-weight:800;letter-spacing:-.03em}.tt .r{margin-left:auto;display:flex;gap:8px;align-items:center}
+.ctl label{display:flex;justify-content:space-between;align-items:baseline;font-weight:700;font-size:14px;margin-top:22px;color:var(--sub)}
+.ctl label .fig{font-size:24px;color:var(--t)}
+.sl{height:10px;border-radius:99px;background:var(--s2);margin-top:12px;position:relative}
+.sl i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--cob),var(--cy),var(--lime))}
+.sl u{position:absolute;top:-9px;width:28px;height:28px;border-radius:50%;background:var(--t);border:5px solid var(--lime);margin-left:-14px}
+.tick{display:flex;justify-content:space-between;font-size:11px;color:var(--ter);margin-top:8px;font-weight:600}
+.res{display:flex;flex-direction:column;min-width:0}
+.gauge{position:relative;height:236px;display:grid;place-items:center}
+.gauge .fig{position:absolute;top:84px;font-size:90px}
+.gauge small{position:absolute;top:182px;font-weight:700;color:var(--sub)}
+.vd{text-align:center;font-size:30px;font-weight:800;letter-spacing:-.035em}.vd em{font-style:normal;background:var(--lime);color:#111;padding:0 8px;border-radius:8px}
+.mini{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}
+.mini div{background:var(--s2);border-radius:16px;padding:12px 14px}.mini small{display:block;font-size:12px;font-weight:700;color:var(--sub)}.mini .fig{font-size:24px}
+.curve{width:100%;height:90px;margin-top:14px}
+.foot{position:absolute;left:30px;right:30px;bottom:18px;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--sub);font-weight:600}
+</style></head><body data-active="chats"><div class="app"><nav id="rail"></nav>
+<section class="chat">
+<div class="h"><b>Laptop on the Slice card</b></div>
+<div class="th">
+<div class="me" style="font-size:16px">Build me something to play with price and date</div>
+<div class="ag" style="margin-top:22px"><span class="orb" style="--s:30px"><i></i></span><div>
+<p class="say">Done — <b>I built you a planner</b>. Move anything and I re-run 1,000 futures. Every result comes from the projection engine.</p>
+<div class="built"><i>▦</i><div><b>Laptop planner</b><span>Live tool · saved to this conversation</span></div></div>
+<div class="steps"><span class="st">Read SBI Savings and Slice card</span><span class="st">Found rent 1 Dec, salary 30 Nov</span><span class="st">Built 4 controls</span></div>
+</div></div></div>
+<div class="comp"><p>Ask, or ask me to build a tool…</p><div class="row"><span class="tool"><span data-icon="mic"></span></span><span class="send">↑</span></div></div>
+</section>
+<section class="tl">
+<div class="tt"><span class="orb" style="--s:22px"><i></i></span><h1>Laptop planner</h1><span class="r"><span class="serial">FA·68P·0911</span><span class="btn">⤢ Full screen</span></span></div>
+<div class="ctl">
+<label>Price <span class="fig">₹68,000</span></label><div class="sl"><i style="width:62%"></i><u style="left:62%"></u></div><div class="tick"><span>₹30,000</span><span>₹1,00,000</span></div>
+<label>Buy on <span class="fig">8 Nov</span></label><div class="sl"><i style="width:8%"></i><u style="left:8%"></u></div><div class="tick"><span>Today</span><span>30 Nov</span></div>
+<label>Pay with</label><div class="tabs" style="margin-top:12px;justify-content:space-between"><span class="on">Card in full</span><span>3 EMIs</span><span>From SBI</span></div>
+<label>Floor <span class="fig">₹25,000</span></label><div class="sl"><i style="width:25%"></i><u style="left:25%"></u></div><div class="tick"><span>₹0</span><span>₹1,00,000</span></div>
+</div>
+<div class="res">
+<div class="gauge"><svg viewBox="0 0 300 170" style="width:330px"><defs><linearGradient id="gg" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset=".5" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs><path d="M30 150 A120 120 0 0 1 270 150" fill="none" stroke="#22241e" stroke-width="22" stroke-linecap="round"/><path d="M30 150 A120 120 0 0 1 258 104" fill="none" stroke="url(#gg)" stroke-width="22" stroke-linecap="round"/><line x1="262" y1="96" x2="284" y2="87" stroke="#ff6a2b" stroke-width="3"/></svg><span class="fig">91%</span><small>floor holds · needs 90%</small></div>
+<div class="vd">Yes, <em>with a change</em></div>
+<div class="mini"><div><small>Lowest median</small><span class="fig">₹38,400</span></div><div><small>Tightest day</small><span class="fig">2 Dec</span></div><div><small>Wait till 21 Nov</small><span class="fig pos">96%</span></div></div>
+<svg class="curve" viewBox="0 0 600 90" preserveAspectRatio="none"><path d="M0,14 C120,17 200,40 300,50 S500,42 600,30 L600,72 C500,78 400,80 300,76 S120,44 0,26Z" fill="#1ec8a5" opacity=".15"/><path d="M0,20 C120,24 200,52 300,62 S500,56 600,46" fill="none" stroke="#d4ff3a" stroke-width="3"/><line x1="0" x2="600" y1="86" y2="86" stroke="#ff6a2b" stroke-dasharray="4 5"/></svg>
+</div>
+<div class="foot"><span>Computed by the projection engine · 1,000 runs per change · 3 sources</span><span class="btn lime">Save as a plan</span></div>
+</section></div><script src="shell.js"></script></body></html>

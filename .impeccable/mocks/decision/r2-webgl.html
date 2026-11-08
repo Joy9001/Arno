@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Generative Field</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#050505;--t:#f1efe9;--sub:rgba(241,239,233,.55);--hot:#ff4a1c;--ice:#bfe3ff;--grn:#7dffa8;--line:rgba(241,239,233,.12)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:400 15px/1.45 "Inter Tight",sans-serif;position:relative;-webkit-font-smoothing:antialiased}
+canvas{position:absolute;inset:0}
+.vig{position:absolute;inset:0;background:radial-gradient(80% 70% at 35% 55%,transparent 30%,rgba(5,5,5,.85));pointer-events:none}
+nav{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:28px;padding:26px 44px;font-weight:500}
+.brand{font:800 18px/1 Archivo;font-stretch:125%;letter-spacing:-.02em;margin-right:20px}
+nav a{color:var(--sub)}nav a.on{color:var(--t)}nav a sup{color:var(--hot);font-weight:600}
+nav .r{margin-left:auto;color:var(--sub);font-size:13px}
+.hero{position:absolute;left:44px;top:110px}
+.k{font:500 12px/1 "Inter Tight";letter-spacing:.16em;text-transform:uppercase;color:var(--sub);display:flex;gap:14px;align-items:center}
+.k i{width:40px;height:1px;background:var(--sub)}
+.big{font:900 150px/.86 Archivo;font-stretch:108%;letter-spacing:-.055em;margin-top:18px;font-variant-numeric:tabular-nums}
+.big span{color:var(--hot)}
+.meta{display:flex;gap:44px;margin-top:22px}
+.meta div small{display:block;color:var(--sub);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+.meta div b{font:700 34px/1.1 Archivo;font-stretch:110%;letter-spacing:-.03em}
+.axis{position:absolute;left:44px;right:500px;bottom:30px;display:flex;justify-content:space-between;font-size:12px;color:var(--sub);letter-spacing:.08em;text-transform:uppercase}
+.tag{position:absolute;font-size:12px;color:var(--t);display:flex;align-items:center;gap:8px;letter-spacing:.04em}
+.tag:before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor;box-shadow:0 0 14px currentColor}
+.panel{position:absolute;right:28px;top:90px;bottom:28px;width:440px;border-radius:28px;background:rgba(18,18,18,.62);backdrop-filter:blur(24px);border:1px solid var(--line);padding:24px 26px;display:flex;flex-direction:column}
+.panel h2{font:700 20px/1.2 Archivo;font-stretch:105%;letter-spacing:-.02em;display:flex;justify-content:space-between}
+.panel h2 span{font:500 13px "Inter Tight";color:var(--sub)}
+.me{margin:26px 0 0 auto;width:fit-content;max-width:320px;background:var(--t);color:#050505;font-weight:500;padding:11px 16px;border-radius:20px 20px 4px 20px}
+.say{margin-top:20px;font-size:17px;line-height:1.5}
+.rc{margin-top:18px;border-top:1px solid var(--line);padding-top:16px}
+.rc .top{display:flex;justify-content:space-between;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--sub)}
+.rc .v{font:900 44px/.95 Archivo;font-stretch:112%;letter-spacing:-.045em;margin:12px 0 16px}
+.rc .v em{font-style:normal;color:var(--hot)}
+.rc .g{display:grid;grid-template-columns:repeat(3,1fr)}.rc .g div+div{border-left:1px solid var(--line);padding-left:14px}
+.rc small{display:block;color:var(--sub);font-size:12px}.rc b{font:700 24px/1.1 Archivo;letter-spacing:-.03em}
+.rc .w{display:flex;justify-content:space-between;margin-top:14px;font-size:14px;color:var(--sub)}.rc .w a{color:var(--t);border-bottom:1px solid var(--hot)}
+.comp{margin-top:auto;display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:99px;padding:8px 8px 8px 20px;color:var(--sub)}
+.comp>span:first-child{flex:1}.send{width:44px;height:44px;border-radius:50%;background:var(--hot);display:grid;place-items:center;color:#fff;font-weight:700}
+</style></head><body>
+<canvas id="c" width="1440" height="900"></canvas>
+<div class="vig"></div>
+<nav><span class="brand">FIN—AGENT</span><a class="on">Home<sup> 1</sup></a><a>Money</a><a>Activity</a><a>Settings</a><span class="r">Sun 08 Nov · private instance</span></nav>
+<div class="hero">
+<div class="k"><i></i>Spendable · next 90 days</div>
+<div class="big"><span>₹</span>1,84,200</div>
+<div class="meta"><div><small>Floor holds</small><b style="color:var(--grn)">91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Floor</small><b>₹25,000</b></div></div>
+</div>
+<span class="tag" style="left:448px;top:676px;color:var(--hot)">Slice due ₹12,400 · 18 Nov</span>
+<span class="tag" style="left:640px;top:772px;color:var(--ice)">Lowest ₹38,400 · 2 Dec</span>
+<div class="axis"><span>08 Nov</span><span>Dec</span><span>Jan</span><span>05 Feb</span></div>
+<aside class="panel">
+<h2>Laptop on the Slice card <span>History · New</span></h2>
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<p class="say">Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="rc"><div class="top"><span>Affordability · card</span><span>FA·68P·0911</span></div>
+<div class="v">Yes, <em>with a change</em></div>
+<div class="g"><div><small>Floor</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Runs · src</small><b>1,000 · 3</b></div></div>
+<div class="w"><span>Waiting until 21 Nov is safer.</span><a>Open the rows</a></div></div>
+<div class="comp"><span>Ask about your money</span><span class="send">↑</span></div>
+</aside>
+<script>
+const c=document.getElementById("c"),x=c.getContext("2d");const L=44,R=940,T=560,B=880;
+const p90=t=>T+40+ -30*Math.sin(t*2.4)+t*60, p10=t=>T+150+90*Math.sin(t*3.1-0.3)+t*30, med=t=>(p90(t)*0.45+p10(t)*0.55);
+for(let i=0;i<=90;i++){const f=i/90;x.beginPath();for(let s=0;s<=200;s++){const t=s/200,X=L+(R-L)*t,Y=p90(t)+(p10(t)-p90(t))*f+Math.sin(t*14+f*9)*2.2;s?x.lineTo(X,Y):x.moveTo(X,Y)}
+const a=0.08+0.32*(1-Math.abs(f-0.55)*1.8);x.strokeStyle=`rgba(${f<0.5?"191,227,255":"255,120,80"},${Math.max(a,0.05)})`;x.lineWidth=0.8;x.stroke()}
+x.beginPath();for(let s=0;s<=200;s++){const t=s/200,X=L+(R-L)*t,Y=med(t);s?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle="#f1efe9";x.lineWidth=3;x.shadowColor="#fff";x.shadowBlur=14;x.stroke();x.shadowBlur=0;
+x.setLineDash([2,6]);x.strokeStyle="rgba(125,255,168,.8)";x.lineWidth=1.5;x.beginPath();x.moveTo(L,872);x.lineTo(R,872);x.stroke();
+</script>
+</body></html>

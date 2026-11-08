@@ -1,0 +1,33 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>21 · Phone · Money</title><link rel="stylesheet" href="shell.css">
+<style>
+.h1{padding:54px 18px 0;display:flex;align-items:center;justify-content:space-between}.h1 b{font-size:30px;font-weight:800;letter-spacing:-.04em}
+.tabs{margin:12px 16px 0;overflow:hidden;width:fit-content;max-width:358px}.tabs span{padding:6px 11px;font-size:13px}
+.big{padding:16px 18px 0}.big .fig{font-size:52px;display:block;margin-top:6px}
+.note{margin:12px 16px 0;padding:10px 12px;border-radius:16px;display:flex;gap:10px;align-items:center;background:rgba(212,255,58,.07);box-shadow:inset 0 0 0 1px rgba(212,255,58,.14);font-size:13px;font-weight:600}.note b{color:var(--lime)}
+.tl{position:relative;margin:14px 0 0;height:300px}
+.tl svg{position:absolute;inset:0;width:100%;height:100%}
+.now{position:absolute;left:70px;top:10px;bottom:30px;width:2px;background:var(--t)}.now b{position:absolute;top:-2px;left:6px;font-size:10px;font-weight:800;background:var(--t);color:#000;border-radius:99px;padding:2px 7px;white-space:nowrap}
+.scrub{position:absolute;left:236px;top:10px;bottom:30px;width:2px;background:var(--lime);box-shadow:0 0 10px var(--lime)}.scrub i{position:absolute;bottom:-10px;left:-10px;width:22px;height:22px;border-radius:50%;background:var(--lime)}
+.pop{position:absolute;left:150px;top:18px;width:200px;background:rgba(23,24,20,.92);border:1px solid var(--line);border-radius:18px;padding:10px 12px}.pop .kk{color:var(--lime);font-size:10px}.pop .fig{font-size:26px;display:block;margin-top:4px}
+.evs{display:flex;flex-direction:column;padding:6px 16px 0}
+.e{display:grid;grid-template-columns:52px 1fr auto;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:14px;align-items:center}.e .d{font:600 11px "JetBrains Mono";color:var(--sub)}.e b{font-variant-numeric:tabular-nums}
+</style></head><body class="phone" data-active="money">
+<div class="h1"><b>Money</b><span class="btn ask" style="padding:7px 12px;font-size:13px">Ask</span></div>
+<div class="tabs"><span class="on">Timeline</span><span>Accounts</span><span>Bills</span><span>Goals</span><span>People</span></div>
+<div class="big"><span class="k">Spendable till 5 Feb</span><span class="fig">₹1,84,200</span></div>
+<div class="note"><span class="orb" style="--s:20px"><i></i></span><span>Tightest day is <b>2 Dec</b>, after rent.</span></div>
+<div class="tl">
+<svg viewBox="0 0 390 300" preserveAspectRatio="none"><defs><linearGradient id="f" x1="0" x2="1"><stop offset="0" stop-color="#1ec8a5" stop-opacity=".4"/><stop offset="1" stop-color="#2b59ff" stop-opacity=".1"/></linearGradient><linearGradient id="l" x1="0" x2="1"><stop offset="0" stop-color="#d4ff3a"/><stop offset="1" stop-color="#2b59ff"/></linearGradient></defs>
+<g fill="#ffd23a" opacity=".6"><rect x="10" y="190" width="6" height="40"/><rect x="22" y="170" width="6" height="60"/><rect x="34" y="120" width="6" height="110"/><rect x="46" y="200" width="6" height="30"/><rect x="58" y="160" width="6" height="70"/></g>
+<path d="M72,90 C130,96 180,130 238,170 S340,150 390,120 L390,250 C340,262 290,268 238,262 S130,130 72,112Z" fill="url(#f)"/>
+<path d="M72,100 C130,106 180,150 238,210 S340,190 390,170" fill="none" stroke="url(#l)" stroke-width="3"/>
+<line x1="72" x2="390" y1="268" y2="268" stroke="#ff6a2b" stroke-dasharray="4 5"/><circle cx="238" cy="210" r="6" fill="#d4ff3a"/></svg>
+<div class="now"><b>Today</b></div><div class="scrub"><i></i></div>
+<div class="pop"><span class="kk">2 DEC · TIGHTEST</span><span class="fig">₹38,400</span></div>
+</div>
+<div class="evs">
+<div class="e"><span class="d due">18 NOV</span><span>Slice card</span><b class="due">₹12,400</b></div>
+<div class="e"><span class="d">30 NOV</span><span>Salary · Acme</span><b class="pos">+₹92,000</b></div>
+</div>
+<nav id="tabbar"></nav>
+<script src="shell.js"></script></body></html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent + canvas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0f0c;--s:#171814;--s2:#22241e;--t:#f6f7f0;--sub:#9fa396;--lime:#d4ff3a;--cob:#2b59ff;--org:#ff6a2b;--grn:#3ee07f;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:400 15px/1.45 "Bricolage Grotesque",sans-serif;display:grid;grid-template-columns:76px 600px 1fr;-webkit-font-smoothing:antialiased}
+.orb{border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff 0 5%,#d4ff3a 22%,#1ec8a5 52%,#2b59ff 84%)}
+nav{display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px 0;border-right:1px solid var(--line)}
+nav .orb{width:36px;height:36px;margin-bottom:14px}
+.ni{width:46px;height:46px;border-radius:16px;display:grid;place-items:center;color:var(--sub);font-size:18px}.ni.on{background:var(--s2);color:var(--t)}
+.chat{display:flex;flex-direction:column;padding:20px 30px;border-right:1px solid var(--line)}
+.h{display:flex;justify-content:space-between;align-items:center}.h b{font-size:18px;font-weight:800;letter-spacing:-.02em}.h span{font-size:13px;color:var(--sub)}
+.th{flex:1;padding-top:26px}
+.me{margin-left:auto;width:fit-content;max-width:420px;background:var(--cob);font-weight:600;font-size:17px;padding:13px 18px;border-radius:26px 26px 6px 26px}
+.ag{display:flex;gap:12px;margin-top:24px}.ag .orb{width:30px;height:30px;flex:none}
+.trail{display:flex;gap:6px;flex-wrap:wrap}.st{font-size:12px;font-weight:700;color:var(--sub);background:var(--s);border-radius:99px;padding:5px 11px}.st:before{content:"✓ ";color:var(--lime)}
+.say{font-size:19px;line-height:1.45;margin-top:12px}.say b{color:var(--lime)}
+.ref{margin-top:14px;display:flex;align-items:center;gap:12px;background:var(--s);border-radius:20px;padding:12px 14px;box-shadow:inset 0 0 0 1.5px rgba(212,255,58,.35)}
+.ref i{width:44px;height:44px;border-radius:14px;background:var(--lime);display:grid;place-items:center;color:#111;font-style:normal;font-weight:800}
+.ref b{display:block;font-weight:800}.ref span{font-size:13px;color:var(--sub)}
+.me2{margin:22px 0 0 auto;width:fit-content;background:var(--cob);font-weight:600;padding:11px 16px;border-radius:22px 22px 6px 22px}
+.typing{display:flex;gap:12px;margin-top:18px;align-items:center;color:var(--sub);font-weight:700;font-size:14px}.typing .orb{width:30px;height:30px;animation:p 1.4s infinite}@keyframes p{50%{opacity:.5;transform:scale(.9)}}
+.comp{background:var(--s);border-radius:28px;padding:14px 14px 12px 20px}
+.comp p{font-size:17px;color:var(--sub)}.comp .row{display:flex;gap:8px;margin-top:12px;align-items:center}
+.tool{background:var(--s2);border-radius:99px;padding:6px 12px;font-weight:700;font-size:13px}
+.send{margin-left:auto;width:44px;height:44px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800;font-size:18px}
+.canvas{position:relative;overflow:hidden;padding:24px 30px;display:flex;flex-direction:column}
+canvas{position:absolute;left:0;bottom:0}
+.ck{display:flex;justify-content:space-between;align-items:center;position:relative}
+.tag{font-weight:700;font-size:13px;color:var(--sub)}.tag b{color:var(--t)}
+.seg{display:flex;background:var(--s);border-radius:99px;padding:4px;font-weight:700;font-size:14px}.seg span{padding:7px 14px;border-radius:99px;color:var(--sub)}.seg .on{background:var(--lime);color:#111}
+.verdict{position:relative;margin-top:26px;font-size:92px;font-weight:800;letter-spacing:-.06em;line-height:.9}
+.verdict em{font-style:normal;background:linear-gradient(90deg,#d4ff3a,#1ec8a5 60%,#2b59ff);-webkit-background-clip:text;color:transparent}
+.figs{position:relative;display:flex;gap:40px;margin-top:22px}
+.figs small{display:block;font-size:13px;font-weight:700;color:var(--sub)}.figs b{font-size:40px;font-weight:800;letter-spacing:-.045em}
+.serial{background:var(--s);border-radius:99px;padding:6px 12px;font-weight:700;font-size:12px}
+.pin{position:absolute;font-weight:800;font-size:13px;border-radius:99px;padding:5px 11px}
+.axis{position:absolute;left:30px;right:30px;bottom:18px;display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--sub)}
+.src{position:relative;display:flex;gap:8px;margin-top:18px}.src span{background:var(--s);border-radius:99px;padding:6px 12px;font-weight:700;font-size:13px}
+</style></head><body>
+<nav><span class="orb"></span><span class="ni on">✦</span><span class="ni">☰</span><span class="ni">₹</span><span class="ni">⇪</span><span class="ni" style="margin-top:auto">⚙</span></nav>
+<section class="chat">
+<div class="h"><b>Laptop on the Slice card</b><span>History · New</span></div>
+<div class="th">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="ag"><span class="orb"></span><div>
+<div class="trail"><span class="st">Read 3 accounts</span><span class="st">Ran 1,000 futures</span></div>
+<p class="say">Yes — <b>if you clear it on the due date</b>. The floor still holds in 91% of runs. I put the full picture on the right.</p>
+<div class="ref"><i>₹</i><div><b>Affordability · laptop</b><span>90-day projection · 3 sources · FA·68P·0911</span></div></div>
+</div></div>
+<div class="me2">What if I wait till 21 Nov?</div>
+<div class="typing"><span class="orb"></span>Re-running 1,000 futures with a 21 Nov purchase…</div>
+</div>
+<div class="comp"><p>Ask a follow-up…</p><div class="row"><span class="tool">📷</span><span class="tool">🎙</span><span class="tool">📄</span><span class="send">↑</span></div></div>
+</section>
+<section class="canvas">
+<canvas id="c" width="764" height="520"></canvas>
+<div class="ck"><span class="tag">Affordability · <b>₹68,000 laptop on Slice</b></span><span class="serial">FA·68P·0911</span></div>
+<div class="ck" style="margin-top:16px"><span class="seg"><span class="on">Buy 8 Nov</span><span>Wait till 21 Nov</span><span>3 EMIs</span></span></div>
+<div class="verdict">Yes,<br><em>with a change</em></div>
+<div class="figs"><div><small>Floor holds</small><b style="color:var(--grn)">91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Spendable now</small><b>₹1,84,200</b></div></div>
+<div class="src"><span>SBI Savings</span><span>Slice card schedule</span><span>Rent · 1 Dec</span></div>
+<span class="pin" style="left:150px;bottom:206px;background:var(--org);color:#111">Laptop · 8 Nov</span>
+<span class="pin" style="left:380px;bottom:92px;background:var(--t);color:#111">Lowest ₹38,400 · 2 Dec</span>
+<div class="axis"><span>8 Nov</span><span>Dec</span><span>Jan</span><span>5 Feb</span></div>
+</section>
+<script>
+const c=document.getElementById("c"),x=c.getContext("2d"),W=764,H=520,L=0,R=W,T=250;
+const hi=t=>T+10-40*Math.sin(t*2.2)+t*40, lo=t=>T+170+70*Math.sin(t*3-0.3)+t*20, med=t=>hi(t)*.45+lo(t)*.55;
+const g=x.createLinearGradient(0,0,W,0);g.addColorStop(0,"#2b59ff");g.addColorStop(.5,"#1ec8a5");g.addColorStop(1,"#d4ff3a");
+for(let i=0;i<=70;i++){const f=i/70;x.beginPath();for(let s=0;s<=160;s++){const t=s/160,X=L+(R-L)*t,Y=hi(t)+(lo(t)-hi(t))*f+Math.sin(t*12+f*8)*2;s?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle=g;x.globalAlpha=.05+.3*(1-Math.abs(f-.55)*1.7);x.lineWidth=.9;x.stroke()}
+x.globalAlpha=1;x.beginPath();for(let s=0;s<=160;s++){const t=s/160,X=L+(R-L)*t,Y=med(t);s?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle="#f6f7f0";x.lineWidth=3.5;x.shadowColor="#d4ff3a";x.shadowBlur=16;x.stroke();x.shadowBlur=0;
+x.setLineDash([4,6]);x.strokeStyle="#ff6a2b";x.lineWidth=1.5;x.beginPath();x.moveTo(0,490);x.lineTo(W,490);x.stroke();
+x.setLineDash([]);x.strokeStyle="rgba(255,106,43,.9)";x.beginPath();x.moveTo(150,240);x.lineTo(150,500);x.stroke();
+</script>
+</body></html>

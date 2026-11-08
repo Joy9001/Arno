@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Spotlight Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--t:#f5f6f7;--sub:rgba(245,246,247,.6);--line:rgba(255,255,255,.12);--lime:#d4ff3a;--org:#ff6a2b;--cy:#5eead4}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:#04060a;color:var(--t);font:400 15px/1.5 Geist,sans-serif;position:relative;-webkit-font-smoothing:antialiased}
+canvas{position:absolute;inset:0}
+.wall{position:absolute;left:56px;top:48px}
+.wall .k{font:500 12px "Geist Mono";letter-spacing:.12em;color:var(--sub)}
+.wall .v{font-weight:200;font-size:150px;letter-spacing:-.06em;line-height:1;margin-top:6px;opacity:.9}
+.wall .m{display:flex;gap:28px;margin-top:6px;font:500 13px "Geist Mono";color:var(--sub)}.wall .m b{color:var(--t);font-weight:500}
+.dues{position:absolute;right:56px;top:56px;text-align:right;font:500 13px "Geist Mono";color:var(--sub);line-height:2}.dues b{color:var(--t);font-weight:500}.dues .o{color:var(--org)}
+.veil{position:absolute;inset:0;background:radial-gradient(50% 55% at 50% 52%,rgba(4,6,10,.75),rgba(4,6,10,.15))}
+.spot{position:absolute;left:50%;top:190px;transform:translateX(-50%);width:760px;border-radius:24px;background:rgba(22,24,30,.72);backdrop-filter:blur(30px) saturate(1.6);border:1px solid var(--line);box-shadow:0 40px 120px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.12);overflow:hidden}
+.in{display:flex;align-items:center;gap:14px;padding:20px 22px;border-bottom:1px solid var(--line);font-size:21px}
+.in i{width:22px;height:22px;border-radius:50%;background:conic-gradient(var(--lime),var(--cy),#2b59ff,var(--lime));animation:r 3s linear infinite}@keyframes r{to{transform:rotate(360deg)}}
+.in span{flex:1}.in kbd{font:500 12px "Geist Mono";color:var(--sub);border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+.steps{display:flex;gap:8px;padding:14px 22px 0;font:500 12px "Geist Mono";color:var(--sub)}.steps span:before{content:"✓ ";color:var(--lime)}
+.ans{padding:14px 22px 18px}
+.ans h2{font-size:34px;font-weight:600;letter-spacing:-.04em;line-height:1.1}.ans h2 em{font-style:normal;color:var(--lime)}
+.ans p{color:#cfd2d8;margin-top:8px;font-size:16px}
+.g{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:16px}
+.g div{padding:12px 22px}.g div+div{border-left:1px solid var(--line)}
+.g small{display:block;font:500 11px "Geist Mono";color:var(--sub);letter-spacing:.06em}.g b{font-size:24px;font-weight:600;letter-spacing:-.04em}
+.acts{padding:8px}
+.a{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:12px;color:#dfe2e6}
+.a.on{background:rgba(255,255,255,.08)}.a kbd{margin-left:auto;font:500 11px "Geist Mono";color:var(--sub)}
+.a i{width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.08);display:grid;place-items:center;font-style:normal;font-size:12px}
+.foot{display:flex;justify-content:space-between;padding:10px 22px;border-top:1px solid var(--line);font:500 12px "Geist Mono";color:var(--sub)}
+.dock{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);display:flex;gap:4px;padding:6px;border-radius:16px;background:rgba(22,24,30,.6);backdrop-filter:blur(20px);border:1px solid var(--line)}
+.dock span{padding:8px 14px;border-radius:11px;font-weight:500;color:var(--sub)}.dock .on{background:rgba(255,255,255,.1);color:var(--t)}
+</style></head><body>
+<canvas id="c" width="1440" height="900"></canvas>
+<div class="wall"><div class="k">SPENDABLE · NEXT 90 DAYS</div><div class="v">₹1,84,200</div><div class="m"><span>floor holds <b>91%</b></span><span>lowest <b>₹38,400 · 02 DEC</b></span></div></div>
+<div class="dues"><span class="o">18 NOV · SLICE CARD · ₹12,400</span><br>21 NOV · SIP · <b>₹10,000</b><br>01 DEC · RENT · <b>₹22,000</b><br>RAVI OWES · <b>₹4,400</b></div>
+<div class="veil"></div>
+<div class="spot">
+<div class="in"><i></i><span>Can I buy a ₹68,000 laptop on the Slice card?</span><kbd>esc</kbd></div>
+<div class="steps"><span>read 3 accounts</span><span>ran 1,000 futures</span><span>compared 3 dates</span><span style="margin-left:auto">FA·68P·0911</span></div>
+<div class="ans"><h2>Yes, <em>if you clear it on the due date.</em></h2><p>Floor holds in 91% of runs, down from 94%. Tightest on 2 Dec, after rent.</p></div>
+<div class="g"><div><small>FLOOR</small><b>91%</b></div><div><small>LOWEST</small><b>₹38,400</b></div><div><small>WAIT TILL 21 NOV</small><b style="color:var(--lime)">96%</b></div><div><small>SOURCES</small><b>3</b></div></div>
+<div class="acts">
+<div class="a on"><i>↗</i>Open the full answer and the rows behind it<kbd>↵</kbd></div>
+<div class="a"><i>⟳</i>Re-run as if I wait till 21 Nov<kbd>⌘1</kbd></div>
+<div class="a"><i>₹</i>Log the laptop as planned on 21 Nov<kbd>⌘2</kbd></div>
+</div>
+<div class="foot"><span>↑↓ to move · ↵ to open · type to ask a follow-up</span><span>private · on your machine</span></div>
+</div>
+<div class="dock"><span class="on">Ask</span><span>Conversations</span><span>Money</span><span>Activity · 1</span><span>Settings</span></div>
+<script>
+const c=document.getElementById("c"),x=c.getContext("2d"),W=1440;
+const hi=t=>560-60*Math.sin(t*2.2)+t*50, lo=t=>760+80*Math.sin(t*3-.3)+t*20;
+const g=x.createLinearGradient(0,0,W,0);g.addColorStop(0,"#2b59ff");g.addColorStop(.5,"#5eead4");g.addColorStop(1,"#d4ff3a");
+for(let i=0;i<=80;i++){const f=i/80;x.beginPath();for(let s=0;s<=200;s++){const t=s/200,X=W*t,Y=hi(t)+(lo(t)-hi(t))*f+Math.sin(t*10+f*7)*3;s?x.lineTo(X,Y):x.moveTo(X,Y)}x.strokeStyle=g;x.globalAlpha=.06+.3*(1-Math.abs(f-.55)*1.7);x.lineWidth=1;x.stroke()}
+x.globalAlpha=1;x.beginPath();for(let s=0;s<=200;s++){const t=s/200;const Y=hi(t)*.45+lo(t)*.55;s?x.lineTo(W*t,Y):x.moveTo(0,Y)}x.strokeStyle="#fff";x.lineWidth=2.5;x.shadowColor="#5eead4";x.shadowBlur=18;x.stroke();
+</script>
+</body></html>

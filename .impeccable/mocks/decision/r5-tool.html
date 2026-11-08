@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent builds a tool</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eceef2;--w:#fff;--t:#0a0b0d;--sub:#6a6f78;--line:rgba(10,11,13,.08);--cob:#2346ff;--lime:#d4ff3a;--grn:#10a95f;--org:#ff5a1f}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:500 15px/1.45 "Schibsted Grotesk",sans-serif;display:grid;grid-template-columns:420px minmax(0,1fr);-webkit-font-smoothing:antialiased}
+.chat{padding:26px 30px;display:flex;flex-direction:column}
+.brand{font-weight:900;font-size:20px;letter-spacing:-.03em;display:flex;justify-content:space-between;align-items:center}
+.brand span{font-size:13px;font-weight:600;color:var(--sub)}
+.th{flex:1;padding-top:34px}
+.me{margin-left:auto;width:fit-content;max-width:320px;background:var(--t);color:#fff;font-weight:600;padding:12px 16px;border-radius:20px 20px 4px 20px}
+.say{margin-top:22px;font-size:19px;line-height:1.45}
+.built{margin-top:16px;display:flex;align-items:center;gap:12px;background:var(--w);border-radius:18px;padding:12px 14px;box-shadow:0 0 0 2px var(--cob)}
+.built i{width:40px;height:40px;border-radius:12px;background:var(--cob);color:#fff;display:grid;place-items:center;font-style:normal;font-weight:900}
+.built b{display:block}.built span{font-size:13px;color:var(--sub)}
+.steps{margin-top:14px;font-size:13px;color:var(--sub);line-height:1.9}.steps span:before{content:"✓  ";color:var(--grn);font-weight:900}
+.comp{background:var(--w);border-radius:20px;padding:12px 12px 12px 18px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 0 var(--line)}
+.comp span{flex:1;color:var(--sub)}.send{width:42px;height:42px;border-radius:12px;background:var(--t);color:#fff;display:grid;place-items:center;font-weight:800}
+.app{margin:16px 16px 16px 0;background:var(--w);border-radius:28px;box-shadow:0 30px 80px rgba(10,11,13,.08);padding:28px 34px;display:grid;grid-template-columns:360px 1fr;gap:34px;position:relative;min-width:0;grid-template-columns:340px minmax(0,1fr)}
+.app .tt{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:16px}
+.tt h1{font-size:24px;font-weight:900;letter-spacing:-.03em}.tt span{font-size:12px;font-weight:700;color:var(--sub);background:var(--bg);border-radius:99px;padding:5px 10px}
+.ctl label{display:flex;justify-content:space-between;font-weight:700;font-size:14px;margin-top:24px}
+.ctl label b{font-size:22px;font-weight:900;letter-spacing:-.03em}
+.sl{height:10px;border-radius:99px;background:var(--bg);margin-top:12px;position:relative}
+.sl i{position:absolute;left:0;top:0;bottom:0;border-radius:99px;background:var(--t)}
+.sl u{position:absolute;top:-9px;width:28px;height:28px;border-radius:50%;background:var(--lime);border:3px solid var(--t);margin-left:-14px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--bg);border-radius:14px;padding:4px;margin-top:12px;font-weight:700;font-size:14px;text-align:center}
+.seg span{padding:9px;border-radius:11px;color:var(--sub)}.seg .on{background:var(--w);color:var(--t);box-shadow:0 2px 8px rgba(10,11,13,.08)}
+.tick{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);margin-top:8px;font-weight:600}
+.res{display:flex;flex-direction:column}
+.gauge{position:relative;height:250px;display:grid;place-items:center}
+.gauge b{position:absolute;top:92px;font-size:88px;font-weight:900;letter-spacing:-.06em;line-height:1}
+.gauge small{position:absolute;top:186px;font-weight:700;color:var(--sub)}
+.verdict{text-align:center;font-size:30px;font-weight:900;letter-spacing:-.035em}.verdict em{font-style:normal;background:var(--lime);padding:0 8px;border-radius:8px}
+.mini{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:20px}
+.mini div{background:var(--bg);border-radius:16px;padding:12px 14px}.mini small{display:block;font-size:12px;font-weight:700;color:var(--sub)}.mini b{font-size:22px;font-weight:900;letter-spacing:-.03em}
+.curve{width:100%;height:90px;margin-top:16px}
+.foot{position:absolute;left:34px;right:34px;bottom:20px;display:flex;justify-content:space-between;font-size:12px;color:var(--sub);font-weight:600}
+.btn{background:var(--t);color:#fff;border-radius:12px;padding:10px 16px;font-weight:800;font-size:14px}
+</style></head><body>
+<section class="chat">
+<div class="brand">Fin-Agent<span>History · Money · Settings</span></div>
+<div class="th">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<p class="say">Yes, if you clear it on the due date. Price and timing both matter here, so <b>I built you a planner</b> — move the sliders and I'll re-run the futures.</p>
+<div class="built"><i>▦</i><div><b>Laptop planner</b><span>Live · re-runs 1,000 futures on every change</span></div></div>
+<div class="steps"><span>Read SBI Savings and Slice card</span><br><span>Found rent on 1 Dec and salary on 30 Nov</span><br><span>Built a planner with 3 controls</span></div>
+</div>
+<div class="comp"><span>Ask, or ask me to build a tool…</span>🎙 <b class="send">↑</b></div>
+</section>
+<section class="app">
+<div class="tt"><h1>Laptop planner</h1><span>built by Fin-Agent · FA·68P·0911</span></div>
+<div class="ctl">
+<label>Price <b>₹68,000</b></label><div class="sl"><i style="width:62%"></i><u style="left:62%"></u></div><div class="tick"><span>₹30k</span><span>₹1L</span></div>
+<label>Buy on <b>8 Nov</b></label><div class="sl"><i style="width:8%"></i><u style="left:8%"></u></div><div class="tick"><span>Today</span><span>30 Nov</span></div>
+<label>Pay with</label><div class="seg"><span class="on">Card in full</span><span>3 EMIs</span><span>SBI</span></div>
+<label>Floor <b>₹25,000</b></label><div class="sl"><i style="width:25%"></i><u style="left:25%"></u></div><div class="tick"><span>₹0</span><span>₹1L</span></div>
+</div>
+<div class="res">
+<div class="gauge"><svg viewBox="0 0 300 170" style="width:340px"><path d="M30 150 A120 120 0 0 1 270 150" fill="none" stroke="#eceef2" stroke-width="22" stroke-linecap="round"/><path d="M30 150 A120 120 0 0 1 258 104" fill="none" stroke="#0a0b0d" stroke-width="22" stroke-linecap="round"/><line x1="262" y1="96" x2="282" y2="88" stroke="#ff5a1f" stroke-width="3"/></svg><b>91%</b><small>floor holds · needs 90%</small></div>
+<div class="verdict">Yes, <em>with a change</em></div>
+<div class="mini"><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Tightest day</small><b>2 Dec</b></div><div><small>Wait till 21 Nov</small><b style="color:var(--grn)">96%</b></div></div>
+<svg class="curve" viewBox="0 0 600 90" preserveAspectRatio="none"><path d="M0,14 C120,17 200,40 300,50 S500,42 600,30 L600,72 C500,78 400,80 300,76 S120,44 0,26Z" fill="#2346ff" opacity=".1"/><path d="M0,20 C120,24 200,52 300,62 S500,56 600,46" fill="none" stroke="#2346ff" stroke-width="3"/><line x1="0" x2="600" y1="86" y2="86" stroke="#ff5a1f" stroke-dasharray="4 5"/></svg>
+</div>
+<div class="foot"><span>Every result is computed by the projection engine, not the model.</span><span class="btn">Save as a plan</span></div>
+</section>
+</body></html>

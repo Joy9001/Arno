@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>09 · Money · Goals</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.goals{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+.g{border-radius:28px;padding:22px;min-height:0;display:flex;flex-direction:column;position:relative;overflow:hidden;background:var(--s)}
+.g .top{display:flex;justify-content:space-between;align-items:center}
+.g h3{font-size:24px;font-weight:800;letter-spacing:-.03em;margin-top:14px}
+.ring{position:relative;width:180px;height:180px;margin:14px auto 34px;display:grid;place-items:center}
+.ring svg{position:absolute;inset:0}
+.ring .fig{font-size:40px}
+.ring small{position:absolute;top:190px;white-space:nowrap;font-size:12px;font-weight:700;color:var(--sub)}
+.facts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto}
+.facts div{background:var(--s2);border-radius:16px;padding:10px 12px}.facts small{display:block;font-size:11px;font-weight:700;color:var(--sub)}.facts b{font-size:17px;font-weight:800}
+.g.slip{box-shadow:inset 0 0 0 1.5px rgba(255,106,43,.5)}
+.st2{font-size:12px;font-weight:800;border-radius:99px;padding:4px 10px}
+.newg{border:2px dashed var(--line);background:transparent;align-items:center;justify-content:center;gap:12px;text-align:center}
+</style></head><body data-active="money"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Money</h1><span class="tabs"><span>Timeline</span><span>Accounts</span><span>Schedules</span><span class="on">Goals</span><span>People</span></span><span class="r"><span class="btn ask">Set a goal</span></span></div>
+<div class="note"><span class="orb" style="--s:26px"><i></i></span><p><b>Goa trip</b> slips 9 days at your current pace. Moving ₹2,000 from eating out each week brings it back to 20 Dec.</p><span class="btn lime">Show me the trade</span></div>
+<div class="body">
+<div class="goals">
+<div class="g"><div class="top"><span class="av mesh" style="border-radius:14px">EF</span><span class="st2" style="background:#3ee07f22;color:var(--grn)">On track</span></div>
+<h3>Emergency fund</h3><span class="sub" style="font-weight:600">₹6,000 a month into SBI</span>
+<div class="ring"><svg viewBox="0 0 180 180"><defs><linearGradient id="a" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset=".5" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs><circle cx="90" cy="90" r="76" fill="none" stroke="#22241e" stroke-width="14"/><circle cx="90" cy="90" r="76" fill="none" stroke="url(#a)" stroke-width="14" stroke-linecap="round" stroke-dasharray="306 478" transform="rotate(-90 90 90)"/></svg><span class="fig">64%</span><small>₹96,000 of ₹1,50,000</small></div>
+<div class="facts"><div><small>Reaches it</small><b>14 Aug 2027</b></div><div><small>Deadline</small><b>Dec 2027</b></div></div></div>
+<div class="g slip"><div class="top"><span class="av" style="background:var(--org);color:#111;border-radius:14px">GT</span><span class="st2" style="background:var(--org);color:#111">Slips 9 days</span></div>
+<h3>Goa trip</h3><span class="sub" style="font-weight:600">₹4,500 a month · flights booked</span>
+<div class="ring"><svg viewBox="0 0 180 180"><circle cx="90" cy="90" r="76" fill="none" stroke="#22241e" stroke-width="14"/><circle cx="90" cy="90" r="76" fill="none" stroke="#ff6a2b" stroke-width="14" stroke-linecap="round" stroke-dasharray="263 478" transform="rotate(-90 90 90)"/></svg><span class="fig">55%</span><small>₹22,000 of ₹40,000</small></div>
+<div class="facts"><div><small>Reaches it</small><b class="due">29 Dec</b></div><div><small>Deadline</small><b>20 Dec</b></div></div></div>
+<div class="g"><div class="top"><span class="av" style="background:var(--s2);border-radius:14px">NP</span><span class="st2" style="background:var(--s2);color:var(--sub)">Early</span></div>
+<h3>New phone</h3><span class="sub" style="font-weight:600">₹4,000 a month</span>
+<div class="ring"><svg viewBox="0 0 180 180"><circle cx="90" cy="90" r="76" fill="none" stroke="#22241e" stroke-width="14"/><circle cx="90" cy="90" r="76" fill="none" stroke="#2b59ff" stroke-width="14" stroke-linecap="round" stroke-dasharray="64 478" transform="rotate(-90 90 90)"/></svg><span class="fig">13%</span><small>₹8,000 of ₹60,000</small></div>
+<div class="facts"><div><small>Reaches it</small><b>May 2027</b></div><div><small>Deadline</small><b>Jun 2027</b></div></div></div>
+</div>
+<div class="sec"><h2>When each goal lands</h2><span>at today's pace</span><span class="r btn ask">What if I save more?</span></div>
+<div style="background:var(--s);border-radius:24px;padding:16px 20px;position:relative">
+<div style="display:grid;grid-template-columns:140px repeat(10,1fr);font:600 11px 'JetBrains Mono';color:var(--ter);letter-spacing:.06em"><span></span><span>NOV</span><span>DEC</span><span>JAN</span><span>FEB</span><span>MAR</span><span>APR</span><span>MAY</span><span>JUN</span><span>JUL</span><span>AUG</span></div>
+<div style="display:grid;grid-template-columns:140px 1fr;align-items:center;margin-top:12px;font-weight:700"><span>Goa trip</span><div style="position:relative;height:16px"><i style="position:absolute;left:0;width:15%;top:0;bottom:0;border-radius:99px;background:var(--org)"></i><i style="position:absolute;left:12.5%;top:-4px;bottom:-4px;width:2px;background:var(--t)"></i></div></div>
+<div style="display:grid;grid-template-columns:140px 1fr;align-items:center;margin-top:12px;font-weight:700"><span>New phone</span><div style="position:relative;height:16px"><i style="position:absolute;left:0;width:65%;top:0;bottom:0;border-radius:99px;background:var(--cob)"></i></div></div>
+<div style="display:grid;grid-template-columns:140px 1fr;align-items:center;margin-top:12px;font-weight:700"><span>Emergency fund</span><div style="position:relative;height:16px"><i style="position:absolute;left:0;width:100%;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--cob),var(--cy),var(--lime))"></i></div></div>
+</div>
+</div>
+</section></div><script src="shell.js"></script></body></html>

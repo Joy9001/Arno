@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Receipt Printer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fragment+Mono&family=Inter+Tight:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--desk:#17181a;--paper:#fbfbf7;--ink:#141414;--sub:#7a7a74;--red:#e3361b;--lime:#d4ff3a;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:radial-gradient(60% 70% at 55% 30%,#26282b,var(--desk));color:#f2f2ee;font:400 15px/1.45 "Inter Tight",sans-serif;display:grid;grid-template-columns:480px 1fr;-webkit-font-smoothing:antialiased}
+.mono{font-family:"Fragment Mono",monospace}
+.chat{padding:30px 36px;display:flex;flex-direction:column;border-right:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px}
+.brand i{width:26px;height:26px;border-radius:7px;background:var(--paper);display:grid;place-items:center;color:var(--ink);font-style:normal;font-size:14px}
+.nav{display:flex;gap:6px;margin-top:18px}.nav span{border:1px solid var(--line);border-radius:99px;padding:5px 12px;font-size:13px;color:#b5b5ae;font-weight:600}.nav .on{background:#f2f2ee;color:var(--ink)}
+.th{flex:1;padding-top:40px}
+.me{margin-left:auto;width:fit-content;max-width:330px;background:#f2f2ee;color:var(--ink);font-weight:600;font-size:17px;padding:12px 16px;border-radius:20px 20px 4px 20px}
+.say{margin-top:26px;font-size:22px;line-height:1.35;font-weight:600;letter-spacing:-.015em}
+.say span{color:#9a9a93;font-weight:500}
+.print{margin-top:18px;display:flex;gap:10px;align-items:center;font:400 12px "Fragment Mono";color:#9a9a93}
+.print i{width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime)}
+.comp{background:#232427;border-radius:22px;padding:14px 14px 14px 20px;display:flex;align-items:center;gap:10px}
+.comp span{flex:1;color:#8d8d86;font-size:16px}.send{width:44px;height:44px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800}
+.desk{position:relative;overflow:hidden}
+.slot{position:absolute;left:50%;top:0;transform:translateX(-50%);width:470px;height:26px;background:#0c0c0d;border-radius:0 0 14px 14px;box-shadow:inset 0 -6px 10px rgba(0,0,0,.6)}
+.r{position:absolute;background:var(--paper);color:var(--ink);font:400 14px/1.55 "Fragment Mono";padding:26px 28px 34px;box-shadow:0 30px 60px rgba(0,0,0,.45);--z:0}
+.r:after{content:"";position:absolute;left:0;right:0;bottom:-10px;height:10px;background:linear-gradient(-45deg,transparent 7px,var(--paper) 0) 0 0/14px 10px,linear-gradient(45deg,transparent 7px,var(--paper) 0) 0 0/14px 10px}
+.main{left:50%;top:18px;width:430px;transform:translateX(-50%) rotate(-1.2deg)}
+.old1{left:110px;top:320px;width:300px;transform:rotate(-9deg);opacity:.92}
+.old2{right:90px;top:360px;width:300px;transform:rotate(7deg);opacity:.92}
+.c{text-align:center}
+.hd{font:900 13px/1 "Inter Tight";letter-spacing:.3em}
+.hr{border:0;border-top:1.5px dashed #c9c9c2;margin:12px 0}
+.row{display:flex;justify-content:space-between}
+.v{font:900 40px/1 "Inter Tight";letter-spacing:-.04em;text-align:center;margin:10px 0 4px}
+.big{font:800 30px/1 "Inter Tight";letter-spacing:-.03em}
+.stamp{position:absolute;right:24px;top:600px;transform:rotate(-14deg);border:3px solid var(--red);color:var(--red);font:900 18px/1 "Inter Tight";letter-spacing:.12em;padding:8px 10px;border-radius:6px;opacity:.88;mix-blend-mode:multiply}
+.bars{height:46px;margin-top:12px;background:repeating-linear-gradient(90deg,#141414 0 2px,transparent 2px 4px,#141414 4px 7px,transparent 7px 9px,#141414 9px 10px,transparent 10px 13px)}
+svg{width:100%;height:70px;margin-top:6px}
+.small{font-size:12px;color:var(--sub)}
+</style></head><body>
+<section class="chat">
+<div class="brand"><i>₹</i>Fin-Agent</div>
+<div class="nav"><span class="on">Ask</span><span>Receipts · 24</span><span>Money</span><span>Activity · 1</span><span>Settings</span></div>
+<div class="th">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<p class="say">Yes — if you clear it on the due date. <span>The floor holds in 91% of runs. Your receipt is printing.</span></p>
+<div class="print"><i></i>printed FA·68P·0911 · 1,000 runs · 3 sources · 4.2s</div>
+</div>
+<div class="comp"><span>Ask, and keep the receipt…</span>📷 🎙 <b class="send">↑</b></div>
+</section>
+<section class="desk">
+<div class="slot"></div>
+<div class="r old1"><div class="hd c">FIN-AGENT</div><hr class="hr"><div class="row"><span>RENT SPLIT</span><span>02 NOV</span></div><div class="row"><span>Ravi owes</span><b>₹4,400</b></div><hr class="hr"><div class="small">FA·41R·0211 · 2 sources</div></div>
+<div class="r old2"><div class="hd c">FIN-AGENT</div><hr class="hr"><div class="row"><span>OCTOBER SPEND</span><span>01 NOV</span></div><div class="row"><span>Food</span><b>₹14,210</b></div><div class="row"><span>Rent</span><b>₹22,000</b></div><div class="row"><span>Travel</span><b>₹6,880</b></div><hr class="hr"><div class="small">FA·OCT·1101 · 912 rows</div></div>
+<div class="r main">
+<div class="hd c">FIN-AGENT · AFFORDABILITY</div>
+<div class="c small" style="margin-top:6px">08 NOV 2026 · 21:40 · PRIVATE INSTANCE</div>
+<hr class="hr">
+<div class="row"><span>ITEM</span><span>Laptop</span></div>
+<div class="row"><span>PRICE</span><b>₹68,000</b></div>
+<div class="row"><span>PAID BY</span><span>Slice card</span></div>
+<div class="row"><span>CLEARED</span><span>18 Nov (due date)</span></div>
+<hr class="hr">
+<div class="v">YES,<br>WITH A CHANGE</div>
+<div class="c small">wait till 21 Nov → 96%</div>
+<hr class="hr">
+<div class="row"><span>FLOOR HOLDS</span><span class="big">91%</span></div>
+<div class="row"><span>  threshold</span><span>90%</span></div>
+<div class="row"><span>LOWEST MEDIAN</span><span class="big">₹38,400</span></div>
+<div class="row"><span>  on</span><span>02 Dec</span></div>
+<svg viewBox="0 0 380 70" preserveAspectRatio="none"><path d="M0,12 C80,15 130,36 190,46 S310,38 380,26 L380,58 C310,64 250,66 190,62 S80,40 0,24Z" fill="#141414" opacity=".08"/><path d="M0,18 C80,22 130,46 190,54 S310,48 380,40" fill="none" stroke="#141414" stroke-width="2.5"/><line x1="0" x2="380" y1="66" y2="66" stroke="#e3361b" stroke-dasharray="3 3"/></svg>
+<hr class="hr">
+<div class="row small"><span>[1] SBI Savings</span><span>₹1,46,800</span></div>
+<div class="row small"><span>[2] Slice schedule</span><span>₹12,400</span></div>
+<div class="row small"><span>[3] Rent · 1 Dec</span><span>₹22,000</span></div>
+<div class="bars"></div>
+<div class="c" style="margin-top:6px;letter-spacing:.2em">FA·68P·0911</div>
+<div class="stamp">COMPUTED</div>
+</div>
+</section>
+</body></html>

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Security Print</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=Martian+Mono:wdth,wght@75..112.5,400..700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#110f18;--rail:#16131f;--sheet:#1c1828;--lav:#b7a6d9;--lav2:rgba(183,166,217,.22);--mag:#e0428a;--yel:#f2b632;--grn:#4fd18b;--red:#ff5a4f;--txt:#efeaf7;--sub:#a59cb8;--line:rgba(183,166,217,.16)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--ink);color:var(--txt);font:400 15px/1.5 "Hanken Grotesk",sans-serif;display:grid;grid-template-columns:232px 1fr 380px}
+.mono{font-family:"Martian Mono",monospace;font-variation-settings:"wdth" 87}
+.rail{background:var(--rail);border-right:1px solid var(--line);padding:22px 14px;display:flex;flex-direction:column;gap:2px}
+.mark{display:flex;align-items:center;gap:10px;padding:2px 10px 24px;font-weight:800;font-size:18px;letter-spacing:-.01em}
+.seal{width:30px;height:30px;border-radius:50%;border:1.5px solid var(--lav);display:grid;place-items:center;font:700 13px/1 "Martian Mono";color:var(--lav);background:repeating-radial-gradient(circle,transparent 0 2px,var(--lav2) 2px 2.6px)}
+.nav{display:flex;justify-content:space-between;padding:9px 12px;border-radius:8px;font-weight:500;color:#cfc8de}
+.nav.on{background:var(--sheet);color:#fff;box-shadow:inset 2px 0 0 var(--mag)}
+.nav b{font:600 10px/1.6 "Martian Mono";color:var(--mag)}
+.foot{margin-top:auto;font:400 10px/1.7 "Martian Mono";color:var(--sub);padding:12px;border-top:1px solid var(--line);letter-spacing:.02em}
+main{display:flex;flex-direction:column;padding:22px 48px;min-width:0}
+.head{display:flex;justify-content:space-between;align-items:center;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.head h1{font-size:17px;font-weight:700}.head span{color:var(--sub);font-size:13px}
+.btn{border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:13px;font-weight:600}
+.thread{flex:1;max-width:720px;width:100%;margin:0 auto;padding-top:28px}
+.me{margin-left:auto;width:fit-content;background:var(--mag);color:#fff;font-weight:500;padding:11px 16px;border-radius:16px 16px 4px 16px}
+.who{font:500 10px/1 "Martian Mono";letter-spacing:.14em;color:var(--lav);margin:28px 0 8px}
+.say{max-width:62ch;font-size:16px}
+.note{position:relative;margin-top:16px;border-radius:14px;padding:18px 20px 16px;background:var(--sheet);border:1px solid var(--line);overflow:hidden}
+.note:before{content:"";position:absolute;inset:0;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='24'%3E%3Cpath d='M0 12 Q15 0 30 12 T60 12 T90 12 T120 12' fill='none' stroke='%23b7a6d9' stroke-opacity='.13'/%3E%3Cpath d='M0 12 Q15 24 30 12 T60 12 T90 12 T120 12' fill='none' stroke='%23e0428a' stroke-opacity='.10'/%3E%3C/svg%3E");mask:linear-gradient(90deg,#000 0 18%,transparent 40%)}
+.note>*{position:relative}
+.top{display:flex;justify-content:space-between;align-items:flex-start}
+.vk{font:500 10px/1 "Martian Mono";letter-spacing:.14em;color:var(--sub)}
+.verdict{font-weight:800;font-size:34px;letter-spacing:-.03em;line-height:1.05;margin-top:6px}
+.verdict em{font-style:normal;color:var(--yel)}
+.serial{font-family:"Martian Mono";color:var(--mag);font-weight:600;letter-spacing:.02em;white-space:nowrap}
+.serial span:nth-child(1){font-size:11px}.serial span:nth-child(2){font-size:13px}.serial span:nth-child(3){font-size:15px}.serial span:nth-child(4){font-size:17px}.serial span:nth-child(5){font-size:19px}.serial span:nth-child(6){font-size:21px}
+.figs{display:grid;grid-template-columns:repeat(3,1fr);margin-top:16px;border-top:1px solid var(--line)}
+.figs div{padding:12px 0 4px}.figs div+div{padding-left:16px;border-left:1px solid var(--line)}
+.figs small{display:block;font-size:12px;color:var(--sub)}
+.figs strong{font-weight:700;font-size:26px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.thread-line{height:3px;margin:12px 0;background:repeating-linear-gradient(90deg,var(--grn) 0 14px,transparent 14px 18px)}
+.why{display:flex;justify-content:space-between;font-size:14px;color:var(--sub)}.why a{color:var(--txt);font-weight:600;text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--mag)}
+.chips{display:flex;gap:8px;margin-top:16px}.chip{border:1px solid var(--line);border-radius:99px;padding:6px 13px;font-size:13px;color:var(--sub)}
+.comp{max-width:720px;width:100%;margin:0 auto;background:var(--sheet);border:1px solid var(--line);border-radius:16px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;color:var(--sub)}
+.send{background:var(--mag);color:#fff;font-weight:600;border-radius:10px;padding:8px 16px}
+aside{background:var(--rail);border-left:1px solid var(--line);padding:24px 26px;display:flex;flex-direction:column}
+.date{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--sub)}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;font:500 11px/1 "Martian Mono"}.seg span{padding:5px 9px}.seg .on{background:var(--lav);color:var(--ink);border-radius:7px}
+.label{font:500 10px/1 "Martian Mono";letter-spacing:.14em;color:var(--lav);margin-top:22px}
+.big{font-weight:800;font-size:60px;letter-spacing:-.045em;line-height:1.05;font-variant-numeric:tabular-nums;margin-top:6px}
+.big small{font-size:34px;color:var(--sub);margin-right:2px}
+.cap{font-size:13px;color:var(--sub)}
+svg{width:100%;height:132px;margin:14px 0 4px}
+.axis{display:flex;justify-content:space-between;font:400 10px/1 "Martian Mono";color:var(--sub)}
+.row{display:grid;grid-template-columns:52px 1fr auto;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px;align-items:baseline}
+.row .d{font:400 11px/1 "Martian Mono";color:var(--sub)}.row b{font-variant-numeric:tabular-nums}
+.due b{color:var(--yel)}.pos b{color:var(--grn)}
+</style></head><body>
+<nav class="rail">
+<div class="mark"><span class="seal">₹</span>Fin-Agent</div>
+<div class="nav on">Home <b>01</b></div><div class="nav">Money</div><div class="nav">Activity</div><div class="nav">Settings</div>
+<div class="foot">PRIVATE INSTANCE · JOY<br>TAILSCALE ONLY · NO ANALYTICS</div>
+</nav>
+<main>
+<div class="head"><div><h1>Laptop on the Slice card</h1><span>4 messages · today</span></div><div style="display:flex;gap:8px"><span class="btn">History</span><span class="btn">New chat</span></div></div>
+<div class="thread">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="who">FIN-AGENT</div>
+<p class="say">Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="note">
+<div class="top"><div><div class="vk">AFFORDABILITY · CARD · 90 DAYS</div><div class="verdict">Yes, <em>with a change</em></div></div>
+<div class="serial"><span>F</span><span>A</span><span>6</span><span>8</span><span>P</span><span>0911</span></div></div>
+<div class="figs">
+<div><small>Floor holds</small><strong>91%</strong><small>threshold 90%</small></div>
+<div><small>Lowest median</small><strong>₹38,400</strong><small>on 2 Dec</small></div>
+<div><small>Runs · sources</small><strong>1,000 · 3</strong><small>seeded</small></div>
+</div>
+<div class="thread-line" title="floor holds"></div>
+<div class="why"><span>Waiting until 21 Nov is safer.</span><a>Open the curve and rows</a></div>
+</div>
+<div class="chips"><span class="chip">What if I wait till 21 Nov?</span><span class="chip">Show the 3 sources</span></div>
+</div>
+<div class="comp"><span>Ask about your money…</span><span style="display:flex;gap:12px;align-items:center"><span>Photo</span><span>Voice</span><span class="send">Send</span></span></div>
+</main>
+<aside>
+<div class="date"><span>Sunday, 8 November</span><span class="seg"><span>30D</span><span class="on">90D</span><span>1Y</span></span></div>
+<div class="label">SPENDABLE</div>
+<div class="big"><small>₹</small>1,84,200</div>
+<div class="cap">After dues and goal savings · 3 accounts</div>
+<svg viewBox="0 0 320 132" preserveAspectRatio="none">
+<defs><pattern id="g" width="16" height="6" patternUnits="userSpaceOnUse"><path d="M0 3 Q4 0 8 3 T16 3" fill="none" stroke="#b7a6d9" stroke-opacity=".55" stroke-width=".7"/></pattern></defs>
+<path d="M0,20 C60,24 110,40 160,48 S260,36 320,26 L320,84 C260,92 210,94 160,90 S60,56 0,38Z" fill="url(#g)"/>
+<path d="M0,29 C60,34 110,58 160,68 S260,60 320,52" fill="none" stroke="#efeaf7" stroke-width="2.2"/>
+<line x1="0" x2="320" y1="112" y2="112" stroke="#4fd18b" stroke-width="2.5" stroke-dasharray="12 4"/>
+<line x1="16" x2="16" y1="6" y2="120" stroke="#f2b632" stroke-width="1.2"/><circle cx="16" cy="29" r="4" fill="#f2b632"/>
+</svg>
+<div class="axis"><span>8 NOV</span><span>FLOOR ₹25,000</span><span>5 FEB</span></div>
+<div class="label" style="margin-bottom:4px">NEXT DUES</div>
+<div class="row due"><span class="d">18 NOV</span><span>Slice card</span><b>₹12,400</b></div>
+<div class="row"><span class="d">21 NOV</span><span>SIP · Nifty 50</span><b>₹10,000</b></div>
+<div class="row"><span class="d">01 DEC</span><span>Rent</span><b>₹22,000</b></div>
+<div class="row pos"><span class="d">OWED</span><span>Ravi owes you</span><b>₹4,400</b></div>
+</aside>
+</body></html>

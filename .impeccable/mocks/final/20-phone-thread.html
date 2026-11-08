@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>20 · Phone · Conversation</title><link rel="stylesheet" href="shell.css">
+<style>
+.ctx{display:flex;gap:6px;padding:0 16px;overflow:hidden}.ctx .chip{flex:none;font-size:12px;padding:5px 11px}
+.th{padding:16px 16px 0;overflow:hidden;height:560px}
+.me{font-size:16px;max-width:290px;padding:11px 15px;border-radius:22px 22px 6px 22px}
+.ag{gap:10px;margin-top:16px}
+.say{font-size:17px;margin-top:8px;line-height:1.42}
+.verdict{margin-top:12px;border-radius:24px;padding:16px}.verdict .v{font-size:30px;margin:10px 0}.verdict .f b{font-size:19px}
+.verdict svg{width:100%;height:56px;margin-top:10px}
+.fu{display:flex;gap:6px;margin-top:12px;overflow:hidden}.fu .chip{flex:none}
+.pcomp{position:absolute;left:12px;right:12px;bottom:96px;background:var(--s);border-radius:28px;padding:9px 9px 9px 18px;display:flex;align-items:center;gap:8px}
+.pcomp span.in{flex:1;color:var(--sub);font-size:16px}
+.cb{width:40px;height:40px;border-radius:50%;background:var(--s2);display:grid;place-items:center}.cb svg{width:17px;height:17px}
+.pcomp .send{margin:0;width:42px;height:42px}
+</style></head><body class="phone" data-active="ask">
+<div class="pbar"><span class="orb" style="--s:30px"><i></i></span><b>Laptop on the Slice card</b><span class="pic" data-icon="menu"></span></div>
+<div class="ctx"><span class="chip"><i></i>₹1,84,200 spendable</span><span class="chip"><i></i>Floor 94%</span><span class="chip"><i style="background:var(--org)"></i>Slice in 10d</span></div>
+<div class="th">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="ag"><span class="orb" style="--s:26px"><i></i></span><div>
+<span class="st">Ran 1,000 futures · 3 sources</span>
+<p class="say">Yes — <b>if you clear it on the due date</b>. Floor holds in 91% of runs; tightest on 2 Dec.</p>
+<div class="verdict"><div style="display:flex;justify-content:space-between;font-weight:700;font-size:12px"><span>Affordability · card</span><span class="serial" style="font-size:10px">FA·68P·0911</span></div><div class="v">Yes, with a change</div>
+<div class="f" style="display:flex;gap:14px"><div><small>Floor</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Safer</small><b>21 Nov</b></div></div>
+<svg viewBox="0 0 300 56" preserveAspectRatio="none"><path d="M0,14 C60,16 110,30 150,36 S240,30 300,22" fill="none" stroke="#0e0f0c" stroke-width="3" stroke-linecap="round"/><line x1="0" x2="300" y1="52" y2="52" stroke="#0e0f0c" stroke-dasharray="3 4" opacity=".5"/></svg></div>
+<div class="fu"><span class="chip out">Wait till 21 Nov?</span><span class="chip out">Planner</span><span class="chip out">Flow</span></div>
+</div></div></div>
+<div class="pcomp"><span class="in">Ask or log a spend…</span><span class="cb" data-icon="camera"></span><span class="cb" data-icon="mic"></span><span class="send">↑</span></div>
+<nav id="tabbar"></nav>
+<script src="shell.js"></script></body></html>

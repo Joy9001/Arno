@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>17 · Sign in</title><link rel="stylesheet" href="shell.css">
+<style>
+body{display:grid;place-items:center;position:relative;overflow:hidden}
+body::before{content:"";position:absolute;width:900px;height:900px;border-radius:50%;background:var(--iris);filter:blur(160px);opacity:.18;animation:spin 30s linear infinite}
+.box{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;width:460px}
+h1{font-size:48px;font-weight:800;letter-spacing:-.045em;margin-top:30px}
+p{color:var(--sub);font-weight:600;margin-top:8px;font-size:17px}
+.go{margin-top:30px;width:100%;justify-content:center;padding:16px;font-size:17px}
+.fine{margin-top:22px;display:flex;gap:16px;font-size:13px;color:var(--ter);font-weight:600}
+.fine span::before{content:"● ";color:var(--grn)}
+.setup{margin-top:30px;width:100%;background:var(--s);border-radius:22px;padding:14px 16px;text-align:left;display:flex;gap:12px;align-items:center}
+.setup b{display:block;font-weight:800}.setup span{color:var(--sub);font-size:13px}
+</style></head><body>
+<div class="box">
+<span class="orb" style="--s:150px"><i></i></span>
+<h1>Fin-Agent</h1>
+<p>Your private money agent. Unlock with your passkey.</p>
+<span class="btn lime go">Sign in with passkey</span>
+<div class="fine"><span>On your machine</span><span>Tailscale only</span><span>No analytics</span></div>
+<div class="setup"><span class="btn" style="padding:10px 12px">＋</span><div><b>New device?</b><span>Run <span class="mono">fin-agent setup-token</span> on the host, then open the link here.</span></div></div>
+</div>
+</body></html>

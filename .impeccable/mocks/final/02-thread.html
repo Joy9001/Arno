@@ -1,0 +1,61 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>02 · Conversation</title><link rel="stylesheet" href="shell.css">
+<style>
+.app{grid-template-columns:76px 272px 1fr}
+.list{background:var(--s);padding:20px 14px;display:flex;flex-direction:column;gap:4px}
+.new{background:var(--lime);color:#111;font-weight:800;border-radius:16px;padding:12px 16px;display:flex;justify-content:space-between}
+.search{background:var(--s2);border-radius:14px;padding:10px 14px;color:var(--sub);margin:6px 0 8px}
+.g{font-size:12px;font-weight:700;color:var(--sub);padding:12px 10px 4px}
+.th{padding:10px 12px;border-radius:14px}.th b{display:block;font-weight:700;font-size:14px}.th span{font-size:12px;color:var(--sub)}
+.th.on{background:var(--s2);box-shadow:inset 3px 0 0 var(--lime)}
+.th.sched b::before{content:"⏱ ";color:var(--cy)}
+main{display:flex;flex-direction:column;min-width:0}
+.bar{display:flex;gap:8px;padding:16px 28px;align-items:center}
+.bar .lab{font-size:12px;font-weight:700;color:var(--sub)}
+.bar .r{margin-left:auto;display:flex;gap:8px;align-items:center}
+.thread{flex:1;overflow:hidden;width:800px;margin:0 auto;padding-top:10px}
+.rc{margin-top:16px;border-radius:28px;overflow:hidden;display:grid;grid-template-columns:1.1fr 1fr}
+.rc .verdict{border-radius:0}
+.rc .r{background:var(--s2);padding:18px 20px}
+svg.cv{width:100%;height:118px;margin-top:8px}
+.fu{display:flex;gap:8px;margin:14px 0 0 48px}
+.sup{margin:14px 0 0 48px;display:flex;align-items:center;gap:8px;color:var(--sub);font-size:13px;font-weight:700}
+.sup span{background:var(--s);border-radius:12px;padding:7px 12px}
+.comp{width:840px;margin:0 auto 22px;box-shadow:0 -30px 60px var(--bg)}
+</style></head><body data-active="chats"><div class="app"><nav id="rail"></nav>
+<aside class="list">
+<div class="new"><span>New chat</span><span class="mono" style="font-size:12px">⌘N</span></div>
+<div class="search">Search conversations</div>
+<div class="g">Today</div>
+<div class="th on"><b>Laptop on the Slice card</b><span>Yes, with a change · 91%</span></div>
+<div class="th"><b>Chai with team</b><span>Logged ₹480 · Food</span></div>
+<div class="g">This week</div>
+<div class="th"><b>Rent split with Ravi</b><span>Ravi owes ₹4,400</span></div>
+<div class="th"><b>HDFC October statement</b><span>912 rows imported</span></div>
+<div class="th"><b>Where did October go?</b><span>₹61,240 · food up 8%</span></div>
+<div class="g">Scheduled</div>
+<div class="th sched"><b>Every Monday: am I on track?</b><span>Next: 9 Nov, 9:00</span></div>
+</aside>
+<main>
+<div class="bar"><span class="lab">Looking at</span><span class="chip"><i></i>₹1,84,200 spendable</span><span class="chip"><i></i>Floor holds 94%</span><span class="chip"><i style="background:var(--org)"></i>Slice due in 10 days</span>
+<span class="r"><span class="tabs"><span class="on">Chat</span><span>Flow</span></span><span class="btn">Share</span></span></div>
+<div class="thread">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="ag" style="margin-top:24px"><span class="orb" style="--s:34px"><i></i></span><div>
+<div class="trail"><span class="st">Read 5 accounts</span><span class="st">Ran 1,000 futures</span><span class="st">Tried waiting till 21 Nov</span></div>
+<p class="say" style="margin-top:12px">Yes — <b>if you clear it on the due date</b>. Your ₹25,000 floor still holds in 91% of runs, down from 94% today. The tight spot is 2 Dec, the day after rent.</p>
+<div class="rc">
+<div class="verdict"><div style="display:flex;justify-content:space-between;font-weight:700;font-size:13px"><span>Affordability · card</span><span class="serial">FA·68P·0911</span></div>
+<div class="v">Yes, with a change</div>
+<div class="f" style="display:flex;gap:20px"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Sources</small><b>3</b></div></div></div>
+<div class="r"><div style="display:flex;justify-content:space-between" class="k"><span>Next 90 days</span><span class="btn" style="padding:4px 10px;font-size:12px">Open canvas ↗</span></div>
+<svg class="cv" viewBox="0 0 300 118" preserveAspectRatio="none"><defs><linearGradient id="m" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset=".5" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs>
+<path d="M0,24 C60,28 110,46 150,58 S240,52 300,40 L300,92 C240,98 200,100 150,96 S60,62 0,40Z" fill="url(#m)" opacity=".22"/>
+<path d="M0,32 C60,38 110,66 150,78 S240,70 300,60" fill="none" stroke="url(#m)" stroke-width="3.5" stroke-linecap="round"/>
+<line x1="0" x2="300" y1="110" y2="110" stroke="#ff6a2b" stroke-width="1.5" stroke-dasharray="4 5"/><circle cx="150" cy="78" r="5" fill="#f6f7f0"/></svg>
+<div class="k" style="display:flex;justify-content:space-between"><span>Lowest 2 Dec</span><span>Floor ₹25,000</span></div></div>
+</div></div></div>
+<div class="sup"><span>▸ Supporting data · 3 reads</span><span>Flag</span><span>Copy</span></div>
+<div class="fu"><span class="chip out">What if I wait till 21 Nov?</span><span class="chip out">Build me a planner</span><span class="chip out">Show the 3 sources</span></div>
+</div>
+<div class="comp"><p>Ask a follow-up, or tell me about a spend…</p><div class="row"><span class="tool"><span data-icon="camera"></span>Photo</span><span class="tool"><span data-icon="mic"></span>Voice</span><span class="tool"><span data-icon="file"></span>Statement</span><span class="send">↑</span></div></div>
+</main></div><script src="shell.js"></script></body></html>

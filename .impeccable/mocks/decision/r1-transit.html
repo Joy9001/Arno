@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Transit Line</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500;700;900&family=Red+Hat+Text:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--mid:#0c1a3a;--mid2:#13244d;--por:#f4f2ec;--sub:#9fb0d4;--sca:#e63946;--cob:#3a86ff;--amb:#f4a261;--grn:#2ec4a0;--line:rgba(244,242,236,.12)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--mid);color:var(--por);font:400 15px/1.5 "Red Hat Text",sans-serif;display:flex;flex-direction:column}
+nav{display:flex;align-items:center;gap:4px;padding:16px 40px}
+.brand{font:900 20px/1 "Red Hat Display";margin-right:24px;display:flex;align-items:center;gap:10px}
+.brand i{width:22px;height:22px;border-radius:50%;border:5px solid var(--por);display:inline-block}
+.tab{padding:8px 14px;border-radius:99px;font-weight:600;color:var(--sub)}.tab.on{background:var(--por);color:var(--mid)}
+.tab b{background:var(--sca);color:#fff;border-radius:99px;font-size:11px;padding:0 6px;margin-left:6px}
+.meta{margin-left:auto;color:var(--sub);font-size:13px}
+.hero{padding:18px 40px 0;display:flex;justify-content:space-between;align-items:flex-end}
+.k{font:700 12px/1 "Red Hat Display";letter-spacing:.14em;color:var(--sub);text-transform:uppercase}
+.big{font:900 76px/1 "Red Hat Display";letter-spacing:-.03em;margin-top:8px;font-variant-numeric:tabular-nums}
+.sum{display:flex;gap:36px}.sum div b{display:block;font:700 30px/1.1 "Red Hat Display"}.sum small{color:var(--sub);font-size:13px}
+.map{position:relative;margin:26px 40px 0;height:250px;background:var(--mid2);border-radius:20px;border:1px solid var(--line)}
+svg{position:absolute;inset:0;width:100%;height:100%}
+.st{position:absolute;font-size:13px;line-height:1.3;width:130px}
+.st b{display:block;font:700 15px/1.2 "Red Hat Display"}
+.st span{color:var(--sub)}
+.legend{position:absolute;right:20px;top:16px;display:flex;gap:16px;font-size:12px;color:var(--sub)}.legend i{display:inline-block;width:18px;height:5px;border-radius:3px;margin-right:6px;vertical-align:middle}
+.low{position:absolute;background:var(--por);color:var(--mid);font-weight:700;font-size:12px;padding:3px 8px;border-radius:99px}
+.lower{display:grid;grid-template-columns:1fr 1fr;gap:28px;padding:26px 40px 26px;flex:1}
+.ask{display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;gap:12px;background:var(--por);color:var(--mid);border-radius:18px;padding:16px 18px;font-size:17px}
+.bar span{flex:1;color:#56607a}.bar b{background:var(--sca);color:#fff;border-radius:12px;padding:8px 18px;font-weight:600;font-size:15px}
+.chips{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}.chip{border:1px solid var(--line);border-radius:99px;padding:6px 13px;font-size:13px;color:var(--sub)}
+.journey{background:var(--mid2);border:1px solid var(--line);border-radius:20px;padding:18px 20px}
+.journey .q{color:var(--sub);font-size:14px}
+.journey .v{display:flex;justify-content:space-between;align-items:center;margin-top:6px}
+.journey .v strong{font:900 30px/1.1 "Red Hat Display"}.journey .v strong em{font-style:normal;color:var(--amb)}
+.serial{font:700 12px/1 "Red Hat Display";letter-spacing:.12em;border:1.5px solid var(--sub);color:var(--sub);border-radius:99px;padding:5px 10px}
+.route{display:flex;align-items:center;margin:16px 0 6px}
+.route i{width:16px;height:16px;border-radius:50%;background:var(--mid2);border:4px solid var(--por)}
+.route u{flex:1;height:6px;background:var(--cob);text-decoration:none}.route u.s{background:var(--sca)}
+.rl{display:flex;justify-content:space-between;font-size:12px;color:var(--sub)}
+.figs{display:flex;gap:28px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.figs b{display:block;font:700 22px/1.1 "Red Hat Display"}.figs small{color:var(--sub);font-size:12px}
+</style></head><body>
+<nav><span class="brand"><i></i>Fin-Agent</span><span class="tab on">Home<b>1</b></span><span class="tab">Money</span><span class="tab">Activity</span><span class="tab">Settings</span><span class="meta">Sunday, 8 November · private instance</span></nav>
+<div class="hero">
+<div><div class="k">Spendable · next 90 days</div><div class="big">₹1,84,200</div></div>
+<div class="sum"><div><small>Floor holds</small><b style="color:var(--grn)">91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Floor</small><b>₹25,000</b></div></div>
+</div>
+<div class="map">
+<div class="legend"><span><i style="background:var(--cob)"></i>SBI Savings</span><span><i style="background:var(--sca)"></i>Slice card</span><span><i style="background:var(--grn)"></i>Income</span><span><i style="background:var(--amb)"></i>Goals</span></div>
+<svg viewBox="0 0 1360 250" preserveAspectRatio="none" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M60 150 H420 L460 110 H1300" stroke="#3a86ff" stroke-width="10"/>
+<path d="M60 150 H240 L280 190 H560 L600 150 H700" stroke="#e63946" stroke-width="10"/>
+<path d="M700 70 L740 110 H900" stroke="#2ec4a0" stroke-width="10"/>
+<path d="M900 110 L940 150 H1300" stroke="#f4a261" stroke-width="10" stroke-dasharray="1 0"/>
+<g fill="#13244d" stroke="#f4f2ec" stroke-width="5"><circle cx="60" cy="150" r="11"/><circle cx="420" cy="150" r="8"/><circle cx="560" cy="190" r="8"/><circle cx="740" cy="110" r="11"/><circle cx="820" cy="110" r="8"/><circle cx="1300" cy="110" r="11"/></g>
+<rect x="800" y="98" width="8" height="24" fill="#f4f2ec"/>
+</svg>
+<div class="st" style="left:30px;top:170px"><b>Today</b><span>8 Nov</span></div>
+<div class="st" style="left:380px;top:170px"><b>SIP ₹10,000</b><span>21 Nov</span></div>
+<div class="st" style="left:520px;top:210px;width:170px"><b style="color:#ff7b85">Slice due ₹12,400</b><span>18 Nov · 10 days</span></div>
+<div class="st" style="left:690px;top:24px"><b style="color:var(--grn)">Salary +₹92,000</b><span>30 Nov · interchange</span></div>
+<div class="st" style="left:790px;top:130px"><b>Rent ₹22,000</b><span>1 Dec</span></div>
+<span class="low" style="left:820px;top:62px">Lowest ₹38,400 · 2 Dec</span>
+<div class="st" style="left:1250px;top:132px;text-align:right;width:100px"><b>5 Feb</b><span>horizon</span></div>
+</div>
+<div class="lower">
+<div class="ask">
+<div class="bar"><span>Ask about your money…</span>Photo · Voice <b>Ask</b></div>
+<div class="chips"><span class="chip">Can I afford a ₹68,000 laptop?</span><span class="chip">Where did my money go in October?</span><span class="chip">Ravi owes me ₹4,400</span></div>
+</div>
+<div class="journey">
+<div class="q">You asked: Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="v"><strong>Yes, <em>with a change</em></strong><span class="serial">FA·68P·0911</span></div>
+<div class="route"><i></i><u class="s"></u><i></i><u></u><i></i></div>
+<div class="rl"><span>Buy 8 Nov</span><span>Clear on 18 Nov</span><span>Safer: wait till 21 Nov</span></div>
+<div class="figs"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Runs · sources</small><b>1,000 · 3</b></div></div>
+</div>
+</div>
+</body></html>

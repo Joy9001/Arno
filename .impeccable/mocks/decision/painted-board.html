@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Painted Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Anek+Latin:wdth,wght@75..125,400..800&display=swap" rel="stylesheet">
+<style>
+:root{--board:#0f2a44;--deep:#0a1f34;--panel:#163a5d;--yel:#ffc72c;--ink:#f7f5ee;--sub:#a9bdd2;--red:#ff5a3d;--grn:#3ccb6e;--line:rgba(247,245,238,.14)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--board);color:var(--ink);font:400 15px/1.5 "Anek Latin",sans-serif;font-variation-settings:"wdth" 100;display:grid;grid-template-columns:232px 1fr 380px}
+.rail{background:var(--yel);color:var(--deep);padding:22px 14px;display:flex;flex-direction:column;gap:4px}
+.mark{font:800 26px/1 "Anek Latin";font-variation-settings:"wdth" 75;letter-spacing:.01em;padding:4px 10px 22px;text-transform:uppercase}
+.mark small{display:block;font:600 11px/1.4 "Anek Latin";letter-spacing:.08em;opacity:.7;margin-top:4px}
+.nav{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-radius:8px;font-weight:600;font-size:15px}
+.nav.on{background:var(--deep);color:var(--yel)}
+.nav b{background:var(--red);color:#fff;border-radius:99px;font-size:11px;padding:1px 7px}
+.foot{margin-top:auto;font-size:12px;padding:10px 12px;border-top:2px solid rgba(10,31,52,.25);font-weight:500}
+main{display:flex;flex-direction:column;padding:22px 48px 22px;min-width:0}
+.head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:14px}
+.head h1{font:700 18px/1.2 "Anek Latin"}
+.head span{color:var(--sub);font-size:13px}
+.btn{border:1.5px solid var(--line);border-radius:8px;padding:6px 12px;font-weight:600;font-size:13px;color:var(--ink)}
+.thread{flex:1;max-width:720px;margin:0 auto;width:100%;padding-top:28px}
+.me{margin-left:auto;width:fit-content;background:var(--yel);color:var(--deep);font-weight:600;padding:11px 16px;border-radius:14px 14px 4px 14px}
+.who{font:700 11px/1 "Anek Latin";letter-spacing:.12em;color:var(--yel);margin:28px 0 8px;text-transform:uppercase}
+.say{max-width:62ch;font-size:16px}
+.plate{margin-top:16px;background:var(--ink);color:var(--deep);border-radius:10px;overflow:hidden}
+.plate .top{display:flex;justify-content:space-between;align-items:baseline;padding:14px 18px 0}
+.verdict{font:800 40px/1 "Anek Latin";font-variation-settings:"wdth" 78;text-transform:uppercase;letter-spacing:.005em}
+.verdict em{font-style:normal;color:#c2410c}
+.serial{font:700 13px/1 "Anek Latin";letter-spacing:.14em;color:#b3261e;border:1.5px solid #b3261e;border-radius:4px;padding:4px 7px}
+.figs{display:grid;grid-template-columns:repeat(3,1fr);margin:14px 18px 0;border-top:2px solid var(--deep)}
+.figs div{padding:10px 0 12px;border-right:1px solid rgba(15,42,68,.18)}
+.figs div+div{padding-left:14px}.figs div:last-child{border:0}
+.figs small{display:block;font-size:12px;font-weight:600;opacity:.65}
+.figs strong{font:800 28px/1.1 "Anek Latin";font-variation-settings:"wdth" 80;font-feature-settings:"tnum"}
+.why{padding:10px 18px 14px;border-top:1px solid rgba(15,42,68,.18);font-size:14px;display:flex;justify-content:space-between}
+.why a{font-weight:700;color:var(--deep);text-decoration:underline;text-underline-offset:3px}
+.chips{display:flex;gap:8px;margin-top:16px}
+.chip{border:1.5px solid var(--line);border-radius:99px;padding:6px 13px;font-size:13px;font-weight:500;color:var(--sub)}
+.comp{max-width:720px;margin:0 auto;width:100%;background:var(--panel);border-radius:14px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;color:var(--sub);border:1.5px solid var(--line)}
+.send{background:var(--yel);color:var(--deep);font-weight:700;border-radius:8px;padding:8px 16px}
+aside{background:var(--deep);padding:24px 26px;border-left:1px solid var(--line);display:flex;flex-direction:column}
+.date{display:flex;justify-content:space-between;font-size:13px;color:var(--sub);font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.big small{display:block;margin-top:18px;color:var(--yel);font-weight:700;font-size:12px;letter-spacing:.12em;text-transform:uppercase}
+.big strong{font:800 68px/1 "Anek Latin";font-variation-settings:"wdth" 75;font-feature-settings:"tnum";letter-spacing:-.01em}
+.big p{font-size:13px;color:var(--sub)}
+svg{margin:14px 0 6px;width:100%;height:118px}
+.seg{display:flex;gap:4px;font-size:12px;font-weight:700}.seg span{padding:3px 9px;border-radius:6px;color:var(--sub)}.seg .on{background:var(--yel);color:var(--deep)}
+h3{font:700 12px/1 "Anek Latin";letter-spacing:.14em;text-transform:uppercase;color:var(--yel);margin:20px 0 6px;display:flex;justify-content:space-between}
+.row{display:flex;align-items:baseline;gap:8px;padding:8px 0;font-size:15px}
+.row i{flex:1;border-bottom:2px dotted rgba(247,245,238,.28);transform:translateY(-4px)}
+.row b{font:700 18px/1 "Anek Latin";font-feature-settings:"tnum"}
+.row .d{color:var(--sub);font-size:12px;width:44px}
+.row.done{color:var(--sub)}.row.done span,.row.done b{text-decoration:line-through;text-decoration-thickness:2px;text-decoration-color:var(--grn)}
+.row.due b{color:var(--deep);background:var(--yel);padding:3px 7px;border-radius:99px}
+.pos{color:var(--grn)}
+</style></head><body>
+<nav class="rail">
+<div class="mark">Fin-Agent<small>Private · Tailscale only</small></div>
+<div class="nav on">Home <b>1</b></div><div class="nav">Money</div><div class="nav">Activity</div><div class="nav">Settings</div>
+<div class="foot">Asha · no analytics<br>Sign out</div>
+</nav>
+<main>
+<div class="head"><div><h1>Laptop on the Slice card</h1><span>4 messages · today</span></div><div style="display:flex;gap:8px"><span class="btn">History</span><span class="btn">New chat</span></div></div>
+<div class="thread">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="who">Fin-Agent</div>
+<p class="say">Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="plate">
+<div class="top"><div class="verdict">Yes, <em>with a change</em></div><span class="serial">FA·68P·0911</span></div>
+<div class="figs">
+<div><small>Floor holds</small><strong>91%</strong><small>threshold 90%</small></div>
+<div><small>Lowest median</small><strong>₹38,400</strong><small>on 2 Dec</small></div>
+<div><small>Runs · sources</small><strong>1,000 · 3</strong><small>90 days</small></div>
+</div>
+<div class="why"><span>Waiting until 21 Nov is safer.</span><a>Open the curve and rows</a></div>
+</div>
+<div class="chips"><span class="chip">What if I wait till 21 Nov?</span><span class="chip">Show the 3 sources</span></div>
+</div>
+<div class="comp"><span>Ask about your money…</span><span style="display:flex;gap:10px;align-items:center"><span>Photo</span><span>Voice</span><span class="send">Send</span></span></div>
+</main>
+<aside>
+<div class="date"><span>Today · Sun 8 Nov</span><span class="seg"><span>30d</span><span class="on">90d</span><span>1y</span></span></div>
+<div class="big"><small>Spendable</small><strong>₹1,84,200</strong><p>After dues and goal savings · 3 accounts</p></div>
+<svg viewBox="0 0 320 118" preserveAspectRatio="none">
+<path d="M0,20 C60,24 110,40 160,48 S260,36 320,26 L320,84 C260,92 210,94 160,90 S60,56 0,38Z" fill="rgba(255,199,44,.16)"/>
+<path d="M0,29 C60,34 110,58 160,68 S260,60 320,52" fill="none" stroke="#ffc72c" stroke-width="3"/>
+<line x1="0" x2="320" y1="104" y2="104" stroke="#ff5a3d" stroke-width="2" stroke-dasharray="6 5"/>
+<line x1="16" x2="16" y1="8" y2="110" stroke="#f7f5ee" stroke-width="1.5"/><circle cx="16" cy="29" r="4.5" fill="#f7f5ee"/>
+</svg>
+<div class="date" style="font-size:11px"><span>8 Nov</span><span>Floor ₹25,000</span><span>5 Feb</span></div>
+<h3><span>Dues this month</span><span style="color:var(--sub)">₹48,600</span></h3>
+<div class="row done"><span class="d">1 Nov</span><span>Rent</span><i></i><b>₹22,000</b></div>
+<div class="row done"><span class="d">5 Nov</span><span>Netflix</span><i></i><b>₹649</b></div>
+<div class="row due"><span class="d">18 Nov</span><span>Slice card</span><i></i><b>₹12,400</b></div>
+<div class="row"><span class="d">21 Nov</span><span>SIP · Nifty 50</span><i></i><b>₹10,000</b></div>
+<h3><span>People</span></h3>
+<div class="row"><span class="d"></span><span>Ravi owes you</span><i></i><b class="pos">₹4,400</b></div>
+</aside>
+</body></html>

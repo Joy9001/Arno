@@ -1,0 +1,34 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>10 · Money · People</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:18px}
+.p{background:var(--s);border-radius:28px;padding:22px;display:flex;flex-direction:column;min-height:340px}
+.p .top{display:flex;align-items:center;gap:12px}
+.p .face{width:58px;height:58px;border-radius:20px;display:grid;place-items:center;font-weight:800;font-size:22px}
+.p h3{font-size:22px;font-weight:800;letter-spacing:-.03em}
+.p .fig{font-size:52px;margin-top:22px}
+.p .l{font-weight:700;color:var(--sub);margin-top:6px}
+.hist{margin-top:18px;display:flex;flex-direction:column}
+.h{display:flex;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line);font-size:14px}.h span{color:var(--sub)}.h b{font-variant-numeric:tabular-nums}
+.act{display:flex;gap:8px;margin-top:auto;padding-top:16px}
+.owes{background:var(--mesh);color:#111}.owes .l,.owes .h span{color:rgba(17,17,17,.65)}.owes .h{border-color:rgba(17,17,17,.12)}
+</style></head><body data-active="money"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Money</h1><span class="tabs"><span>Timeline</span><span>Accounts</span><span>Schedules</span><span>Goals</span><span class="on">People</span></span><span class="r"><span class="btn ask">Split something</span></span></div>
+<div class="note"><span class="orb" style="--s:26px"><i></i></span><p>Net, people owe you <b>₹3,150</b>. Ravi's ₹4,400 is 6 days old — I don't count it in your projection until it's paid.</p><span class="btn">Remind Ravi</span></div>
+<div class="body"><div class="cols">
+<div class="p owes"><div class="top"><span class="face" style="background:#111;color:var(--lime)">R</span><div><h3>Ravi</h3><span style="font-weight:600;opacity:.7">Flatmate</span></div></div>
+<span class="fig">₹4,400</span><span class="l">owes you</span>
+<div class="hist"><div class="h"><span>2 Nov · Dinner at Toit, split 2</span><b>₹2,200</b></div><div class="h"><span>1 Nov · Rent top-up, half</span><b>₹2,200</b></div></div>
+<div class="act"><span class="btn ink">Mark paid</span><span class="btn" style="background:rgba(17,17,17,.12);color:#111">Ask about Ravi</span></div></div>
+<div class="p"><div class="top"><span class="face" style="background:#ff6a2b22;color:var(--org)">A</span><div><h3>Ananya</h3><span class="sub" style="font-weight:600">Friend</span></div></div>
+<span class="fig due">₹1,250</span><span class="l">you owe</span>
+<div class="hist"><div class="h"><span>29 Oct · Movie tickets</span><b>₹1,250</b></div></div>
+<div class="act"><span class="btn lime">Mark settled</span><span class="btn ask">Ask</span></div></div>
+<div class="p"><div class="top"><span class="face" style="background:var(--s2);color:var(--sub)">P</span><div><h3>Priya</h3><span class="sub" style="font-weight:600">Colleague</span></div></div>
+<span class="fig sub">Settled</span><span class="l">since 12 Oct</span>
+<div class="hist"><div class="h"><span>12 Oct · Priya paid you</span><b class="pos">₹3,600</b></div><div class="h"><span>4 Oct · Cab to airport, split 2</span><b>₹1,800</b></div><div class="h"><span>4 Oct · Lunch, split 2</span><b>₹1,800</b></div></div>
+<div class="act"><span class="btn ask">Ask</span></div></div>
+</div>
+<div class="sec"><h2>Split something</h2><span>tell me in plain words</span></div>
+<div class="comp" style="display:flex;align-items:center;gap:12px;padding:12px 12px 12px 22px"><span class="orb" style="--s:28px"><i></i></span><p style="flex:1">“Dinner ₹3,600 with Ravi and Ananya, I paid” — I'll split it and update who owes what.</p><span class="tool"><span data-icon="camera"></span>Photo the bill</span><span class="send" style="margin:0">↑</span></div>
+</div>
+</section></div><script src="shell.js"></script></body></html>

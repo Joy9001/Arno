@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Time Scrubber</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#07090c;--t:#eef2f5;--sub:#7d8792;--amb:#ffb547;--cy:#38e0d0;--lime:#d4ff3a;--org:#ff6a2b;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:500 15px/1.45 Manrope,sans-serif;position:relative;-webkit-font-smoothing:antialiased}
+.top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:22px;padding:22px 40px;font-weight:700}
+.top b{font-weight:800;font-size:18px;margin-right:16px}.top span{color:var(--sub)}.top .on{color:var(--t)}.top .r{margin-left:auto;font-weight:600;font-size:13px}
+.past{position:absolute;left:0;top:0;bottom:0;width:560px;background:linear-gradient(90deg,rgba(255,181,71,.08),transparent)}
+.fut{position:absolute;right:0;top:0;bottom:0;width:820px;background:linear-gradient(270deg,rgba(56,224,208,.10),transparent)}
+.lbl{position:absolute;top:96px;font:800 12px/1 Manrope;letter-spacing:.2em;color:var(--sub)}
+svg.track{position:absolute;left:0;top:250px;width:1440px;height:330px}
+.now{position:absolute;left:560px;top:150px;bottom:180px;width:2px;background:var(--t)}
+.now b{position:absolute;top:-28px;left:-30px;background:var(--t);color:#000;border-radius:99px;padding:3px 10px;font-size:12px;font-weight:800;white-space:nowrap}
+.scrub{position:absolute;left:1010px;top:150px;bottom:180px;width:2px;background:var(--lime);box-shadow:0 0 16px var(--lime)}
+.scrub i{position:absolute;bottom:-14px;left:-13px;width:28px;height:28px;border-radius:50%;background:var(--lime);box-shadow:0 0 0 8px rgba(212,255,58,.15)}
+.ev{position:absolute;font-size:12px;font-weight:700;color:var(--sub);text-align:center;transform:translateX(-50%)}
+.ev b{display:block;color:var(--t);font-size:13px}
+.ev:before{content:"";display:block;width:10px;height:10px;border-radius:50%;margin:0 auto 6px;background:currentColor}
+.bubble{position:absolute;left:1030px;top:150px;width:380px;background:rgba(18,22,27,.85);backdrop-filter:blur(16px);border:1px solid var(--line);border-radius:24px;padding:18px 20px}
+.bubble .k{font-size:12px;font-weight:800;letter-spacing:.14em;color:var(--lime)}
+.bubble .v{font-size:44px;font-weight:800;letter-spacing:-.04em;line-height:1;margin-top:8px}
+.bubble p{color:#c3cbd3;margin-top:8px;font-size:15px}
+.pastc{position:absolute;left:40px;top:150px;width:300px;background:rgba(18,22,27,.7);border:1px solid var(--line);border-radius:22px;padding:16px 18px}
+.pastc .k{font-size:12px;font-weight:800;letter-spacing:.14em;color:var(--amb)}.pastc b{display:block;font-size:30px;font-weight:800;letter-spacing:-.03em;margin-top:6px}.pastc span{color:var(--sub);font-size:13px}
+.dock{position:absolute;left:40px;right:40px;bottom:28px;display:grid;grid-template-columns:1fr 520px;gap:20px;align-items:end}
+.conv .me{width:fit-content;background:#1b2027;border-radius:18px 18px 18px 4px;padding:10px 14px;font-weight:600;color:#c3cbd3}
+.conv .ag{margin-top:10px;font-size:21px;font-weight:700;letter-spacing:-.015em;max-width:640px}.conv .ag em{font-style:normal;color:var(--lime)}
+.conv .tag{margin-top:8px;font-size:12px;color:var(--sub);font-weight:700}
+.comp{background:#12161b;border:1px solid var(--line);border-radius:22px;padding:12px 12px 12px 18px;display:flex;align-items:center;gap:10px}
+.comp span{flex:1;color:var(--sub);font-size:15px}.send{width:44px;height:44px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800}
+.chips{display:flex;gap:6px;margin-bottom:10px}.chips span{border:1px solid var(--line);border-radius:99px;padding:5px 11px;font-size:12px;font-weight:700;color:#c3cbd3}
+</style></head><body>
+<div class="past"></div><div class="fut"></div>
+<div class="top"><b>Fin-Agent</b><span class="on">Time</span><span>Conversations</span><span>Money</span><span>Activity · 1</span><span>Settings</span><span class="r">Drag into the future · ask about any day</span></div>
+<span class="lbl" style="left:40px">← WHAT HAPPENED · LEDGER</span><span class="lbl" style="left:1180px">WHAT COULD HAPPEN · 1,000 RUNS →</span>
+<div class="pastc"><div class="k">OCTOBER</div><b>₹61,240 spent</b><span>Food ₹14,210 · Rent ₹22,000 · 912 rows</span></div>
+<svg class="track" viewBox="0 0 1440 330" preserveAspectRatio="none">
+<defs><linearGradient id="f" x1="0" x2="1"><stop offset="0" stop-color="#38e0d0" stop-opacity=".35"/><stop offset="1" stop-color="#38e0d0" stop-opacity=".08"/></linearGradient></defs>
+<g fill="#ffb547" opacity=".7">
+<rect x="40" y="150" width="8" height="40"/><rect x="62" y="140" width="8" height="50"/><rect x="84" y="110" width="8" height="80"/><rect x="106" y="160" width="8" height="30"/><rect x="128" y="120" width="8" height="70"/><rect x="150" y="60" width="8" height="130"/><rect x="172" y="150" width="8" height="40"/><rect x="194" y="130" width="8" height="60"/><rect x="216" y="100" width="8" height="90"/><rect x="238" y="155" width="8" height="35"/><rect x="260" y="140" width="8" height="50"/><rect x="282" y="90" width="8" height="100"/><rect x="304" y="150" width="8" height="40"/><rect x="326" y="120" width="8" height="70"/><rect x="348" y="40" width="8" height="150"/><rect x="370" y="145" width="8" height="45"/><rect x="392" y="130" width="8" height="60"/><rect x="414" y="110" width="8" height="80"/><rect x="436" y="155" width="8" height="35"/><rect x="458" y="140" width="8" height="50"/><rect x="480" y="100" width="8" height="90"/><rect x="502" y="150" width="8" height="40"/><rect x="524" y="125" width="8" height="65"/></g>
+<path d="M560,110 C700,116 820,150 1000,190 S1300,160 1440,130 L1440,280 C1300,300 1150,310 1000,300 S700,170 560,140Z" fill="url(#f)"/>
+<path d="M560,124 C700,130 820,180 1000,240 S1300,220 1440,200" fill="none" stroke="#38e0d0" stroke-width="3"/>
+<line x1="560" x2="1440" y1="318" y2="318" stroke="#ff6a2b" stroke-dasharray="5 6"/>
+<circle cx="1010" cy="242" r="7" fill="#d4ff3a"/>
+</svg>
+<div class="now"><b>Today · 8 Nov</b></div>
+<div class="scrub"><i></i></div>
+<span class="ev" style="left:700px;top:600px;color:var(--org)"><b>Slice ₹12,400</b>18 Nov</span>
+<span class="ev" style="left:790px;top:600px;color:var(--cy)"><b>Salary +₹92,000</b>30 Nov</span>
+<span class="ev" style="left:930px;top:640px;color:var(--cy)"><b>Rent ₹22,000</b>1 Dec</span>
+<span class="ev" style="left:1250px;top:600px;color:var(--cy)"><b>SIP ₹10,000</b>21 Jan</span>
+<div class="bubble"><div class="k">2 DEC · LOWEST POINT</div><div class="v">₹38,400</div><p>Median balance after rent, with the laptop on the card. Floor ₹25,000 holds in 91% of runs.</p></div>
+<div class="dock">
+<div class="conv"><div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div><div class="ag">Yes — <em>if you clear it on the due date.</em> I've marked the tightest day, 2 Dec, on your timeline.</div><div class="tag">FA·68P·0911 · 1,000 runs · 3 sources</div></div>
+<div><div class="chips"><span>Jump to 21 Nov</span><span>Compare to October</span><span>What about January?</span></div><div class="comp"><span>Ask about any day…</span>🎙 <b class="send">↑</b></div></div>
+</div>
+</body></html>

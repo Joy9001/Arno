@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Warm App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root{--g:#ffe1c7;--card:#fff;--ink:#241a14;--sub:#7b6658;--act:#1f3cff;--grn:#0f9d58;--red:#e5383b;--amb:#d97706;--line:rgba(36,26,20,.09)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--g);color:var(--ink);font:500 15px/1.5 Nunito,sans-serif;display:grid;grid-template-columns:96px 560px 1fr;gap:24px;padding:24px}
+.rail{background:var(--ink);border-radius:32px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:18px 0;color:#f5e8dc}
+.logo{width:48px;height:48px;border-radius:16px;background:var(--act);display:grid;place-items:center;font-weight:900;font-size:22px;color:#fff;margin-bottom:12px}
+.it{width:72px;padding:10px 0;border-radius:20px;text-align:center;font-size:12px;font-weight:700;position:relative}
+.it i{display:block;width:24px;height:24px;margin:0 auto 4px;border-radius:8px;border:2.5px solid currentColor}
+.it.on{background:#fff;color:var(--ink)}.it b{position:absolute;top:4px;right:10px;background:var(--red);color:#fff;border-radius:99px;font-size:10px;padding:0 5px}
+.col{display:flex;flex-direction:column;gap:16px}
+.hi{font-weight:800;font-size:15px;color:var(--sub)}
+.card{background:var(--card);border-radius:28px;padding:22px 24px;box-shadow:0 1px 0 rgba(36,26,20,.04)}
+.big{font:900 64px/1 Nunito;letter-spacing:-.03em;margin:6px 0 4px;font-variant-numeric:tabular-nums}
+.lbl{font-weight:800;font-size:13px;color:var(--sub)}
+.pill{display:inline-flex;gap:6px;align-items:center;background:#e7f6ee;color:var(--grn);font-weight:800;border-radius:99px;padding:4px 12px;font-size:14px}
+svg{width:100%;height:96px;margin-top:12px}
+.row{display:flex;align-items:center;gap:14px;padding:10px 0}.row+.row{border-top:1px solid var(--line)}
+.ic{width:40px;height:40px;border-radius:14px;display:grid;place-items:center;font-weight:900;font-size:15px}
+.row .t{flex:1}.row .t b{display:block;font-weight:800}.row .t span{font-size:13px;color:var(--sub)}
+.row .a{font-weight:900;font-size:17px;font-variant-numeric:tabular-nums}
+.chat{background:var(--card);border-radius:32px;display:flex;flex-direction:column;padding:26px 30px}
+.chat h2{font-weight:900;font-size:22px;display:flex;justify-content:space-between;align-items:center}
+.ghost{font-size:14px;font-weight:800;background:#f6ece3;border-radius:99px;padding:6px 14px;color:var(--ink)}
+.me{margin:26px 0 0 auto;width:fit-content;background:var(--act);color:#fff;font-weight:700;padding:12px 18px;border-radius:22px 22px 6px 22px}
+.say{margin-top:20px;font-size:17px;max-width:56ch}
+.ans{margin-top:16px;border-radius:24px;background:#fff6ee;padding:20px 22px}
+.ans .v{display:flex;justify-content:space-between;align-items:center}
+.ans strong{font-weight:900;font-size:28px}.ans strong em{font-style:normal;color:var(--amb)}
+.serial{font-weight:800;font-size:12px;color:var(--sub);background:#fff;border-radius:99px;padding:4px 10px}
+.fg{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.fg div{background:#fff;border-radius:18px;padding:12px 14px}.fg small{display:block;font-size:12px;font-weight:800;color:var(--sub)}.fg b{font-weight:900;font-size:24px}
+.why{margin-top:14px;display:flex;justify-content:space-between;font-weight:700}.why a{color:var(--act)}
+.comp{margin-top:auto;display:flex;align-items:center;gap:10px;background:#f6ece3;border-radius:99px;padding:10px 10px 10px 22px;color:var(--sub);font-weight:700}
+.comp span{flex:1}.send{background:var(--act);color:#fff;border-radius:99px;padding:10px 22px}
+</style></head><body>
+<nav class="rail"><div class="logo">₹</div><div class="it on"><b>1</b><i></i>Home</div><div class="it"><i></i>Money</div><div class="it"><i></i>Activity</div><div class="it"><i></i>Settings</div></nav>
+<div class="col">
+<div class="hi">Good evening, Asha · Sunday 8 Nov</div>
+<div class="card"><div class="lbl">You can spend</div><div class="big">₹1,84,200</div><div class="lbl" style="font-weight:600">till 5 Feb, after dues and goal savings</div>
+<div style="margin-top:12px;display:flex;gap:8px;align-items:center"><span class="pill">● Floor holds in 91% of runs</span><span class="lbl" style="font-weight:600">floor ₹25,000</span></div>
+<svg viewBox="0 0 500 96" preserveAspectRatio="none"><path d="M0,14 C90,18 170,32 250,40 S410,30 500,20 L500,70 C410,78 330,80 250,76 S90,46 0,30Z" fill="#ffe1c7"/><path d="M0,22 C90,27 170,48 250,56 S410,50 500,44" fill="none" stroke="#241a14" stroke-width="3"/><line x1="0" x2="500" y1="90" y2="90" stroke="#e5383b" stroke-width="2" stroke-dasharray="6 6"/></svg>
+</div>
+<div class="card"><div class="lbl" style="margin-bottom:4px">Coming up</div>
+<div class="row"><span class="ic" style="background:#ffe8e8;color:var(--red)">S</span><span class="t"><b>Slice card</b><span>Due 18 Nov · in 10 days</span></span><span class="a">₹12,400</span></div>
+<div class="row"><span class="ic" style="background:#e9edff;color:var(--act)">N</span><span class="t"><b>SIP · Nifty 50</b><span>21 Nov</span></span><span class="a">₹10,000</span></div>
+<div class="row"><span class="ic" style="background:#e7f6ee;color:var(--grn)">R</span><span class="t"><b>Ravi owes you</b><span>Dinner split · 2 Nov</span></span><span class="a" style="color:var(--grn)">₹4,400</span></div>
+</div>
+</div>
+<section class="chat">
+<h2>Laptop on the Slice card <span style="display:flex;gap:8px"><span class="ghost">History</span><span class="ghost">New chat</span></span></h2>
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<p class="say">Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="ans"><div class="v"><strong>Yes, <em>with a change</em></strong><span class="serial">FA·68P·0911</span></div>
+<div class="fg"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest median</small><b>₹38,400</b></div><div><small>Runs · sources</small><b>1,000 · 3</b></div></div>
+<div class="why"><span>Waiting until 21 Nov is safer.</span><a>See the curve and rows</a></div></div>
+<div class="comp"><span>Ask about your money…</span>📷 🎙 <b class="send">Send</b></div>
+</section>
+</body></html>

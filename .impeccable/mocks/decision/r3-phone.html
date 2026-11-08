@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent phone</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0f0c;--s:#171814;--s2:#22241e;--t:#f6f7f0;--sub:#9fa396;--lime:#d4ff3a;--cob:#2b59ff;--org:#ff6a2b;--grn:#3ee07f}
+*{box-sizing:border-box;margin:0}
+body{width:390px;height:844px;overflow:hidden;background:var(--bg);color:var(--t);font:400 15px/1.45 "Bricolage Grotesque",sans-serif;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
+.orb{border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff 0 5%,#d4ff3a 22%,#1ec8a5 52%,#2b59ff 84%)}
+.bar{display:flex;align-items:center;gap:10px;padding:52px 16px 10px}
+.bar .orb{width:30px;height:30px}.bar b{font-weight:800;font-size:17px;flex:1}
+.ic{width:38px;height:38px;border-radius:14px;background:var(--s);display:grid;place-items:center;font-size:15px}
+.ctx{display:flex;gap:6px;padding:0 16px;overflow:hidden}
+.cx{flex:none;border-radius:99px;padding:5px 11px;font-weight:700;font-size:12px;background:var(--s)}
+.cx i{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--grn);margin-right:5px;vertical-align:1px}
+.th{flex:1;padding:18px 16px 0;overflow:hidden}
+.me{margin-left:auto;width:fit-content;max-width:290px;background:var(--cob);font-weight:600;font-size:16px;padding:11px 15px;border-radius:22px 22px 6px 22px}
+.ag{display:flex;gap:10px;margin-top:18px}.ag .orb{width:26px;height:26px;flex:none}
+.st{display:inline-block;font-size:11px;font-weight:700;color:var(--sub);background:var(--s);border-radius:99px;padding:4px 9px}.st:before{content:"✓ ";color:var(--lime)}
+.say{font-size:17px;line-height:1.42;margin-top:8px}.say b{color:var(--lime)}
+.rc{margin-top:12px;border-radius:24px;background:var(--lime);color:#0e0f0c;padding:16px}
+.rc .k{display:flex;justify-content:space-between;font-weight:700;font-size:12px}
+.rc .k span:last-child{background:#0e0f0c;color:var(--lime);border-radius:99px;padding:1px 8px;font-size:10px}
+.rc .v{font-size:30px;font-weight:800;letter-spacing:-.045em;line-height:1;margin:10px 0}
+.rc .f{display:flex;gap:14px}.rc small{display:block;font-size:11px;font-weight:600;opacity:.65}.rc b{font-size:19px;font-weight:800}
+svg{width:100%;height:56px;margin-top:10px}
+.fu{display:flex;gap:6px;margin-top:12px;overflow:hidden}.fu span{flex:none;border:1.5px solid rgba(255,255,255,.1);border-radius:99px;padding:7px 12px;font-weight:700;font-size:13px}
+.comp{margin:10px 12px 30px;background:var(--s);border-radius:28px;padding:10px 10px 10px 18px;display:flex;align-items:center;gap:8px}
+.comp>span:first-child{flex:1;color:var(--sub);font-size:16px}
+.cb{width:40px;height:40px;border-radius:50%;background:var(--s2);display:grid;place-items:center}
+.send{width:44px;height:44px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800;font-size:18px}
+</style></head><body>
+<div class="bar"><span class="orb"></span><b>Fin-Agent</b><span class="ic">☰</span><span class="ic">✎</span></div>
+<div class="ctx"><span class="cx"><i></i>₹1,84,200 spendable</span><span class="cx"><i></i>Floor 91%</span><span class="cx"><i style="background:var(--org)"></i>Slice in 10d</span></div>
+<div class="th">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="ag"><span class="orb"></span><div>
+<span class="st">Ran 1,000 futures · 3 sources</span>
+<p class="say">Yes — <b>if you clear it on the due date</b>. Floor holds in 91% of runs; tightest on 2 Dec.</p>
+<div class="rc"><div class="k"><span>Affordability · card</span><span>FA·68P·0911</span></div><div class="v">Yes, with a change</div>
+<div class="f"><div><small>Floor</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Safer</small><b>21 Nov</b></div></div>
+<svg viewBox="0 0 300 56" preserveAspectRatio="none"><path d="M0,14 C60,16 110,30 150,36 S240,30 300,22" fill="none" stroke="#0e0f0c" stroke-width="3" stroke-linecap="round"/><line x1="0" x2="300" y1="52" y2="52" stroke="#0e0f0c" stroke-dasharray="3 4" opacity=".5"/></svg></div>
+<div class="fu"><span>Wait till 21 Nov?</span><span>Show sources</span><span>EMIs?</span></div>
+</div></div>
+</div>
+<div class="comp"><span>Ask or log a spend…</span><span class="cb">📷</span><span class="cb">🎙</span><span class="send">↑</span></div>
+</body></html>

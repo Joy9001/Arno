@@ -1,0 +1,41 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>07 · Money · Accounts</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.acc{background:var(--s);border-radius:24px;padding:16px 18px;display:flex;flex-direction:column;gap:4px;min-height:150px}
+.acc .t{display:flex;align-items:center;gap:10px}.acc .t b{font-weight:800}.acc .t span{font-size:12px;color:var(--sub)}
+.acc .fig{font-size:30px;margin-top:auto}
+.acc em{font-style:normal;font-size:12px;color:var(--ter);font-weight:600}
+.total{background:var(--mesh);color:#111}.total .fig{font-size:44px}.total em{color:rgba(17,17,17,.65)}
+.cc{border-radius:24px;padding:18px;min-height:150px;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.cc .bank{font-weight:800;font-size:15px;display:flex;justify-content:space-between}
+.cc .chipm{width:34px;height:24px;border-radius:6px;background:linear-gradient(135deg,#f5e3a1,#c9a64f);margin-top:14px}
+.cc .fig{font-size:30px;margin-top:auto}
+.cc .d{display:flex;justify-content:space-between;font-size:12px;font-weight:700;margin-top:6px}
+.c1{background:linear-gradient(135deg,#ff6a2b,#ff9a3c 60%,#ffd23a);color:#111}
+.c2{background:linear-gradient(135deg,#1d2a6b,#2b59ff);color:#fff}
+.warn{font-size:12px;font-weight:700;color:var(--sun)}
+</style></head><body data-active="money"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Money</h1><span class="tabs"><span>Timeline</span><span class="on">Accounts</span><span>Schedules</span><span>Goals</span><span>People</span></span><span class="r"><span class="sub" style="font-size:13px">As of 8 Nov</span><span class="btn ask">Add an account</span></span></div>
+<div class="note"><span class="orb" style="--s:26px"><i></i></span><p>Your <b>HDFC Millennia</b> statement says ₹9,140, the ledger says ₹8,960. One ₹180 refund is probably missing — want me to look?</p><span class="btn lime">Find it</span></div>
+<div class="body">
+<div class="sec"><h2>Bank and cash</h2><span>3 accounts</span></div>
+<div class="grid">
+<div class="acc total"><span class="k" style="color:#111;opacity:.7">Cash on hand</span><span class="fig">₹2,45,600</span><em>Sum of liquid balances · not money free to spend</em></div>
+<div class="acc"><div class="t"><span class="av" style="background:#2b59ff22;color:#8aa4ff">SBI</span><div><b>SBI Savings</b><br><span>Bank · ••4412</span></div></div><span class="fig">₹1,46,800</span><em>Statement matches · 3 Nov</em></div>
+<div class="acc"><div class="t"><span class="av" style="background:#1ec8a522;color:var(--cy)">HD</span><div><b>HDFC Salary</b><br><span>Bank · ••0931</span></div></div><span class="fig">₹96,350</span><em>Statement matches · 31 Oct</em></div>
+<div class="acc"><div class="t"><span class="av" style="background:#d4ff3a22;color:var(--lime)">₹</span><div><b>Paytm wallet</b><br><span>Wallet · hand-updated</span></div></div><span class="fig">₹2,450</span><em>Updated 6 Nov</em></div>
+</div>
+<div class="sec"><h2>Cards and loans</h2><span>₹63,360 owed</span></div>
+<div class="grid">
+<div class="cc c1"><div class="bank"><span>Slice</span><span>••7720</span></div><div class="chipm"></div><span class="fig">₹12,400</span><div class="d"><span>Due 18 Nov · in 10 days</span><span>Limit ₹60,000</span></div></div>
+<div class="cc c2"><div class="bank"><span>HDFC Millennia</span><span>••2210</span></div><div class="chipm"></div><span class="fig">₹8,960</span><div class="d"><span>Due 3 Dec</span><span class="warn">Statement ₹9,140</span></div></div>
+<div class="acc"><div class="t"><span class="av" style="background:#ff6a2b22;color:var(--org)">BL</span><div><b>Bike loan</b><br><span>Bajaj Finance · 11 EMIs left</span></div></div><span class="fig">₹42,000</span><em>EMI ₹3,500 on the 5th</em></div>
+<div class="acc" style="justify-content:center;align-items:center;background:transparent;box-shadow:inset 0 0 0 1.5px dashed var(--line);border:1.5px dashed var(--line)"><span class="btn ask">Tell me about a card</span></div>
+</div>
+<div class="sec"><h2>Holdings</h2><span>hand-updated · ₹1,93,000</span></div>
+<div class="grid">
+<div class="acc"><div class="t"><span class="av" style="background:var(--s2)">N</span><div><b>Nifty 50 index fund</b><br><span>Updated 1 Nov</span></div></div><span class="fig">₹1,28,000</span><em>SIP ₹10,000 on the 21st</em></div>
+<div class="acc"><div class="t"><span class="av" style="background:var(--s2)">P</span><div><b>PPF</b><br><span>Updated 1 Apr</span></div></div><span class="fig">₹65,000</span><em>Locked till 2034</em></div>
+</div>
+</div>
+</section></div><script src="shell.js"></script></body></html>

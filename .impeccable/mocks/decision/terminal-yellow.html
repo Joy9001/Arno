@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Terminal Yellow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Mukta:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--g:#16181b;--g2:#1f2226;--y:#ffd200;--k:#111;--w:#f4f4f2;--sub:#a3a7ad;--red:#ff5a3c;--grn:#38d27a;--line:rgba(255,255,255,.12)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--g);color:var(--w);font:400 15px/1.5 Mukta,sans-serif;display:grid;grid-template-columns:232px 1fr 380px;grid-template-rows:64px 1fr}
+.band{grid-column:1/-1;background:var(--y);color:var(--k);display:flex;align-items:center;gap:18px;padding:0 24px;font-weight:600;font-size:18px}
+.band .pic{width:40px;height:40px;background:var(--k);color:var(--y);display:grid;place-items:center;font-weight:800;font-size:22px;border-radius:4px}
+.band strong{font-weight:800;font-size:26px;letter-spacing:-.01em}
+.band .arrow{font-weight:800;font-size:28px}
+.band .gate{margin-left:auto;background:var(--k);color:var(--y);font-weight:800;font-size:22px;padding:2px 14px;border-radius:4px}
+.rail{background:var(--g2);padding:18px 14px;display:flex;flex-direction:column;gap:2px;border-right:1px solid var(--line)}
+.mark{font-weight:800;font-size:20px;padding:4px 10px 20px}
+.nav{display:flex;justify-content:space-between;padding:9px 12px;border-radius:6px;font-weight:600;color:#d5d7da}
+.nav.on{background:var(--w);color:var(--k)}.nav b{background:var(--y);color:var(--k);border-radius:4px;padding:0 6px;font-size:12px}
+.foot{margin-top:auto;font-size:12px;color:var(--sub);padding:10px 12px;border-top:1px solid var(--line)}
+main{display:flex;flex-direction:column;padding:20px 48px;min-width:0}
+.head{display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.head h1{font-size:18px;font-weight:700}.head span{color:var(--sub);font-size:13px}
+.btn{border:1px solid var(--line);border-radius:6px;padding:4px 12px;font-weight:600;font-size:14px}
+.thread{flex:1;max-width:720px;width:100%;margin:0 auto;padding-top:24px}
+.me{margin-left:auto;width:fit-content;background:var(--w);color:var(--k);font-weight:600;padding:10px 16px;border-radius:6px}
+.who{font-weight:700;font-size:12px;letter-spacing:.1em;color:var(--y);margin:24px 0 6px}
+.say{font-size:17px;max-width:62ch}
+.card{margin-top:14px;border-radius:6px;overflow:hidden;background:var(--g2);border:1px solid var(--line)}
+.card .ban{background:var(--y);color:var(--k);display:flex;align-items:center;justify-content:space-between;padding:8px 16px}
+.card .ban strong{font-size:30px;font-weight:800;line-height:1.1}
+.card .ban span{font-weight:700;font-size:13px;background:var(--k);color:var(--y);padding:2px 8px;border-radius:3px}
+.figs{display:grid;grid-template-columns:repeat(3,1fr);padding:4px 16px}
+.figs div{padding:12px 0}.figs div+div{padding-left:16px;border-left:1px solid var(--line)}
+.figs small{display:block;color:var(--sub);font-size:13px}.figs strong{font-size:34px;font-weight:800;line-height:1.1;font-variant-numeric:tabular-nums}
+.why{display:flex;justify-content:space-between;padding:10px 16px;border-top:1px solid var(--line);font-size:15px}.why a{font-weight:700;color:var(--y)}
+.chips{display:flex;gap:8px;margin-top:14px}.chip{border:1px solid var(--line);border-radius:4px;padding:4px 12px;font-size:14px;color:#d5d7da}
+.comp{max-width:720px;width:100%;margin:0 auto;background:var(--g2);border:1px solid var(--line);border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;color:var(--sub)}
+.send{background:var(--y);color:var(--k);font-weight:800;border-radius:5px;padding:6px 18px}
+aside{background:var(--g2);border-left:1px solid var(--line);padding:22px 26px;display:flex;flex-direction:column}
+.l{font-weight:700;font-size:12px;letter-spacing:.1em;color:var(--sub);display:flex;justify-content:space-between}
+.big{font-size:72px;font-weight:800;line-height:1;letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin-top:8px}
+.cap{color:var(--sub);font-size:14px}
+svg{width:100%;height:120px;margin:16px 0 4px}
+.row{display:grid;grid-template-columns:56px 1fr auto;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+.row .d{background:var(--w);color:var(--k);font-weight:800;font-size:13px;text-align:center;border-radius:3px}
+.row b{font-size:18px;font-variant-numeric:tabular-nums}.row.next .d{background:var(--y)}
+</style></head><body>
+<div class="band"><span class="pic">₹</span><span>Next</span><strong>Slice card due</strong><span class="arrow">→</span><span>₹12,400 · 18 Nov · autopay off</span><span class="gate">10 days</span></div>
+<nav class="rail">
+<div class="mark">Fin-Agent</div>
+<div class="nav on">Home <b>1</b></div><div class="nav">Money</div><div class="nav">Activity</div><div class="nav">Settings</div>
+<div class="foot">Private · Tailscale only<br>Sign out</div>
+</nav>
+<main>
+<div class="head"><div><h1>Laptop on the Slice card</h1><span>4 messages · today</span></div><div style="display:flex;gap:8px"><span class="btn">History</span><span class="btn">New chat</span></div></div>
+<div class="thread">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="who">FIN-AGENT</div>
+<p class="say">Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="card">
+<div class="ban"><strong>Yes, with a change</strong><span>FA·68P·0911</span></div>
+<div class="figs">
+<div><small>Floor holds</small><strong>91%</strong><small>threshold 90%</small></div>
+<div><small>Lowest median</small><strong>₹38,400</strong><small>2 Dec</small></div>
+<div><small>Runs · sources</small><strong>1,000 · 3</strong><small>90 days</small></div>
+</div>
+<div class="why"><span>Waiting until 21 Nov is safer.</span><a>Open the curve and rows →</a></div>
+</div>
+<div class="chips"><span class="chip">What if I wait till 21 Nov?</span><span class="chip">Show the 3 sources</span></div>
+</div>
+<div class="comp"><span>Ask about your money…</span><span style="display:flex;gap:12px;align-items:center"><span>Photo</span><span>Voice</span><span class="send">Send</span></span></div>
+</main>
+<aside>
+<div class="l"><span>SPENDABLE · SUN 8 NOV</span><span>90 DAYS</span></div>
+<div class="big">₹1,84,200</div>
+<div class="cap">After dues and goal savings · 3 accounts</div>
+<svg viewBox="0 0 320 120" preserveAspectRatio="none">
+<path d="M0,20 C60,24 110,40 160,48 S260,36 320,26 L320,84 C260,92 210,94 160,90 S60,56 0,38Z" fill="rgba(255,255,255,.12)"/>
+<path d="M0,29 C60,34 110,58 160,68 S260,60 320,52" fill="none" stroke="#ffd200" stroke-width="3"/>
+<line x1="0" x2="320" y1="106" y2="106" stroke="#ff5a3c" stroke-width="2"/>
+</svg>
+<div class="l" style="font-weight:500"><span>8 Nov</span><span>Floor ₹25,000</span><span>5 Feb</span></div>
+<div class="l" style="margin:22px 0 4px"><span>DEPARTURES</span><span>₹48,600</span></div>
+<div class="row next"><span class="d">18 NOV</span><span>Slice card</span><b>₹12,400</b></div>
+<div class="row"><span class="d">21 NOV</span><span>SIP · Nifty 50</span><b>₹10,000</b></div>
+<div class="row"><span class="d">01 DEC</span><span>Rent</span><b>₹22,000</b></div>
+<div class="row"><span class="d" style="background:var(--grn)">IN</span><span>Ravi owes you</span><b style="color:var(--grn)">₹4,400</b></div>
+</aside>
+</body></html>

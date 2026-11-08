@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Living Orb</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f3f4f6;--t:#0b0c10;--sub:#6b6f7a;--line:rgba(11,12,16,.08);--cob:#2b59ff;--grn:#10b26c;--org:#ff6a2b}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:radial-gradient(70% 60% at 50% 38%,#fff 0,#f3f4f6 60%,#e8eaef);color:var(--t);font:500 15px/1.45 "Plus Jakarta Sans",sans-serif;position:relative;-webkit-font-smoothing:antialiased}
+.top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;padding:24px 36px;gap:10px}
+.top b{font-weight:800;font-size:18px;letter-spacing:-.02em;margin-right:auto}
+.pill{background:#fff;border-radius:99px;padding:8px 14px;font-weight:700;font-size:13px;box-shadow:0 1px 0 var(--line),0 6px 18px rgba(11,12,16,.06)}
+.pill i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--grn);margin-right:6px;vertical-align:1px}
+.stage{position:absolute;left:50%;top:92px;transform:translateX(-50%);width:380px;height:380px}
+.orb{position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,#ff6a2b,#ffd23a,#3ee07f,#1ec8a5,#2b59ff,#b388ff,#ff6a2b);filter:blur(18px) saturate(1.3);animation:spin 12s linear infinite}
+.orb2{position:absolute;inset:34px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff 0 8%,rgba(255,255,255,.4) 30%,transparent 60%),conic-gradient(from 180deg,#2b59ff,#1ec8a5,#d4ff3a,#ff6a2b,#2b59ff);filter:blur(6px);animation:spin 7s linear infinite reverse;mix-blend-mode:screen}
+.gloss{position:absolute;inset:40px;border-radius:50%;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.95),rgba(255,255,255,0) 40%);}
+.ring{position:absolute;inset:-26px;border-radius:50%;border:1.5px solid rgba(43,89,255,.15);animation:pulse 3s ease-in-out infinite}
+@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{50%{transform:scale(1.05);opacity:.4}}
+.state{position:absolute;left:0;right:0;top:488px;text-align:center;font-weight:700;color:var(--sub);font-size:14px;letter-spacing:.02em}
+.you{position:absolute;left:0;right:0;top:518px;text-align:center;font-size:20px;color:var(--sub);font-weight:600}
+.say{position:absolute;left:50%;transform:translateX(-50%);top:556px;width:900px;text-align:center;font-size:40px;font-weight:800;letter-spacing:-.035em;line-height:1.12}
+.say span{color:var(--sub);font-weight:700}
+.say em{font-style:normal;background:linear-gradient(90deg,#2b59ff,#1ec8a5);-webkit-background-clip:text;color:transparent}
+.float{position:absolute;background:#fff;border-radius:26px;padding:16px 18px;box-shadow:0 1px 0 var(--line),0 24px 60px rgba(11,12,16,.10)}
+.float small{display:block;font-size:12px;font-weight:700;color:var(--sub)}.float b{font-size:30px;font-weight:800;letter-spacing:-.04em}
+.f1{left:150px;top:170px;transform:rotate(-4deg)}.f2{right:150px;top:150px;transform:rotate(3deg)}.f3{left:210px;top:350px;transform:rotate(2deg)}.f4{right:190px;top:340px;transform:rotate(-3deg);width:250px}
+svg{width:100%;height:50px;margin-top:6px}
+.dock{position:absolute;left:50%;transform:translateX(-50%);bottom:30px;display:flex;align-items:center;gap:10px;background:#fff;border-radius:99px;padding:8px;box-shadow:0 1px 0 var(--line),0 24px 60px rgba(11,12,16,.12);width:720px}
+.dock span.in{flex:1;color:var(--sub);font-size:17px;padding-left:16px}
+.db{width:48px;height:48px;border-radius:50%;background:#f1f2f5;display:grid;place-items:center;font-size:17px}
+.mic{width:64px;height:64px;border-radius:50%;background:var(--t);color:#fff;display:grid;place-items:center;font-size:22px;box-shadow:0 0 0 6px rgba(43,89,255,.12)}
+.side{position:absolute;left:36px;bottom:40px;display:flex;flex-direction:column;gap:6px;font-weight:700;font-size:13px;color:var(--sub)}
+.side b{color:var(--t)}
+</style></head><body>
+<div class="top"><b>Fin-Agent</b><span class="pill"><i></i>₹1,84,200 spendable</span><span class="pill"><i style="background:var(--org)"></i>Slice due in 10 days</span><span class="pill">History</span><span class="pill">Money ›</span></div>
+<div class="stage"><div class="ring"></div><div class="orb"></div><div class="orb2"></div><div class="gloss"></div></div>
+<div class="float f1"><small>Floor holds</small><b style="color:var(--grn)">91%</b></div>
+<div class="float f2"><small>Lowest median · 2 Dec</small><b>₹38,400</b></div>
+<div class="float f3"><small>Safer date</small><b>21 Nov</b></div>
+<div class="float f4"><small>Next 90 days · FA·68P·0911</small><svg viewBox="0 0 220 50" preserveAspectRatio="none"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#1ec8a5"/></linearGradient></defs><path d="M0,10 C50,12 80,28 110,34 S180,26 220,18" fill="none" stroke="url(#g)" stroke-width="3.5" stroke-linecap="round"/><line x1="0" x2="220" y1="46" y2="46" stroke="#ff6a2b" stroke-dasharray="3 4"/></svg></div>
+<div class="state">● Speaking · ran 1,000 futures on 3 sources</div>
+<div class="you">“Can I buy a ₹68,000 laptop on the Slice card?”</div>
+<p class="say"><em>Yes — if you clear it on the due date.</em> <span>Your floor still holds in 91% of runs. Waiting till 21 Nov makes it safer.</span></p>
+<div class="side"><span>Recent</span><b>Laptop on the Slice card</b><span>Rent split with Ravi</span><span>October SBI statement</span></div>
+<div class="dock"><span class="in">Type instead…</span><span class="db">📷</span><span class="db">📄</span><span class="mic">🎙</span></div>
+</body></html>

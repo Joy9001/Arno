@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent thread</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0e0f0c;--s:#171814;--s2:#22241e;--t:#f6f7f0;--sub:#9fa396;--lime:#d4ff3a;--cob:#2b59ff;--org:#ff6a2b;--grn:#3ee07f;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:400 15px/1.45 "Bricolage Grotesque",sans-serif;display:grid;grid-template-columns:272px 1fr;-webkit-font-smoothing:antialiased}
+.orb{border-radius:50%;background:radial-gradient(circle at 32% 28%,#fff 0 6%,#d4ff3a 22%,#1ec8a5 52%,#2b59ff 82%);box-shadow:0 0 24px rgba(212,255,58,.35)}
+aside{background:var(--s);padding:20px 14px;display:flex;flex-direction:column;gap:6px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:19px;letter-spacing:-.02em;padding:2px 8px 16px}
+.brand .orb{width:28px;height:28px}
+.new{background:var(--lime);color:#111;font-weight:800;border-radius:16px;padding:12px 16px;display:flex;justify-content:space-between}
+.search{background:var(--s2);border-radius:14px;padding:10px 14px;color:var(--sub);margin-bottom:10px}
+.g{font-size:12px;font-weight:700;color:var(--sub);padding:12px 10px 4px}
+.th{padding:10px 12px;border-radius:14px}.th b{display:block;font-weight:700;font-size:14px}.th span{font-size:12px;color:var(--sub)}
+.th.on{background:var(--s2);box-shadow:inset 3px 0 0 var(--lime)}
+.areas{margin-top:auto;border-top:1px solid var(--line);padding-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.ar{background:var(--s2);border-radius:12px;padding:9px 12px;font-weight:700;font-size:13px;display:flex;justify-content:space-between}.ar b{color:var(--org)}
+main{display:flex;flex-direction:column;min-width:0;position:relative}
+.ctx{display:flex;gap:8px;padding:18px 28px;align-items:center}
+.ctx .lab{font-size:12px;font-weight:700;color:var(--sub);margin-right:4px}
+.cx{border-radius:99px;padding:6px 13px;font-weight:700;font-size:13px;background:var(--s);display:flex;gap:6px;align-items:center}
+.cx i{width:7px;height:7px;border-radius:50%;background:var(--grn)}.cx.w i{background:var(--org)}
+.ctx .r{margin-left:auto;color:var(--sub);font-size:13px}
+.thread{flex:1;overflow:hidden;width:780px;margin:0 auto;padding-top:14px}
+.me{margin-left:auto;width:fit-content;background:var(--cob);font-weight:600;font-size:17px;padding:13px 18px;border-radius:26px 26px 6px 26px}
+.ag{display:flex;gap:14px;margin-top:26px}
+.ag .orb{width:34px;height:34px;flex:none}
+.trail{display:flex;gap:6px;flex-wrap:wrap}
+.st{font-size:12px;font-weight:700;color:var(--sub);background:var(--s);border-radius:99px;padding:5px 11px}.st:before{content:"✓ ";color:var(--lime)}
+.say{font-size:20px;line-height:1.45;margin-top:12px;letter-spacing:-.005em;max-width:34em}
+.say b{color:var(--lime);font-weight:700}
+.rc{margin-top:16px;border-radius:28px;overflow:hidden;display:grid;grid-template-columns:1.1fr 1fr}
+.rc .l{background:var(--lime);color:#0e0f0c;padding:20px 22px}
+.rc .k{display:flex;justify-content:space-between;font-weight:700;font-size:13px}
+.rc .k span:last-child{background:#0e0f0c;color:var(--lime);border-radius:99px;padding:2px 9px;font-size:11px}
+.rc .v{font-size:38px;font-weight:800;letter-spacing:-.045em;line-height:1;margin:14px 0}
+.rc .f{display:flex;gap:18px}.rc small{display:block;font-size:12px;font-weight:600;opacity:.65}.rc .f b{font-size:22px;font-weight:800;letter-spacing:-.03em}
+.rc .r{background:var(--s2);padding:18px 20px;position:relative}
+.rc .r .k{color:var(--sub)}
+svg{width:100%;height:120px;margin-top:8px}
+.why{font-size:13px;color:var(--sub);display:flex;justify-content:space-between}.why b{color:var(--t)}
+.fu{display:flex;gap:8px;margin:16px 0 0 48px}
+.fu span{border:1.5px solid var(--line);border-radius:99px;padding:8px 14px;font-weight:700;font-size:14px}
+.comp{width:820px;margin:0 auto 22px;background:var(--s);border-radius:30px;padding:16px 16px 14px 22px;box-shadow:0 -30px 60px var(--bg)}
+.comp p{font-size:18px;color:var(--sub)}
+.comp .row{display:flex;align-items:center;gap:8px;margin-top:14px}
+.tool{background:var(--s2);border-radius:99px;padding:7px 13px;font-weight:700;font-size:13px}
+.send{margin-left:auto;width:48px;height:48px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center;font-weight:800;font-size:20px}
+</style></head><body>
+<aside>
+<div class="brand"><span class="orb"></span>Fin-Agent</div>
+<div class="new"><span>New chat</span><span>⌘N</span></div>
+<div class="search">Search conversations</div>
+<div class="g">Today</div>
+<div class="th on"><b>Laptop on the Slice card</b><span>Yes, with a change · 91%</span></div>
+<div class="th"><b>Rent split with Ravi</b><span>Ravi owes ₹4,400</span></div>
+<div class="g">This week</div>
+<div class="th"><b>October SBI statement</b><span>912 rows imported</span></div>
+<div class="th"><b>Is my SIP on track?</b><span>Goal reached 14 Aug 2027</span></div>
+<div class="th"><b>Where did October go?</b><span>Food ₹14,210 · top</span></div>
+<div class="areas"><span class="ar">Money</span><span class="ar">Activity <b>1</b></span><span class="ar">Imports</span><span class="ar">Settings</span></div>
+</aside>
+<main>
+<div class="ctx"><span class="lab">I'm looking at</span><span class="cx"><i></i>₹1,84,200 spendable</span><span class="cx"><i></i>Floor holds 91%</span><span class="cx w"><i></i>Slice due in 10 days</span><span class="r">Private · on your machine</span></div>
+<div class="thread">
+<div class="me">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<div class="ag"><span class="orb"></span><div>
+<div class="trail"><span class="st">Read 3 accounts</span><span class="st">Ran 1,000 futures</span><span class="st">Tried waiting till 21 Nov</span></div>
+<p class="say">Yes — <b>if you clear it on the due date</b>. Your floor of ₹25,000 still holds in 91% of runs, down from 94% today. The tight spot is 2 Dec, right after rent.</p>
+<div class="rc">
+<div class="l"><div class="k"><span>Affordability · card</span><span>FA·68P·0911</span></div><div class="v">Yes, with a change</div>
+<div class="f"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Sources</small><b>3</b></div></div></div>
+<div class="r"><div class="k"><span>Next 90 days</span><span>Open ↗</span></div>
+<svg viewBox="0 0 300 120" preserveAspectRatio="none"><defs><linearGradient id="m" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset=".5" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs>
+<g id="fld"></g>
+<path d="M0,24 C60,28 110,46 150,58 S240,52 300,40 L300,92 C240,98 200,100 150,96 S60,62 0,40Z" fill="url(#m)" opacity=".22"/>
+<path d="M0,32 C60,38 110,66 150,78 S240,70 300,60" fill="none" stroke="url(#m)" stroke-width="3.5" stroke-linecap="round"/>
+<line x1="0" x2="300" y1="112" y2="112" stroke="#ff6a2b" stroke-width="1.5" stroke-dasharray="4 5"/>
+<circle cx="150" cy="78" r="5" fill="#f6f7f0"/></svg>
+<div class="why"><span>Lowest <b>2 Dec</b></span><span>Floor ₹25,000</span></div></div>
+</div>
+</div></div>
+<div class="fu"><span>What if I wait till 21 Nov?</span><span>Show the 3 sources</span><span>Split it into EMIs?</span></div>
+</div>
+<div class="comp"><p>Ask a follow-up, or tell me about a spend…</p><div class="row"><span class="tool">📷 Photo</span><span class="tool">🎙 Voice</span><span class="tool">📄 Statement</span><span class="send">↑</span></div></div>
+</main>
+</body></html>

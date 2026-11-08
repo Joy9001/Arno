@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Timetable Rack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
+<style>
+:root{--bed:#e3a51b;--glass:rgba(32,42,52,.9);--iv:#f3eedf;--car:#16191c;--ver:#e2401c;--btl:#1d6b45;--sub:rgba(243,238,223,.62);--fs:18px}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;color:var(--iv);font:400 var(--fs)/1.35 Archivo,sans-serif;background:radial-gradient(ellipse 60% 70% at 40% 45%,#ffd35a,var(--bed) 55%,#b97f0c);display:flex;flex-direction:column}
+.c{font-stretch:62%;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+nav{display:flex;gap:2px;padding:20px 40px;color:var(--car)}
+nav span{padding:6px 14px}nav .on{background:var(--car);color:var(--bed)}nav .b{margin-right:30px;font-weight:900}
+.rack{flex:1;display:flex;gap:26px;padding:20px 40px 0 70px;align-items:flex-start}
+.slide{transform:skewX(-11deg);background:var(--glass);padding:24px 28px;min-height:640px;box-shadow:0 30px 60px rgba(80,50,0,.35)}
+.slide>*{transform:skewX(11deg)}
+.s1{width:380px}.s2{width:470px}.s3{width:340px}
+.h{display:flex;justify-content:space-between;border-bottom:2px solid var(--iv);padding-bottom:8px;margin-bottom:14px}
+.h .n{color:var(--bed)}
+.fig{font-weight:900;font-stretch:62%;}
+.plate{background:var(--iv);color:var(--car);padding:10px 14px;margin:6px 0 16px}
+.plate .fig{font-size:var(--fs)}
+.r{display:grid;grid-template-columns:90px 1fr auto;gap:10px;padding:9px 0;border-bottom:1px solid rgba(243,238,223,.18)}
+.mark{display:inline-block;width:14px;height:14px;border:2px solid var(--iv);border-radius:50%;margin-right:8px;vertical-align:-2px}
+.mark.f{background:var(--iv)}
+.r.paid{color:var(--sub)}.r.paid .x{text-decoration:line-through;text-decoration-color:var(--ver);text-decoration-thickness:3px}
+.ok{color:#7fe0a8}.am{color:var(--bed)}
+svg{width:100%;height:150px;margin:6px 0 10px}
+.prose{background:var(--iv);color:var(--car);padding:14px 16px;margin:10px 0}
+.v{background:var(--ver);color:var(--iv);padding:10px 14px;display:flex;justify-content:space-between;margin:12px 0}
+.ask{background:var(--car);color:var(--sub);padding:14px 16px;margin-top:16px;display:flex;justify-content:space-between}
+.ask b{color:var(--bed)}
+.ticks{display:flex;gap:6px;padding:16px 70px 26px;align-items:center;color:var(--car)}
+.ticks i{width:44px;height:6px;background:rgba(22,25,28,.25)}.ticks i.on{background:var(--car)}
+</style></head><body>
+<nav class="c"><span class="b">Fin-Agent</span><span class="on">Home · 1</span><span>Money</span><span>Activity</span><span>Settings</span><span style="margin-left:auto">Sun 8 Nov</span></nav>
+<div class="rack">
+<section class="slide s1">
+<div class="h c"><span>01 · Today</span><span class="n">90 days</span></div>
+<div class="c">Spendable</div>
+<div class="plate"><span class="fig c" style="letter-spacing:.02em">₹1,84,200 till 5 Feb</span></div>
+<svg viewBox="0 0 320 150" preserveAspectRatio="none"><path d="M0,24 C60,28 110,46 160,54 S260,42 320,30 L320,96 C260,104 210,106 160,102 S60,64 0,44Z" fill="rgba(243,238,223,.16)"/><path d="M0,34 C60,40 110,64 160,76 S260,68 320,60" fill="none" stroke="#f3eedf" stroke-width="3"/><line x1="0" x2="320" y1="134" y2="134" stroke="#e2401c" stroke-width="3"/></svg>
+<div class="r"><span class="c">Floor</span><span>holds in 1,000 runs</span><span class="fig ok">91%</span></div>
+<div class="r"><span class="c">Lowest</span><span>median, 2 Dec</span><span class="fig">₹38,400</span></div>
+<div class="r"><span class="c">Limit</span><span>your floor</span><span class="fig">₹25,000</span></div>
+</section>
+<section class="slide s2">
+<div class="h c"><span>02 · Laptop on the Slice card</span><span class="n">FA·68P·0911</span></div>
+<div class="prose">Can I buy a ₹68,000 laptop on the Slice card?</div>
+<p>Yes — if you clear it on the due date. The floor holds in 91% of runs, down from 94% today.</p>
+<div class="v c"><span>Yes, with a change</span><span>Wait till 21 Nov</span></div>
+<div class="r"><span class="c">Floor</span><span>threshold 90%</span><span class="fig ok">91%</span></div>
+<div class="r"><span class="c">Lowest</span><span>median on 2 Dec</span><span class="fig">₹38,400</span></div>
+<div class="r"><span class="c">Basis</span><span>1,000 runs · 3 sources</span><span class="fig am">Open</span></div>
+<div class="ask c"><span>Ask about your money…</span><b>Send</b></div>
+</section>
+<section class="slide s3">
+<div class="h c"><span>03 · Dues · Nov</span><span class="n">₹48,600</span></div>
+<div class="r paid"><span class="c">01 Nov</span><span class="x"><i class="mark f"></i>Rent</span><span class="fig x">22,000</span></div>
+<div class="r paid"><span class="c">05 Nov</span><span class="x"><i class="mark f"></i>Netflix</span><span class="fig x">649</span></div>
+<div class="r"><span class="c am">18 Nov</span><span><i class="mark"></i>Slice card</span><span class="fig am">12,400</span></div>
+<div class="r"><span class="c">21 Nov</span><span><i class="mark"></i>SIP · Nifty 50</span><span class="fig">10,000</span></div>
+<div class="r"><span class="c">Owed</span><span>Ravi owes you</span><span class="fig ok">4,400</span></div>
+</section>
+</div>
+<div class="ticks"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><span class="c" style="margin-left:10px;font-size:14px">3 of 5 · Imports, People →</span></div>
+</body></html>

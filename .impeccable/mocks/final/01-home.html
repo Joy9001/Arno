@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>01 · Home</title><link rel="stylesheet" href="shell.css">
+<style>
+main{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:56px;overflow:hidden}
+main::before{content:"";position:absolute;width:1000px;height:640px;top:-330px;left:50%;transform:translateX(-50%);background:radial-gradient(closest-side,rgba(43,89,255,.30),rgba(30,200,165,.12) 50%,transparent);pointer-events:none}
+.top{position:absolute;top:20px;right:28px;display:flex;gap:8px;align-items:center}
+.halo{position:relative;display:grid;place-items:center}
+.halo::before{content:"";position:absolute;width:220px;height:220px;border-radius:50%;background:var(--iris);filter:blur(60px);opacity:.35;animation:spin 14s linear infinite}
+h1{position:relative;font-size:58px;font-weight:800;letter-spacing:-.045em;line-height:1;margin-top:26px;text-align:center}
+h1 span{color:var(--sub);font-weight:500}
+.comp{width:820px;margin-top:30px;border:1.5px solid rgba(212,255,58,.25);box-shadow:0 30px 80px rgba(0,0,0,.5),0 0 0 6px rgba(212,255,58,.04)}
+.comp p{font-size:21px}
+.sug{display:flex;gap:8px;margin-top:14px}
+.noticed{width:1200px;margin-top:38px}
+.noticed .h{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--sub);font-size:14px}
+.cards{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:14px;margin-top:12px}
+.c{border-radius:26px;padding:20px;display:flex;flex-direction:column;min-height:214px;position:relative;overflow:hidden}
+.c .fig{font-size:50px;margin-top:auto}
+.c p{font-size:15px;font-weight:600;margin-top:8px;line-height:1.35}.recap p,.recap .k{max-width:62%}
+.c .act{display:flex;gap:6px;margin-top:14px}
+.due{background:var(--org);color:#111}.dark{background:var(--s)}
+.recap{background:#0b0c09;box-shadow:inset 0 0 0 1.5px var(--line)}
+.thumb{position:absolute;right:18px;top:-8px;width:74px;height:120px;border-radius:14px;background:var(--mesh);transform:rotate(6deg);box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.thumb::after{content:"₹61k";position:absolute;left:8px;bottom:10px;font-weight:800;color:#111;font-size:18px;letter-spacing:-.04em}
+</style></head><body data-active="ask"><div class="app"><nav id="rail"></nav>
+<main>
+<div class="top"><span class="sub" style="font-size:13px">Private · on your machine</span><span class="btn">History</span></div>
+<div class="halo"><span class="orb big"><i></i></span></div>
+<h1>Evening, Asha. <span>What do you<br>want to know about your money?</span></h1>
+<div class="comp"><p>Ask anything — “can I afford…”, “where did it go…”, “Ravi paid me back”</p>
+<div class="row"><span class="tool"><span data-icon="camera"></span>Photo a bill</span><span class="tool"><span data-icon="mic"></span>Talk</span><span class="tool"><span data-icon="file"></span>Drop a statement</span><span class="send">↑</span></div></div>
+<div class="sug"><span class="chip out">Can I afford a ₹68,000 laptop?</span><span class="chip out">Where did October go?</span><span class="chip out">When do I hit my emergency fund?</span><span class="chip out">Who owes me?</span></div>
+<div class="noticed">
+<div class="h"><span class="orb" style="--s:16px"><i></i></span>I noticed four things since this morning</div>
+<div class="cards">
+<div class="c mesh"><span class="k" style="color:#111;opacity:.75">You can spend till 5 Feb</span><span class="fig">₹1,84,200</span><p>Your ₹25,000 floor holds in 94% of 1,000 futures.</p><div class="act"><span class="btn ink">Why this number?</span></div></div>
+<div class="c due"><span class="k" style="color:#111;opacity:.7">Due in 10 days · 18 Nov</span><span class="fig">₹12,400</span><p>Slice card. SBI covers it with room to spare.</p><div class="act"><span class="btn ink" style="color:#fff">Remind me 16 Nov</span></div></div>
+<div class="c dark"><span class="k">New recurring charge</span><span class="fig" style="font-size:40px">₹299/mo</span><p>STREAMBOX, 3 months running. Track it as a subscription?</p><div class="act"><span class="btn" style="background:var(--t);color:#111">Yes, track</span><span class="btn">Ignore</span></div></div>
+<div class="c recap"><span class="thumb"></span><span class="k">Your October recap</span><span class="fig" style="font-size:34px;margin-top:auto">5 stories</span><p>Spending, the big three, and one surprise.</p><div class="act"><span class="btn lime">▶ Watch</span></div></div>
+</div></div>
+</main></div><script src="shell.js"></script></body></html>

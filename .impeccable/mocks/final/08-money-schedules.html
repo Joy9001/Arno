@@ -1,0 +1,48 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>08 · Money · Schedules</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.cal{display:grid;grid-template-columns:repeat(30,1fr);gap:4px;margin-top:14px}
+.d{height:74px;border-radius:12px;background:var(--s);padding:6px;font-size:11px;font-weight:700;color:var(--sub);position:relative}
+.d.today{box-shadow:inset 0 0 0 2px var(--t);color:var(--t)}
+.d i{position:absolute;left:6px;right:6px;bottom:6px;height:6px;border-radius:99px}
+.d.past{opacity:.45}
+.cols{display:grid;grid-template-columns:1.4fr 1fr;gap:20px;margin-top:6px}
+.row{display:grid;grid-template-columns:62px 40px 1fr auto auto;gap:12px;align-items:center;padding:11px 4px;border-top:1px solid var(--line)}
+.row .dt{font:600 12px "JetBrains Mono";color:var(--sub)}
+.row b{display:block;font-weight:800}.row span.s{font-size:12px;color:var(--sub)}
+.row .fig{font-size:20px}
+.row.paid{opacity:.5}.row.paid b,.row.paid .fig{text-decoration:line-through;text-decoration-color:var(--grn);text-decoration-thickness:2px}
+.row.next{background:rgba(255,106,43,.08);border-radius:14px;border-top-color:transparent}
+.tag{font-size:11px;font-weight:800;border-radius:99px;padding:3px 9px;background:var(--s2)}
+.sub2{background:var(--s);border-radius:24px;padding:16px 18px}
+.sub2 .row{grid-template-columns:40px 1fr auto}
+</style></head><body data-active="money"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Money</h1><span class="tabs"><span>Timeline</span><span>Accounts</span><span class="on">Schedules</span><span>Goals</span><span>People</span></span><span class="r"><span class="tabs"><span class="on">November</span><span>December</span></span><span class="btn ask">Add a bill</span></span></div>
+<div class="note"><span class="orb" style="--s:26px"><i></i></span><p>November has <b>₹58,909</b> going out and <b>₹92,000</b> coming in. Every due is covered on its date in 99% of runs.</p><span class="btn">See the risky one</span></div>
+<div class="body">
+<div class="cal">
+<div class="d past">1<i style="background:var(--cy)"></i></div><div class="d past">2</div><div class="d past">3</div><div class="d past">4</div><div class="d past">5<i style="background:var(--org)"></i></div><div class="d past">6</div><div class="d past">7</div><div class="d today">8 · today</div><div class="d">9</div><div class="d">10</div><div class="d">11</div><div class="d">12</div><div class="d">13</div><div class="d">14</div><div class="d">15<i style="background:var(--cy)"></i></div><div class="d">16</div><div class="d">17</div><div class="d" style="color:var(--org)">18<i style="background:var(--org)"></i></div><div class="d">19</div><div class="d">20</div><div class="d">21<i style="background:var(--cob)"></i></div><div class="d">22</div><div class="d">23</div><div class="d">24</div><div class="d">25</div><div class="d">26</div><div class="d">27</div><div class="d">28</div><div class="d">29</div><div class="d" style="color:var(--grn)">30<i style="background:var(--grn)"></i></div>
+</div>
+<div class="cols">
+<div>
+<div class="sec"><h2>This month</h2><span>9 items</span></div>
+<div class="row paid"><span class="dt">01 NOV</span><span class="av" style="background:var(--s2)">R</span><div><b>Rent</b><span class="s">Monthly · from SBI</span></div><span class="tag">Paid</span><span class="fig">₹22,000</span></div>
+<div class="row paid"><span class="dt">05 NOV</span><span class="av" style="background:var(--s2)">BL</span><div><b>Bike loan EMI</b><span class="s">11 left · Bajaj Finance</span></div><span class="tag">Paid</span><span class="fig">₹3,500</span></div>
+<div class="row paid"><span class="dt">05 NOV</span><span class="av" style="background:var(--s2)">N</span><div><b>Netflix</b><span class="s">Subscription · Slice</span></div><span class="tag">Paid</span><span class="fig">₹649</span></div>
+<div class="row"><span class="dt">15 NOV</span><span class="av" style="background:var(--s2)">S</span><div><b>Spotify</b><span class="s">Subscription · HDFC Millennia</span></div><span class="tag">Auto</span><span class="fig">₹119</span></div>
+<div class="row next"><span class="dt" style="color:var(--org)">18 NOV</span><span class="av" style="background:#ff6a2b33;color:var(--org)">S</span><div><b>Slice card</b><span class="s">Pay in full · from SBI</span></div><span class="tag" style="background:var(--org);color:#111">In 10 days</span><span class="fig">₹12,400</span></div>
+<div class="row"><span class="dt">21 NOV</span><span class="av" style="background:var(--s2)">⟳</span><div><b>SIP · Nifty 50</b><span class="s">Investment · from SBI</span></div><span class="tag">Auto</span><span class="fig">₹10,000</span></div>
+<div class="row"><span class="dt">30 NOV</span><span class="av" style="background:#3ee07f22;color:var(--grn)">₹</span><div><b>Salary · Acme Ltd</b><span class="s">Income · into HDFC Salary</span></div><span class="tag">Expected</span><span class="fig pos">+₹92,000</span></div>
+</div>
+<div>
+<div class="sec"><h2>Subscriptions</h2><span>₹1,067 a month</span></div>
+<div class="sub2">
+<div class="row" style="border:0"><span class="av" style="background:var(--s2)">N</span><div><b>Netflix</b><span class="s">5th · since Mar 2024</span></div><span class="fig">₹649</span></div>
+<div class="row"><span class="av" style="background:var(--s2)">S</span><div><b>Spotify</b><span class="s">15th · since Jan 2025</span></div><span class="fig">₹119</span></div>
+<div class="row"><span class="av" style="background:#ffd23a22;color:var(--sun)">D</span><div><b>STREAMBOX <span class="tag" style="background:var(--sun);color:#111">New?</span></b><span class="s">Seen 3 months · not confirmed</span></div><span class="fig">₹299</span></div>
+</div>
+<div class="sec"><h2>Card installments</h2><span>none running</span></div>
+<div class="sub2" style="color:var(--sub);font-weight:600">No EMIs on your cards. Ask me before converting a purchase — I'll show what it does to your floor.</div>
+</div>
+</div>
+</div>
+</section></div><script src="shell.js"></script></body></html>

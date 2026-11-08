@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Analyst Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f5f6f8;--paper:#fff;--t:#0b0c0e;--sub:#62666f;--line:rgba(11,12,14,.09);--cob:#1f4bff;--grn:#0f9d58;--org:#ff5a1f}
+*{box-sizing:border-box;margin:0}
+body{width:1440px;height:900px;overflow:hidden;background:var(--bg);color:var(--t);font:400 16px/1.55 "Inter Tight",sans-serif;display:grid;grid-template-columns:250px 1fr 320px;-webkit-font-smoothing:antialiased}
+aside.l{padding:22px 18px;display:flex;flex-direction:column;gap:4px}
+.brand{font:400 30px/1 "Instrument Serif";letter-spacing:-.01em;padding:0 8px 18px}
+.new{background:var(--t);color:#fff;font-weight:700;border-radius:12px;padding:11px 14px;margin-bottom:14px}
+.g{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sub);padding:12px 8px 4px}
+.th{padding:8px 10px;border-radius:10px;font-weight:500;font-size:14px}.th.on{background:var(--paper);box-shadow:0 1px 0 var(--line);font-weight:700}
+.areas{margin-top:auto;display:flex;flex-wrap:wrap;gap:6px}.areas span{background:var(--paper);border-radius:99px;padding:5px 11px;font-size:13px;font-weight:600;box-shadow:0 1px 0 var(--line)}
+main{background:var(--paper);margin:14px 0;border-radius:22px;box-shadow:0 1px 0 var(--line),0 30px 80px rgba(11,12,14,.06);padding:34px 64px 0;position:relative;overflow:hidden}
+.q{display:flex;align-items:center;gap:10px;font-weight:600;color:var(--sub)}
+.q i{width:26px;height:26px;border-radius:50%;background:#e9ebf0;display:grid;place-items:center;font-style:normal;font-size:12px;color:var(--t)}
+h1{font:400 74px/.98 "Instrument Serif";letter-spacing:-.025em;margin-top:18px;max-width:14ch}
+h1 em{color:var(--cob)}
+.by{display:flex;gap:14px;align-items:center;margin-top:16px;font-size:13px;color:var(--sub);font-weight:500}
+.by b{color:var(--t)}.dot{width:4px;height:4px;border-radius:50%;background:var(--sub)}
+.cols{display:grid;grid-template-columns:1fr 330px;gap:40px;margin-top:26px}
+p{font-size:18px;line-height:1.6;max-width:36em}
+p+p{margin-top:14px}
+sup{display:inline-grid;place-items:center;min-width:20px;height:20px;border-radius:6px;background:#eef1ff;color:var(--cob);font:700 11px "Inter Tight";padding:0 5px;vertical-align:3px;margin-left:2px}
+.num{font-weight:700;border-bottom:2px solid rgba(31,75,255,.25)}
+.fig{border-radius:18px;background:var(--bg);padding:16px}
+.fig .k{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sub);display:flex;justify-content:space-between}
+.fig .big{font:400 58px/1 "Instrument Serif";margin-top:8px}
+.fig .big small{font:600 14px "Inter Tight";color:var(--sub);margin-left:6px}
+svg{width:100%;height:120px;margin-top:8px}
+.cap{font-size:12px;color:var(--sub)}
+.tbl{margin-top:14px;font-size:14px}.tbl div{display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line)}.tbl b{font-weight:700;font-variant-numeric:tabular-nums}
+.ask{position:absolute;left:64px;right:64px;bottom:20px;display:flex;align-items:center;gap:10px;background:#fff;border:1.5px solid var(--line);border-radius:18px;padding:10px 10px 10px 18px;box-shadow:0 20px 50px rgba(11,12,14,.10)}
+.ask span{flex:1;color:var(--sub)}.ask b{background:var(--t);color:#fff;border-radius:12px;padding:9px 16px;font-size:14px}
+aside.r{padding:26px 20px}
+aside.r h3{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--sub);margin-bottom:12px}
+.src{background:var(--paper);border-radius:14px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 0 var(--line);font-size:13px}
+.src .n{display:flex;gap:8px;align-items:center;font-weight:700;font-size:14px}
+.src .n sup{margin:0}.src span{color:var(--sub)}
+.src.hl{box-shadow:0 0 0 2px var(--cob)}
+.serial{margin-top:18px;font:600 12px ui-monospace,Consolas,monospace;color:var(--sub)}
+</style></head><body>
+<aside class="l"><div class="brand">Fin-Agent</div><div class="new">＋ Ask a new question</div>
+<div class="g">Briefs</div><div class="th on">Laptop on the Slice card</div><div class="th">Rent split with Ravi</div><div class="th">Where did October go?</div><div class="th">Is my SIP on track?</div>
+<div class="areas"><span>Money</span><span>Activity · 1</span><span>Imports</span><span>Settings</span></div></aside>
+<main>
+<div class="q"><i>J</i>Can I buy a ₹68,000 laptop on the Slice card?</div>
+<h1>Yes — <em>if you clear it on the due date.</em></h1>
+<div class="by"><b>Fin-Agent</b><span class="dot"></span>8 Nov, 21:40<span class="dot"></span>1,000 simulated futures<span class="dot"></span>3 sources<span class="dot"></span>4.2s</div>
+<div class="cols">
+<div>
+<p>Paying the card in full on 18 Nov keeps your floor of <span class="num">₹25,000</span><sup>1</sup> intact in <span class="num">91%</span> of runs<sup>2</sup> — down from 94% without the laptop.</p>
+<p>The tight spot is <span class="num">2 Dec</span>, the day after rent<sup>3</sup>, when the median balance bottoms out at <span class="num">₹38,400</span><sup>2</sup>. If you wait until <b>21 Nov</b>, salary lands first and the floor holds in 96% of runs.</p>
+<p style="color:var(--sub);font-size:15px">I didn't count Ravi's ₹4,400 — it's owed, not paid.</p>
+</div>
+<div class="fig"><div class="k"><span>Floor holds</span><span>≥ 90%</span></div><div class="big">91%<small>of 1,000 runs</small></div>
+<svg viewBox="0 0 300 120" preserveAspectRatio="none"><path d="M0,22 C60,26 110,44 150,54 S240,42 300,30 L300,88 C240,96 200,98 150,94 S60,60 0,40Z" fill="#1f4bff" opacity=".1"/><path d="M0,31 C60,36 110,62 150,74 S240,66 300,56" fill="none" stroke="#1f4bff" stroke-width="2.5"/><line x1="0" x2="300" y1="110" y2="110" stroke="#ff5a1f" stroke-dasharray="3 4"/><circle cx="150" cy="74" r="4" fill="#0b0c0e"/></svg>
+<div class="cap">Median and P10–P90 band · 8 Nov → 5 Feb</div>
+<div class="tbl"><div><span>Buy 8 Nov</span><b>91%</b></div><div><span>Wait till 21 Nov</span><b style="color:var(--grn)">96%</b></div><div><span>3 EMIs</span><b>93%</b></div></div></div>
+</div>
+<div class="ask"><span>Ask a follow-up about this brief…</span>📷 🎙 <b>Ask</b></div>
+</main>
+<aside class="r"><h3>Sources</h3>
+<div class="src"><div class="n"><sup>1</sup>Floor setting</div><span>Settings · ₹25,000 · set 12 Oct</span></div>
+<div class="src hl"><div class="n"><sup>2</sup>Projection run</div><span>1,000 runs · seed 0911 · SBI Savings, Slice card</span></div>
+<div class="src"><div class="n"><sup>3</sup>Rent · schedule</div><span>₹22,000 monthly · 1st · from SBI</span></div>
+<div class="serial">FA·68P·0911 · every number above is cited</div></aside>
+</body></html>

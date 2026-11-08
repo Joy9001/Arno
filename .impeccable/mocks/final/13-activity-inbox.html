@@ -1,0 +1,32 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>13 · Activity · Inbox</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.cols{display:grid;grid-template-columns:1fr 360px;gap:20px}
+.it{display:grid;grid-template-columns:48px 1fr auto;gap:16px;align-items:flex-start;background:var(--s);border-radius:24px;padding:18px 20px;margin-bottom:12px}
+.it .ic{width:48px;height:48px;border-radius:16px;display:grid;place-items:center;font-weight:800;font-size:20px}
+.it .kind{font:600 11px "JetBrains Mono";letter-spacing:.08em;text-transform:uppercase}
+.it h3{font-size:19px;font-weight:800;letter-spacing:-.02em;margin-top:4px}
+.it p{color:#c9ccc1;margin-top:4px;font-size:14px;max-width:62ch}
+.it .act{display:flex;gap:8px;margin-top:12px}
+.it .tm{font-size:12px;color:var(--ter);font-weight:600}
+.it.unread{box-shadow:inset 3px 0 0 var(--lime)}
+.it.read{opacity:.55}
+.side{display:flex;flex-direction:column;gap:12px}
+.sq{background:var(--s);border-radius:22px;padding:14px 16px}
+.sq b{display:block;font-weight:800}.sq span{font-size:12px;color:var(--sub)}
+</style></head><body data-active="activity"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Activity</h1><span class="tabs"><span>Ledger</span><span>Imports</span><span class="on">Inbox · 3</span></span><span class="r"><span class="btn">Mark all read</span></span></div>
+<div class="note"><span class="orb" style="--s:26px"><i></i></span><p>I watch your money while you're away: <b>reminders</b>, <b>risk checks</b>, <b>patterns</b>, and the questions you scheduled. Nothing here changes your data without a tap.</p></div>
+<div class="body"><div class="cols"><div>
+<div class="it unread"><span class="ic" style="background:var(--sun);color:#111">?</span><div><span class="kind" style="color:var(--sun)">Needs your call · proposal</span><h3>New recurring charge: STREAMBOX ₹299</h3><p>Three months on Slice, same amount, around the 7th. Track it as a subscription so it shows in your forecasts?</p><div class="act"><span class="btn lime">Yes, track it</span><span class="btn">Not a subscription</span><span class="btn ask">Ask</span></div></div><span class="tm">12:01</span></div>
+<div class="it unread"><span class="ic" style="background:var(--org);color:#111">!</span><div><span class="kind" style="color:var(--org)">Reminder</span><h3>Slice card ₹12,400 due in 10 days</h3><p>SBI covers it on 18 Nov. Paying in full keeps your floor at 94%.</p><div class="act"><span class="btn">Remind me 16 Nov</span><span class="btn ask">Open in chat</span></div></div><span class="tm">09:00</span></div>
+<div class="it unread"><span class="ic mesh">↗</span><div><span class="kind" style="color:var(--lime)">Pattern</span><h3>Food is up 18% over three weeks</h3><p>Mostly Swiggy after 10pm — ₹4,120 since 18 Oct. At this pace Goa slips another 4 days.</p><div class="act"><span class="btn ask">Show me</span><span class="btn">Mark read</span></div></div><span class="tm">Yesterday</span></div>
+<div class="it read"><span class="ic" style="background:var(--s2)">✓</span><div><span class="kind sub">Scheduled question · every Monday</span><h3>Am I on track this week?</h3><p>Yes — spending ₹3,200 under your usual week; all goals on pace except Goa.</p></div><span class="tm">2 Nov</span></div>
+</div>
+<div class="side">
+<div class="sec" style="margin:0"><h2>Scheduled questions</h2></div>
+<div class="sq"><b>Every Monday 9:00 · “Am I on track this week?”</b><span>Next: tomorrow</span></div>
+<div class="sq"><b>1st of month · “Recap last month”</b><span>Next: 1 Dec · makes a recap story</span></div>
+<div class="sq" style="border:1.5px dashed var(--line);background:transparent"><b>＋ Schedule a question</b><span>Read-only · I answer, I never change data</span></div>
+</div>
+</div></div>
+</section></div><script src="shell.js"></script></body></html>

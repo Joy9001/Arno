@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>12 · Activity · Imports</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.top3{display:grid;grid-template-columns:330px 1fr;gap:16px}
+.drop{border:2px dashed rgba(212,255,58,.35);border-radius:26px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;background:rgba(212,255,58,.03)}
+.drop .ic{width:50px;height:50px;border-radius:16px;background:var(--lime);color:#111;display:grid;place-items:center}.drop .ic svg{width:24px;height:24px}
+.drop b{font-size:17px;font-weight:800}.drop span{color:var(--sub);font-size:13px}
+.hist{display:flex;gap:10px;flex-wrap:wrap;align-content:flex-start}
+.imp{background:var(--s);border-radius:20px;padding:12px 14px;width:220px}
+.imp b{display:block;font-weight:800;font-size:14px}.imp span{font-size:12px;color:var(--sub)}
+.imp.on{box-shadow:inset 0 0 0 2px var(--lime)}
+.imp .t{display:inline-block;margin-top:6px;font-size:11px;font-weight:800;border-radius:99px;padding:2px 8px;background:var(--s2)}
+.parser{display:flex;align-items:center;gap:12px;background:var(--s);border-radius:20px;padding:12px 16px;margin-top:16px}
+.parser b{font-weight:800}.parser .mono{font-size:12px;color:var(--sub)}
+.review{display:grid;grid-template-columns:1fr 360px;gap:16px;margin-top:14px}
+td{padding:8px 12px;font-size:14px}
+.amb{background:var(--s);border-radius:24px;padding:16px 18px}
+.amb .q{font-weight:700;margin-top:8px}.amb .opts{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.commit{display:flex;gap:8px;margin-top:12px}
+</style></head><body data-active="activity"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Activity</h1><span class="tabs"><span>Ledger</span><span class="on">Imports</span><span>Inbox · 3</span></span></div>
+<div class="body">
+<div class="top3">
+<div class="drop"><span class="ic" data-icon="file"></span><b>Drop a statement</b><span>PDF or CSV from any Indian bank. Passwords go on the card, never in chat.</span></div>
+<div><div class="sec" style="margin-top:0"><h2>Recent imports</h2><span>review before anything lands</span></div>
+<div class="hist">
+<div class="imp on"><b>HDFC_Oct_2026.pdf</b><span>HDFC Salary · 1–31 Oct</span><br><span class="t" style="background:var(--lime);color:#111">Ready to review</span></div>
+<div class="imp"><b>SBI_Oct_2026.pdf</b><span>SBI Savings · 1–31 Oct</span><br><span class="t">Committed · 3 Nov</span></div>
+<div class="imp"><b>Slice_Oct.csv</b><span>Slice · Oct cycle</span><br><span class="t">Committed · 2 Nov</span></div>
+<div class="imp"><b>SBI_Sep_2026.pdf</b><span>SBI Savings · Sep</span><br><span class="t">Committed · 4 Oct</span></div>
+</div></div>
+</div>
+<div class="parser"><span class="orb" style="--s:28px"><i></i></span><div style="flex:1"><b>I read HDFC_Oct_2026.pdf</b> <span class="sub">— balances chain exactly from the printed opening to the printed closing.</span><div class="mono">parser v3 · HDFC layout · 2m 41s · 942 rows</div></div><span class="btn">See how</span></div>
+<div class="strip" style="grid-template-columns:repeat(5,1fr);margin-top:14px">
+<div><small>Rows</small><span class="fig">942</span></div><div><small>New</small><span class="fig lime">912</span></div><div><small>Matched</small><span class="fig">24</span><em>already logged by you</em></div><div><small>Ambiguous</small><span class="fig" style="color:var(--sun)">3</span><em>need your call</em></div><div><small>Own transfers</small><span class="fig">3</span><em>not spending</em></div>
+</div>
+<div class="review">
+<div class="card" style="padding:8px 8px 4px"><table><tr><th>Date</th><th>Narration</th><th>Category</th><th class="n">Amount</th><th>Status</th></tr>
+<tr><td class="mono sub">31 OCT</td><td>NEFT-ACME LTD-SALARY OCT</td><td><span class="cat">Salary</span></td><td class="n pos">+₹92,000</td><td><span class="cat">New</span></td></tr>
+<tr><td class="mono sub">30 OCT</td><td>UPI/ZOMATO/88123</td><td><span class="cat">Food</span></td><td class="n">−₹612</td><td><span class="cat">New</span></td></tr>
+<tr><td class="mono sub">29 OCT</td><td>UPI/PVR/MOVIE</td><td><span class="cat">Entertainment</span></td><td class="n">−₹1,250</td><td><span class="cat" style="background:#2b59ff33">Matched</span></td></tr>
+<tr><td class="mono sub">28 OCT</td><td>IMPS-SELF-SBI</td><td><span class="cat">Transfer</span></td><td class="n sub">₹20,000</td><td><span class="cat">Own account</span></td></tr>
+</table></div>
+<div class="amb"><span class="k" style="color:var(--sun)">3 ambiguous · 1 of 3</span>
+<div class="q">“UPI/RAVI K/7721 · +₹3,000 on 26 Oct” — is this Ravi paying you back?</div>
+<div class="opts"><span class="btn lime">Yes, settle with Ravi</span><span class="btn">Income</span><span class="btn">Skip</span></div>
+<div class="commit"><span class="btn lime" style="flex:1;justify-content:center">Commit 912 rows</span><span class="btn">Reject</span></div></div>
+</div>
+</div>
+</section></div><script src="shell.js"></script></body></html>

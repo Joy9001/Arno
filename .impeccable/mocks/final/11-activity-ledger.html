@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>11 · Activity · Ledger</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="money.css">
+<style>
+.wrap{display:grid;grid-template-columns:1fr 400px;gap:18px;height:100%}
+.filters{display:flex;gap:8px;align-items:center}
+.search{flex:1;background:var(--s);border-radius:99px;padding:10px 16px;color:var(--sub);display:flex;gap:10px;align-items:center}
+.search .orb{--s:18px}
+.queue{background:linear-gradient(90deg,rgba(255,210,58,.08),transparent);border-radius:22px;padding:12px 16px;margin-top:14px;box-shadow:inset 0 0 0 1px rgba(255,210,58,.18)}
+.qr{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:8px 0}
+.qr+.qr{border-top:1px solid var(--line)}.qr b{font-weight:800}.qr span.s{color:var(--sub);font-size:12px;display:block}
+.sugg{display:flex;gap:6px}.sugg span{border-radius:99px;padding:5px 11px;font-size:12px;font-weight:800;background:var(--s2)}.sugg .best{background:var(--lime);color:#111}
+.day{font:600 11px "JetBrains Mono";letter-spacing:.08em;color:var(--ter);padding:16px 12px 4px;display:flex;justify-content:space-between}
+td{padding:10px 12px}td b{font-weight:800;display:block}td span.s{font-size:12px;color:var(--sub)}
+tr.sel td{background:rgba(212,255,58,.06)}tr.sel td:first-child{box-shadow:inset 3px 0 0 var(--lime)}
+.drawer{background:var(--s);border-radius:28px;padding:20px 22px;display:flex;flex-direction:column;gap:12px}
+.drawer .fig{font-size:46px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:8px 12px;font-size:14px}.kv span{color:var(--sub);font-weight:600}.kv b{font-weight:700}
+.ev{background:var(--s2);border-radius:16px;padding:12px;font:500 12px/1.6 "JetBrains Mono";color:#cfd1c8}
+.legs{display:flex;flex-direction:column;gap:6px}.leg{display:flex;justify-content:space-between;background:var(--s2);border-radius:12px;padding:8px 12px;font-size:13px;font-weight:700}
+</style></head><body data-active="activity"><div class="app"><nav id="rail"></nav><section class="page">
+<div class="head"><h1>Activity</h1><span class="tabs"><span class="on">Ledger</span><span>Imports</span><span>Inbox · 3</span></span><span class="r"><span class="btn">Export</span><span class="btn ask">Log a spend</span></span></div>
+<div class="body"><div class="wrap"><div style="min-width:0;overflow:hidden">
+<div class="filters"><div class="search"><span class="orb"><i></i></span>Ask or search — “food in October over ₹500”</div><span class="chip">All accounts ▾</span><span class="chip">All categories ▾</span><span class="chip">Nov 2026 ▾</span></div>
+<div class="queue"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span class="k" style="color:var(--sun)">3 need a category · I guessed</span><span class="btn" style="padding:5px 12px;font-size:12px">Accept all guesses</span></div>
+<div class="qr"><div><b>STREAMBOX</b><span class="s">7 Nov · ₹299 · Slice · UPI/STREAMBOX/9921</span></div><div class="sugg"><span class="best">Subscriptions</span><span>Entertainment</span></div><span class="btn" style="padding:5px 10px;font-size:12px">Other…</span></div>
+<div class="qr"><div><b>Mahalakshmi Stores</b><span class="s">6 Nov · ₹1,140 · SBI · UPI/MAHALAKSHMI</span></div><div class="sugg"><span class="best">Groceries</span><span>Household</span></div><span class="btn" style="padding:5px 10px;font-size:12px">Other…</span></div>
+</div>
+<div class="day"><span>TODAY · SUN 8 NOV</span><span>−₹480</span></div>
+<table><tr class="sel"><td><b>Chaayos</b><span class="s">Logged from a UPI screenshot · 18:14</span></td><td><span class="cat">Food</span></td><td class="sub">SBI Savings</td><td class="n"><b>−₹480</b></td></tr></table>
+<div class="day"><span>SAT 7 NOV</span><span>−₹2,569</span></div>
+<table>
+<tr><td><b>Swiggy Instamart</b><span class="s">UPI/SWIGGY/7712</span></td><td><span class="cat">Groceries</span></td><td class="sub">Slice</td><td class="n"><b>−₹1,830</b></td></tr>
+<tr><td><b>STREAMBOX</b><span class="s">UPI/STREAMBOX/9921</span></td><td><span class="cat" style="background:rgba(255,210,58,.2);color:var(--sun)">Uncategorized</span></td><td class="sub">Slice</td><td class="n"><b>−₹299</b></td></tr>
+<tr><td><b>Uber</b><span class="s">Ride to Indiranagar</span></td><td><span class="cat">Travel</span></td><td class="sub">HDFC Millennia</td><td class="n"><b>−₹440</b></td></tr>
+</table>
+<div class="day"><span>FRI 6 NOV</span><span>+₹1,860</span></div>
+<table>
+<tr><td><b>Transfer to Slice</b><span class="s">Own-account · not spending</span></td><td><span class="cat">Transfer</span></td><td class="sub">SBI → Slice</td><td class="n"><b class="sub">₹5,000</b></td></tr>
+<tr><td><b>Ravi</b><span class="s">Paid back part of dinner</span></td><td><span class="cat" style="background:#3ee07f22;color:var(--grn)">Settlement</span></td><td class="sub">SBI Savings</td><td class="n"><b class="pos">+₹3,000</b></td></tr>
+<tr><td><b>Mahalakshmi Stores</b><span class="s">UPI/MAHALAKSHMI</span></td><td><span class="cat" style="background:rgba(255,210,58,.2);color:var(--sun)">Uncategorized</span></td><td class="sub">SBI Savings</td><td class="n"><b>−₹1,140</b></td></tr>
+</table>
+</div>
+<aside class="drawer">
+<div style="display:flex;justify-content:space-between;align-items:center"><span class="k">Movement · 8 Nov, 18:12</span><span class="btn" style="padding:5px 10px">✕</span></div>
+<div><span style="font-size:22px;font-weight:800">Chaayos</span><span class="fig" style="display:block;margin-top:8px">−₹480</span></div>
+<div class="kv"><span>Kind</span><b>Spend · UPI</b><span>Category</span><b><span class="cat">Food</span> learned rule</b><span>Account</span><b>SBI Savings</b><span>State</span><b class="pos">Posted · undoable for 24h</b></div>
+<div class="k">Evidence</div>
+<div class="ev">PAID ₹480 TO CHAAYOS VIA UPI<br>08 NOV 18:12 · UPI REF 4471…<br><span class="sub">from a photo you sent · note “chai with team”</span></div>
+<div class="k">Balanced entries</div>
+<div class="legs"><div class="leg"><span>SBI Savings</span><span class="neg">−₹480</span></div><div class="leg"><span>Expense · Food</span><span>+₹480</span></div></div>
+<div style="display:flex;gap:8px;margin-top:auto"><span class="btn ask" style="flex:1;justify-content:center">Ask about this</span><span class="btn">Undo</span><span class="btn">Edit</span></div>
+</aside>
+</div></div>
+</section></div><script src="shell.js"></script></body></html>
