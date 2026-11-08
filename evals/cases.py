@@ -402,6 +402,12 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             {"check": "preference", "contains": "mom"},
         ),
         _case(
+            "wr_preference_fact",
+            "writes",
+            ["Remember that Mira is my flatmate."],
+            {"check": "preference", "contains": "flatmate"},
+        ),
+        _case(
             "wr_floor",
             "writes",
             ["Set my floor to ₹30,000."],

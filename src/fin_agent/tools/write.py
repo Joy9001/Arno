@@ -1171,7 +1171,12 @@ async def preference(
     text: str | None,
     preference_id: str | None,
     message_id: str | None,
+    kind: str | None = None,
 ) -> dict[str, Any]:
+    # None means "not given": remember defaults to preference and keeps an existing memory's kind;
+    # classify must name the kind it sets.
+    if kind is not None and kind not in {"preference", "fact", "rule"}:
+        raise ToolInputError("kind must be preference, fact or rule")
     if action == "remember":
         if not text or not text.strip():
             raise ToolInputError("what should I remember?")
@@ -1185,21 +1190,45 @@ async def preference(
             text,
         )
         if existing:
+            if kind is not None and existing["kind"] != kind:
+                async with write_group(conn, actor="agent", message_id=message_id) as group:
+                    after = await conn.fetchrow(
+                        "UPDATE preferences SET kind = $1, updated_at = now() "
+                        "WHERE id = $2 RETURNING *",
+                        kind,
+                        existing["id"],
+                    )
+                    group.record_updated("preferences", existing["id"], existing, after)
+                return {
+                    "status": "remembered",
+                    "id": existing["id"],
+                    "undo_id": group.group_id,
+                    "text": existing["body"],
+                    "kind": after["kind"],
+                    "card": _card(
+                        "preference",
+                        title="Reclassified",
+                        text=existing["body"],
+                        undo_id=group.group_id,
+                    ),
+                }
             return {
                 "status": "remembered",
                 "id": existing["id"],
                 "undo_id": None,
                 "text": existing["body"],
+                "kind": existing["kind"],
                 "card": _card("preference", title="Remembered", text=existing["body"]),
             }
         async with write_group(conn, actor="agent", message_id=message_id) as group:
             row = await conn.fetchrow(
                 """
-                INSERT INTO preferences (body, created_by, source_message_id)
-                VALUES ($1, 'agent', $2) RETURNING *
+                INSERT INTO preferences (body, created_by, source_message_id, kind)
+                VALUES ($1, 'agent', $2, $3) RETURNING *
                 """,
                 text,
                 message_id,
+                kind or "preference",
             )
             group.record_created("preferences", row)
         return {
@@ -1207,6 +1236,7 @@ async def preference(
             "id": row["id"],
             "undo_id": group.group_id,
             "text": row["body"],
+            "kind": row["kind"],
             "card": _card(
                 "preference",
                 title="Remembered",
@@ -1249,6 +1279,7 @@ async def preference(
             "id": row["id"],
             "undo_id": group.group_id,
             "text": row["body"],
+            "kind": row["kind"],
             "card": _card(
                 "preference",
                 title="Forgotten",
@@ -1257,7 +1288,36 @@ async def preference(
             ),
         }
 
-    raise ToolInputError("action is remember or forget")
+    if action == "classify":
+        if not preference_id or kind is None:
+            raise ToolInputError("classify needs the memory id and its new kind")
+        row = await conn.fetchrow(
+            "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
+        )
+        if row is None:
+            raise ToolInputError("No memory matched that ID")
+        async with write_group(conn, actor="agent", message_id=message_id) as group:
+            after = await conn.fetchrow(
+                "UPDATE preferences SET kind = $1, updated_at = now() WHERE id = $2 RETURNING *",
+                kind,
+                preference_id,
+            )
+            group.record_updated("preferences", preference_id, row, after)
+        return {
+            "status": "classified",
+            "id": preference_id,
+            "kind": after["kind"],
+            "text": row["body"],
+            "undo_id": group.group_id,
+            "card": _card(
+                "preference",
+                title="Reclassified",
+                text=row["body"],
+                undo_id=group.group_id,
+            ),
+        }
+
+    raise ToolInputError("action is remember, forget or classify")
 
 
 async def undo(

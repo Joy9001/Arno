@@ -644,14 +644,18 @@ async def schedule_payment(
 
 async def preference(
     ctx: RunContext[AgentDeps],
-    action: Literal["remember", "forget"],
+    action: Literal["remember", "forget", "classify"],
     text: str | None = None,
     id: str | None = None,
+    kind: Literal["preference", "fact", "rule"] | None = None,
 ) -> ToolReturn:
-    """Remember a lasting fact or rule about the user, or forget one. Call it unprompted when you
-    notice one, such as "Mom's monthly transfer isn't discretionary." Never store a number the
-    ledger owns."""
-    await _gate(ctx, f"{action} preference: {text or id}")
+    """Remember a lasting preference, fact, or rule about the user, forget one, or reclassify one.
+    A preference is how the user wants you to behave or talk, such as "Use Hinglish when I do." A
+    fact is true about the user's world, such as "Mira is my flatmate." A rule is how the user
+    wants their money data treated, such as "Family transfers are essential expenses." Call it
+    unprompted when you notice one, and choose the kind. Use classify with the memory id and the
+    new kind to change an existing memory's kind. Never store a number the ledger owns."""
+    await _gate(ctx, f"{action} {kind or 'memory'}: {text or id}")
     payload = await _call_write(
         lambda conn: write_tools.preference(
             conn,
@@ -659,6 +663,7 @@ async def preference(
             text=text,
             preference_id=id,
             message_id=ctx.deps.message_id,
+            kind=kind,
         )
     )
     return _write_return(payload)

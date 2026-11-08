@@ -10,7 +10,7 @@ import json
 import os
 import uuid
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
@@ -45,6 +45,10 @@ class ThreadRename(ApiModel):
 
 class PreferenceUpdate(ApiModel):
     active: bool
+
+
+class PreferenceKindUpdate(ApiModel):
+    kind: Literal["preference", "fact", "rule"]
 
 
 def _approval_submission(messages: list[dict[str, Any]]) -> bool:
@@ -658,6 +662,34 @@ async def patch_preference(
             json.dumps(after, default=str),
         )
     return dict(after)
+
+
+@router.patch("/preferences/{preference_id}/kind")
+async def patch_preference_kind(
+    conn: Database, preference_id: str, body: PreferenceKindUpdate
+) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="That preference does not exist.")
+    async with conn.transaction():
+        after = await conn.fetchrow(
+            "UPDATE preferences SET kind = $1, updated_at = now() WHERE id = $2 RETURNING *",
+            body.kind,
+            preference_id,
+        )
+        audit = await conn.fetchrow(
+            """
+            INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
+            VALUES ('user', pgledger_generate_id('und'), 'preferences', $1, $2, $3)
+            RETURNING group_id
+            """,
+            preference_id,
+            json.dumps(row, default=str),
+            json.dumps(after, default=str),
+        )
+    return {**dict(after), "undo_id": audit["group_id"]}
 
 
 @router.delete("/preferences/{preference_id}")

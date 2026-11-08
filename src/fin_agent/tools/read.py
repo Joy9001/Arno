@@ -264,10 +264,10 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         )
 
     preferences = [
-        {"id": row["id"], "text": row["body"]}
+        {"id": row["id"], "text": row["body"], "kind": row["kind"]}
         for row in await conn.fetch(
             """
-            SELECT id, body FROM preferences
+            SELECT id, body, kind FROM preferences
             WHERE active AND deleted_at IS NULL
             ORDER BY created_at
             """
@@ -715,7 +715,7 @@ async def run_query(sql: str, *, deadline_seconds: float = 2.0) -> dict[str, Any
 async def active_preferences(conn: Connection) -> list[dict[str, Any]]:
     return await conn.fetch(
         """
-        SELECT id, body, created_by, active, created_at, updated_at
+        SELECT id, body, kind, created_by, active, created_at, updated_at
         FROM preferences WHERE deleted_at IS NULL ORDER BY created_at
         """
     )

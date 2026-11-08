@@ -55,6 +55,7 @@ export type ThreadBody = {
 export type Preference = {
   id: string;
   body: string;
+  kind: "preference" | "fact" | "rule";
   created_by: "agent" | "user";
   active: boolean;
   created_at: string;

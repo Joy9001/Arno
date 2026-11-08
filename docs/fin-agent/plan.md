@@ -90,7 +90,7 @@ The following table sets what the agent knows, by area:
 | People | Splits, lending, borrowing, reimbursements—what each person owes is a ledger balance |
 | Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
 | Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants. A correction about a payee or UPI ID ("ramesh@okaxis is my landlord") applies to that payee's past and future transactions |
-| Memory | Agent-managed typed preferences. The agent saves lasting facts on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
+| Memory | Agent-managed typed memories: each one is a preference (how the agent behaves), a fact (the user's world), or a rule (how their money data is treated). The agent saves lasting ones on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
 | Conversations | Threads you can see, reopen, or start at any time, kept and searchable. Every ledger write links to the message that caused it |
 
 ### How data gets in

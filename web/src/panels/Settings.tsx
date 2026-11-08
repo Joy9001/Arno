@@ -9,6 +9,7 @@ import {
   Brain,
   CalendarClock,
   ChevronLeft,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -2025,7 +2026,7 @@ function MemorySection({ preferences }: { preferences: ApiState<PreferenceList> 
     <SettingsSection
       id="memory"
       title="Agent memory"
-      description="Saved preferences injected into answers on this instance. Turning one off keeps it listed and reversible."
+      description="Saved preferences, facts, and rules injected into answers on this instance. Turning one off keeps it listed and reversible."
     >
       <Loadable
         state={preferences}
@@ -2041,6 +2042,7 @@ function MemorySection({ preferences }: { preferences: ApiState<PreferenceList> 
 function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () => void }) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<"all" | "agent" | "user">("all");
+  const [kind, setKindFilter] = useState<"all" | Preference["kind"]>("all");
   const [page, setPage] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
@@ -2049,8 +2051,27 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
   const needle = query.trim().toLowerCase();
   const filtered = data.preferences.filter((item) => {
     if (source !== "all" && item.created_by !== source) return false;
+    if (kind !== "all" && item.kind !== kind) return false;
     return !needle || item.body.toLowerCase().includes(needle);
   });
+  const kindFilters: Array<{ value: "all" | Preference["kind"]; label: string; count: number }> = [
+    { value: "all", label: "All", count: data.preferences.length },
+    {
+      value: "preference",
+      label: "Preferences",
+      count: data.preferences.filter((item) => item.kind === "preference").length,
+    },
+    {
+      value: "fact",
+      label: "Facts",
+      count: data.preferences.filter((item) => item.kind === "fact").length,
+    },
+    {
+      value: "rule",
+      label: "Rules",
+      count: data.preferences.filter((item) => item.kind === "rule").length,
+    },
+  ];
   const pageCount = Math.max(1, Math.ceil(filtered.length / MEMORY_PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);
   const visible = filtered.slice(
@@ -2065,6 +2086,22 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
       await api(`/api/preferences/${item.id}`, {
         method: "PATCH",
         body: JSON.stringify({ active: !item.active }),
+      });
+      onChanged();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function changeKind(item: Preference, next: Preference["kind"]) {
+    setBusyId(item.id);
+    setError(null);
+    try {
+      await api(`/api/preferences/${item.id}/kind`, {
+        method: "PATCH",
+        body: JSON.stringify({ kind: next }),
       });
       onChanged();
     } catch (caught) {
@@ -2116,12 +2153,33 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
         <Orb size={56} />
         <div>
           <h3>What I remember about you</h3>
-          <p>{data.preferences.length} saved {data.preferences.length === 1 ? "preference" : "preferences"}. Review what shapes the agent’s answers.</p>
+          <p>{data.preferences.length} saved {data.preferences.length === 1 ? "memory" : "memories"}. Review what shapes the agent’s answers.</p>
         </div>
       </div>
       <p className="stg-hint">
-        Turning a preference off is reversible. Deleting it for good blanks the text in the audit log and cannot be undone.
+        Turning a memory off is reversible. Deleting it for good blanks the text in the audit log and cannot be undone.
       </p>
+
+      {data.preferences.length > 0 && (
+        <div className="memory-filter subtabs" role="radiogroup" aria-label="Filter by kind">
+          {kindFilters.map((filter) => (
+            <button
+              key={filter.value}
+              type="button"
+              role="radio"
+              className="subtab"
+              aria-checked={kind === filter.value}
+              data-state={kind === filter.value ? "active" : undefined}
+              onClick={() => {
+                setKindFilter(filter.value);
+                setPage(0);
+              }}
+            >
+              {filter.label} {filter.count}
+            </button>
+          ))}
+        </div>
+      )}
 
       {data.preferences.length > 0 && (
         <div className="stg-filter">
@@ -2167,7 +2225,22 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
           <div className="stg-list">
             {visible.map((item) => (
               <div className={item.active ? "stg-list-row memory-row" : "stg-list-row memory-row off"} key={item.id}>
-                <span className="memory-type">Preference</span>
+                <span className="memory-type-wrap">
+                  <select
+                    className="memory-type"
+                    aria-label={"Kind of memory: " + item.body}
+                    value={item.kind}
+                    disabled={busyId === item.id}
+                    onChange={(event) =>
+                      void changeKind(item, event.target.value as Preference["kind"])
+                    }
+                  >
+                    <option value="preference">Preference</option>
+                    <option value="fact">Fact</option>
+                    <option value="rule">Rule</option>
+                  </select>
+                  <ChevronDown size={12} strokeWidth={2.4} aria-hidden="true" />
+                </span>
                 <div className="stg-list-body">
                   {editing?.id === item.id ? (
                     <>
@@ -2215,7 +2288,7 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
                     <p className="stg-memory-body">{item.body || "(deleted)"}</p>
                   )}
                   <p className="stg-list-meta">
-                    Saved preference · This instance ·{" "}
+                    Saved {item.kind} · This instance ·{" "}
                     {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
                     {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
                   </p>

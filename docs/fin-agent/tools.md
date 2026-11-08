@@ -63,7 +63,7 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
   "upcoming": [{"date", "name", "kind", "amount": Money}],
   "goals": [{"name", "target": Money, "saved": Money, "deadline", "priority"}],
   "owed": [{"person", "amount": Money, "expected_date"}],  # positive: they owe you
-  "preferences": [{"id", "text"}],                         # active ones only
+  "preferences": [{"id", "text", "kind"}],                 # active ones only
   "setup_gaps": ["no income schedule"],
   "warnings": ["SBI balance is 23 days old"]
 }
@@ -715,26 +715,35 @@ The plain service, REST API, and agent wrapper share validation and audit behavi
 
 **Tier:** lasting.
 
-**Description:** "Remember a lasting fact or rule about the user, or forget one. Call it unprompted
-when you notice one, such as 'Mom's monthly transfer isn't discretionary.' Never store a number the
-ledger owns."
+**Description:** "Remember a lasting preference, fact, or rule about the user, forget one, or
+reclassify one. A preference is how the user wants you to behave or talk, such as 'Use Hinglish when
+I do.' A fact is true about the user's world, such as 'Mira is my flatmate.' A rule is how the user
+wants their money data treated, such as 'Family transfers are essential expenses.' Call it
+unprompted when you notice one, and choose the kind. Use classify with the memory id and the new
+kind to change an existing memory's kind. Never store a number the ledger owns."
 
-**Input:** `preference(action: Literal["remember", "forget"], text: str | None = None, id: str |
-None = None)`
+**Input:** `preference(action: Literal["remember", "forget", "classify"], text: str | None = None,
+id: str | None = None, kind: Literal["preference", "fact", "rule"] | None = None)`. A new memory
+without a kind is a preference; remembering existing text without a kind keeps its kind; `classify`
+requires both `id` and `kind`.
 
-**Output:** `{"status": "remembered" | "forgotten", "id", "undo_id", "text"}`. UI: "Remembered" card
-with undo, or the confirm card first.
+**Output:** `{"status": "remembered" | "forgotten" | "classified", "id", "undo_id", "text",
+"kind"}`. UI: "Remembered" card with undo, or the confirm card first.
 
 **Logic**
 
 ```
-gate(the exact text)                  # both actions: forgetting a rule lasts too
+gate(the action and kind)              # all actions: forgetting or reclassifying a rule lasts too
 remember:
-    same text already active: return it
-    insert(created_by = agent, source_message_id, active = true)
+    same text already active, same kind: return it
+    same text, different kind: update kind in a write group, return its undo
+    insert(created_by = agent, source_message_id, active = true, kind)
 forget:
     find by id, else ModelRetry listing active preferences
     set active = false                # stays listed in Settings, and can be turned back on
+classify:
+    find by id, else ModelRetry
+    set kind and updated_at = now()   # undo restores the old kind
 ```
 
 **Delete is not in this tool.** Settings can delete a preference for good, with a confirm. That also

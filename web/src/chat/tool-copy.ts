@@ -81,9 +81,9 @@ export const TOOL_COPY: Record<string, ToolCopy> = {
     done: "Updated the payment match.",
   },
   preference: {
-    label: "Saving a preference",
-    running: "Saving the preference…",
-    done: "Saved the preference.",
+    label: "Updating agent memory",
+    running: "Updating the memory…",
+    done: "Updated the memory.",
   },
   import_document: {
     label: "Starting a statement import",
