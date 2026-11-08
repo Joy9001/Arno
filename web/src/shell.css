@@ -170,8 +170,25 @@ h3 {
   visibility: hidden;
 }
 
+/* On Ask the head floats over the thread, so the orb's glow runs to the top edge unclipped. */
+.talk[data-mode="ask"] .chat-main-col {
+  position: relative;
+}
+
 .talk[data-mode="ask"] .assistant-head {
+  position: absolute;
+  z-index: 2;
+  inset: 0 0 auto;
   border-bottom-color: transparent;
+  pointer-events: none;
+}
+
+.talk[data-mode="ask"] .assistant-head > * {
+  pointer-events: auto;
+}
+
+.talk[data-mode="ask"] .aui-thread-viewport {
+  padding-top: 69px;
 }
 
 .canvas {

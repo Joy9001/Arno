@@ -198,7 +198,7 @@
 }
 
 .aui-chat .aui-thread-root {
-  background: var(--bg);
+  background: transparent;
   color: var(--foreground);
 }
 
