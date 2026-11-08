@@ -124,7 +124,8 @@ def _plain_errors(chunk: str) -> str:
     except json.JSONDecodeError:
         return chunk
     if isinstance(payload, dict) and payload.get("type") == "error":
-        logger.warning("chat stream error")
+        # The browser gets plain words; the log keeps the real error for diagnosis.
+        logger.warning("chat stream error: %s", str(payload.get("errorText", ""))[:2000])
         payload["errorText"] = "The model failed. Nothing was lost; try again."
         return _event_chunk(payload)
     return chunk

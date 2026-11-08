@@ -110,25 +110,25 @@ ceiling ends the run with a report. You and the main agent decide what happens n
 
 ### The import card
 
-A subagent in the background says nothing in the chat, so the card shows the work. It reads from
-the database, because once the chat turn has ended there is no stream to carry events. It is built
-from assistant-ui elements in their standalone, props-only mode:
+The card follows assistant-ui's [multi-agent pattern](https://www.assistant-ui.com/docs/tools/multi-agent):
+a subagent's conversation belongs on the delegation tool call as nested `messages`, and the bound
+[Task card](https://www.assistant-ui.com/elements/task-card) renders it as one card with a state
+icon, a label, elapsed time, the transcript on demand, and the result below. So the main agent's
+background `delegate_task` call *is* the card: a toolkit renderer for `delegate_task` reads the
+task id from the harness's acceptance receipt and places the bound card itself ("Place a card
+yourself" in the docs).
 
-| What the card shows | Element |
-|---|---|
-| The task: state, time, result, transcript | Task card |
-| The subagent's plan, from `PostgresPlanStore` | Agent plan |
-| One live line, such as "reading page 12 of 74" | Agent status |
-| Each file in a multi-file upload | Job progress |
-| A question passed to you, such as which account | Option list |
+The AI SDK runtime never fills a tool call's `messages`, and once the chat turn has ended there is
+no stream to carry the subagent's events, so the card polls `GET /api/tasks/{id}` every two
+seconds while the task runs. That returns the task's state, the files and their statuses, the
+pending question, and the subagent's transcript built from its live history. The parser's plan
+shows inside the transcript: its `write_plan` calls render as the Agent plan element.
 
-The five come from the assistant-ui registry (`@assistant-ui/elements-task-card` and so on) and
-live in `web/src/components/assistant-ui/elements/`. The card finds its task from the harness's
-acceptance receipt for a background `parser` task and polls `GET /api/tasks/{id}` while it runs.
-Job progress has no slot for a per-file status, so each file's status is part of its stage name.
-A "which account" question is answered on the card by picking one of your accounts, and the server
-writes the answer from that account; any other question shows as plain text and is answered in
-chat.
+Two small props on our copy of the bound card carry what it has no slot for. `actions`, under the
+header, holds what the task waits on: the password field for a locked file, or your accounts to
+pick for "which account" (the server writes the answer from that account). Any other question
+shows as plain text and is answered in chat. `result` lists each file with its status and an
+"Open review" link. A run that stops before its files settle says so and asks you to continue.
 
 ### Parser versions
 

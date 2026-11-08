@@ -16,6 +16,9 @@ from fin_agent.agent.models import backup_model, primary_model
 from fin_agent.agent.toolset import build_read_toolset, build_write_toolset
 from fin_agent.db.conn import connect
 
+# How long a delegation may hold the chat turn before it continues in the background.
+AUTO_BACKGROUND_SECONDS = 15.0
+
 READ_ONLY_SUFFIX = """
 
 Scheduled question
@@ -123,7 +126,9 @@ def build_agent(
             ],
             forward_usage=False,
             contain_errors=True,
-            task_control=TaskControl(),
+            # A parse never holds a chat turn: a delegation the model didn't background (a resume,
+            # say) becomes a background task once it has run this long.
+            task_control=TaskControl(auto_background_after=AUTO_BACKGROUND_SECONDS),
         )
 
     return Agent(

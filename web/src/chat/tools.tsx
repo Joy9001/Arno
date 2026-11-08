@@ -4,8 +4,11 @@ import {
   type ToolCallMessagePartComponent,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
+import { AgentPlan } from "@/components/assistant-ui/elements/agent-plan.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
 import { ChatToolFallback } from "./parts";
+import { DelegateTaskCard } from "./delegate-task-card";
+import { displayText } from "./display-text";
 
 type ToolCopy = {
   label: string;
@@ -145,6 +148,36 @@ function knownTool(name: string): ToolCallMessagePartComponent {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** A plan is the call's own full list: the first step not done is the one in progress. */
+const WritePlan: ToolCallMessagePartComponent = (props) => {
+  if (needsFallback(props)) return <ChatToolFallback {...props} />;
+  const args = isRecord(props.args) ? props.args : {};
+  const items = (Array.isArray(args.items) ? args.items : [])
+    .filter(isRecord)
+    .filter((item) => typeof item.content === "string" && item.content.trim() !== "");
+  if (items.length === 0) return <ChatToolFallback {...props} />;
+  const steps = items.map((item, index) => ({
+    id: typeof item.id === "string" ? item.id : String(index),
+    label: displayText(item.content as string),
+    description:
+      typeof item.active_form === "string" && item.active_form.trim() !== ""
+        ? displayText(item.active_form)
+        : undefined,
+  }));
+  const open = items.findIndex((item) => item.status !== "completed");
+  return (
+    <AgentPlan
+      title={typeof args.title === "string" ? args.title : undefined}
+      steps={steps}
+      activeIndex={open === -1 ? steps.length : open}
+    />
+  );
+};
+
 /** Module-scope backend entries: renderers only, no client execution and no new approvals. */
 export const CHAT_TOOLKIT = defineToolkit({
   run_code: { type: "backend", render: knownTool("run_code") },
@@ -164,4 +197,6 @@ export const CHAT_TOOLKIT = defineToolkit({
   preference: { type: "backend", render: knownTool("preference") },
   import_document: { type: "backend", render: knownTool("import_document") },
   undo: { type: "backend", render: knownTool("undo") },
+  delegate_task: { type: "backend", render: DelegateTaskCard },
+  write_plan: { type: "backend", render: WritePlan },
 });

@@ -22,11 +22,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.step_persistence import PostgresStepStore
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks, SubAgents
 
-from fin_agent.agent.builder import build_agent
+from fin_agent.agent.builder import AUTO_BACKGROUND_SECONDS, build_agent
 from fin_agent.agent.capabilities import MODEL_SETTINGS
-from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
+from fin_agent.api.tasks import task_payload
 from fin_agent.importers.commit import commit_import
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.pipeline import create_import, import_payload
@@ -772,9 +772,13 @@ async def test_a_report_with_parser_text_flags_the_conversation(ledger):
     assert await _flagged(ledger, "conv_flag_report")
 
 
-async def test_a_background_parser_receipt_becomes_an_import_task_card(ledger, tmp_path):
-    del ledger
-    parser = build_parser_agent(model=_streaming(_output(ParseReport(status="ready"))))
+async def test_the_task_api_serves_the_parser_transcript(ledger, tmp_path):
+    parser = build_parser_agent(
+        model=_streaming(
+            ModelResponse(parts=[TextPart("Reading the statement.")]),
+            _output(ParseReport(status="ready")),
+        )
+    )
     parent = build_agent(
         model=_sequence(
             ModelResponse(
@@ -796,24 +800,31 @@ async def test_a_background_parser_receipt_becomes_an_import_task_card(ledger, t
     owner = DelegationTasks(directory=tmp_path)
     async with owner.opened():
         with owner.bind():
-            result = await parent.run(
+            await parent.run(
                 "Import it.",
                 deps=AgentDeps(conversation_id="conv_card"),
                 conversation_id="conv_card",
             )
         task_id = next(iter(owner.records))
-        cards = cards_from_messages(result.all_messages())
-        rebuilt = cards_for_transcript(result.all_messages())
+        for _ in range(200):
+            if owner.records[task_id].status == "finished":
+                break
+            await asyncio.sleep(0.05)
+        payload = await task_payload(ledger, owner, task_id)
 
-    found = [
-        card
-        for card in cards
-        if isinstance(card.data, dict) and card.data.get("card") == "import-task"
-    ]
-    assert [card.data["task_id"] for card in found] == [task_id]
-    assert any(
-        isinstance(card.data, dict) and card.data.get("task_id") == task_id for card in rebuilt
-    )
+    messages = payload["messages"]
+    assert messages[0]["role"] == "user"
+    assert messages[0]["content"] == [{"type": "text", "text": "Import attachment att_x"}]
+    assert messages[1]["role"] == "assistant"
+    assert messages[1]["status"] == {"type": "complete", "reason": "stop"}
+    assert messages[1]["content"] == [{"type": "text", "text": "Reading the statement."}]
+    parts = [part for message in messages for part in message["content"]]
+    assert all(part["type"] != "thinking" for part in parts)
+    [call] = [part for part in parts if part["type"] == "tool-call"]
+    assert call["toolName"] == "final_result"
+    assert call["args"]["status"] == "ready"
+    assert call["result"]
+    assert json.loads(call["argsText"]) == call["args"]
 
 
 async def _flagged(conn, thread_id: str) -> bool:
@@ -960,3 +971,7 @@ def test_the_parser_catches_a_stall_and_its_subagent_has_no_timeout():
     # Usage limits still bound how many requests the parser makes; wall-clock time does not.
     parser_delegate = next(item for item in subagents.agents if item.resolved_name == "parser")
     assert parser_delegate.timeout_seconds is None
+    # A parse never holds a chat turn: an unbackgrounded delegation (a resume, say) goes to the
+    # background once it has run this long.
+    assert subagents.task_control is not None
+    assert subagents.task_control.auto_background_after == AUTO_BACKGROUND_SECONDS

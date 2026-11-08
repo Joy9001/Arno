@@ -7,7 +7,6 @@ when the turn is saved so the card survives a reload.
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolCallPart, ToolReturnPart
@@ -15,15 +14,6 @@ from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
 RUN_CODE_TOOL_NAME = "run_code"
-DELEGATE_TOOL_NAME = "delegate_task"
-PARSER_AGENT_NAME = "parser"
-
-# The harness's own acceptance receipt for a background child. Only a running parser task makes
-# an import card; a foreground result or a stopped task is not one.
-TASK_RECEIPT = re.compile(
-    r"^Task ([0-9a-f]{32}) is running in the background\. "
-    r"This is an acceptance receipt, not a result\."
-)
 
 
 def _as_data_chunk(item: Any) -> DataChunk | None:
@@ -162,34 +152,8 @@ def nested_cards(part: ToolReturnPart, *, script: str | None = None) -> list[Dat
     return _link_answer_charts(cards)
 
 
-def _delegate_agents(messages: list[ModelMessage]) -> dict[str, str]:
-    """The agent name of each `delegate_task` call, keyed by the call's id."""
-    agents: dict[str, str] = {}
-    for message in messages:
-        for part in getattr(message, "parts", []):
-            if not isinstance(part, ToolCallPart) or part.tool_name != DELEGATE_TOOL_NAME:
-                continue
-            agent_name = part.args_as_dict().get("agent_name")
-            if isinstance(agent_name, str):
-                agents[part.tool_call_id] = agent_name
-    return agents
-
-
-def _import_task_card(part: ToolReturnPart, agents: dict[str, str]) -> DataChunk | None:
-    """The card that follows a background `delegate_task` for the parser."""
-    if part.tool_name != DELEGATE_TOOL_NAME or agents.get(part.tool_call_id) != PARSER_AGENT_NAME:
-        return None
-    if not isinstance(part.content, str):
-        return None
-    match = TASK_RECEIPT.match(part.content)
-    if match is None:
-        return None
-    return DataChunk(type="data-card", data={"card": "import-task", "task_id": match.group(1)})
-
-
 def _cards_from_messages(messages: list[ModelMessage], scripts: dict[str, str]) -> list[DataChunk]:
     cards: list[DataChunk] = []
-    agents = _delegate_agents(messages)
     for message in messages:
         if not isinstance(message, ModelRequest):
             continue
@@ -198,10 +162,6 @@ def _cards_from_messages(messages: list[ModelMessage], scripts: dict[str, str]) 
                 continue
             if part.tool_name == RUN_CODE_TOOL_NAME:
                 cards.extend(nested_cards(part, script=scripts.get(part.tool_call_id)))
-                continue
-            card = _import_task_card(part, agents)
-            if card is not None:
-                cards.append(card)
     return _link_answer_charts(cards)
 
 

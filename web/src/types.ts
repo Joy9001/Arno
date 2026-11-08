@@ -445,6 +445,25 @@ export type ImportTaskImport = {
   counts: ImportCounts | null;
 };
 
+export type ImportTaskMessagePart =
+  | { type: "text"; text: string }
+  | {
+      type: "tool-call";
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, unknown>;
+      argsText: string;
+      result?: unknown;
+    };
+
+/** The parser's own conversation, as the task API serves it back. */
+export type ImportTaskMessage = {
+  id: string;
+  role: "user" | "assistant";
+  createdAt: string;
+  content: ImportTaskMessagePart[];
+};
+
 export type ImportTask = {
   task_id: string;
   agent_name: string;
@@ -456,6 +475,7 @@ export type ImportTask = {
   question: { question_id: string | null; text: string } | null;
   plan: ImportTaskPlanItem[];
   imports: ImportTaskImport[];
+  messages: ImportTaskMessage[];
 };
 
 export type ParserVersion = {

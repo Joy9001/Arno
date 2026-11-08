@@ -1,187 +1,242 @@
 "use client";
 
-import { Children, type ComponentProps, type ReactNode, useState } from "react";
 import {
-  Ban,
-  CheckIcon,
-  ChevronRightIcon,
-  Loader2Icon,
-  XIcon,
-} from "lucide-react";
+  MessagePrimitive,
+  ReadonlyThreadProvider,
+  ThreadPrimitive,
+  useAui,
+  useAuiState,
+  type ThreadMessage,
+  type ToolCallMessagePart,
+  type ToolCallMessagePartComponent,
+  type ToolCallMessagePartProps,
+  type ToolCallMessagePartStatus,
+} from "@assistant-ui/react";
+import { type FC, type ReactNode, useState } from "react";
+import { MarkdownText } from "@/components/markdown-text";
+import {
+  formatUnknownValue,
+  offersInterruptAction,
+  ToolFallback,
+  ToolFallbackApproval,
+  ToolFallbackError,
+} from "@/components/tool-fallback.aui";
 import { cn } from "@/lib/utils";
-import { mono, paper } from "@/components/surfaces";
+import { mono } from "@/components/surfaces";
+import { TaskCard as TaskCardBase } from "./task-card";
+import {
+  formatElapsed,
+  TASK_PAGE_SIZE,
+  taskLabel,
+  taskMeta,
+  taskStateOf,
+  useTaskElapsed,
+} from "../utils/task";
 
-export type TaskCardState =
-  | "working"
-  | "waiting"
-  | "done"
-  | "failed"
-  | "cancelled";
+export type { TaskCardState } from "./task-card";
+export { TASK_PAGE_SIZE } from "../utils/task";
 
-const isRenderable = (node: ReactNode) =>
-  node !== undefined && node !== null && node !== false && node !== true;
+export type TaskPart = ToolCallMessagePart & {
+  readonly status: ToolCallMessagePartStatus;
+} & Partial<
+    Pick<ToolCallMessagePartProps, "addResult" | "resume" | "respondToApproval">
+  >;
 
-export function TaskStateIcon({
-  state,
-  className,
-}: {
-  state: TaskCardState;
-  className?: string;
-}) {
-  if (state === "done") {
-    return (
-      <CheckIcon
-        aria-hidden
-        className={cn("size-3.5 shrink-0 text-emerald-500", className)}
-      />
-    );
-  }
-  if (state === "failed") {
-    return (
-      <XIcon
-        aria-hidden
-        className={cn("text-destructive size-3.5 shrink-0", className)}
-      />
-    );
-  }
-  if (state === "cancelled") {
-    return (
-      <Ban
-        aria-hidden
-        className={cn("text-muted-foreground size-3.5 shrink-0", className)}
-      />
-    );
-  }
-  if (state === "working") {
-    return (
-      <Loader2Icon
-        aria-hidden
-        className={cn(
-          "text-muted-foreground size-3.5 shrink-0 animate-spin motion-reduce:animate-none",
-          className,
-        )}
-      />
-    );
-  }
+export const isTaskPart = (part: {
+  readonly type: string;
+  readonly messages?: unknown;
+}) => part.type === "tool-call" && part.messages !== undefined;
+
+const KEY_SEPARATOR = String.fromCharCode(31);
+
+const ROLE_LABELS = {
+  user: "instruction",
+  assistant: "agent",
+  system: "system",
+} as const;
+
+const NestedToolCall: ToolCallMessagePartComponent = (part) =>
+  isTaskPart(part) ? <TaskCard part={part} /> : <ToolFallback {...part} />;
+
+const NestedMessage: FC = () => {
+  const role = useAuiState((s) => s.message.role);
+
   return (
-    <span
-      aria-hidden
-      className={cn(
-        "border-foreground/35 m-1 size-1.5 shrink-0 rounded-full border",
-        className,
-      )}
+    <MessagePrimitive.Root
+      data-slot="aui_task-transcript-message"
+      data-role={role}
+      className="flex flex-col gap-1 text-xs leading-relaxed"
+    >
+      <span className={cn(mono, "text-muted-foreground")}>
+        {ROLE_LABELS[role]}
+      </span>
+      <MessagePrimitive.Parts
+        components={{ Text: MarkdownText, tools: { Fallback: NestedToolCall } }}
+      />
+    </MessagePrimitive.Root>
+  );
+};
+
+const TaskTranscript: FC<{ messages: readonly ThreadMessage[] }> = ({
+  messages,
+}) => (
+  <ReadonlyThreadProvider messages={messages}>
+    <ThreadPrimitive.Messages>
+      {() => <NestedMessage />}
+    </ThreadPrimitive.Messages>
+  </ReadonlyThreadProvider>
+);
+
+const TaskResult: FC<{ result: unknown }> = ({ result }) =>
+  typeof result === "string" ? (
+    <p className="m-0 whitespace-pre-wrap">{result}</p>
+  ) : (
+    <pre className="m-0 overflow-x-auto whitespace-pre-wrap">
+      {formatUnknownValue(result, 2)}
+    </pre>
+  );
+
+export const TaskCard: FC<{
+  part: TaskPart;
+  className?: string;
+  /** A host-rendered result for a card whose result is not plain tool output. */
+  result?: ReactNode;
+  /** Host-rendered controls for a wait that is not a tool approval or interrupt. */
+  actions?: ReactNode;
+}> = ({ part, className, result: hostResult, actions: hostActions }) => {
+  const elapsedMs = useTaskElapsed(
+    part.timing,
+    part.status.type === "running" || part.status.type === "requires-action",
+  );
+  const canAnswer = useAuiState((s) => s.thread.capabilities.answerToolCall);
+  const messages = part.messages ?? [];
+  const showError =
+    part.status.type === "incomplete" &&
+    part.status.error !== undefined &&
+    part.status.error !== null;
+  const result =
+    hostResult !== undefined ? (
+      hostResult
+    ) : showError || part.result !== undefined ? (
+      <>
+        {showError && <ToolFallbackError status={part.status} />}
+        {part.result !== undefined && <TaskResult result={part.result} />}
+      </>
+    ) : undefined;
+  const approvalPending =
+    part.approval == null ||
+    (part.approval.approved === undefined &&
+      part.approval.resolution === undefined);
+  const actions =
+    hostActions !== undefined
+      ? hostActions
+      : part.status.type === "requires-action" &&
+          approvalPending &&
+          offersInterruptAction(part.status, part.approval, part.interrupt) &&
+          (canAnswer || part.approval?.prompt) ? (
+          <ToolFallbackApproval
+            status={part.status}
+            {...(part.approval !== undefined && { approval: part.approval })}
+            {...(part.interrupt !== undefined && { interrupt: part.interrupt })}
+            {...(part.addResult && { addResult: part.addResult })}
+            {...(part.resume && { resume: part.resume })}
+            {...(part.respondToApproval && {
+              respondToApproval: part.respondToApproval,
+            })}
+          />
+        ) : undefined;
+
+  return (
+    <TaskCardBase
+      className={className}
+      label={taskLabel(part.toolName, part.args)}
+      meta={taskMeta(part.args)}
+      state={taskStateOf(part.status, part.isError)}
+      elapsed={elapsedMs === undefined ? undefined : formatElapsed(elapsedMs)}
+      actions={actions}
+      result={result}
+    >
+      {messages.length > 0 ? <TaskTranscript messages={messages} /> : undefined}
+    </TaskCardBase>
+  );
+};
+
+const TaskLane: FC<{ index: number }> = ({ index }) => {
+  const aui = useAui();
+  const part = useAuiState((s) => s.message.parts[index]);
+  if (part?.type !== "tool-call") return null;
+  const client = aui.message.part({ toolCallId: part.toolCallId });
+  return (
+    <TaskCard
+      part={{
+        ...part,
+        addResult: client.addToolResult,
+        resume: client.resumeToolCall,
+        respondToApproval: client.respondToToolApproval,
+      }}
     />
   );
-}
+};
 
-export function TaskCard({
-  label,
-  meta,
-  state,
-  elapsed,
-  actions,
-  result,
-  open,
-  onOpenChange,
-  children,
-  className,
-  ...props
-}: Omit<
-  ComponentProps<"div">,
-  "children" | "label" | "state" | "result" | "open" | "onOpenChange"
-> & {
-  label: string;
-  meta?: string | undefined;
-  state: TaskCardState;
-  elapsed?: string | undefined;
-  actions?: ReactNode | undefined;
-  result?: ReactNode | undefined;
-  open?: boolean | undefined;
-  onOpenChange?: ((open: boolean) => void) | undefined;
-  children?: ReactNode | undefined;
-}) {
-  const hasTranscript = Children.toArray(children).length > 0;
-  const inert = open !== undefined && onOpenChange === undefined;
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
-  const isOpen = open ?? uncontrolledOpen;
-  const toggle = () => {
-    const next = !isOpen;
-    if (open === undefined) setUncontrolledOpen(next);
-    onOpenChange?.(next);
-  };
+export const TaskGroup: FC<{
+  group: MessagePrimitive.GroupedParts.GroupPart;
+  className?: string;
+}> = ({ group, className }) => {
+  const [visible, setVisible] = useState(TASK_PAGE_SIZE);
+  const { indices, counts } = group;
+  // A selector has to return a stable value, so the lane keys travel as one string and are split afterwards.
+  const laneKeys = useAuiState((s) =>
+    indices
+      .map((index) => {
+        const part = s.message.parts[index];
+        return part?.type === "tool-call" ? part.toolCallId : String(index);
+      })
+      .join(KEY_SEPARATOR),
+  ).split(KEY_SEPARATOR);
+  const failed = useAuiState((s) =>
+    indices.reduce((count, index) => {
+      const part = s.message.parts[index];
+      return part?.type === "tool-call" &&
+        taskStateOf(part.status, part.isError) === "failed"
+        ? count + 1
+        : count;
+    }, 0),
+  );
+  if (indices.length === 1) return <TaskLane index={indices[0]!} />;
+
+  const shown = indices.slice(0, visible);
+  const hidden = indices.length - shown.length;
+  const summary = [
+    `${indices.length} tasks`,
+    counts.running > 0 && `${counts.running} running`,
+    counts.requiresAction > 0 && `${counts.requiresAction} waiting`,
+    failed > 0 && `${failed} failed`,
+  ].filter((entry): entry is string => typeof entry === "string");
 
   return (
     <div
-      data-slot="task-card"
-      data-state={state}
-      className={cn(
-        paper,
-        "flex w-full max-w-sm flex-col overflow-hidden rounded-2xl",
-        className,
-      )}
-      {...props}
+      data-slot="aui_task-group"
+      className={cn("flex w-full max-w-sm flex-col gap-2", className)}
     >
-      <button
-        type="button"
-        aria-expanded={hasTranscript ? isOpen : undefined}
-        disabled={!hasTranscript || inert}
-        onClick={toggle}
-        className="hover:enabled:bg-foreground/[0.03] flex items-center gap-2.5 px-3.5 py-2.5 text-start transition-colors disabled:cursor-default"
+      <div
+        data-slot="aui_task-group-summary"
+        className="text-muted-foreground px-1 text-xs"
       >
-        <TaskStateIcon state={state} />
-        <span className="sr-only">{state}</span>
-        <span className="min-w-0 flex-1 truncate text-[13.5px]">{label}</span>
-        {meta !== undefined && (
-          <span
-            className={cn(
-              mono,
-              "text-muted-foreground max-w-24 shrink-0 truncate",
-            )}
-          >
-            {meta}
-          </span>
-        )}
-        {elapsed !== undefined && (
-          <span
-            className={cn(mono, "text-muted-foreground shrink-0 tabular-nums")}
-          >
-            {elapsed}
-          </span>
-        )}
-        {hasTranscript && (
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "text-muted-foreground size-3 shrink-0 transition-transform duration-200 motion-reduce:transition-none",
-              isOpen && "rotate-90",
-            )}
-          />
-        )}
-      </button>
-      {isRenderable(actions) && (
-        <div
-          data-slot="task-card-actions"
-          className="border-border/60 border-t px-3.5 py-2.5"
+        {summary.join(" · ")}
+      </div>
+      {shown.map((index, position) => (
+        <TaskLane key={laneKeys[position] ?? index} index={index} />
+      ))}
+      {hidden > 0 && (
+        <button
+          type="button"
+          data-slot="aui_task-group-more"
+          onClick={() => setVisible((count) => count + TASK_PAGE_SIZE)}
+          className="text-muted-foreground hover:text-foreground w-fit px-1 text-xs transition-colors"
         >
-          {actions}
-        </div>
-      )}
-      {hasTranscript && isOpen && (
-        <div
-          data-slot="task-card-transcript"
-          className="border-border/60 flex flex-col gap-2 border-t px-3.5 py-2.5"
-        >
-          {children}
-        </div>
-      )}
-      {isRenderable(result) && (
-        <div
-          data-slot="task-card-result"
-          className="border-border/60 text-foreground/70 border-t px-3.5 py-2 text-xs leading-relaxed"
-        >
-          {result}
-        </div>
+          Show {Math.min(hidden, TASK_PAGE_SIZE)} more
+        </button>
       )}
     </div>
   );
-}
+};

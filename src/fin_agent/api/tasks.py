@@ -8,10 +8,20 @@ answer text is composed from the account row.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from fin_agent.api.deps import Database, current_session
 from fin_agent.importers.layouts import rollback_layout
@@ -19,6 +29,9 @@ from fin_agent.importers.layouts import rollback_layout
 router = APIRouter(prefix="/api", tags=["tasks"], dependencies=[Depends(current_session)])
 
 ACCOUNT_KINDS = ("bank", "card", "wallet")
+
+# A tool result can be a whole page of statement rows; the transcript is a receipt, not a dump.
+RESULT_LIMIT = 1200
 
 
 class ApiModel(BaseModel):
@@ -61,6 +74,89 @@ async def _plan(conn: Database, task_id: str) -> list[dict[str, Any]]:
         task_id,
     )
     return [dict(row) for row in rows]
+
+
+def _short(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= RESULT_LIMIT else f"{text[:RESULT_LIMIT]}…"
+
+
+def _args(part: ToolCallPart) -> dict[str, Any]:
+    try:
+        args = part.args_as_dict()
+    except TypeError, ValueError:
+        return {}
+    return args if isinstance(args, dict) else {}
+
+
+def _returns(messages: list[ModelMessage]) -> dict[str, str]:
+    returns: dict[str, str] = {}
+    for message in messages:
+        for part in getattr(message, "parts", []):
+            if isinstance(part, ToolReturnPart):
+                returns[part.tool_call_id] = _short(part.content)
+    return returns
+
+
+def _content(part: Any, returns: dict[str, str]) -> dict[str, Any] | None:
+    if isinstance(part, TextPart):
+        return {"type": "text", "text": part.content} if part.content else None
+    if not isinstance(part, ToolCallPart):
+        return None
+    args = _args(part)
+    call: dict[str, Any] = {
+        "type": "tool-call",
+        "toolCallId": part.tool_call_id,
+        "toolName": part.tool_name,
+        "args": args,
+        "argsText": json.dumps(args, ensure_ascii=False),
+    }
+    if part.tool_call_id in returns:
+        call["result"] = returns[part.tool_call_id]
+    return call
+
+
+def _transcript(record: Any, messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    """The child's conversation as assistant-ui `ThreadMessage` objects.
+
+    Thinking, system prompts, and retries stay out; a tool call carries its result from
+    the matching return so the transcript reads on its own.
+    """
+    fallback = datetime.fromtimestamp(record.started_at, tz=UTC)
+    returns = _returns(messages)
+    transcript: list[dict[str, Any]] = []
+    for message in messages:
+        created_at = (message.timestamp or fallback).isoformat()
+        if isinstance(message, ModelRequest):
+            for part in message.parts:
+                if (
+                    isinstance(part, UserPromptPart)
+                    and isinstance(part.content, str)
+                    and part.content.strip()
+                ):
+                    transcript.append(
+                        {
+                            "id": f"{record.id}:{len(transcript)}",
+                            "role": "user",
+                            "createdAt": created_at,
+                            "content": [{"type": "text", "text": part.content}],
+                        }
+                    )
+            continue
+        if not isinstance(message, ModelResponse):
+            continue
+        content = [item for part in message.parts if (item := _content(part, returns)) is not None]
+        if content:
+            transcript.append(
+                {
+                    "id": f"{record.id}:{len(transcript)}",
+                    "role": "assistant",
+                    "createdAt": created_at,
+                    "status": {"type": "complete", "reason": "stop"},
+                    "content": content,
+                }
+            )
+    return transcript
 
 
 async def _imports(conn: Database, task_id: str, *, running: bool) -> list[dict[str, Any]]:
@@ -114,6 +210,7 @@ async def task_payload(
         "question": question,
         "plan": await _plan(conn, task_id),
         "imports": await _imports(conn, task_id, running=record.status == "running"),
+        "messages": _transcript(record, tasks.history(task_id)),
     }
 
 

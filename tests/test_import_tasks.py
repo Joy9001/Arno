@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import asyncpg
 import pytest
 from fastapi import HTTPException
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai_harness.planning import PlanItem, PostgresPlanStore, TaskStatus
 from pydantic_ai_harness.subagents import DelegationTask, DelegationTasks
 
@@ -163,6 +164,27 @@ async def test_a_stopped_task_reports_no_stale_progress_and_keeps_the_import_res
         assert stopped["imports"][0]["progress"] is None
         # Still resumable: a stopped parser task never fails its imports.
         assert stopped["imports"][0]["status"] == "parsing"
+
+
+async def test_a_running_task_transcript_follows_the_child_history(ledger):
+    owner = DelegationTasks()
+    async with owner.opened():
+        task_id = "5" * 32
+        record = _record(task_id, started_at=1000.0)
+        owner.records[task_id] = record
+        record.messages = [ModelRequest(parts=[UserPromptPart("Import the statement.")])]
+
+        first = await task_payload(ledger, owner, task_id)
+        assert first["state"] == "running"
+        assert [message["role"] for message in first["messages"]] == ["user"]
+
+        record.messages = [
+            *record.messages,
+            ModelResponse(parts=[TextPart("Reading page 1.")]),
+        ]
+        second = await task_payload(ledger, owner, task_id)
+        assert [message["role"] for message in second["messages"]] == ["user", "assistant"]
+        assert second["messages"][1]["content"] == [{"type": "text", "text": "Reading page 1."}]
 
 
 async def test_task_payload_reads_the_plan_from_the_postgres_store(ledger):

@@ -21,7 +21,6 @@ import { ChartCard } from "./chart";
 import { AnswerBoundary } from "./answer-boundary";
 import { chartSchema } from "./answer-data";
 import { projectionSchema } from "./projection-schema";
-import { ImportTaskCard } from "./import-task-card";
 
 function UndoButton({ undoId }: { undoId?: string | null }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
@@ -309,7 +308,6 @@ export function Card({
   }
 
   if (card === "import") return <ImportCard data={data} />;
-  if (card === "import-task") return <ImportTaskCard taskId={String(data.task_id ?? "")} />;
 
   if (card === "preference") {
     return (
