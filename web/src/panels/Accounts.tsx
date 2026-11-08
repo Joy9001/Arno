@@ -296,7 +296,7 @@ function AccountRow({ account }: { account: Account }) {
       <div className="moneyv-actions">
         <button
           type="button"
-          className="ask-link moneyv-ask"
+          className="pill-button"
           onClick={() => setOpen(true)}
           aria-label={`Details for ${account.name}`}
         >

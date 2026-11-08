@@ -280,7 +280,7 @@ export function SchedulesPanel() {
               ) : (
                 <button
                   type="button"
-                  className="ask-link moneyv-ask"
+                  className="pill-button"
                   onClick={() => {
                     setBucket("all");
                     setPage(0);

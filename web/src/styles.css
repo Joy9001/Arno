@@ -672,21 +672,35 @@ input[type="file"]::file-selector-button:hover {
   background: rgba(118, 118, 128, 0.32);
 }
 
+/* Every Ask on a data page is a pill marked with the orb's colours. */
 .ask-link {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   min-height: 32px;
-  padding: 4px 9px;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--sub);
-  font-size: 12px;
-  font-weight: 500;
+  padding: 6px 13px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 800;
+}
+
+.ask-link svg {
+  display: none;
+}
+
+.ask-link::before {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--iris);
 }
 
 .ask-link:hover {
-  background: rgba(118, 118, 128, 0.16);
+  background: var(--surface-3);
   color: var(--text);
 }
 

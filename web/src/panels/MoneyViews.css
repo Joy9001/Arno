@@ -12,25 +12,38 @@
 
 .moneyv-summary-cell {
   min-width: 0;
-  padding: 15px 17px;
+  padding: 16px 18px;
+  border-radius: 22px;
   background: var(--surface);
+}
+
+/* The lead figure carries the mesh, as on the agent's home. */
+.moneyv-summary-cell:first-child {
+  background: var(--mesh);
+  color: var(--lime-ink);
+}
+
+.moneyv-summary-cell:first-child dt,
+.moneyv-summary-cell:first-child .moneyv-summary-note,
+.moneyv-summary-cell:first-child .moneyv-value {
+  color: var(--lime-ink);
 }
 
 .moneyv-summary dt {
   margin: 0;
   color: var(--sub);
-  font-size: 11.5px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.01em;
 }
 
 .moneyv-summary .moneyv-value {
-  margin: 5px 0 0;
+  margin: 8px 0 0;
   color: var(--text);
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.03em;
-  line-height: 1.2;
+  font-size: clamp(24px, 2.4vw, 34px);
+  font-weight: 800;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -644,13 +657,11 @@
 /* Summary strip: one surface split by hairlines; two columns on narrow screens, never a stack. */
 .moneyv-summary {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
-  gap: 1px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
   margin: 0;
-  overflow: hidden;
-  border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  background: var(--line-soft);
+  border: 0;
+  background: transparent;
 }
 
 /* Row actions sit together at the row's end: Details beside Ask, never inside the figures. */
