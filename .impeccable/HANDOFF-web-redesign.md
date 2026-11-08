@@ -27,7 +27,8 @@ and the traps that already cost time.
   - No third-party fetches: fonts are self-hosted in `web/public/fonts/`. CSP is
     `default-src 'self'` (see `src/fin_agent/api/middleware.py`).
   - Never put real data in tracked files. The dev DB holds the owner's **real** statement data
-    (real payee "DHRITISH", "939 rows", SBI balance). Mocks/fixtures use invented demo data only.
+    (a real payee name, a real statement row count, a real bank balance). Mocks and fixtures use
+    invented demo data only.
 
 ## 2. The chosen direction (what "done" looks like)
 
@@ -210,8 +211,9 @@ All helpers live in the session scratchpad
 - `react-refresh/only-export-components`: non-component exports go in `.ts` modules (that's why
   `notifications.ts` exists).
 - Windows file locks occasionally make `open(p,'w')` fail ("Invalid argument"); retry.
-- Never include `DHRITISH`, `939`, `15,348`, `AccountStatement`, or the owner's name in tracked
-  files. Grep `.impeccable/mocks` before committing mocks.
+- Never copy anything you see in the real app's screenshots (payee names, row counts, balances,
+  statement filenames, the owner's name) into tracked files. Before committing mocks, compare
+  them against what the real dev instance shows and grep for any such value.
 
 ## 7. Definition of done for each commit
 
