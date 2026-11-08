@@ -351,14 +351,13 @@ def build_capabilities(
     return capabilities
 
 
-RUN_MODEL_SETTINGS = ModelSettings(first_event_timeout=60, request_timeout=180)
-
 STALL_SECONDS = 600
-# Background work streams, so this catches a request that sends nothing for ten minutes and never
-# cuts off a slow model that is still producing output. It is large because a local server that
-# runs one or two requests at a time queues the other chunks with no bytes coming back, which
-# looks the same as a stall.
-BACKGROUND_MODEL_SETTINGS = ModelSettings(timeout=STALL_SECONDS)
+# Every model request streams, so this catches a request that sends nothing for ten minutes and
+# never cuts off a slow model that is still producing output. It is large because a local server
+# that runs one or two requests at a time queues the other chunks with no bytes coming back, which
+# looks the same as a stall. No run has a total-time limit: Stop, usage limits, and this stall
+# guard are the bounds.
+MODEL_SETTINGS = ModelSettings(timeout=STALL_SECONDS)
 
 
 async def drain_events(ctx: RunContext[Any], events: AsyncIterable[AgentStreamEvent]) -> None:
@@ -374,9 +373,8 @@ def turn_limits() -> Any:
 
 
 __all__ = [
-    "BACKGROUND_MODEL_SETTINGS",
     "DAILY_CEILING_USD",
-    "RUN_MODEL_SETTINGS",
+    "MODEL_SETTINGS",
     "SHARED_DAILY_BUDGET",
     "STALL_SECONDS",
     "SUMMARY_PROMPT",

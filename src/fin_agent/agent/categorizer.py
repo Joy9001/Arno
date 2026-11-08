@@ -24,7 +24,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import UsageLimits
 
 from fin_agent.agent.capabilities import (
-    BACKGROUND_MODEL_SETTINGS,
+    MODEL_SETTINGS,
     ToolErrorsToModel,
     drain_events,
     spend_limits,
@@ -157,9 +157,7 @@ def _chunk_agent(model: Any) -> Agent[None, list[KeyChoice]]:
         output_type=list[KeyChoice],
         instructions=LABEL_INSTRUCTIONS,
         # Naming a category needs no long reasoning; it was 90% of the output and the timeouts.
-        model_settings=merge_model_settings(
-            BACKGROUND_MODEL_SETTINGS, ModelSettings(thinking=False)
-        ),
+        model_settings=merge_model_settings(MODEL_SETTINGS, ModelSettings(thinking=False)),
         name="categorizer-chunk",
     )
 
@@ -488,7 +486,7 @@ def build_labeling_agent(model: Any) -> Agent[None, Any]:
         model,
         output_type=[list[KeyChoice], PendingModelResponse],
         instructions=LABEL_INSTRUCTIONS,
-        model_settings=ModelSettings(request_timeout=180, thinking=False),
+        model_settings=merge_model_settings(MODEL_SETTINGS, ModelSettings(thinking=False)),
         name="categorizer-batch",
     )
 
@@ -515,7 +513,7 @@ def build_categorizer_agent(
         deps_type=CategorizerDeps,
         output_type=CategorizeReport,
         instructions=CATEGORIZE_INSTRUCTIONS,
-        model_settings=BACKGROUND_MODEL_SETTINGS,
+        model_settings=MODEL_SETTINGS,
         toolsets=[toolset],
         capabilities=capabilities,
         name="categorizer",

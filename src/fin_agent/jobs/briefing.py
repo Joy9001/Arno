@@ -221,7 +221,7 @@ async def write_prose(
     # CHAT endpoint so a real provider's prose and timeout behavior are measured.
     from pydantic_ai import Agent, UsageLimits
 
-    from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, spend_limits
+    from fin_agent.agent.capabilities import MODEL_SETTINGS, drain_events, spend_limits
     from fin_agent.agent.spend import spend_store_scope
 
     async with spend_store_scope(spend_store) as store:
@@ -236,7 +236,8 @@ async def write_prose(
         result = await agent.run(
             "Write the brief from this JSON. Use only these numbers.\n"
             + json.dumps(numbers, ensure_ascii=False, default=str),
-            model_settings=RUN_MODEL_SETTINGS,
+            model_settings=MODEL_SETTINGS,
+            event_stream_handler=drain_events,
             usage_limits=UsageLimits(request_limit=1),
         )
         text = str(result.output or "").strip()

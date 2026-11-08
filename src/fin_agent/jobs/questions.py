@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any
 
 from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS
+from fin_agent.agent.capabilities import MODEL_SETTINGS, drain_events
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import build_snapshot_history
 from fin_agent.agent.spend import make_spend_store
@@ -59,7 +59,8 @@ async def answer_question(
             prompt,
             message_history=history,
             deps=deps,
-            model_settings=RUN_MODEL_SETTINGS,
+            model_settings=MODEL_SETTINGS,
+            event_stream_handler=drain_events,
             usage_limits=UsageLimits(
                 request_limit=REQUEST_LIMIT,
                 tool_calls_limit=TOOL_CALL_LIMIT,

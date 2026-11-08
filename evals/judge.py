@@ -46,11 +46,7 @@ class LLMJudge:
             try:
                 result = await self.agent.run(
                     prompt,
-                    model_settings=ModelSettings(
-                        temperature=0,
-                        first_event_timeout=60,
-                        request_timeout=120,
-                    ),
+                    model_settings=ModelSettings(temperature=0),
                     retries=2,
                 )
                 return parse_verdict(str(result.output))

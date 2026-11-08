@@ -13,6 +13,7 @@ import type { AccountSummary, ImportTask, ImportTaskImport } from "../types";
 import { displayText } from "./display-text";
 
 const ACCOUNT_QUESTION = "Which account is this statement for?";
+const STOPPED_NOTE = "The parser stopped before it finished. Ask me to continue.";
 const SETTLED = new Set([
   "review",
   "committed",
@@ -32,7 +33,8 @@ const IMPORT_LABEL: Record<string, string> = {
   rejected: "Rejected",
 };
 
-function importLabel(status: string): string {
+function importLabel(status: string, stopped = false): string {
+  if (stopped) return "Stopped";
   return IMPORT_LABEL[status] ?? status.replaceAll("_", " ");
 }
 
@@ -242,6 +244,7 @@ export function ImportTaskCard({ taskId }: { taskId: string }) {
       : "Reading the statements";
   const elapsed = duration((task.finished_at ?? now) - task.started_at);
   const current = task.imports.find((item) => !SETTLED.has(item.status));
+  const stopped = !running && current !== undefined;
   const firstOpen = task.imports.findIndex((item) => !SETTLED.has(item.status));
   const stageIndex = firstOpen === -1 ? task.imports.length : firstOpen;
   const progressItem = running ? task.imports.find((item) => item.progress) : undefined;
@@ -255,11 +258,16 @@ export function ImportTaskCard({ taskId }: { taskId: string }) {
     !running ? (task.outcome === "ok" ? "done" : "failed") : task.question ? "waiting" : "working";
   const progressLabel = progressItem?.progress
     ? displayText(progressItem.progress)
-    : current
-      ? importLabel(current.status)
-      : "Files settled";
+    : stopped
+      ? "Stopped"
+      : current
+        ? importLabel(current.status)
+        : "Files settled";
   const files = task.imports.map((item) => ({
-    name: `${displayText(item.filename ?? "Statement")} · ${importLabel(item.status)}`,
+    name: `${displayText(item.filename ?? "Statement")} · ${importLabel(
+      item.status,
+      !running && !SETTLED.has(item.status),
+    )}`,
     weight: 1,
   }));
 
@@ -305,6 +313,8 @@ export function ImportTaskCard({ taskId }: { taskId: string }) {
         label={progressLabel}
         elapsed={running ? elapsed : undefined}
       />
+
+      {stopped && <p className="fine">{STOPPED_NOTE}</p>}
 
       {files.length > 0 && (
         <JobProgress

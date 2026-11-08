@@ -23,7 +23,7 @@ from pydantic_ai_harness.planning import Planning, PostgresPlanStore
 from pydantic_ai_harness.subagents import DelegationTasks
 
 from fin_agent.agent.capabilities import (
-    BACKGROUND_MODEL_SETTINGS,
+    MODEL_SETTINGS,
     ToolErrorsToModel,
     spend_limits,
 )
@@ -896,7 +896,7 @@ def build_parser_agent(
         deps_type=AgentDeps,
         output_type=ParseReport,
         instructions=PARSE_INSTRUCTIONS,
-        model_settings=BACKGROUND_MODEL_SETTINGS,
+        model_settings=MODEL_SETTINGS,
         toolsets=[toolset],
         capabilities=capabilities,
         name="parser",

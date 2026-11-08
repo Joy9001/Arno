@@ -16,9 +16,11 @@ import httpx
 import uvicorn
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.compaction import is_pinned
 
 from fin_agent.agent.builder import build_agent
+from fin_agent.agent.capabilities import MODEL_SETTINGS
 from fin_agent.agent.history import recover_crashed_runs
 from fin_agent.api import app as app_module
 from fin_agent.api.deps import current_session
@@ -214,6 +216,26 @@ async def test_deploy_drain_stops_and_saves(app, db, monkeypatch):
     assert app.state.turns.get("thread-drain") is None
     row = await db.fetchrow("SELECT run_started_at FROM conversations WHERE id = 'thread-drain'")
     assert row["run_started_at"] is None
+
+
+async def test_a_chat_turn_has_no_total_time_limit(app, db, monkeypatch):
+    """Stop, usage limits and the stall timeout bound a turn; a wall clock does not."""
+    seen: dict = {}
+    original = VercelAIAdapter.run_stream
+
+    def recording(self, **kwargs):
+        seen.update(kwargs)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(VercelAIAdapter, "run_stream", recording)
+    model = streaming_model(lambda messages, info: ModelResponse(parts=[TextPart("hello")]))
+    async with live_server(app, monkeypatch, model) as client:
+        async with client.stream(
+            "POST", "/api/chat", json=_body("thread-limit", "msg-limit")
+        ) as response:
+            assert await _text_after(response) == "hello"
+    assert "timeout" not in seen
+    assert seen["model_settings"] is MODEL_SETTINGS
 
 
 CARD_LIMIT = "₹1,00,000"

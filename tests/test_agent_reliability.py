@@ -14,7 +14,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.spend import SpendEntry
 
 from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, turn_limits
+from fin_agent.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS, turn_limits
 from fin_agent.agent.models import WindowLimited
 from fin_agent.agent.spend import _SingleConnectionPool, make_spend_store
 from fin_agent.config import get_settings
@@ -126,8 +126,10 @@ def test_the_turn_ceilings_are_wide_but_finite():
     limits = turn_limits()
     assert limits.request_limit == 50
     assert limits.tool_calls_limit == 100
-    assert RUN_MODEL_SETTINGS["first_event_timeout"] == 60
-    assert RUN_MODEL_SETTINGS["request_timeout"] == 180
+    # No total-time limit: a request that sends nothing for ten minutes is the only cut-off.
+    assert MODEL_SETTINGS["timeout"] == STALL_SECONDS
+    assert "request_timeout" not in MODEL_SETTINGS
+    assert "first_event_timeout" not in MODEL_SETTINGS
 
 
 async def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_client, demo_ledger):

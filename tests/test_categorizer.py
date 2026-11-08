@@ -22,7 +22,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.usage import RunUsage
 
 from fin_agent.agent import categorizer as categorizer_mod
-from fin_agent.agent.capabilities import BACKGROUND_MODEL_SETTINGS, STALL_SECONDS
+from fin_agent.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS
 from fin_agent.agent.categorizer import CategorizerDeps
 from fin_agent.importers import rules as rules_mod
 from fin_agent.importers.categorize import collect_batch, run_categorize
@@ -442,7 +442,7 @@ async def test_a_chunk_run_streams_and_carries_the_stall_timeout():
 def test_the_categorizer_agent_catches_a_stall_not_a_total_time():
     model = FunctionModel(lambda *_: _output([]))
     agent = categorizer_mod.build_categorizer_agent(model=model)
-    assert agent.model_settings == BACKGROUND_MODEL_SETTINGS
+    assert agent.model_settings == MODEL_SETTINGS
 
 
 async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledger, monkeypatch):

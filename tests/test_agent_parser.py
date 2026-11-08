@@ -23,7 +23,7 @@ from pydantic_ai_harness.step_persistence import PostgresStepStore
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks, SubAgents
 
 from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import BACKGROUND_MODEL_SETTINGS
+from fin_agent.agent.capabilities import MODEL_SETTINGS
 from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
@@ -951,7 +951,7 @@ def test_the_password_wait_outlasts_the_toolset_timeout():
 
 def test_the_parser_catches_a_stall_and_its_subagent_has_no_timeout():
     parser = build_parser_agent(model="test")
-    assert parser.model_settings == BACKGROUND_MODEL_SETTINGS
+    assert parser.model_settings == MODEL_SETTINGS
 
     parent = build_agent(model="test", parser_agent=parser)
     subagents = next(

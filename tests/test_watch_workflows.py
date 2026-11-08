@@ -14,14 +14,12 @@ from fin_agent.jobs.reminders import send_reminders
 from fin_agent.jobs.risk import risk_warning
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.scheduled_questions import create_question
+from tests.agent_helpers import streaming_model
 
 
 def _prose_model(text: str) -> FunctionModel:
-    def respond(messages: list, info: AgentInfo) -> ModelResponse:
-        del messages, info
-        return ModelResponse(parts=[TextPart(text)])
-
-    return FunctionModel(respond)
+    # Streamed only: the briefing and scheduled-question runs pass an event stream handler.
+    return streaming_model(lambda messages, info: ModelResponse(parts=[TextPart(text)]))
 
 
 async def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
@@ -103,15 +101,16 @@ async def test_briefing_uses_one_model_call_and_falls_back_to_the_template(db):
     assert good["body"] == "A short brief written from the numbers."
     assert good["data"]["prose"] == "model"
 
-    def down(messages: list, info: AgentInfo) -> ModelResponse:
+    async def down(messages: list, info: AgentInfo):
         del messages, info
         raise RuntimeError("endpoint down")
+        yield ""  # pragma: no cover
 
     fallback = await send_weekly_briefing(
         db,
         as_of=date(2026, 11, 1),
         period="2099-W02",
-        model=FunctionModel(down),
+        model=FunctionModel(stream_function=down),
     )
     assert fallback is not None
     assert fallback["data"]["prose"] == "template"

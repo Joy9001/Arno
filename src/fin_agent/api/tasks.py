@@ -63,7 +63,7 @@ async def _plan(conn: Database, task_id: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-async def _imports(conn: Database, task_id: str) -> list[dict[str, Any]]:
+async def _imports(conn: Database, task_id: str, *, running: bool) -> list[dict[str, Any]]:
     rows = await conn.fetch(
         """
         SELECT i.id, i.status, i.reason, i.progress, i.counts, a.filename
@@ -83,7 +83,8 @@ async def _imports(conn: Database, task_id: str) -> list[dict[str, Any]]:
             "filename": row["filename"],
             "status": row["status"],
             "reason": row["reason"],
-            "progress": row["progress"],
+            # A stopped task's last progress line is stale; the card shows the import as stopped.
+            "progress": row["progress"] if running else None,
             "counts": row["counts"],
         }
         for row in rows
@@ -112,7 +113,7 @@ async def task_payload(
         "report": _report(record.output),
         "question": question,
         "plan": await _plan(conn, task_id),
-        "imports": await _imports(conn, task_id),
+        "imports": await _imports(conn, task_id, running=record.status == "running"),
     }
 
 

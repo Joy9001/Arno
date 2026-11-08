@@ -24,12 +24,12 @@ MAX_ATTEMPTS = 3
 # `None` means no limit: the handler runs until it finishes, so a slow model is never cut off.
 DEFAULT_TIMEOUTS: dict[str, float | None] = {
     "recompute_baselines": 120,
-    "weekly_briefing": 180,
+    "weekly_briefing": None,
     "reminders": 60,
     "risk_check": 120,
     "pattern_detection": 120,
     "backup_check": 30,
-    "scheduled_question": 300,
+    "scheduled_question": None,
     "categorize_import": None,
     "collect_batch": None,
 }

@@ -139,6 +139,32 @@ async def test_task_payload_for_a_running_and_a_finished_task(ledger):
         assert len(finished["imports"]) == 1
 
 
+async def test_a_stopped_task_reports_no_stale_progress_and_keeps_the_import_resumable(ledger):
+    owner = DelegationTasks()
+    async with owner.opened():
+        running_id = "3" * 32
+        owner.records[running_id] = _record(running_id, started_at=1000.0)
+        await _import(ledger, task_id=running_id, progress="reading pages 47 to 74 of 74")
+
+        finished_id = "4" * 32
+        owner.records[finished_id] = _record(
+            finished_id,
+            status="finished",
+            outcome="cancelled",
+            started_at=1000.0,
+            finished_at=1005.0,
+        )
+        await _import(ledger, task_id=finished_id, progress="reading pages 47 to 74 of 74")
+
+        running = await task_payload(ledger, owner, running_id)
+        assert running["imports"][0]["progress"] == "reading pages 47 to 74 of 74"
+
+        stopped = await task_payload(ledger, owner, finished_id)
+        assert stopped["imports"][0]["progress"] is None
+        # Still resumable: a stopped parser task never fails its imports.
+        assert stopped["imports"][0]["status"] == "parsing"
+
+
 async def test_task_payload_reads_the_plan_from_the_postgres_store(ledger):
     owner = DelegationTasks()
     async with owner.opened():

@@ -290,8 +290,7 @@ async def run_turn(turn):
                 conversation_id=str(thread.id),
                 run_id=turn.run_id,
                 cancellation_token=turn.token,    # Stop and deploys; task.cancel() saves nothing
-                timeout=300,
-                model_settings=ModelSettings(first_event_timeout=60, request_timeout=180),
+                model_settings=ModelSettings(timeout=600),  # a stall limit; no total-time limit
                 usage_limits=turn_limits,
                 on_complete=save_finished,        # both records, a number check, and a "cut off" card
                 on_cancel=save_stopped,           # both records, from RunCancelled
