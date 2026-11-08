@@ -1814,3 +1814,116 @@ h3 {
     padding: 14px 16px 32px;
   }
 }
+
+/* Phone refinements ---------------------------------------------------------------------------- */
+@media (max-width: 900px) {
+  .subtabs {
+    flex-wrap: nowrap;
+    scrollbar-width: none;
+  }
+
+  .subtab {
+    flex: none;
+  }
+
+  .inbox-panel .inbox-item {
+    grid-template-columns: 40px minmax(0, 1fr);
+    gap: 12px;
+    padding: 16px;
+  }
+
+  .inbox-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .inbox-time {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+    justify-self: end;
+  }
+
+  .inbox-main {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .agent-note {
+    flex-wrap: wrap;
+  }
+
+  .agent-note p {
+    flex-basis: calc(100% - 40px);
+    font-size: 14.5px;
+  }
+
+  /* Recaps: the periods become a chip row above the story. */
+  .recaps {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .recap-list {
+    display: flex;
+    gap: 8px;
+    padding: 12px 12px 4px;
+    overflow-x: auto;
+    border-right: 0;
+    scrollbar-width: none;
+  }
+
+  .recap-list > h2,
+  .recap-list > .fine,
+  .recap-kind,
+  .recap-thumb,
+  .recap-item span span {
+    display: none;
+  }
+
+  .recap-group {
+    display: contents;
+  }
+
+  .recap-item {
+    flex: none;
+    width: auto;
+    padding: 8px 14px;
+    border-radius: 99px;
+    background: var(--surface);
+  }
+
+  .recap-item b {
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .story {
+    height: calc(100dvh - 76px - 70px);
+  }
+}
+
+@media (max-width: 640px) {
+  .timeline-labels span:first-child,
+  .tl-past-tag {
+    display: none;
+  }
+
+  .timeline-labels {
+    justify-content: flex-end;
+  }
+
+  .timeline-plot,
+  .timeline-axis,
+  .timeline-events {
+    margin-inline: 12px;
+  }
+
+  .tl-pop {
+    width: 196px;
+    padding: 10px 12px;
+  }
+
+  .tl-pop strong {
+    font-size: 24px;
+  }
+}

@@ -112,7 +112,7 @@ export function Timeline({ payload }: { payload: ProjectionPayload }) {
 
   if (!curve.length) return null;
   const scrubX = geometry.x(Math.min(scrub, curve.length - 1));
-  const popLeft = Math.min(Math.max(scrubX + 14, geometry.pastWidth), width - 250);
+  const popLeft = Math.min(Math.max(scrubX + 14, geometry.pastWidth), width - (width < 640 ? 200 : 250));
 
   return (
     <section className="timeline" aria-label="Money timeline">

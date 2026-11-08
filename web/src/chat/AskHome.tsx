@@ -32,7 +32,9 @@ function partOfDay(hour: number): string {
 /** The agent's home: the new-conversation view, above the composer. */
 export function AskGreeting() {
   const user = useContext(UserContext);
-  const name = user?.display_name?.trim().split(/\s+/)[0];
+  // "You" is the default display name, not a name to greet.
+  const first = user?.display_name?.trim().split(/\s+/)[0];
+  const name = first && first.toLowerCase() !== "you" ? first : undefined;
   return (
     <div className="ask-hero">
       <div className="ask-halo">
