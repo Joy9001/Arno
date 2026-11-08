@@ -21,7 +21,8 @@ logger = logging.getLogger("fin_agent.jobs")
 
 Handler = Callable[[dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
 MAX_ATTEMPTS = 3
-DEFAULT_TIMEOUTS = {
+# `None` means no limit: the handler runs until it finishes, so a slow model is never cut off.
+DEFAULT_TIMEOUTS: dict[str, float | None] = {
     "recompute_baselines": 120,
     "weekly_briefing": 180,
     "reminders": 60,
@@ -29,8 +30,8 @@ DEFAULT_TIMEOUTS = {
     "pattern_detection": 120,
     "backup_check": 30,
     "scheduled_question": 300,
-    "categorize_import": 900,
-    "collect_batch": 600,
+    "categorize_import": None,
+    "collect_batch": None,
 }
 
 
@@ -249,7 +250,7 @@ class JobRunner:
         concurrency: int = 2,
         poll_seconds: float = 1.0,
         registry: Mapping[str, Handler] | None = None,
-        timeouts: Mapping[str, float] | None = None,
+        timeouts: Mapping[str, float | None] | None = None,
     ) -> None:
         self.concurrency = max(1, concurrency)
         self.poll_seconds = poll_seconds
@@ -346,7 +347,7 @@ class JobRunner:
             async with connect() as conn:
                 await _finish(conn, job_id, status="failed", error=f"no handler for {kind}")
             return
-        timeout = float(self.timeouts.get(kind, 120))
+        timeout = self.timeouts.get(kind, 120)
         try:
             payload = dict(job.get("payload") or {})
             if inspect.iscoroutinefunction(handler):
@@ -358,9 +359,10 @@ class JobRunner:
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            logger.warning("job %s timed out after %ss", job["key"], timeout)
+            after = f" after {float(timeout):.0f}s" if timeout is not None else ""
+            logger.warning("job %s timed out%s", job["key"], after)
             async with connect() as conn:
-                await _fail(conn, job, f"timed out after {timeout:.0f}s", timed_out=True)
+                await _fail(conn, job, f"timed out{after}", timed_out=True)
         except Exception as exc:  # noqa: BLE001 - every handler failure is retried
             logger.exception("job %s failed", job["key"])
             async with connect() as conn:

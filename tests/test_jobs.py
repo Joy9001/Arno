@@ -100,6 +100,22 @@ async def test_a_timeout_is_a_failure_with_a_marker(db):
     assert "timed out" in row["last_error"]
 
 
+async def test_a_job_with_no_timeout_runs_to_completion(db):
+    import asyncio
+
+    async def slow(payload):
+        del payload
+        await asyncio.sleep(0.2)
+
+    runner = JobRunner(registry={"slow": slow}, timeouts={"slow": None})
+    await db.execute("INSERT INTO jobs (key, kind) VALUES ('slow:none', 'slow')")
+
+    await runner.run_once()
+    row = await _job(db, "slow:none")
+    assert row["status"] == "done"
+    assert row["timed_out_at"] is None
+
+
 async def test_the_loop_claims_at_most_two_jobs_at_once(db):
     started: list[str] = []
 

@@ -7,6 +7,7 @@ behavior are measured from traces at L2.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterable
 from decimal import Decimal
 from typing import Any
 
@@ -17,7 +18,7 @@ from pydantic_ai.capabilities import (
     ModelFallback,
     WrapRunHandler,
 )
-from pydantic_ai.messages import ModelRequest, UserPromptPart
+from pydantic_ai.messages import AgentStreamEvent, ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai_harness.code_mode import CodeMode
@@ -352,6 +353,19 @@ def build_capabilities(
 
 RUN_MODEL_SETTINGS = ModelSettings(first_event_timeout=60, request_timeout=180)
 
+STALL_SECONDS = 600
+# Background work streams, so this catches a request that sends nothing for ten minutes and never
+# cuts off a slow model that is still producing output. It is large because a local server that
+# runs one or two requests at a time queues the other chunks with no bytes coming back, which
+# looks the same as a stall.
+BACKGROUND_MODEL_SETTINGS = ModelSettings(timeout=STALL_SECONDS)
+
+
+async def drain_events(ctx: RunContext[Any], events: AsyncIterable[AgentStreamEvent]) -> None:
+    """A no-op event stream handler; passing it makes a run's model requests streamed."""
+    async for _ in events:
+        pass
+
 
 def turn_limits() -> Any:
     from pydantic_ai import UsageLimits
@@ -360,9 +374,11 @@ def turn_limits() -> Any:
 
 
 __all__ = [
+    "BACKGROUND_MODEL_SETTINGS",
     "DAILY_CEILING_USD",
     "RUN_MODEL_SETTINGS",
     "SHARED_DAILY_BUDGET",
+    "STALL_SECONDS",
     "SUMMARY_PROMPT",
     "RootSpanIO",
     "TaskTextIsOutside",
@@ -370,6 +386,7 @@ __all__ = [
     "WRITE_TOOLS",
     "build_capabilities",
     "date_and_changes",
+    "drain_events",
     "redaction_guardrail",
     "shared_daily_budget",
     "spend_limits",

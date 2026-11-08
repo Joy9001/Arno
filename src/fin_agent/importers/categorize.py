@@ -16,7 +16,7 @@ from pydantic_ai.capabilities import BatchModelRequests
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.output import PendingModelResponse
 
-from fin_agent.agent.capabilities import spend_limits
+from fin_agent.agent.capabilities import drain_events, spend_limits
 from fin_agent.agent.categorizer import (
     CATEGORIZE_USAGE_LIMITS,
     CategorizerDeps,
@@ -141,6 +141,7 @@ async def run_categorize(
                 f"Categorize the payees of import {import_id}. Save once, then report.",
                 deps=deps,
                 usage_limits=CATEGORIZE_USAGE_LIMITS,
+                event_stream_handler=drain_events,
             )
         except Exception as exc:  # noqa: BLE001 - a failed label must not fail a committed import
             ceiling = ceiling_name(exc)

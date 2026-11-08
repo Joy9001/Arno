@@ -94,8 +94,8 @@ and pushed to `main`. Group B's import items wait for this group.
       session `__LOCALID_y8OJ3G9`.
       Operator run on November 7 (see the run log): responsive chat, a verified 939-row parse,
       commit, replay of the saved parser, and categorizing in 3-5 minutes all pass. Open: the
-      restart, the same run through the UI with a passkey, and the categorizing chunks that
-      still hit the request limit on `deepseek-v4.1-flash`.
+      restart and the same run through the UI with a passkey. The categorizing chunks that hit
+      the request limit were fixed on November 8: every chunk returned, 591 of 939 labelled.
 
 ## B. Owner setup and measurements
 

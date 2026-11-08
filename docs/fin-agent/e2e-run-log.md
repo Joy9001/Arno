@@ -54,6 +54,12 @@ their payees stay uncategorized and the run saves the rest. The agreement sample
 (1-5 payees) on this import, because few payees are both rule-covered and in a chunk that
 returned.
 
+Rerun on 8 November, after background model work moved from total-time limits to a stall limit
+(streamed requests, `timeout=600` per chunk, no request, tool, job or task limit). The `llm`
+labels were cleared first, so the whole set went to the model again. Every chunk returned:
+the job took 273 s, labelled 591 of 939 rows with 136 `llm` rules, and left 348 uncategorized
+with a hint, at agreement 0.80 on 5 check payees.
+
 ## Seeded greeting baseline (6 November 2026)
 
 Run `2026-11-06-J01-seeded`; owner sends messages, parent inspects. Session

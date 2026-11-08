@@ -117,7 +117,6 @@ def build_agent(
                 SubAgent(
                     parser_agent,
                     usage_limits=PARSE_USAGE_LIMITS,
-                    timeout_seconds=1200,
                     can_ask_questions=True,
                     resumable=True,
                 )

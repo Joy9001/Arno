@@ -20,9 +20,10 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.step_persistence import PostgresStepStore
-from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
+from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks, SubAgents
 
 from fin_agent.agent.builder import build_agent
+from fin_agent.agent.capabilities import BACKGROUND_MODEL_SETTINGS
 from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
@@ -946,3 +947,16 @@ def test_the_password_wait_outlasts_the_toolset_timeout():
     assert found, "wait_for_password is not on the parser"
     assert found[0].timeout is not None
     assert found[0].timeout > parser_module.PASSWORD_WAIT_SECONDS
+
+
+def test_the_parser_catches_a_stall_and_its_subagent_has_no_timeout():
+    parser = build_parser_agent(model="test")
+    assert parser.model_settings == BACKGROUND_MODEL_SETTINGS
+
+    parent = build_agent(model="test", parser_agent=parser)
+    subagents = next(
+        cap for cap in parent._root_capability.capabilities if isinstance(cap, SubAgents)
+    )
+    # Usage limits still bound how many requests the parser makes; wall-clock time does not.
+    parser_delegate = next(item for item in subagents.agents if item.resolved_name == "parser")
+    assert parser_delegate.timeout_seconds is None

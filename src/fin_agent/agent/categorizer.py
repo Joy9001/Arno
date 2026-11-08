@@ -19,10 +19,16 @@ from pydantic_ai import Agent, ModelRetry, ModelSettings, RunContext
 from pydantic_ai.capabilities import BatchModelRequests
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.output import PendingModelResponse
+from pydantic_ai.settings import merge_model_settings
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import UsageLimits
 
-from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, ToolErrorsToModel, spend_limits
+from fin_agent.agent.capabilities import (
+    BACKGROUND_MODEL_SETTINGS,
+    ToolErrorsToModel,
+    drain_events,
+    spend_limits,
+)
 from fin_agent.agent.models import primary_model
 from fin_agent.db.conn import connect
 from fin_agent.importers import rules as rules_mod
@@ -31,7 +37,7 @@ from fin_agent.ledger.categories import normalize_pattern, upsert_rule_in_group
 
 logger = logging.getLogger("fin_agent.agent.categorizer")
 
-CHUNK_PAYEES = 12  # smaller chunks keep a reasoning model's reply under the request timeout
+CHUNK_PAYEES = 12  # smaller chunks keep each reply short and its prompt small
 CHUNK_CONCURRENCY = 8
 CHECK_PAYEES = 5
 BATCH_MAX_WAIT = timedelta(seconds=30)
@@ -151,7 +157,9 @@ def _chunk_agent(model: Any) -> Agent[None, list[KeyChoice]]:
         output_type=list[KeyChoice],
         instructions=LABEL_INSTRUCTIONS,
         # Naming a category needs no long reasoning; it was 90% of the output and the timeouts.
-        model_settings=ModelSettings(request_timeout=120, thinking=False),
+        model_settings=merge_model_settings(
+            BACKGROUND_MODEL_SETTINGS, ModelSettings(thinking=False)
+        ),
         name="categorizer-chunk",
     )
 
@@ -162,7 +170,9 @@ async def _ask_chunk(
     agent = _chunk_agent(model)
     limits = spend_limits(spend_store)
     result = await agent.run(
-        payload["prompt"], capabilities=[limits] if limits is not None else None
+        payload["prompt"],
+        capabilities=[limits] if limits is not None else None,
+        event_stream_handler=drain_events,
     )
     keys = set(payload["keys"])
     return [
@@ -495,7 +505,7 @@ def build_categorizer_agent(
         tools.append(submit_batch)
     if with_batch_results:
         tools.append(batch_results)
-    toolset = FunctionToolset(tools=tools, timeout=300)
+    toolset = FunctionToolset(tools=tools)
     capabilities: list[Any] = [ToolErrorsToModel()]
     limits = spend_limits(spend_store)
     if limits is not None:
@@ -505,7 +515,7 @@ def build_categorizer_agent(
         deps_type=CategorizerDeps,
         output_type=CategorizeReport,
         instructions=CATEGORIZE_INSTRUCTIONS,
-        model_settings=RUN_MODEL_SETTINGS,
+        model_settings=BACKGROUND_MODEL_SETTINGS,
         toolsets=[toolset],
         capabilities=capabilities,
         name="categorizer",

@@ -22,7 +22,11 @@ from pydantic_ai_harness.code_mode import CodeMode
 from pydantic_ai_harness.planning import Planning, PostgresPlanStore
 from pydantic_ai_harness.subagents import DelegationTasks
 
-from fin_agent.agent.capabilities import RUN_MODEL_SETTINGS, ToolErrorsToModel, spend_limits
+from fin_agent.agent.capabilities import (
+    BACKGROUND_MODEL_SETTINGS,
+    ToolErrorsToModel,
+    spend_limits,
+)
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.models import parse_model
 from fin_agent.db.conn import Connection, connect
@@ -892,7 +896,7 @@ def build_parser_agent(
         deps_type=AgentDeps,
         output_type=ParseReport,
         instructions=PARSE_INSTRUCTIONS,
-        model_settings=RUN_MODEL_SETTINGS,
+        model_settings=BACKGROUND_MODEL_SETTINGS,
         toolsets=[toolset],
         capabilities=capabilities,
         name="parser",
