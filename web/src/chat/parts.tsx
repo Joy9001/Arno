@@ -102,6 +102,15 @@ function CardData({ data }: { data: Record<string, unknown> }) {
 }
 
 function ReplyModelData({ data }: { data: { model: string; fallback: boolean } }) {
+  // Each run saved into one message (a delegate report, a retry) adds its own part; the
+  // last one is the model that answered, so only it shows.
+  const parts = useAuiState((state) => state.message.parts);
+  const index = usePartIndex();
+  const last = parts.findLastIndex((part) => part.type === "data" && part.name === "reply-model");
+  const lastPart = parts[last];
+  const isLast =
+    index === null ? lastPart?.type === "data" && lastPart.data === data : index === last;
+  if (!isLast) return null;
   return (
     <p className="aui-part-note">
       Model: {data.model}
