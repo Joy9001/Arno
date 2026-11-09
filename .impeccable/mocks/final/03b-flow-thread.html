@@ -1,0 +1,72 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>03b · Flow mode · a whole conversation</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="flow.css">
+<style>
+.file{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;font-weight:700;opacity:.85}
+.file svg{width:14px;height:14px}
+.fstep .act{display:inline-flex;margin-top:10px}
+.fstep .act .btn{font-size:12.5px;padding:6px 12px}
+.direct{position:absolute;z-index:1;font:500 11.5px "JetBrains Mono";color:var(--sub);background:var(--bg);padding:2px 8px;border-radius:99px;box-shadow:inset 0 0 0 1px var(--line)}
+dd.warn{color:var(--org)}
+</style></head><body data-active="chats"><div class="app"><nav id="rail"></nav>
+<main class="flowmain">
+<div class="fbar"><b>Hey</b><span class="r"><span class="tabs"><span>Chat</span><span class="on">Flow</span></span><span class="btn">Fit</span><span class="btn">New</span></span></div>
+
+<svg class="wires" viewBox="0 0 1364 900">
+  <defs>
+    <linearGradient id="in" gradientUnits="userSpaceOnUse" x1="340" x2="400" y1="0" y2="0"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#1ec8a5"/></linearGradient>
+    <linearGradient id="out" gradientUnits="userSpaceOnUse" x1="720" x2="800" y1="0" y2="0"><stop offset="0" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient>
+    <linearGradient id="direct" gradientUnits="userSpaceOnUse" x1="340" x2="800" y1="0" y2="0"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient>
+  </defs>
+  <!-- turn 1: no tools, the question wires straight to the answer -->
+  <path class="wire" stroke="url(#direct)" d="M340 128 L800 128"/>
+  <!-- turn 2 -->
+  <path class="wire" stroke="url(#in)" d="M340 318 C370 318 370 318 400 318"/>
+  <path class="wire" stroke="url(#out)" d="M720 318 C760 318 760 318 800 318"/>
+  <!-- turn 3 -->
+  <path class="wire" stroke="url(#in)" d="M340 560 C370 560 370 560 400 560"/>
+  <path class="wire" stroke="url(#out)" d="M720 560 C760 560 760 560 800 560"/>
+  <!-- the conversation continues: each answer leads to the next question -->
+  <g stroke="rgba(255,255,255,.16)" stroke-dasharray="3 6" class="wire"><path d="M190 168 V262"/><path d="M190 372 V500"/></g>
+  <g class="port">
+    <circle cx="340" cy="128" r="4.5" stroke="#2b59ff"/><circle cx="800" cy="128" r="4.5" stroke="#d4ff3a"/>
+    <circle cx="340" cy="318" r="4.5" stroke="#2b59ff"/><circle cx="400" cy="318" r="4.5" stroke="#1ec8a5"/><circle cx="720" cy="318" r="4.5" stroke="#1ec8a5"/><circle cx="800" cy="318" r="4.5" stroke="#d4ff3a"/>
+    <circle cx="340" cy="560" r="4.5" stroke="#2b59ff"/><circle cx="400" cy="560" r="4.5" stroke="#1ec8a5"/><circle cx="720" cy="560" r="4.5" stroke="#1ec8a5"/><circle cx="800" cy="560" r="4.5" stroke="#d4ff3a"/>
+  </g>
+</svg>
+
+<!-- Turn 1 -->
+<div class="fnode fq" style="left:40px;top:90px;width:300px;height:78px"><span class="k">You · 2:10 pm</span><p>Hey</p></div>
+<span class="direct" style="left:500px;top:118px">answered from the conversation</span>
+<div class="fnode fans" style="left:800px;top:76px;width:500px">
+  <div class="k"><span class="orb" style="--s:16px"><i></i></span>Answer<span>0.9s</span></div>
+  <p>Hey! Your ledger is empty right now: no accounts, income, bills, or goals. Let’s start with two things: <b>your bank accounts</b>, and <b>your income</b>.</p>
+</div>
+
+<!-- Turn 2 -->
+<div class="fnode fq" style="left:40px;top:262px;width:300px;height:110px"><span class="k">You · 2:11 pm</span><p>I have got an SBI savings bank account.</p></div>
+<div class="fnode fstep" style="left:400px;top:244px;width:320px">
+  <div class="hd"><span class="dot"></span><b>Added an account</b><span class="t">0.2s</span></div>
+  <span class="id">update_setup</span>
+  <dl><dt>Account</dt><dd>SBI Savings</dd><dt>Kind</dt><dd>Bank</dd><dt>Balance</dt><dd class="warn">Not known yet</dd></dl>
+</div>
+<div class="fnode fans" style="left:800px;top:252px;width:500px">
+  <div class="k"><span class="orb" style="--s:16px"><i></i></span>Answer<span>1.4s</span></div>
+  <p>Added <b>SBI Savings</b>. It has no balance yet, so I can’t project anything from it. What’s in it right now, roughly, and as of when?</p>
+  <span class="more">Open in chat</span>
+</div>
+
+<!-- Turn 3 -->
+<div class="fnode fq" style="left:40px;top:500px;width:300px;height:120px"><span class="k">You · 2:14 pm</span><p>Here is my one year SBI statement.</p><span class="file"><span data-icon="file"></span>AccountStatement_Asha.pdf</span></div>
+<div class="fnode fstep warn" style="left:400px;top:470px;width:320px">
+  <div class="hd"><span class="dot"></span><b>Reading your statement</b><span class="t">4m 20s</span></div>
+  <span class="id">parser · background</span>
+  <dl><dt>Status</dt><dd class="warn">Paused, out of steps</dd><dt>Steps</dt><dd>120 of 120</dd><dt>Your ledger</dt><dd>Nothing written</dd></dl>
+  <span class="act"><span class="btn">Open run</span></span>
+</div>
+<div class="fnode fans" style="left:800px;top:494px;width:500px">
+  <div class="k"><span class="orb" style="--s:16px"><i></i></span>Answer<span>2.1s</span></div>
+  <p>The statement parser paused: it used all 120 of its steps. <b>Nothing reached your ledger.</b> Press Continue on the run card to give it another 120.</p>
+  <span class="more">Open in chat</span>
+</div>
+
+<div class="comp fcomp"><p>Ask anything…</p><span class="send" style="margin:0">↑</span></div>
+</main></div><script src="shell.js"></script></body></html>

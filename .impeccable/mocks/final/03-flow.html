@@ -1,45 +1,77 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>03 · Flow mode</title><link rel="stylesheet" href="shell.css">
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>03 · Flow mode</title><link rel="stylesheet" href="shell.css"><link rel="stylesheet" href="flow.css">
 <style>
-main{position:relative;background:radial-gradient(rgba(255,255,255,.07) 1px,transparent 1.2px) 0 0/22px 22px;overflow:hidden}
-.bar{position:absolute;top:16px;left:24px;right:24px;display:flex;align-items:center;gap:10px;z-index:2}
-.bar b{font-size:18px;font-weight:800;letter-spacing:-.02em}
-.bar .r{margin-left:auto;display:flex;gap:8px;align-items:center}
-svg.w{position:absolute;inset:0}
-.node{position:absolute;background:var(--s);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.4)}
-.node .h{display:flex;align-items:center;padding:9px 14px;font:600 11px "JetBrains Mono";letter-spacing:.06em;color:var(--sub);border-bottom:1px solid var(--line)}
-.node .h span{margin-left:auto}
-.node .b{padding:12px 14px;font:500 12px/1.7 "JetBrains Mono";color:#cfd1c8}.node .b b{color:var(--t);font-weight:600}
-.tool .h::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--grn);margin-right:8px;box-shadow:0 0 8px var(--grn)}
-.q{left:30px;top:290px;width:270px;background:var(--cob);border:0}.q .h{color:rgba(255,255,255,.75);border-color:rgba(255,255,255,.2)}.q .b{font:700 20px/1.25 "Bricolage Grotesque";color:#fff}
-.n1{left:370px;top:96px;width:260px}.n2{left:370px;top:300px;width:260px}.n3{left:370px;top:500px;width:260px}
-.ans{left:710px;top:150px;width:400px;border:0}.ans .verdict{border-radius:0}
-.fu{left:1160px;width:190px;background:transparent;border:1.5px dashed rgba(255,255,255,.2);box-shadow:none}.fu .h{border:0;padding-bottom:0}.fu .b{font:700 15px "Bricolage Grotesque";color:var(--t)}
-.live{left:710px;top:560px;width:400px}.live .b{display:flex;gap:10px;align-items:center;font-family:"Bricolage Grotesque";font-size:14px}
-.sl{flex:1;height:6px;border-radius:99px;background:var(--s2);position:relative}.sl i{position:absolute;left:0;width:62%;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--cob),var(--cy),var(--lime))}.sl u{position:absolute;left:62%;top:-6px;width:18px;height:18px;border-radius:50%;background:#fff;margin-left:-9px}
-.agent{left:710px;top:96px;display:flex;align-items:center;gap:8px;position:absolute;font-weight:700;color:var(--sub);font-size:13px}
-.comp{position:absolute;left:50%;transform:translateX(-50%);bottom:20px;width:760px;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 22px}
-.comp p{flex:1;margin:0;font-size:16px}
-.mini{position:absolute;right:20px;bottom:22px;width:160px;height:96px;border-radius:14px;background:var(--s);border:1px solid var(--line)}
-.mini i{position:absolute;border-radius:3px;background:var(--s2)}
+.slider{display:flex;align-items:center;gap:12px;margin-top:12px;font-size:14px;font-weight:700}
+.sl{flex:1;height:6px;border-radius:99px;background:var(--s2);position:relative}
+.sl i{position:absolute;left:0;width:62%;top:0;bottom:0;border-radius:99px;background:linear-gradient(90deg,var(--cob),var(--cy),var(--lime))}
+.sl u{position:absolute;left:62%;top:-6px;width:18px;height:18px;border-radius:50%;background:#fff;margin-left:-9px;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+.agent{position:absolute;left:740px;top:118px;display:flex;align-items:center;gap:8px;font-weight:700;color:var(--sub);font-size:13px;z-index:1}
 </style></head><body data-active="chats"><div class="app"><nav id="rail"></nav>
-<main>
-<div class="bar"><b>Laptop on the Slice card</b><span class="serial">FA·68P·0911</span><span class="r"><span class="tabs"><span>Chat</span><span class="on">Flow</span></span><span class="btn">Fit</span><span class="btn">Share</span></span></div>
-<svg class="w" viewBox="0 0 1364 900" fill="none" stroke-width="2"><defs><linearGradient id="w" x1="0" x2="1"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient></defs>
-<path d="M300 340 C335 340 335 140 370 140" stroke="url(#w)"/><path d="M300 340 C335 340 335 345 370 345" stroke="url(#w)"/><path d="M300 340 C335 340 335 545 370 545" stroke="url(#w)"/>
-<path d="M630 140 C670 140 670 260 710 260" stroke="url(#w)"/><path d="M630 345 C670 345 670 290 710 290" stroke="url(#w)"/><path d="M630 545 C670 545 670 320 710 320" stroke="url(#w)"/>
-<g stroke="rgba(255,255,255,.25)" stroke-dasharray="4 5"><path d="M1110 240 C1135 240 1135 170 1160 170"/><path d="M1110 290 C1135 290 1135 320 1160 320"/><path d="M1110 340 C1135 340 1135 470 1160 470"/><path d="M910 500 V560"/></g></svg>
-<div class="node q"><div class="h">YOU · 21:40</div><div class="b">Can I buy a ₹68,000 laptop on the Slice card?</div></div>
-<div class="node tool n1"><div class="h">READ ACCOUNTS<span>0.3s</span></div><div class="b">SBI Savings <b>₹1,46,800</b><br>Slice card <b>₹12,400 · 18 Nov</b><br>floor <b>₹25,000</b></div></div>
-<div class="node tool n2"><div class="h">RUN PROJECTION<span>2.8s</span></div><div class="b">runs <b>1,000</b> · horizon <b>90d</b><br>floor holds <b>91%</b> (was 94%)<br>lowest median <b>₹38,400 · 2 Dec</b></div></div>
-<div class="node tool n3"><div class="h">COMPARE DATES<span>1.1s</span></div><div class="b">buy 8 Nov <b>91%</b><br>wait 21 Nov <b>96%</b><br>3 EMIs <b>93%</b></div></div>
-<div class="agent"><span class="orb" style="--s:22px"><i></i></span>Fin-Agent answered in 4.2s</div>
-<div class="node ans"><div class="verdict"><div style="display:flex;justify-content:space-between;font-weight:700;font-size:13px"><span>Answer</span><span>3 sources</span></div><div class="v">Yes, with a change</div>
-<p style="font-weight:600">Clear it on the due date. Waiting till 21 Nov lifts the floor to 96%.</p>
-<div class="f" style="display:flex;gap:20px;margin-top:12px"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Safer</small><b>21 Nov</b></div></div></div></div>
-<div class="node fu" style="top:140px"><div class="h">BRANCH</div><div class="b">What if I wait till 21 Nov?</div></div>
-<div class="node fu" style="top:290px"><div class="h">BRANCH</div><div class="b">Split into 3 EMIs?</div></div>
-<div class="node fu" style="top:440px"><div class="h">BRANCH</div><div class="b">Show the 3 source rows</div></div>
-<div class="node live"><div class="h">TRY IT · LIVE<span>re-runs on release</span></div><div class="b"><b>Price</b><div class="sl"><i></i><u></u></div><b>₹68,000</b></div></div>
-<div class="comp"><p>Ask, or drag a branch to explore…</p><span class="send" style="margin:0">↑</span></div>
-<div class="mini"><i style="left:10px;top:40px;width:24px;height:14px;background:#2b59ff"></i><i style="left:44px;top:20px;width:28px;height:10px"></i><i style="left:44px;top:40px;width:28px;height:10px"></i><i style="left:44px;top:60px;width:28px;height:10px"></i><i style="left:84px;top:28px;width:38px;height:28px;background:#d4ff3a"></i><i style="left:130px;top:22px;width:20px;height:8px"></i><i style="left:130px;top:44px;width:20px;height:8px"></i></div>
+<main class="flowmain">
+<div class="fbar"><b>Laptop on the Slice card</b><span class="r"><span class="tabs"><span>Chat</span><span class="on">Flow</span></span><span class="btn">Fit</span><span class="btn">New</span></span></div>
+
+<svg class="wires" viewBox="0 0 1364 900">
+  <defs>
+    <linearGradient id="in" gradientUnits="userSpaceOnUse" x1="310" x2="380" y1="0" y2="0"><stop offset="0" stop-color="#2b59ff"/><stop offset="1" stop-color="#1ec8a5"/></linearGradient>
+    <linearGradient id="out" gradientUnits="userSpaceOnUse" x1="680" x2="740" y1="0" y2="0"><stop offset="0" stop-color="#1ec8a5"/><stop offset="1" stop-color="#d4ff3a"/></linearGradient>
+  </defs>
+  <!-- question → steps -->
+  <path class="wire" stroke="url(#in)" d="M310 366 C345 366 345 175 380 175"/>
+  <path class="wire" stroke="url(#in)" d="M310 366 C345 366 345 365 380 365"/>
+  <path class="wire" stroke="url(#in)" d="M310 366 C345 366 345 555 380 555"/>
+  <!-- steps → answer -->
+  <path class="wire" stroke="url(#out)" d="M680 175 C710 175 710 245 740 245"/>
+  <path class="wire" stroke="url(#out)" d="M680 365 C710 365 710 285 740 285"/>
+  <path class="wire" stroke="url(#out)" d="M680 555 C710 555 710 325 740 325"/>
+  <!-- answer → branches, and to the try card -->
+  <g stroke="rgba(255,255,255,.28)" stroke-dasharray="4 6" class="wire">
+    <path d="M1120 220 C1145 220 1145 192 1170 192"/>
+    <path d="M1120 285 C1145 285 1145 332 1170 332"/>
+    <path d="M1120 350 C1145 350 1145 472 1170 472"/>
+    <path d="M930 390 V470"/>
+  </g>
+  <g class="port">
+    <circle cx="310" cy="366" r="4.5" stroke="#2b59ff"/>
+    <circle cx="380" cy="175" r="4.5" stroke="#1ec8a5"/><circle cx="380" cy="365" r="4.5" stroke="#1ec8a5"/><circle cx="380" cy="555" r="4.5" stroke="#1ec8a5"/>
+    <circle cx="680" cy="175" r="4.5" stroke="#1ec8a5"/><circle cx="680" cy="365" r="4.5" stroke="#1ec8a5"/><circle cx="680" cy="555" r="4.5" stroke="#1ec8a5"/>
+    <circle cx="740" cy="245" r="4.5" stroke="#d4ff3a"/><circle cx="740" cy="285" r="4.5" stroke="#d4ff3a"/><circle cx="740" cy="325" r="4.5" stroke="#d4ff3a"/>
+  </g>
+</svg>
+
+<div class="fnode fq" style="left:40px;top:310px;width:270px;height:112px"><span class="k">You · 9:40 pm</span><p>Can I buy a ₹68,000 laptop on the Slice card?</p></div>
+
+<div class="fnode fstep" style="left:380px;top:100px;width:300px;height:150px">
+  <div class="hd"><span class="dot"></span><b>Read your money</b><span class="t">0.3s</span></div>
+  <span class="id">get_financial_context</span>
+  <dl><dt>SBI Savings</dt><dd>₹1,46,800</dd><dt>Slice card, due 18 Nov</dt><dd>₹12,400</dd><dt>Floor</dt><dd>₹25,000</dd></dl>
+</div>
+<div class="fnode fstep" style="left:380px;top:290px;width:300px;height:150px">
+  <div class="hd"><span class="dot"></span><b>Projected 90 days</b><span class="t">2.8s</span></div>
+  <span class="id">project</span>
+  <dl><dt>Futures run</dt><dd>1,000</dd><dt>Floor holds</dt><dd>91% · was 94%</dd><dt>Lowest median</dt><dd>₹38,400 · 2 Dec</dd></dl>
+</div>
+<div class="fnode fstep" style="left:380px;top:480px;width:300px;height:150px">
+  <div class="hd"><span class="dot"></span><b>Compared three dates</b><span class="t">1.1s</span></div>
+  <span class="id">project ×3</span>
+  <dl><dt>Buy today</dt><dd>91%</dd><dt>Wait till 21 Nov</dt><dd>96%</dd><dt>3 EMIs</dt><dd>93%</dd></dl>
+</div>
+
+<div class="agent"><span class="orb" style="--s:22px"><i></i></span>Answered in 4.2s</div>
+<div class="fnode fans verdict" style="left:740px;top:150px;width:380px;height:240px">
+  <div class="k"><span>Answer</span><span>3 sources</span></div>
+  <span class="v">Yes, with a change</span>
+  <p>Clear it on the due date. Waiting till 21 Nov lifts the floor to 96%.</p>
+  <div class="facts"><div><small>Floor holds</small><b>91%</b></div><div><small>Lowest</small><b>₹38,400</b></div><div><small>Safer</small><b>21 Nov</b></div></div>
+</div>
+
+<div class="fbr" style="left:1170px;top:160px;width:170px"><small>Wait</small><b>What if I wait till 21 Nov?</b></div>
+<div class="fbr" style="left:1170px;top:300px;width:170px"><small>Split</small><b>Split it into 3 EMIs?</b></div>
+<div class="fbr" style="left:1170px;top:440px;width:170px"><small>Sources</small><b>Show the 3 source rows</b></div>
+
+<div class="fnode fstep" style="left:740px;top:470px;width:380px">
+  <div class="hd"><span class="dot" style="background:var(--cy)"></span><b>Try another price</b><span class="t">re-runs the projection</span></div>
+  <div class="slider"><span>Price</span><div class="sl"><i></i><u></u></div><span class="num">₹68,000</span></div>
+</div>
+
+<div class="comp fcomp"><p>Ask, or pick a branch to explore…</p><span class="send" style="margin:0">↑</span></div>
+<div class="fmini"><i style="left:10px;top:40px;width:22px;height:12px;background:#2b59ff"></i><i style="left:42px;top:16px;width:26px;height:12px"></i><i style="left:42px;top:40px;width:26px;height:12px"></i><i style="left:42px;top:64px;width:26px;height:12px"></i><i style="left:80px;top:24px;width:34px;height:30px;background:#d4ff3a"></i><i style="left:122px;top:20px;width:20px;height:8px"></i><i style="left:122px;top:40px;width:20px;height:8px"></i><i style="left:122px;top:60px;width:20px;height:8px"></i></div>
 </main></div><script src="shell.js"></script></body></html>
