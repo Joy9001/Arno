@@ -4,8 +4,10 @@ import type { ImportTask } from "../types";
 
 export const CONTINUE_PROMPT = "Continue reading my statement.";
 export const WHY_PROMPT = "Why did my statement import stop?";
+/** Asks an open thread to follow a reply the server started; detail is `{ threadId }`. */
+export const FOLLOW_REPLY_EVENT = "fin-agent:follow-reply";
 
-/** Polls the task while it runs; settles when it ends. */
+/** Polls the task while it runs, and while the chat's turn about its report is pending. */
 export function useRun(taskId: string) {
   const [task, setTask] = useState<ImportTask | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +23,9 @@ export function useRun(taskId: string) {
         if (!active) return;
         setTask(next);
         setError(null);
-        if (next.state === "running") timer = window.setTimeout(() => void load(), 2000);
+        if (next.state === "running" || next.follow_up !== null) {
+          timer = window.setTimeout(() => void load(), 2000);
+        }
       } catch (caught) {
         if (active) setError(errorMessage(caught));
       }

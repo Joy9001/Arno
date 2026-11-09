@@ -152,12 +152,18 @@ export function RunBody({
               <button
                 type="button"
                 className="run-primary"
+                disabled={task.follow_up === "replying"}
                 onClick={() => askAgent(CONTINUE_PROMPT, { send: true })}
               >
                 Continue · {task.run.limit} more steps
               </button>
             )}
-            <button type="button" className="ask-link" onClick={() => askAgent(WHY_PROMPT)}>
+            <button
+              type="button"
+              className="ask-link"
+              disabled={task.follow_up === "replying"}
+              onClick={() => askAgent(WHY_PROMPT)}
+            >
               Ask why
             </button>
           </div>

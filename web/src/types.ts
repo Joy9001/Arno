@@ -490,6 +490,9 @@ export type ImportTask = {
   imports: ImportTaskImport[];
   messages: ImportTaskMessage[];
   model: string | null;
+  conversation_id: string;
+  /** The chat's turn about this report: waiting to start, or being answered now. */
+  follow_up: "waiting" | "replying" | null;
   run: RunView;
 };
 

@@ -33,6 +33,9 @@ let nextMessage = 1;
 let contractAnswer = null;
 // The synthetic parser run behind the "statement" scenario: running, paused, or done.
 let taskState = "running";
+// The thread whose `statement` turn started the fixture task, and a reply the server started.
+let taskThread = null;
+let wakeTurn = null;
 const TASK_ID = "5ad1e0c0ffee4b6e9e7a3c2d1f0b9a87";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +43,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function resetState() {
   threads.clear();
   turns.clear();
+  taskThread = null;
+  wakeTurn = null;
   counters.chatPosts.length = 0;
   counters.stopPosts.length = 0;
   counters.streamGets.length = 0;
@@ -720,6 +725,8 @@ function fixtureTask() {
     }],
     messages: [],
     model: "deepseek-v4.1-flash",
+    conversation_id: taskThread ?? "",
+    follow_up: !paused ? null : wakeTurn && !wakeTurn.done ? "replying" : null,
     run: {
       stages, steps,
       segments: [{ run_id: "run_a", used, limit: 120, started_at: at(36, 41), ended_at: paused ? at(40, 59) : null, stop: paused ? "budget" : null }],
@@ -850,6 +857,7 @@ function chunksForScenario(thread, scenario, text, messageId, approved = true) {
   }
 
   if (scenario === "statement") {
+    taskThread = thread.id;
     return [
       start,
       { type: "text-start", id: "txt_stmt" },
@@ -1353,6 +1361,26 @@ const server = createServer(async (req, res) => {
   // Test-only: exercise Python-produced cards through the real chat stream and saved history.
   if (path === "/__fixture/task" && req.method === "POST") {
     taskState = String((await readJson(req)).state ?? "running");
+    json(res, 200, { ok: true });
+    return;
+  }
+  // Test-only: the task pauses and the server starts a turn about its report, as `wake` does.
+  if (path === "/__fixture/wake" && req.method === "POST") {
+    const thread = taskThread ? threads.get(taskThread) : null;
+    if (!thread) {
+      json(res, 409, { error: "no statement thread" });
+      return;
+    }
+    taskState = "paused";
+    const messageId = `msg_wake_${Date.now()}`;
+    wakeTurn = startTurn(thread, messageId, [
+      { type: "start", messageId },
+      { type: "text-start", id: "txt_wake" },
+      { type: "text-delta", id: "txt_wake", delta: "Your statement import paused: the parser used all 120 of its steps. " },
+      { type: "text-delta", id: "txt_wake", delta: "Nothing reached your ledger. Press Continue on the card to give it another 120." },
+      { type: "text-end", id: "txt_wake" },
+      { type: "finish", finishReason: "stop" },
+    ], 2500);
     json(res, 200, { ok: true });
     return;
   }

@@ -73,7 +73,9 @@ Each view has one main job. Tables below describe what earns space and the main 
 
 A subagent's work never fills the chat. The thread shows one run card: a host-made status line,
 a progress bar while it runs, the unlock and account actions it needs, **Watch** or **Open run**,
-and **Continue** when the run is paused. The run itself opens in two places:
+and **Continue** when the run is paused. When the run ends while no one is chatting, the agent's
+own reply follows the card in the open thread without a reload
+([wake turn](harness.md#the-wake-turn)). The run itself opens in two places:
 
 - **The canvas** beside the conversation (a sheet at 1180px and narrower), for following a live run.
 - **A full page** at `#activity/run/<task>`, with one step in detail: what it means, the agent's

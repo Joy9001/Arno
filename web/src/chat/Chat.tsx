@@ -62,6 +62,7 @@ import {
 import { photoAttachmentAdapter } from "./photo-attachment";
 import { statementAttachmentAdapter } from "./statement-attachment";
 import { StreamCheckpoints, createThreadStreamStorage } from "./streams";
+import { FOLLOW_REPLY_EVENT } from "../run/runData";
 import { CHAT_TOOLKIT } from "./tools";
 import type { ThreadList } from "./types";
 
@@ -456,6 +457,20 @@ function useFinAgentThreadRuntime({
     checkpoints.set(threadId, storage);
     return () => checkpoints.release(threadId, storage);
   }, [checkpoints, storage, threadId]);
+
+  // A reply the server started (a task report arrived while no one was chatting) has no
+  // checkpoint here. Giving it one is the library's idle-follower path: the runtime attaches
+  // to `GET /chat/{id}/stream` and replays the reply into this thread.
+  useEffect(() => {
+    const follow = (event: Event) => {
+      const target = (event as CustomEvent<{ threadId?: string }>).detail?.threadId;
+      if (!target || aui.threadListItem.getState().remoteId !== target) return;
+      if (storage.getStreamId(target) !== null) return;
+      storage.setStreamId(target, target);
+    };
+    window.addEventListener(FOLLOW_REPLY_EVENT, follow);
+    return () => window.removeEventListener(FOLLOW_REPLY_EVENT, follow);
+  }, [aui, storage]);
 
   const resolveThreadId = useCallback(async () => {
     const item = aui.threadListItem;

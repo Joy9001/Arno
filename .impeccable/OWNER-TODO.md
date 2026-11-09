@@ -17,6 +17,10 @@ docker compose logs api --since 5m | grep -iE "migrat|backup|error"
 You should see `pre-migration dump written to ...` and `applied migrations [17]` the first time a
 new migration runs. Build one image at a time; parallel builds have crashed Docker before.
 
+After the rebuild, any chat whose parser report from the last 24 hours was never read gets a reply
+from the agent on its own: one model call, plus one parser retry if the report was a fixable
+failure. Your SBI chat may be one of them. That is the new behavior, not a fault.
+
 ## 2. End-to-end journeys (about 20 minutes, by hand)
 
 Do these in the real app (`http://<your-tailscale-host>:8000`) on the desktop and once on your
@@ -35,6 +39,11 @@ phone. Note anything that looks wrong with a screenshot.
    - While it is still working, switch off Wi-Fi (or close the tab) for 10 seconds, then reconnect.
    - The answer should resume or show a clear retry; the thread must not duplicate or lose turns.
    - Press stop mid-answer once and confirm the composer becomes usable again.
+4. **The agent speaks when a parser run ends**
+   - Upload a statement, then close the tab while the card says "Reading your statement".
+   - Reopen the chat after the run ends: the agent's own reply sits under the card and says what
+     happened. With the tab open, the reply appears without a reload.
+   - If it paused, press Continue once. If it failed, it may retry once by itself, never twice.
 
 ## 3. Agent eval for schedule payments (costs money)
 

@@ -725,8 +725,15 @@
   font-weight: 800;
 }
 
-.run-primary:hover {
+.run-primary:hover:not(:disabled) {
   background: var(--lime-hover);
+}
+
+/* The agent is replying about this run; a new message would wait behind it. */
+.run-primary:disabled,
+.ask-link:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .run-card-extra {

@@ -399,6 +399,12 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     budget pauses instead of failing, and Continue resumes the same task with a fresh budget.
     One import reads at most 150 PDF pages; a longer statement is downloaded in shorter date
     ranges. Decided November 9, 2026 ([run view](web-interface-design.md#subagent-runs)).
+    When a background task settles while no one is chatting, the server starts a turn with no
+    user message, and the main agent reads the report and tells the user what happened. It may
+    start the parser once more by itself for a failure a second try can fix; a report from that
+    retry gets no further retry, and only the user continues a paused run. The harness keeps the
+    report and leaves the wake to the host; the host's rules are in `agent/wake.py`. Decided
+    November 9, 2026 ([wake turn](harness.md#the-wake-turn)).
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)

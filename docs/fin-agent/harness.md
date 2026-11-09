@@ -88,7 +88,7 @@ The following capabilities are on from the start:
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, and API keys typed in chat are removed before they reach the model or storage ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
 | Code Mode, over the read tools only | Multistep modeling from day one. The design target is a frontier model (`plan.md` §3), and a script is how the model computes without doing arithmetic in its head. Configuration in [`design.md`](design.md#code-mode) |
-| SubAgents with Task Control, for the parser | A statement import is agent work that must not hold up the chat. The main agent delegates it in the background and can steer, answer, and resume it. One `DelegationTasks` owner, opened at startup, keeps each task's record; its `step_store`, a `PostgresStepStore`, saves every step as it happens, and `DelegationReports` brings reports into the next turn. Adopted November 7, 2026 ([`import.md`](import.md#the-subagents-run)) |
+| SubAgents with Task Control, for the parser | A statement import is agent work that must not hold up the chat. The main agent delegates it in the background and can steer, answer, and resume it. One `DelegationTasks` owner, opened at startup, keeps each task's record; its `step_store`, a `PostgresStepStore`, saves every step as it happens, and `DelegationReports` brings reports into the next turn, which the host starts itself when no one is chatting ([wake turn](#the-wake-turn)). Adopted November 7, 2026 ([`import.md`](import.md#the-subagents-run)) |
 | Planning, in the parser subagent only | A 74-page statement is dozens of steps; the plan keeps the subagent on track, and the import card shows it. `PostgresPlanStore` takes an asyncpg pool like the spend store's and creates its own table the same way, with the task ID as the session, since one task can hold several imports |
 
 ### Later, with triggers
@@ -107,6 +107,30 @@ The following capabilities wait for their triggers:
 | Detect Loops | Traces show a spend or request ceiling hit by repetition |
 | Repair Tool Arguments | A local model's evals show malformed JSON in tool calls |
 | Online Evaluation, Trajectory Judge | Not adopted ([system design, step 9](system-design.md#traces-phoenix)) |
+
+## The wake turn
+
+The harness keeps a settled background task's report for the conversation's next run and leaves
+starting that run to the host. Without a host wake, a parser that stops while no one is chatting
+stays silent until the user's next message. Fin-Agent starts the turn itself, through the seam the
+harness documents: a run with no new prompt and `DelegationReports(priority='asap')`, so the
+report is the first thing the model reads.
+
+| Rule | Where |
+| --- | --- |
+| A settled task, a finished turn, and startup each check the thread for a waiting report. Startup wakes only for reports from the last 24 hours. | `TurnManager.schedule_wake`, `api/app.py` |
+| A running turn or a message being prepared reads the report itself, so the wake does nothing. | `api/wake.py` |
+| A task the user stopped waits silently for the next message. | `agent/wake.waiting_reports` |
+| The turn may start one fresh parser task, marked as an automatic retry. A report from that retry gets no retry, even after the user continues it. | `WakePolicy` and `KeepRetryMark`, task event listeners |
+| The report is model-written from a statement and no one is watching, so the turn counts as flagged: lasting writes go on a confirm card. | `api/wake.py` |
+| The turn never resumes a task: continuing a paused run is the user's Continue. | `WakePolicy`, a `TaskFollowUpEvent` listener |
+| A wake turn that fails or is stopped does not wake again. | `TurnManager._run` |
+| No user row is saved; the reply is saved like any other. | `save_records` |
+
+The open chat follows the reply through assistant-ui's idle-follower path: the task payload's
+`follow_up` turns `replying`, and the thread gives its resumable storage the stream id, so the
+runtime attaches to `GET /api/chat/{id}/stream`. `waiting` lasts two minutes at most, so a report
+no wake picked up never keeps a card polling.
 
 ## The tool surface is deliberately wide
 

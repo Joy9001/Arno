@@ -776,6 +776,7 @@ upload: the main agent calls delegate_task("parser", "<attachment ids>", backgro
     one upload is one task; the turn ends at once
 the task runs under the DelegationTasks owner opened at startup; history is saved after each step
 a report or a question waits for the conversation's next turn (DelegationReports)
+    no one chatting: the server starts that turn, and the agent explains or retries once
     a report carries statuses and counts; statement text in it goes through mark()
 a password never passes through these tools or ask_parent: the subagent's wait_for_password
     host tool waits on the vault, and the import card's endpoint fills it

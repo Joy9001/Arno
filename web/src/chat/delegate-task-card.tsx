@@ -8,7 +8,7 @@ import { api, errorMessage } from "../api";
 import { askAgent } from "../ask";
 import { openRun } from "../evidence";
 import { Orb } from "../Orb";
-import { CONTINUE_PROMPT, runEnding, useRun } from "../run/runData";
+import { CONTINUE_PROMPT, FOLLOW_REPLY_EVENT, runEnding, useRun } from "../run/runData";
 import type { AccountSummary, ImportTask, ImportTaskImport } from "../types";
 import { displayText } from "./display-text";
 import { ChatToolFallback } from "./parts";
@@ -264,6 +264,7 @@ function RunCardBody({ task, taskId, reload }: { task: ImportTask; taskId: strin
             <button
               type="button"
               className="run-primary"
+              disabled={task.follow_up === "replying"}
               onClick={() => askAgent(CONTINUE_PROMPT, { send: true })}
             >
               Continue
@@ -286,6 +287,13 @@ function RunCardBody({ task, taskId, reload }: { task: ImportTask; taskId: strin
 
 function ImportTaskCard({ taskId }: { taskId: string }) {
   const { task, error, reload } = useRun(taskId);
+  const replying = task?.follow_up === "replying";
+  const threadId = task?.conversation_id;
+  // The server started a turn about this report; the open thread follows it, once.
+  useEffect(() => {
+    if (!replying || !threadId) return;
+    window.dispatchEvent(new CustomEvent(FOLLOW_REPLY_EVENT, { detail: { threadId } }));
+  }, [replying, threadId]);
   if (task) return <RunCardBody task={task} taskId={taskId} reload={reload} />;
   return (
     <div className="run-card">
