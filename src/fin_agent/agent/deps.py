@@ -29,6 +29,10 @@ class AgentDeps:
     statement_attachments: tuple[str, ...] = ()
     # Server-set: parser tasks in this thread that stopped on their step budget and can continue.
     paused_parser_tasks: tuple[str, ...] = ()
+    # Server-set on a turn the server started with no message: the background tasks whose
+    # reports it reads first, and whether it may start the parser again once.
+    woken_by: tuple[str, ...] = ()
+    may_retry: bool = False
     # Opened statement documents for the parser subagent, keyed by import id. Lives for one run.
     parse_docs: dict[str, Any] = field(default_factory=dict)
     # Charts and cards a tool produced inside this turn, for the post-run extractor.

@@ -23,6 +23,7 @@ from fin_agent.agent.quote import QuoteError, quote_from_messages, resolve_quote
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
 from fin_agent.api.capture import log_photo
 from fin_agent.api.deps import Database, PreparationDep, Session, current_session
+from fin_agent.api.wake import paused_parser_tasks
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import read as read_tools
@@ -201,21 +202,6 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
     return StreamingResponse(iterator, media_type="text/event-stream", headers=headers)
 
 
-def _paused_parser_tasks(app: Any, thread_id: str) -> tuple[str, ...]:
-    """This thread's parser tasks that stopped on their step budget, so a reply can continue one."""
-    tasks = getattr(app.state, "tasks", None)
-    if tasks is None:
-        return ()
-    return tuple(
-        record.id
-        for record in tasks.records.values()
-        if record.conversation_id == thread_id
-        and record.agent_name == "parser"
-        and record.status == "finished"
-        and record.outcome == "budget"
-    )
-
-
 @router.post("/chat")
 async def post_chat(request: Request, session: Session, preparation: PreparationDep) -> Response:
     # `preparation` is a function-scoped dependency: it holds the thread's preparation guard
@@ -389,7 +375,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         capture_kind=capture_kind,
         capture_ref=capture_ref,
         statement_attachments=statement_attachments,
-        paused_parser_tasks=_paused_parser_tasks(app, thread_id),
+        paused_parser_tasks=paused_parser_tasks(getattr(app.state, "tasks", None), thread_id),
     )
     adapter = await VercelAIAdapter.from_request(
         request,

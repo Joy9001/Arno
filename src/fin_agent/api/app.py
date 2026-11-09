@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -20,9 +21,11 @@ from fin_agent.agent.history import recover_crashed_runs
 from fin_agent.agent.parser import build_parser_agent
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.agent.turns import TurnManager
+from fin_agent.agent.wake import waiting_threads
 from fin_agent.api import auth, capture, chat, health, home, imports, ledger, static, tasks, watch
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
+from fin_agent.api.wake import wake
 from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.setup import ensure_setup_token, setup_required
 from fin_agent.config import Settings, get_settings
@@ -104,8 +107,17 @@ async def lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001 - the app still serves read-only panels
         logger.exception("subagent store pool did not start")
     step_store = PostgresStepStore(tasks_pool) if tasks_pool is not None else None
+
+    async def observe(event: Any) -> None:
+        await _settle_parser(event)
+        task = event.task
+        turns = getattr(app.state, "turns", None)
+        # A report that settles while no one is chatting starts the turn that tells the user.
+        if event.event is None and task.status == "finished" and turns is not None:
+            turns.schedule_wake(task.conversation_id)
+
     tasks = DelegationTasks(
-        directory=app.state.settings.tasks_dir, step_store=step_store, observer=_settle_parser
+        directory=app.state.settings.tasks_dir, step_store=step_store, observer=observe
     )
     parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)
     app.state.tasks = tasks
@@ -118,6 +130,9 @@ async def lifespan(app: FastAPI):
             logger.exception("import status reconcile failed")
         app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
         app.state.turns = TurnManager(app.state.agent, tasks=tasks)
+        app.state.turns.waker = lambda thread_id: wake(app, thread_id)
+        for thread_id in waiting_threads(tasks, since=time.time() - 86_400):
+            app.state.turns.schedule_wake(thread_id)
         app.state.jobs = JobRunner()
         if app.state.settings.jobs_enabled:
             app.state.jobs.start()

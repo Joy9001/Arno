@@ -8,6 +8,7 @@ answer text is composed from the account row.
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -189,8 +190,38 @@ async def _imports(conn: Database, task_id: str, *, running: bool) -> list[dict[
     ]
 
 
+# A wake starts within a second of the report; past this, the report waits for the next message.
+FOLLOW_UP_SECONDS = 120
+
+
+def _follow_up(record: Any, turns: Any) -> str | None:
+    """Where the chat stands on this task's report: waiting for a turn, or being answered now.
+
+    The open chat follows a `replying` turn it did not start, so the agent's words appear there.
+    """
+    if record.status != "finished" or record.parent_id is not None or not record.background:
+        return None
+    turn = turns.get(record.conversation_id) if turns is not None else None
+    if (
+        turn is not None
+        and not turn.done.is_set()
+        and turn.wake is not None
+        and record.id in turn.deps.woken_by
+    ):
+        return "replying"
+    fresh = time.time() - (record.finished_at or 0) < FOLLOW_UP_SECONDS
+    if fresh and not record.delivered and not record.user_stopped:
+        return "waiting"
+    return None
+
+
 async def task_payload(
-    conn: Database, tasks: Any, task_id: str, *, answered: str | None = None
+    conn: Database,
+    tasks: Any,
+    task_id: str,
+    *,
+    answered: str | None = None,
+    turns: Any = None,
 ) -> dict[str, Any]:
     record = _record(tasks, task_id)
     history = tasks.history(task_id)
@@ -205,6 +236,7 @@ async def task_payload(
     return {
         "task_id": record.id,
         "agent_name": record.agent_name,
+        "conversation_id": record.conversation_id,
         "state": record.status,
         "outcome": record.outcome,
         "started_at": record.started_at,
@@ -215,6 +247,7 @@ async def task_payload(
         "imports": await _imports(conn, task_id, running=record.status == "running"),
         "messages": _transcript(record, history),
         "model": record.model,
+        "follow_up": _follow_up(record, turns),
         "run": await run_view(
             conn,
             task_id=task_id,
@@ -228,7 +261,9 @@ async def task_payload(
 
 @router.get("/tasks/{task_id}")
 async def task_detail(task_id: str, request: Request, conn: Database) -> dict[str, Any]:
-    return await task_payload(conn, request.app.state.tasks, task_id)
+    return await task_payload(
+        conn, request.app.state.tasks, task_id, turns=getattr(request.app.state, "turns", None)
+    )
 
 
 @router.post("/tasks/{task_id}/answer")

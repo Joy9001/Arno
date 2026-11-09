@@ -52,6 +52,28 @@ async def _categories() -> list[str]:
     return categories
 
 
+WOKEN_TEXT = """
+
+A background task reported
+- No one sent a message. This turn started because a task you delegated settled while the user
+  was away; its report is the first message. Tell the user what happened in two or three plain
+  sentences, from the report only. Nothing reached the ledger unless the report says an import is
+  ready for review.
+- Ready for review: say so; the review is on its import card.
+- Out of steps (outcome `budget`): say why it stopped and point to Continue on the run card. Never
+  resume it yourself.
+- Interrupted by a restart (outcome `cancelled`): say so, and that they can ask you to continue it.
+- Failed: when a second attempt could fix it (a model or network error, or a script mistake the
+  report names), start the parser once more with `delegate_task("parser", "<what failed and what
+  to do differently>", background=True)` and say you are retrying. Otherwise say why, and what
+  the user can do: upload the statement in shorter date ranges, or the bank's CSV export.
+"""
+
+WOKEN_NO_RETRY = """- This report is from an automatic retry. Do not start the parser again:
+  say why it failed and what the user can do.
+"""
+
+
 async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
     text = render_instructions(await _categories())
     attachments = getattr(getattr(ctx, "deps", None), "statement_attachments", ())
@@ -82,6 +104,11 @@ Paused statement import
   `delegate_task("parser", "Continue reading the statement.", resume="<task_id>",
   background=True)` and end your turn. Each resume has a fresh step budget.
 """
+    woken = getattr(getattr(ctx, "deps", None), "woken_by", ())
+    if woken and not read_only:
+        text += WOKEN_TEXT
+        if not getattr(ctx.deps, "may_retry", False):
+            text += WOKEN_NO_RETRY
     return text + READ_ONLY_SUFFIX if read_only else text
 
 

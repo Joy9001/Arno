@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 import weakref
+from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,6 +28,7 @@ from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import save_records
 from fin_agent.agent.models import opencode_conversation
 from fin_agent.agent.number_check import check_messages
+from fin_agent.agent.wake import KeepRetryMark, WakePolicy
 from fin_agent.db.conn import connect
 
 logger = logging.getLogger("fin_agent.chat")
@@ -87,6 +89,8 @@ class ChatTurn:
     reply_id: str | None = None
     note: str | None = None
     ending: str | None = None
+    # Set on a turn the server started for a waiting task report; no user message opened it.
+    wake: WakePolicy | None = None
 
     async def push(self, chunk: str) -> None:
         async with self.condition:
@@ -192,6 +196,10 @@ class TurnManager:
         self.drain_seconds = drain_seconds
         self.tasks = tasks
         self.turns: dict[str, ChatTurn] = {}
+        # Starts a turn for a thread whose task report is waiting; the app sets it.
+        self.waker: Callable[[str], Awaitable[Any]] | None = None
+        self._waking: set[asyncio.Task[Any]] = set()
+        self.closing = False
         self._guard = asyncio.Lock()
         # Weak so a finished request's guard is collected; a missing thread id is request-local.
         self._preparing: weakref.WeakValueDictionary[str, Preparation] = (
@@ -223,6 +231,7 @@ class TurnManager:
         run_id: str | None = None,
         initial_cards: list[dict[str, Any]] | None = None,
         reply_id: str | None = None,
+        wake: WakePolicy | None = None,
     ) -> ChatTurn:
         from pydantic_ai import CancellationToken
 
@@ -242,10 +251,19 @@ class TurnManager:
                 initial_cards=initial_cards or [],
                 reply_id=reply_id,
                 token=CancellationToken(),
+                wake=wake,
             )
             self.turns[thread_id] = turn
             turn.task = asyncio.create_task(self._run(turn, adapter))
             return turn
+
+    def schedule_wake(self, thread_id: str) -> None:
+        """Ask the app to start a turn for this thread's waiting report, off the caller's path."""
+        if self.waker is None or self.closing:
+            return
+        task = asyncio.create_task(self.waker(thread_id))
+        self._waking.add(task)
+        task.add_done_callback(self._waking.discard)
 
     def stop(self, thread_id: str) -> bool:
         turn = self.turns.get(thread_id)
@@ -375,11 +393,22 @@ class TurnManager:
 
             with capture_run_messages() as run_messages:
                 captured_ref[0] = run_messages
-                reports = (
-                    [DelegationReports(self.tasks, conversation_id=turn.thread_id)]
+                # A server-started turn has no prompt: its waiting reports are the first request.
+                reports: list[Any] = (
+                    [
+                        DelegationReports(
+                            self.tasks,
+                            conversation_id=turn.thread_id,
+                            priority="asap" if turn.wake is not None else "when_idle",
+                        )
+                    ]
                     if self.tasks is not None
                     else []
                 )
+                if self.tasks is not None:
+                    reports.append(KeepRetryMark(self.tasks))
+                if turn.wake is not None:
+                    reports.append(turn.wake)
                 bound = self.tasks.bind() if self.tasks is not None else nullcontext()
                 with bound, opencode_conversation(turn.thread_id):
                     stream = adapter.run_stream(
@@ -459,6 +488,10 @@ class TurnManager:
             async with self._guard:
                 if self.turns.get(turn.thread_id) is turn:
                     del self.turns[turn.thread_id]
+            # A report that arrived after this run read its last queued message waits for the
+            # next one. A server-started turn that failed or was stopped does not try again.
+            if turn.wake is None or turn.ending == "complete":
+                self.schedule_wake(turn.thread_id)
 
     async def _encoded(
         self,
@@ -517,6 +550,7 @@ class TurnManager:
 
     async def drain(self) -> None:
         """A deploy waits for running turns; then the token stops the rest and saves them."""
+        self.closing = True
         running = [turn for turn in list(self.turns.values()) if not turn.done.is_set()]
         if not running:
             return
