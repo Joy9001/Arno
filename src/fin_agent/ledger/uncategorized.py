@@ -1,8 +1,10 @@
 """The Uncategorized list: what the categorizer left with a hint, grouped by payee.
 
-Rows are grouped by the same payee key rules match on. A UPI person is grouped by name and shown
-as a person, because rent and a friend's dinner share cannot be told apart from the narration.
-Answering one group writes a `user` rule for that payee and labels every row in one write group.
+Only spending rows belong here: income, transfers, and adjustments never need a category. Rows
+are grouped by the same payee key rules match on. A UPI person is grouped by name and shown as a
+person, because rent and a friend's dinner share cannot be told apart from the narration.
+Answering one group writes a `user` rule for that payee and labels the spending side of every row
+in one write group; the other people on a split keep their own labels untouched.
 """
 
 from __future__ import annotations
@@ -64,7 +66,7 @@ async def uncategorized_rows(conn: Connection) -> list[dict[str, Any]]:
                payee.kind AS payee_kind, payee.display_name AS payee_name
         FROM movements m
         LEFT JOIN statement_lines sl ON sl.movement_id = m.id
-        LEFT JOIN spend ON spend.movement_id = m.id
+        JOIN spend ON spend.movement_id = m.id
         LEFT JOIN label ON label.movement_id = m.id
         LEFT JOIN LATERAL (
             SELECT p.kind, p.display_name
@@ -159,9 +161,50 @@ async def answer(
         )
         for row in rows:
             movement_id = str(row["id"])
+            # Only the spending transfer carries a category. A split's person transfers must
+            # keep their own labels, or the money someone owes would look like spending.
             labels = await conn.fetch(
-                "SELECT * FROM transfer_labels WHERE movement_id = $1", movement_id
+                """
+                SELECT tl.*
+                FROM transfer_labels tl
+                JOIN pgledger_transfers t ON t.id = tl.transfer_id
+                JOIN accounts sp ON sp.kind = 'spending'
+                WHERE tl.movement_id = $1
+                  AND (t.from_account_id = sp.ledger_account_id
+                       OR t.to_account_id = sp.ledger_account_id)
+                ORDER BY tl.transfer_id
+                """,
+                movement_id,
             )
+            if not labels:
+                # A plain expense with no payee, category, or note has no label row at all;
+                # without this the answer writes a rule and leaves the spend uncategorized.
+                transfer = await conn.fetchrow(
+                    """
+                    SELECT t.id
+                    FROM pgledger_transfers t
+                    JOIN accounts sp ON sp.kind = 'spending'
+                    WHERE t.metadata ->> 'movement_id' = $1
+                      AND (t.from_account_id = sp.ledger_account_id
+                           OR t.to_account_id = sp.ledger_account_id)
+                    ORDER BY t.id
+                    LIMIT 1
+                    """,
+                    movement_id,
+                )
+                if transfer is None:  # pragma: no cover - uncategorized_rows only returns spend
+                    continue
+                created = await conn.fetchrow(
+                    """
+                    INSERT INTO transfer_labels (transfer_id, movement_id, category_id)
+                    VALUES ($1, $2, $3) RETURNING *
+                    """,
+                    transfer["id"],
+                    movement_id,
+                    category["id"],
+                )
+                group.record_created("transfer_labels", created)
+                labels = [created]
             for label in labels:
                 if str(label["category_id"] or "") == str(category["id"]):
                     continue

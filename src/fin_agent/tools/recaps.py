@@ -183,9 +183,11 @@ async def _spending_days(conn: Connection, start: date, end: date) -> set[date]:
         JOIN movements m ON m.id = t.metadata ->> 'movement_id'
         JOIN accounts sp ON sp.kind = 'spending'
         WHERE t.to_account_id = sp.ledger_account_id AND m.date BETWEEN $1 AND $2
+          AND m.kind <> 'reversal' AND NOT (m.id = ANY($3))
         """,
         start,
         end,
+        await _reversed_ids(conn),
     )
     return {row["date"] for row in rows}
 
@@ -234,7 +236,14 @@ async def recap_list(conn: Connection, *, today: date | None = None) -> dict[str
     for period in periods:
         spend = await summarize_spending(conn, group_by="none", period=period.span())
         total = spend["total"]
-        is_new = period.id in latest and period.id not in seen and bool(total and total["paise"])
+        # The same rule the badge and the job use: a period is new only when it has spending.
+        # A refund-only month has a negative total and is not new.
+        is_new = (
+            period.id in latest
+            and period.id not in seen
+            and total is not None
+            and total["paise"] > 0
+        )
         items.append({**period.public(), "spent": total, "new": is_new})
     return {
         "as_of": day.isoformat(),
@@ -357,7 +366,7 @@ async def spending_rows(
         f"""
         SELECT m.id, m.date, m.description, m.kind,
                c.name AS category, p.display_name AS payee,
-               coalesce(p.outside_text, false) AS outside,
+               (coalesce(p.outside_text, false) OR coalesce(source.from_source, false)) AS outside,
                sum({signed})::bigint AS amount_paise
         FROM pgledger_transfers t
         JOIN movements m ON m.id = t.metadata ->> 'movement_id'
@@ -365,8 +374,14 @@ async def spending_rows(
         LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
         LEFT JOIN categories c ON c.id = tl.category_id
         LEFT JOIN payees p ON p.id = tl.payee_id
+        LEFT JOIN LATERAL (
+            SELECT bool_or(cap.kind IN ('statement_line', 'photo')) AS from_source
+            FROM captures cap
+            WHERE cap.movement_id = m.id
+        ) source ON true
         WHERE {" AND ".join(clauses)}
-        GROUP BY m.id, m.date, m.description, m.kind, c.name, p.display_name, p.outside_text
+        GROUP BY m.id, m.date, m.description, m.kind, c.name, p.display_name, p.outside_text,
+                 source.from_source
         HAVING sum({signed}) <> 0
         ORDER BY m.date DESC, m.id
         """,  # noqa: S608
@@ -428,7 +443,21 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
     before_total = int(before["total"]["paise"]) if before["total"] else 0
     stories: list[dict[str, Any]] = []
 
-    if total <= 0:
+    if total < 0:
+        # A refund landed in a period with no purchase to offset. The figure is real and must
+        # match the list and the rows, not be flattened to zero.
+        stories.append(
+            {
+                "key": "total",
+                "label": "You spent",
+                "figure": money(total),
+                "line": "Refunds came to more than purchases in this period.",
+                "rows": {"story": "total", "key": None},
+            }
+        )
+        return _result(period, now, stories, outside)
+
+    if total == 0:
         stories.append(
             {
                 "key": "total",

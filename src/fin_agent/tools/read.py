@@ -23,7 +23,7 @@ from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger import settings as settings_mod
 from fin_agent.ledger.common import has_known_balance
 from fin_agent.ledger.common import today as ledger_today
-from fin_agent.tools.mark import mark
+from fin_agent.tools.mark import CLOSE, OPEN, mark
 from fin_agent.tools.periods import resolve_period
 
 
@@ -42,8 +42,14 @@ async def coverage(
     account_id: str | None,
     start: date,
     end: date,
+    today: date | None = None,
 ) -> dict[str, Any]:
-    """Which months have a committed statement. A missing month is a gap, never zero."""
+    """Which months have a committed statement. A missing month is a gap, never zero.
+
+    Days after `today` are not a gap: the ledger cannot hold them, so no statement can cover
+    them. A month that has not started is unknown, never complete.
+    """
+    day = today or ledger_today()
     params: list[Any] = [start, end]
     account_clause = ""
     if account_id is not None:
@@ -81,8 +87,11 @@ async def coverage(
         # first five days must not make the rest of the month look known.
         required_start = max(month_start, start)
         required_end = min(month_end, end)
+        if required_start > day:
+            gaps.append(key)
+            continue
         covered = any(
-            interval_start <= required_start and interval_end >= required_end
+            interval_start <= required_start and interval_end >= min(required_end, day)
             for interval_start, interval_end in merged
         )
         if not covered:
@@ -98,9 +107,9 @@ async def coverage(
 
 
 async def _account_coverage(
-    conn: Connection, account_id: str, start: date, end: date
+    conn: Connection, account_id: str, start: date, end: date, *, today: date | None = None
 ) -> dict[str, Any]:
-    return await coverage(conn, account_id=account_id, start=start, end=end)
+    return await coverage(conn, account_id=account_id, start=start, end=end, today=today)
 
 
 async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
@@ -120,9 +129,19 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     warnings: list[str] = []
     for row in account_rows:
         known = has_known_balance(row)
-        as_of = (row["balance_as_of"] or row["statement_balance_as_of"]) if known else None
+        anchors = [
+            anchor
+            for anchor in (row["balance_as_of"], row["statement_balance_as_of"])
+            if anchor is not None
+        ]
+        # The balance is verified as of the later of its last movement and its stated balance:
+        # a stated balance that matches the ledger adds no movement, and reporting the older
+        # date would make a fresh check look stale.
+        as_of = max(anchors) if known and anchors else None
         balance = money(row["balance_paise"]) if known else None
-        coverage_row = await _account_coverage(conn, row["id"], day - timedelta(days=366), day)
+        coverage_row = await _account_coverage(
+            conn, row["id"], day - timedelta(days=366), day, today=day
+        )
         age = row["statement_age_days"]
         if age is not None and age > 30:
             warnings.append(f"{row['name']} balance is {age} days old")
@@ -332,29 +351,39 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
 async def _resolve_named(conn: Connection, table: str, value: str | None) -> str | None:
     if value is None:
         return None
+    # A name the model read back from a payee group carries the outside-text markers; it is
+    # still the same name, so strip them before matching.
+    value = value.replace(OPEN, "").replace(CLOSE, "").strip()
     if table == "accounts":
-        row = await conn.fetchrow(
-            "SELECT id FROM accounts WHERE lower(name) = lower($1) AND active LIMIT 1", value
+        rows = await conn.fetch(
+            "SELECT id, name FROM accounts WHERE lower(name) = lower($1) AND active ORDER BY id",
+            value,
         )
     elif table == "categories":
-        row = await conn.fetchrow(
-            "SELECT id FROM categories WHERE lower(name) = lower($1) AND active LIMIT 1",
+        rows = await conn.fetch(
+            "SELECT id, name FROM categories WHERE lower(name) = lower($1) AND active ORDER BY id",
             value,
         )
     elif table == "payees":
-        row = await conn.fetchrow(
+        rows = await conn.fetch(
             """
-            SELECT id FROM payees WHERE active AND (lower(display_name) = lower($1) OR upi_id = $2)
-            ORDER BY display_name LIMIT 1
+            SELECT id, display_name AS name FROM payees
+            WHERE active AND (lower(display_name) = lower($1) OR upi_id = $2)
+            ORDER BY display_name, id
             """,
             value,
             value,
         )
     else:  # pragma: no cover - internal misuse
         raise ValueError(table)
-    if row is None:
+    if not rows:
         raise ValueError(f"No {table[:-1]} named {value!r}")
-    return str(row["id"])
+    if len(rows) > 1:
+        # Two accounts or payees can share a name. Picking one would answer about a different
+        # set of rows without saying so.
+        candidates = ", ".join(f"{row['name']} ({row['id']})" for row in rows)
+        raise ValueError(f"{table[:-1].capitalize()} {value!r} is ambiguous: {candidates}")
+    return str(rows[0]["id"])
 
 
 MOVEMENT_FILTERS = frozenset(
@@ -385,15 +414,8 @@ def _check_filters(filters: dict[str, Any], allowed: frozenset[str], period_hint
 
 async def _reversed_ids(conn: Connection) -> list[str]:
     """Movements a live reversal cancels. A corrected entry and its reversal are bookkeeping, not
-    activity, so lists and counts leave both out. Few exist, so one pass covers the ledger."""
-    ids = [
-        str(row["id"])
-        for row in await conn.fetch(
-            "SELECT DISTINCT reverses_id AS id FROM movements WHERE reverses_id IS NOT NULL"
-        )
-    ]
-    states = await movements_mod._reversal_state(conn, ids)  # noqa: SLF001
-    return [movement_id for movement_id in ids if states[movement_id]["reversed"]]
+    activity, so lists and counts leave both out. One definition, shared with the ledger."""
+    return await movements_mod._effectively_reversed_ids(conn)  # noqa: SLF001
 
 
 async def query_movements(
@@ -442,7 +464,7 @@ async def query_movements(
             )
             """
         )
-    if category_id or payee_id or filters.get("text"):
+    if category_id or payee_id:
         label_clauses = ["tl.movement_id = m.id"]
         if category_id:
             params.append(category_id)
@@ -450,14 +472,18 @@ async def query_movements(
         if payee_id:
             params.append(payee_id)
             label_clauses.append(f"tl.payee_id = ${len(params)}")
-        if filters.get("text"):
-            pattern = f"%{filters['text']}%"
-            params.extend([pattern, pattern])
-            label_clauses.append(
-                f"(tl.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})"
-            )
         clauses.append(
             f"EXISTS (SELECT 1 FROM transfer_labels tl WHERE {' AND '.join(label_clauses)})"
+        )
+    if filters.get("text"):
+        # A description lives on the movement, so it must match even when the row has no label
+        # (a plain expense with no payee, category, or note). The note needs a label row.
+        pattern = f"%{filters['text']}%"
+        params.extend([pattern, pattern])
+        clauses.append(
+            f"(m.description ILIKE ${len(params) - 1} OR EXISTS ("
+            "SELECT 1 FROM transfer_labels tl "
+            f"WHERE tl.movement_id = m.id AND tl.note ILIKE ${len(params)}))"
         )
     if filters.get("min_paise") is not None or filters.get("max_paise") is not None:
         inner: list[str] = []
@@ -471,13 +497,6 @@ async def query_movements(
             "EXISTS (SELECT 1 FROM pgledger_transfers t WHERE t.metadata ->> 'movement_id' = m.id "
             f"AND {' AND '.join(inner)})"
         )
-    if cursor:
-        try:
-            cursor_date, cursor_id = cursor.split("|", 1)
-            params.extend([date.fromisoformat(cursor_date), cursor_id])
-        except (ValueError, TypeError) as exc:
-            raise ValueError("Invalid cursor") from exc
-        clauses.append(f"(m.date, m.id) < (${len(params) - 1}, ${len(params)})")
     if not filters.get("include_reversed"):
         # In SQL, not after LIMIT, so total_count, the page, and next_cursor agree.
         clauses.append("m.kind <> 'reversal'")
@@ -486,6 +505,7 @@ async def query_movements(
             params.append(hidden)
             clauses.append(f"NOT (m.id = ANY(${len(params)}))")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    # The cursor narrows the page, never the total: every page reports the whole match count.
     total = int(
         (
             await conn.fetchrow(
@@ -494,14 +514,24 @@ async def query_movements(
             )
         )["n"]
     )
-    params.append(limit + 1)
+    page_where = where
+    page_params = list(params)
+    if cursor:
+        try:
+            cursor_date, cursor_id = cursor.split("|", 1)
+            page_params.extend([date.fromisoformat(cursor_date), cursor_id])
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Invalid cursor") from exc
+        cursor_clause = f"(m.date, m.id) < (${len(page_params) - 1}, ${len(page_params)})"
+        page_where = f"WHERE {' AND '.join([*clauses, cursor_clause])}"
+    page_params.append(limit + 1)
     rows = await conn.fetch(
         f"""
-        SELECT m.* FROM movements m {where}
+        SELECT m.* FROM movements m {page_where}
         ORDER BY m.date DESC, m.id DESC
-        LIMIT ${len(params)}
+        LIMIT ${len(page_params)}
         """,  # noqa: S608
-        *params,
+        *page_params,
     )
     states = await movements_mod._reversal_state(  # noqa: SLF001
         conn, [str(row["id"]) for row in rows]
@@ -513,15 +543,17 @@ async def query_movements(
     items: list[dict[str, Any]] = []
     for row in visible:
         payload = await movements_mod.movement_payload(conn, row, state=states[str(row["id"])])
-        is_outside = [
+        # A statement line or a photo is outside text whatever its payee: the description is
+        # still the bank's words, not the user's, and it must be marked before the model reads it.
+        from_source = any(kind in {"statement_line", "photo"} for kind in payload["evidence"])
+        payee_outside = [
             await _payee_is_outside(conn, transfer.get("payee_id"))
             for transfer in payload["transfers"]
         ]
         transfers: list[dict[str, Any]] = []
-        for transfer, hidden_text in zip(payload["transfers"], is_outside, strict=False):
+        for transfer, hidden_text in zip(payload["transfers"], payee_outside, strict=False):
             if hidden_text:
                 transfer["payee_name"] = mark(transfer["payee_name"])
-                outside = True
             transfers.append(
                 {
                     **transfer,
@@ -530,8 +562,9 @@ async def query_movements(
                     "amount": money(int(transfer["amount_paise"])),
                 }
             )
-        if any(is_outside):
+        if from_source or any(payee_outside):
             payload["description"] = mark(payload["description"])
+            outside = True
         items.append(
             {
                 "id": payload["id"],
@@ -558,6 +591,7 @@ async def query_movements(
             account_id=account_id,
             start=start or day - timedelta(days=366),
             end=end or day,
+            today=day,
         ),
         "outside_text": outside,
     }
@@ -646,6 +680,12 @@ async def summarize_spending(
     outside = False
     groups: list[dict[str, Any]] = []
     for row in rows:
+        amount_paise = int(row["amount_paise"])
+        count = int(row["n"])
+        if amount_paise == 0 and count == 0:
+            # A movement a live reversal cancelled leaves nothing to show. It still keeps the
+            # period's total defined, but it must not appear as a ₹0 category.
+            continue
         key = row["key"]
         if group_by == "payee" and await _payee_is_outside(conn, row.get("payee_id")):
             key = mark(key)
@@ -653,11 +693,11 @@ async def summarize_spending(
         groups.append(
             {
                 "key": key,
-                "amount": money(int(row["amount_paise"])),
-                "count": int(row["n"]),
+                "amount": money(amount_paise),
+                "count": count,
             }
         )
-    cov = await coverage(conn, account_id=account_id, start=start, end=end)
+    cov = await coverage(conn, account_id=account_id, start=start, end=end, today=day)
     total_paise = sum(int(row["amount_paise"]) for row in rows)
     total = money(total_paise) if rows or cov["complete"] else None
     return {
