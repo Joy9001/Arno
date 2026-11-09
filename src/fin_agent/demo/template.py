@@ -31,7 +31,7 @@ def _admin_dsn(admin_dsn: str) -> str:
 async def create_database(admin_dsn: str, target: str) -> None:
     if not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
+    async with connect(_admin_dsn(admin_dsn)) as conn:
         await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(target)} WITH (FORCE)")
         await conn.execute(f"CREATE DATABASE {quote_ident(target)}")
 
@@ -39,7 +39,7 @@ async def create_database(admin_dsn: str, target: str) -> None:
 async def drop_database(admin_dsn: str, target: str) -> None:
     if not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
+    async with connect(_admin_dsn(admin_dsn)) as conn:
         await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(target)} WITH (FORCE)")
 
 
@@ -52,7 +52,7 @@ async def clone_database(
 ) -> None:
     if not NAME_RE.match(source) or not NAME_RE.match(target):
         raise ValueError("Database names must be lower-case letters, digits and underscores")
-    async with connect(_admin_dsn(admin_dsn), autocommit=True) as conn:
+    async with connect(_admin_dsn(admin_dsn)) as conn:
         if terminate:
             await conn.execute(
                 """

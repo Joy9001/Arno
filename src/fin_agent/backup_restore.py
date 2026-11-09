@@ -52,7 +52,9 @@ ROLE_STATEMENTS = (
 )
 
 # `agent_ro`'s SELECT list is the security boundary and is not guessed here: it comes back from
-# the dump's own grants. The dumper's broad read access is safe to re-grant in full.
+# the dump's own grants. The dumper's broad read access is safe to re-grant in full, which also
+# repairs a dump made by an older image whose `pg_dump --no-privileges` carried no ACLs at all
+# (`agent_ro` on such a dump stays SELECT-less until a current backup replaces it).
 BACKUP_GRANTS = (
     "GRANT USAGE ON SCHEMA public TO backup",
     "GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup",
@@ -274,11 +276,12 @@ def _restore_dump(dump: Path, target_dsn: str) -> None:
         executable = _binary("PSQL", "psql")
         command = [executable, "-v", "ON_ERROR_STOP=1", "-d", dbname, "-f", str(dump)]
     else:
+        # The dump's GRANTs are applied: `ensure_roles` has already created the roles they name,
+        # and `agent_ro`'s SELECT list is the migrations', not a second copy in this file.
         executable = _binary("PG_RESTORE", "pg_restore")
         command = [
             executable,
             "--no-owner",
-            "--no-privileges",
             "-d",
             dbname,
             str(dump),

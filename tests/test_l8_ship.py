@@ -33,7 +33,7 @@ REQUIRED_POLICY = (
 async def _admin_conn() -> AsyncIterator[Connection]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info), autocommit=True) as conn:
+    async with connect(make_conninfo(**info)) as conn:
         yield conn
 
 
@@ -186,7 +186,6 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
         [
             _binary("PG_DUMP", "pg_dump"),
             "--no-owner",
-            "--no-privileges",
             "--format=custom",
             "-f",
             str(dump),
@@ -242,6 +241,17 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
             assert (await restored.fetchrow("SELECT count(*) AS n FROM audit_log"))["n"] >= 1
             assert (await restored.fetchrow("SELECT count(*) AS n FROM schedules"))["n"] > 0
             assert (await restored.fetchrow("SELECT count(*) AS n FROM goals"))["n"] > 0
+            # The dump carries the migrations' table grants, so a restored instance can answer and
+            # back up again. `agent_ro` still cannot read the auth tables.
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
+            )
+            assert not await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'users', 'SELECT')"
+            )
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
+            )
     finally:
         async with _admin_conn() as admin:
             await admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_restore_test" WITH (FORCE)')
@@ -347,6 +357,13 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
                     "SELECT count(*) AS n FROM preferences WHERE body = 'raced write'"
                 )
             )["n"]
+            # The sidecar's own dump must carry the grants, or a restored instance cannot answer.
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
+            )
+            assert not await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'users', 'SELECT')"
+            )
         assert raced == 0
     finally:
         async with _admin_conn() as admin:

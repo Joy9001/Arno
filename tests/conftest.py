@@ -220,7 +220,7 @@ async def cluster_lock() -> AsyncIterator[None]:
     """Hold a Postgres advisory lock that all workers can see, on the shared server."""
     info = conninfo_to_dict(_dsn())
     info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info), autocommit=True) as conn:
+    async with connect(make_conninfo(**info)) as conn:
         await conn.execute("SELECT pg_advisory_lock($1)", CLUSTER_LOCK_KEY)
         try:
             yield
@@ -233,7 +233,7 @@ async def _ensure_database() -> None:
     info = conninfo_to_dict(_dsn())
     name = info["dbname"]
     info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info), autocommit=True) as conn:
+    async with connect(make_conninfo(**info)) as conn:
         exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
         if not exists:
             await conn.execute(f"CREATE DATABASE {quote_ident(name)}")

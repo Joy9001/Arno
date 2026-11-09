@@ -29,7 +29,7 @@ def _backup_dsn() -> str | None:
 async def _admin_conn() -> AsyncIterator[Connection]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info), autocommit=True) as conn:
+    async with connect(make_conninfo(**info)) as conn:
         yield conn
 
 

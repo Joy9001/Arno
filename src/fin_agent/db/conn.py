@@ -192,12 +192,10 @@ class _ConnectContext:
         dsn: str | None = None,
         *,
         role: Role | None = None,
-        autocommit: bool = False,
         connect_timeout: int = 10,
     ) -> None:
         self._dsn = dsn
         self._role = role
-        self._autocommit = autocommit
         self._connect_timeout = connect_timeout
         self._conn: Connection | None = None
 
@@ -221,8 +219,7 @@ def connect(
     dsn: str | None = None,
     *,
     role: Role | None = None,
-    autocommit: bool = False,
     connect_timeout: int = 10,
 ) -> _ConnectContext:
     """Open a connection. Callers own the connection's lifetime."""
-    return _ConnectContext(dsn, role=role, autocommit=autocommit, connect_timeout=connect_timeout)
+    return _ConnectContext(dsn, role=role, connect_timeout=connect_timeout)

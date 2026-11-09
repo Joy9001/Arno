@@ -370,7 +370,10 @@ docker compose up -d
 The command creates `fin_agent` if it is absent, refuses to touch a database that already has
 tables, restores the newest snapshot, recomputes every table's row count and hash, and checks that
 every transfer balances and every account balance equals its entries. It prints one `ok` line per
-check and exits non-zero on any mismatch.
+check and exits non-zero on any mismatch. It also recreates the `agent_ro` and `backup` login roles
+and applies the dump's table grants, so `run_query` and the backup sidecar work on the restored
+database. Restore from a backup made by the current image: an older dump still restores and the app
+works, but `run_query` stays unprivileged until a new backup replaces it.
 
 If the database already has tables and you really mean to replace it, add `--force`. That drops
 and recreates the target database; it is the destructive path, so it is not the default.

@@ -52,16 +52,9 @@ SQL
 
 snapshot_pid=""
 snapshot_dir=""
-sleep_pid=""
 in_backup=0
 
 stop_snapshot() {
-    # Kill the idle sleep child too, so a stopped container leaves nothing behind.
-    if [ -n "$sleep_pid" ]; then
-        kill "$sleep_pid" 2>/dev/null || true
-        wait "$sleep_pid" 2>/dev/null || true
-        sleep_pid=""
-    fi
     if [ -n "$snapshot_pid" ]; then
         kill "$snapshot_pid" 2>/dev/null || true
         wait "$snapshot_pid" 2>/dev/null || true
@@ -124,7 +117,9 @@ run_backup() {
         return 1
     fi
 
-    if ! pg_dump --snapshot="$snapshot" --no-owner --no-privileges --format=custom \
+    # Keep the table grants: `agent_ro`'s SELECT list and the dumper's own read access are what
+    # make a restored database usable, and the migrations are their only source.
+    if ! pg_dump --snapshot="$snapshot" --no-owner --format=custom \
         --file="$DUMP" "$DATABASE_URL"; then
         finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         duration=$(( $(date +%s) - start_epoch ))
@@ -203,10 +198,12 @@ while true; do
         run_backup || true
         in_backup=0
     fi
-    # A backgrounded sleep keeps the shell able to run the TERM trap immediately; a foreground
-    # sleep defers it until the full interval has passed.
-    sleep "$INTERVAL" &
-    sleep_pid=$!
-    wait "$sleep_pid" || true
-    sleep_pid=""
+    # Sleep in one-second slices. The shell runs the TERM trap only between commands, and a
+    # backgrounded sleep plus `wait` loses a TERM that lands just before `wait` starts (dash
+    # then sleeps the whole interval). A slice bounds any stop to about a second.
+    slept=0
+    while [ "$slept" -lt "$INTERVAL" ]; do
+        sleep 1
+        slept=$((slept + 1))
+    done
 done
