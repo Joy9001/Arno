@@ -6,6 +6,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Installed console commands need the runtime workspace, rather than site-packages.
 REPO_ROOT = Path(
@@ -20,10 +21,32 @@ class ConfigurationError(RuntimeError):
 
 
 def _flag(name: str, default: bool) -> bool:
+    """A boolean setting: unset or blank keeps the default, and a typo is an error, not False."""
     value = os.environ.get(name)
-    if value is None:
+    if value is None or not value.strip():
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(
+        f"{name} must be one of 1/0, true/false, yes/no, or on/off, not {value!r}"
+    )
+
+
+def _positive_int(name: str, default: int) -> int:
+    """A whole number greater than zero, with the variable named in any error."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        number = int(value)
+    except ValueError:
+        raise ConfigurationError(f"{name} must be a whole number, not {value!r}") from None
+    if number <= 0:
+        raise ConfigurationError(f"{name} must be greater than zero, not {number}")
+    return number
 
 
 def _validate_postgres_dsn(dsn: str) -> None:
@@ -72,11 +95,25 @@ class Settings:
             raise ConfigurationError(f"DATABASE_URL is not a valid libpq URI: {exc}") from exc
 
         rp_id = os.environ.get("FIN_AGENT_RP_ID", "localhost").strip()
+        if not rp_id:
+            raise ConfigurationError(
+                "FIN_AGENT_RP_ID must be a hostname such as box.tailnet.ts.net"
+            )
         rp_origin = (
             os.environ.get("FIN_AGENT_RP_ORIGIN", f"http://{rp_id}:8000").strip().rstrip("/")
         )
-        if not rp_origin.startswith(("http://", "https://")):
-            raise ConfigurationError("FIN_AGENT_RP_ORIGIN must be an http(s) origin")
+        parsed_origin = urlsplit(rp_origin)
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+        ):
+            raise ConfigurationError(
+                "FIN_AGENT_RP_ORIGIN must be an origin such as https://box.tailnet.ts.net, "
+                "with no path, query, or fragment"
+            )
 
         hosts = os.environ.get("FIN_AGENT_TRUSTED_HOSTS")
         trusted_hosts = (
@@ -95,8 +132,8 @@ class Settings:
             rp_name=os.environ.get("FIN_AGENT_RP_NAME", "Fin-Agent").strip(),
             trusted_hosts=trusted_hosts,
             cookie_secure=_flag("FIN_AGENT_COOKIE_SECURE", rp_origin.startswith("https://")),
-            session_ttl_days=int(os.environ.get("FIN_AGENT_SESSION_TTL_DAYS", "30")),
-            setup_token_ttl_hours=int(os.environ.get("FIN_AGENT_SETUP_TOKEN_TTL_HOURS", "24")),
+            session_ttl_days=_positive_int("FIN_AGENT_SESSION_TTL_DAYS", 30),
+            setup_token_ttl_hours=_positive_int("FIN_AGENT_SETUP_TOKEN_TTL_HOURS", 24),
             auto_migrate=_flag("FIN_AGENT_AUTO_MIGRATE", True),
             jobs_enabled=_flag("FIN_AGENT_JOBS_ENABLED", True),
             agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,

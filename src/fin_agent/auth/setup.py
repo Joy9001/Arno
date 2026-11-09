@@ -157,9 +157,18 @@ async def resolve_setup_token(conn: Connection, token: str) -> SetupToken | None
     return found
 
 
-async def consume_setup_token(conn: Connection, token_id: str) -> None:
-    async with conn.transaction():
-        await conn.execute(
-            "UPDATE setup_tokens SET consumed_at = now() WHERE id = $1 AND consumed_at IS NULL",
-            token_id,
-        )
+async def consume_setup_token(conn: Connection, token_id: str) -> bool:
+    """Mark one link used, atomically. `False` when another ceremony already took it.
+
+    Two browsers can both open the same link: the conditional update is what makes the last one
+    lose, so one link registers exactly one passkey.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE setup_tokens SET consumed_at = now()
+        WHERE id = $1 AND consumed_at IS NULL
+        RETURNING id
+        """,
+        token_id,
+    )
+    return row is not None

@@ -191,6 +191,8 @@ async def finish_registration(
     aaguid = str(verified.aaguid) if verified.aaguid else None
 
     async with conn.transaction():
+        if not await consume_setup_token(conn, token["id"]):
+            raise PasskeyError("This enrollment link expired or was already used.")
         if challenge.user_id is None:
             user = await conn.fetchrow(
                 """
@@ -224,7 +226,6 @@ async def finish_registration(
             aaguid,
             "Passkey",
         )
-        await consume_setup_token(conn, token["id"])
     return user, token["kind"]
 
 

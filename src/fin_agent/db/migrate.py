@@ -52,13 +52,14 @@ def _expand(path: Path, seen: tuple[Path, ...] = ()) -> str:
     resolved = path.resolve()
     if resolved in seen:
         raise MigrationError(f"Include cycle at {resolved}")
-    if ALLOWED_INCLUDE_ROOT not in resolved.parents:
-        raise MigrationError(f"Include escapes the db directory: {resolved}")
     lines: list[str] = []
     for line in resolved.read_text(encoding="utf-8").splitlines():
         match = INCLUDE_RE.match(line)
         if match:
-            lines.append(_expand(resolved.parent / match.group(1), (*seen, resolved)))
+            included = (resolved.parent / match.group(1)).resolve()
+            if ALLOWED_INCLUDE_ROOT not in included.parents:
+                raise MigrationError(f"Include escapes the db directory: {included}")
+            lines.append(_expand(included, (*seen, resolved)))
         else:
             lines.append(line)
     return "\n".join(lines) + "\n"

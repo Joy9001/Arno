@@ -14,6 +14,7 @@ from fin_agent.db.conn import Connection
 from fin_agent.india.workdays import last_working_day
 from fin_agent.ledger.accounts import create_account, list_accounts, set_statement_balance
 from fin_agent.ledger.categories import ensure_default_categories, upsert_rule
+from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.goals import create_goal, update_goal
 from fin_agent.ledger.movements import (
     correct_movement,
@@ -163,6 +164,12 @@ async def seed_demo(
     the coverage rows off entirely.
     """
     today = today or date.today()
+    ledger_day = ledger_today()
+    if today > ledger_day:
+        raise DemoSeedError(
+            f"The demo anchor {today.isoformat()} is in the future. The ledger refuses movements "
+            f"dated after today ({ledger_day.isoformat()}); pass today or an earlier date."
+        )
     if not reset:
         existing = (
             await conn.fetchrow(

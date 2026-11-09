@@ -63,14 +63,26 @@ def _settings():
         raise typer.Exit(code=2) from exc
 
 
-def _echo_enrollment(text: str) -> None:
-    """Print a QR code even on a console whose stdout is not UTF-8 yet."""
-    try:
-        typer.echo(text)
-    except UnicodeEncodeError:
-        if hasattr(sys.stdout, "reconfigure"):
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        typer.echo(text)
+def _configure_console() -> None:
+    """Write UTF-8 with replacement, so `₹` or a QR block can't crash a legacy console.
+
+    A Windows console still reports a code page such as cp1252, where `₹` is unencodable:
+    `typer.echo` would raise after the turn was already saved, and the user never saw the answer.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except OSError, ValueError:  # pragma: no cover - a closed or exotic stream
+            pass
+
+
+@app.callback()
+def _entry() -> None:
+    """Every command runs on a console that can carry the rupee sign and QR blocks."""
+    _configure_console()
 
 
 async def _migrate(settings) -> list[str]:
@@ -133,7 +145,7 @@ def setup_token() -> None:
     if issued is None:
         typer.echo("Setup is complete; use Settings → Passkeys to add a device.")
         raise typer.Exit(code=0)
-    _echo_enrollment(
+    typer.echo(
         enrollment_message(
             settings.rp_origin,
             issued.token,
@@ -189,7 +201,7 @@ def passkeys_reset() -> None:
 
     typer.echo(f"Deleted {deleted} passkey(s) and revoked {revoked} session(s).")
     if issued:
-        _echo_enrollment(
+        typer.echo(
             enrollment_message(
                 settings.rp_origin,
                 issued.token,
@@ -221,6 +233,9 @@ async def _run_chat_command(settings, thread_id: str | None, message: str | None
         agent = build_agent(spend_store=spend_store)
         async with connect(settings.database_url) as conn:
             thread = await get_thread(conn, thread_id) if thread_id else None
+            if thread_id is not None and thread is None:
+                typer.echo(f"error: no thread {thread_id} on this instance", err=True)
+                raise typer.Exit(code=2)
             if thread is None:
                 thread = await create_thread(conn, title=title_for(message or "Terminal chat"))
             thread_id = str(thread["id"])
@@ -464,8 +479,14 @@ def export_command(
     ),
 ) -> None:
     """Export the whole ledger as JSON, a CSV zip, or a pg_dump."""
+    from fin_agent.ledger.errors import UnavailableLedgerError
+
     settings = _settings()
-    data = asyncio.run(_export(settings, format=format))
+    try:
+        data = asyncio.run(_export(settings, format=format))
+    except UnavailableLedgerError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     if out is None:
         if isinstance(data, bytes):
             sys.stdout.buffer.write(data)

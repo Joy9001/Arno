@@ -41,6 +41,28 @@ REQUIRED_TABLES = {
     "schema_version",
 }
 
+# Login roles live on the cluster, not in a database, so `pg_dump` cannot carry them. A restore
+# into a fresh cluster must recreate them before anything names them. The list and settings mirror
+# migrations 0002 and 0006; their passwords are set again from the environment at boot.
+ROLE_STATEMENTS = (
+    "ALTER ROLE agent_ro NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "ALTER ROLE agent_ro SET default_transaction_read_only = on",
+    "ALTER ROLE agent_ro SET statement_timeout = '2s'",
+    "ALTER ROLE backup NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+)
+
+# `agent_ro`'s SELECT list is the security boundary and is not guessed here: it comes back from
+# the dump's own grants. The dumper's broad read access is safe to re-grant in full.
+BACKUP_GRANTS = (
+    "GRANT USAGE ON SCHEMA public TO backup",
+    "GRANT SELECT ON ALL TABLES IN SCHEMA public TO backup",
+    "GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO backup",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO backup",
+    "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO backup",
+    "GRANT INSERT ON backup_runs TO backup",
+    "GRANT EXECUTE ON FUNCTION fin_agent_backup_manifest() TO backup",
+)
+
 
 class RestoreError(RuntimeError):
     """The restore could not run, or the restored database failed verification."""
@@ -180,7 +202,12 @@ async def _database_has_tables(target_dsn: str) -> bool:
 
 
 async def prepare_database(target_dsn: str, *, force: bool = False) -> str:
-    """Create the target, or replace it only when it is empty or `force` is set."""
+    """Create the target, or replace it only when it is empty or `force` is set.
+
+    The login roles are cluster state, not database state, so they are recreated here too: a
+    restore into a fresh cluster has none, and the API boot (`ALTER ROLE …`) would fail. Boot sets
+    their passwords from the environment.
+    """
     admin, info = _admin_dsn(target_dsn)
     name = str(info["dbname"])
     async with connect(admin) as conn:
@@ -200,7 +227,32 @@ async def prepare_database(target_dsn: str, *, force: bool = False) -> str:
             )
             await conn.execute(f"DROP DATABASE IF EXISTS {quote_ident(name)}")
         await conn.execute(f"CREATE DATABASE {quote_ident(name)}")
+    try:
+        await ensure_roles(target_dsn)
+    except PostgresError as exc:
+        raise RestoreError(f"Could not recreate the database's login roles: {exc}") from exc
     return name
+
+
+async def ensure_roles(target_dsn: str) -> None:
+    """Recreate the two login roles and their cluster settings after a fresh-cluster restore."""
+    async with connect(target_dsn) as conn:
+        for role in ("agent_ro", "backup"):
+            exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", role)
+            if exists is None:
+                await conn.execute(f"CREATE ROLE {quote_ident(role)} LOGIN")
+        for statement in ROLE_STATEMENTS:
+            await conn.execute(statement)
+        database = await conn.fetchval("SELECT current_database()")
+        await conn.execute(f"GRANT CONNECT ON DATABASE {quote_ident(database)} TO agent_ro, backup")
+        await conn.execute(f"REVOKE TEMP ON DATABASE {quote_ident(database)} FROM PUBLIC")
+
+
+async def grant_backup_reader(target_dsn: str) -> None:
+    """Give the backup role its read access again after the table privileges were restored."""
+    async with connect(target_dsn) as conn:
+        for statement in BACKUP_GRANTS:
+            await conn.execute(statement)
 
 
 def _restore_dump(dump: Path, target_dsn: str) -> None:
@@ -346,6 +398,10 @@ async def restore_from_directory(
 
     name = await prepare_database(target_dsn, force=force)
     _restore_dump(dump, target_dsn)
+    try:
+        await grant_backup_reader(target_dsn)
+    except PostgresError as exc:
+        raise RestoreError(f"Could not restore the backup role's grants: {exc}") from exc
     async with connect(target_dsn) as conn:
         checks, mismatches = await verify_database(
             conn,

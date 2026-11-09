@@ -364,27 +364,25 @@ async def rename_passkey(
 
 @router.delete("/passkeys/{passkey_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_passkey(passkey_id: str, session: FreshSession, conn: Database) -> Response:
-    row = await conn.fetchrow(
-        "SELECT id FROM webauthn_credentials WHERE id = $1 AND user_id = $2",
-        passkey_id,
-        session["user_id"],
-    )
-    if row is None:
-        return problem(404, detail="That passkey is not registered on this instance.")
-    remaining = await conn.fetchrow(
-        "SELECT count(*) AS n FROM webauthn_credentials WHERE user_id = $1",
-        session["user_id"],
-    )
-    if remaining["n"] <= 1:
-        return problem(
-            409,
-            detail="That is the last passkey. Add another device before deleting it.",
+    async with conn.transaction():
+        # lock the user's passkeys, so two deletes at once cannot both see "one will be left".
+        rows = await conn.fetch(
+            "SELECT id FROM webauthn_credentials WHERE user_id = $1 FOR UPDATE",
+            session["user_id"],
         )
-    await conn.execute(
-        "DELETE FROM webauthn_credentials WHERE id = $1 AND user_id = $2",
-        passkey_id,
-        session["user_id"],
-    )
+        passkey_ids = [str(row["id"]) for row in rows]
+        if passkey_id not in passkey_ids:
+            return problem(404, detail="That passkey is not registered on this instance.")
+        if len(passkey_ids) <= 1:
+            return problem(
+                409,
+                detail="That is the last passkey. Add another device before deleting it.",
+            )
+        await conn.execute(
+            "DELETE FROM webauthn_credentials WHERE id = $1 AND user_id = $2",
+            passkey_id,
+            session["user_id"],
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
