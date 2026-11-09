@@ -351,18 +351,34 @@ async def log_photo(
     )
 
     # This updates model context only, not the UI messages table. The agent must
-    # see the extracted facts and know the movement has already been logged.
-    await history_mod.append_outside_entry(
-        conn,
-        thread,
-        _photo_history_text(
-            merchant=merchant,
-            amount_paise=amount_paise,
-            when=when,
-            method=method,
-            upi_ref=upi_ref,
-        ),
-    )
+    # see the extracted facts and know the movement has already been logged. A retry of the same
+    # photo must not repeat it, so the marker and the note commit together.
+    async with conn.transaction():
+        marked = await conn.fetchval(
+            """
+            UPDATE captures
+            SET history_at = now()
+            WHERE kind = 'photo' AND ref = $1 AND history_at IS NULL
+            RETURNING id
+            """,
+            str(row["id"]),
+        )
+        already_noted = marked is None and await conn.fetchval(
+            "SELECT 1 FROM captures WHERE kind = 'photo' AND ref = $1",
+            str(row["id"]),
+        )
+        if not already_noted:
+            await history_mod.append_outside_entry(
+                conn,
+                thread,
+                _photo_history_text(
+                    merchant=merchant,
+                    amount_paise=amount_paise,
+                    when=when,
+                    method=method,
+                    upi_ref=upi_ref,
+                ),
+            )
 
     card = {
         "card": "capture",

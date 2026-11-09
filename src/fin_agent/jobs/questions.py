@@ -35,13 +35,22 @@ def spend_budget(question: dict[str, Any]) -> Decimal:
     return (Decimal(int(cents)) / 100).quantize(Decimal("0.01"))
 
 
-async def answer_question(
+def ceiling_answer(question: dict[str, Any]) -> str:
+    """The plain answer one run writes when it stopped at its own ceiling."""
+    return (
+        f"This scheduled question hit its per-run ceiling ({REQUEST_LIMIT} model requests "
+        f"or {spend_budget(question)} USD). It stopped early; narrow the question or raise "
+        "its spend limit in Settings."
+    )
+
+
+async def _answer(
     conn: Connection,
     question: dict[str, Any],
     *,
     agent: Any,
-) -> str:
-    """Run the read-only agent over the pinned snapshot and return its answer."""
+) -> tuple[str, bool]:
+    """The agent's answer, or the plain ceiling note; and whether a ceiling stopped it."""
     # TODO(L6): a real scheduled-question run against the configured CHAT endpoint is still
     # pending; tests use a scripted model and prove the read-only/ceiling wiring.
     prompt = str(question["prompt"])
@@ -67,13 +76,21 @@ async def answer_question(
             ),
         )
     except UsageLimitExceeded:
-        return (
-            f"This scheduled question hit its per-run ceiling ({REQUEST_LIMIT} model requests "
-            f"or {spend_budget(question)} USD). It stopped early; narrow the question or raise "
-            "its spend limit in Settings."
-        )
+        # Named on the answer and marked on the inbox item, so it never reads as an answer.
+        return ceiling_answer(question), True
     answer = str(result.output or "").strip()
-    return answer or "The question ran, but the model returned no answer."
+    return answer or "The question ran, but the model returned no answer.", False
+
+
+async def answer_question(
+    conn: Connection,
+    question: dict[str, Any],
+    *,
+    agent: Any,
+) -> str:
+    """Run the read-only agent over the pinned snapshot and return its answer."""
+    answer, _ceiling = await _answer(conn, question, agent=agent)
+    return answer
 
 
 async def record_answer(
@@ -82,6 +99,7 @@ async def record_answer(
     question: dict[str, Any],
     answer: str,
     period: str,
+    ceiling: bool = False,
 ) -> dict[str, Any] | None:
     row = await create_notification(
         conn,
@@ -93,6 +111,7 @@ async def record_answer(
             "prompt": question["prompt"],
             "period": period,
             "spend_limit_usd": str(spend_budget(question)),
+            "ceiling": ceiling,
         },
         dedupe_key=f"scheduled_question:{question['id']}:{period}",
     )
@@ -141,12 +160,15 @@ async def run_scheduled_question(
             spend_store=spend_store,
             question_budget_usd=spend_budget(dict(question)),
         )
-    answer = await answer_question(conn, dict(question), agent=agent)
-    row = await record_answer(conn, question=dict(question), answer=answer, period=period)
+    answer, ceiling = await _answer(conn, dict(question), agent=agent)
+    row = await record_answer(
+        conn, question=dict(question), answer=answer, period=period, ceiling=ceiling
+    )
     return {
         "notification_id": row["id"] if row else None,
         "period": period,
         "spend_limit_usd": str(spend_budget(dict(question))),
+        "ceiling": ceiling,
     }
 
 
@@ -178,6 +200,7 @@ __all__ = [
     "REQUEST_LIMIT",
     "TOOL_CALL_LIMIT",
     "answer_question",
+    "ceiling_answer",
     "handle_scheduled_question",
     "record_answer",
     "run_scheduled_question",

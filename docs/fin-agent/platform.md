@@ -203,7 +203,9 @@ The loop works as follows:
   together or not at all.
 - **A finished job keeps what its handler returned,** so the app can say what the job did—how many
   rows a categorize run labeled, for example. A handler that knows another attempt cannot help
-  raises `JobGaveUp` and fails at once, without retries; a spend ceiling does this.
+  raises `JobGaveUp` and fails at once, without retries; the categorizer does this at its spend or
+  step ceiling. A scheduled question answers instead: it writes one plain inbox answer naming the
+  ceiling and marks the item `ceiling: true`, so you can see what stopped it.
 - **A failed job can be retried from the app,** which resets the same row and clears its inbox
   alert.
 
@@ -303,9 +305,11 @@ A deployment works as follows:
 - The restore drill is `fin-agent restore`. On a fresh machine, given the backup and the restic
   password, it pulls the dump and manifest out of the newest snapshot, restores into a
   database that has no tables, recomputes every table's hash, and checks that every transfer
-  balances and every account balance equals its entries. It refuses to overwrite a populated
-  database without `--force`. `tests/test_l8_ship.py` runs the round trip through a real restic
-  repository. [Install and restore steps](self-hosting.md#62-restore-drill-on-a-fresh-machine).
+  balances and every account balance equals its entries. The dump carries the migrations' table
+  grants and the restore recreates the two login roles, so `run_query` and the backup sidecar work
+  on the restored database. It refuses to overwrite a populated database without `--force`.
+  `tests/test_l8_ship.py` runs the round trip through a real restic repository.
+  [Install and restore steps](self-hosting.md#62-restore-drill-on-a-fresh-machine).
 
 The restic password is the one secret that has to live somewhere other than this machine. Losing
 it makes the off-site copies unreadable—the install docs say so in bold.

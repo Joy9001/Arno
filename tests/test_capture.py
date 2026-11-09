@@ -363,12 +363,14 @@ def test_photo_extraction_is_five_capped_fields_and_has_no_line_items():
         "upi_ref",
     }
     PaymentPhoto(merchant="Swiggy", amount_paise=45_000, method="cash")
+    # A UTR is often printed in groups; the caller strips the spaces before it is stored.
+    assert PaymentPhoto(upi_ref="4145 1234 5678").upi_ref == "4145 1234 5678"
     with pytest.raises(ValidationError):
         PaymentPhoto(merchant="x" * 201)
     with pytest.raises(ValidationError):
         PaymentPhoto(amount_paise=0)
     with pytest.raises(ValidationError):
-        PaymentPhoto(upi_ref="has spaces")
+        PaymentPhoto(upi_ref="4145;1234")
     with pytest.raises(ValidationError):
         PaymentPhoto(method="cheque")
 

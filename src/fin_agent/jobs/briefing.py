@@ -26,7 +26,8 @@ logger = logging.getLogger("fin_agent.jobs.briefing")
 BRIEFING_INSTRUCTIONS = """You write a short weekly money briefing for one person in India.
 Use only the numbers in the data. Do not calculate, round, convert, or invent a number, and do not
 give advice or recommend a product. Two short paragraphs, plain English, no headings, no markdown
-tables. Say what changed and what is due. If a number is null, say it is unknown, never zero."""
+tables. Say what changed and what is due. If a number is null, say it is unknown, never zero. When
+the spending data says statement coverage is incomplete, say so beside the spend total."""
 
 
 def _sum_paise(value: Any) -> int | None:
@@ -60,6 +61,15 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
     )
     current_paise = _sum_paise(this_week.get("total"))
     previous_paise = _sum_paise(last_week.get("total"))
+    coverage = dict(this_week.get("coverage") or {})
+    # A spend total over a week without a committed statement is the total of the entries
+    # recorded, not of every payment. Say so wherever the total is stated.
+    coverage["note"] = (
+        None
+        if coverage.get("complete", True)
+        else "Statement coverage is incomplete for this week, so this is the total of the "
+        "entries recorded, not of every payment."
+    )
 
     summary = await accounts_mod.account_summary(conn)
     liquid_paise = (
@@ -113,6 +123,7 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
             "previous_paise": previous_paise,
             "previous_money": money(previous_paise),
             "change_percent": _percent_change(current_paise, previous_paise),
+            "coverage": coverage,
         },
         "top_categories": top_categories,
         "liquid": {
@@ -178,6 +189,7 @@ def render_template(numbers: dict[str, Any]) -> str:
         ", ".join(f"{row['name']} {row['amount']['text']}" for row in numbers["top_categories"])
         or "none recorded"
     )
+    coverage = spent["coverage"]["note"] or ""
     bills = numbers["bills"]
     bill_text = (
         f"{bills['count']} scheduled bill(s), {bills['total']['text']} in all"
@@ -213,7 +225,8 @@ def render_template(numbers: dict[str, Any]) -> str:
     )
     return (
         f"Your week ({numbers['week']['from']} to {numbers['week']['to']}): "
-        f"you spent {current} across {spent['entries']} entries. {comparison}\n\n"
+        f"you spent {current} across {spent['entries']} entries. {comparison}"
+        f"{' ' + coverage if coverage else ''}\n\n"
         f"Top categories: {categories}. Liquid balance: "
         f"{numbers['liquid']['money']['text'] if numbers['liquid']['money'] else 'unknown'}. "
         f"Next 7 days: {bill_text}.\n\n"

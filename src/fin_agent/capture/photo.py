@@ -39,10 +39,12 @@ class PaymentPhoto(BaseModel):
     amount_paise: int | None = Field(default=None, gt=0, le=MAX_AMOUNT_PAISE)
     date: Date | None = None
     method: Literal["upi", "card", "cash", "bank", "wallet", "unknown"] = "unknown"
+    # A UTR printed in groups ("4145 1234 5678") is copied exactly as printed; the caller strips
+    # the spaces with `api.capture._clean_upi_ref` before the reference is stored or marked.
     upi_ref: str | None = Field(
         default=None,
         max_length=40,
-        pattern=r"^[A-Za-z0-9._/-]+$",
+        pattern=r"^[A-Za-z0-9._/ -]+$",
     )
 
 
