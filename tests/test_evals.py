@@ -40,7 +40,7 @@ from evals.runner import (
     run_turn,
 )
 from fin_agent.cli import app
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import connect, conninfo_to_dict
 from fin_agent.demo.template import database_dsn, drop_database
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.movements import record_expense
@@ -48,8 +48,11 @@ from fin_agent.ledger.payees import create_payee
 from fin_agent.tools import read as read_tools
 from tests.conftest import cluster_lock
 
-TEMPLATE = "fin_agent_eval_test_template"
-PREFIX = "fin_agent_eval_test_trial"
+# Named for this run's own database, so two runs on one cluster (agents, or xdist workers) never
+# rebuild or drop each other's template. `fin-agent eval` keeps its documented default instead.
+_DB = str(conninfo_to_dict(os.environ["DATABASE_URL"]).get("dbname") or "")
+TEMPLATE = f"{_DB}_eval_template"
+PREFIX = f"{_DB}_eval_trial"
 
 
 @pytest.fixture(scope="module")

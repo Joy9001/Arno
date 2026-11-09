@@ -31,7 +31,6 @@ from pydantic_ai_harness.compaction import (
     is_pinned,
 )
 from pydantic_ai_harness.guardrails import InputGuardrail
-from pydantic_ai_harness.guardrails.detectors import personal_data, secret_data
 from pydantic_ai_harness.spend import Budget, SpendLimits
 from pydantic_ai_harness.subagents import is_task_report
 from pydantic_ai_harness.system_reminders import SystemReminders
@@ -45,7 +44,7 @@ from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.models import DEFAULT_CONTEXT_WINDOW
-from fin_agent.agent.redaction import redact_text
+from fin_agent.agent.redaction import redact_text, redaction_detectors
 from fin_agent.db.conn import connect
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools.mark import flag_outside_text
@@ -241,19 +240,8 @@ async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
 
 
 def redaction_guardrail() -> InputGuardrail[AgentDeps]:
-    return InputGuardrail(
-        guard=[
-            secret_data(),
-            personal_data(
-                only=["credit_card"],
-                extra={
-                    "pan": r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
-                    # Spaced only; an unspaced 12-digit number collides with UPI UTRs.
-                    "aadhaar": r"\b[2-9]\d{3}[ -]\d{4}[ -]\d{4}\b",
-                },
-            ),
-        ]
-    )
+    # The one detector list `redact_text` uses, so the model sees exactly what storage keeps.
+    return InputGuardrail(guard=redaction_detectors())
 
 
 def build_capabilities(

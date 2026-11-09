@@ -275,7 +275,9 @@ normal turn never reaches them:
 | Daily spend, across everything | $20 (shared) | |
 
 - **Hitting a ceiling hands control back.** The agent says what it found so far and which ceiling
-  stopped it, and the trace records it. A ceiling never looks like a finished answer.
+  stopped it, and the trace records it. A ceiling never looks like a finished answer. A scheduled
+  question can't speak mid-run, so it writes one plain answer naming its ceiling and marks the inbox
+  item `ceiling: true` instead of passing off a partial result.
 - **Errors: retry, then the backup, then say so.** A failed model call is retried twice, then the
   backup model takes over if one is configured. If both fail, the agent says plainly that it
   couldn't answer.
@@ -727,8 +729,8 @@ you notice its card or reconcile, or skew the wording of a reply.
 | A saved parser can only produce wrong rows | Monty, the gate, the review screen ([step 5](#imports-the-agent-writes-the-parser)) | Enforced |
 | Nothing else leaves the box | No outbound tools; client file URLs off | Enforced by absence |
 | Replies can't carry data out | Content security policy; links as plain text | Enforced from L0; [tested in step 10](#the-interface-tests-november-1-2026) |
-| Passwords stay out of chat | A field on the import card | By design; a password typed into chat can't be detected |
-| Card numbers and keys typed in chat don't reach the model | `InputGuardrail` | Enforced for known patterns |
+| Passwords stay out of chat | A field on the import card | Enforced when named ("password: ..."); one written without the word can't be detected |
+| Card numbers, keys, and named secrets typed in chat don't reach the model | `InputGuardrail` | Enforced for known shapes and for a secret written next to its name |
 | Outside text is data, not instructions | Markers and one instruction line | Interpreted; eval case |
 | No investment recommendations | One instruction line | Interpreted; eval cases |
 
@@ -771,11 +773,15 @@ afterwards.
   two-statement string turned the timeout off in the tests. So [the recipe](tools.md#run_query) adds
   layers around the grants: one statement through the extended protocol, `SET LOCAL` in a transaction
   that's always rolled back, a client-side deadline, `REVOKE TEMP`, and no network extensions.
-- **Redact what's typed in chat.** `InputGuardrail` removes API keys and other secrets, card numbers,
-  PAN, and spaced Aadhaar. UPI IDs and 12-digit UTRs (UPI reference numbers) stay, because the product
-  uses them. Unspaced Aadhaar isn't matched, because it would collide with UTRs, and bank account
-  numbers and OTPs can't be detected. Your browser shows what you typed until you reload, while the
-  server stores the redacted text.
+- **Redact what's typed in chat.** Card numbers, PAN, spaced Aadhaar, and API keys go by their shape.
+  An OTP, PIN, password, or CVV has none, so the word that names it is the anchor: a value within a
+  few words of "OTP", "PIN", "MPIN", "UPI PIN", "CVV", "password", "passcode", or "passwd" — English
+  or Hinglish, as in "mera pin 4321 hai" or "OTP is 4 8 2 9 1 3" — becomes a placeholder naming its
+  kind, such as `[redacted:otp]`. The words alone ("I forgot my password") stay, and so do amounts,
+  dates, UPI IDs, 12-digit UTRs (UPI reference numbers), and an Indian postal "PIN code". Unspaced
+  Aadhaar isn't matched, because it would collide with UTRs, and a bank account number or a password
+  typed without its name still can't be detected. Your browser shows what you typed until you
+  reload, while the server stores the redacted text.
 - **Photos and voice.** The photo endpoint runs a tool-less vision call into typed, capped fields. The
   server adds them to the thread as a marked entry and sets the flag, and the client can't touch either
   ([`import.md`](import.md#photos-and-voice)). A voice transcript is your own words, so it takes the

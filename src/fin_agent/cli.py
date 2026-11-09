@@ -263,6 +263,7 @@ async def _run_chat_command(settings, thread_id: str | None, message: str | None
 async def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
     from fin_agent.agent.deps import AgentDeps
     from fin_agent.agent.number_check import check_messages
+    from fin_agent.agent.turns import _this_turn
 
     message_id = f"cli_{uuid.uuid4().hex}"
     run_id = f"run_{uuid.uuid4().hex}"
@@ -277,8 +278,9 @@ async def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> 
         flagged=thread.get("outside_text_at") is not None,
         user_texts=(text,),
     )
-    result = await agent.run(text, message_history=history, deps=deps)
-    turn_messages = result.all_messages()[len(history) :]
+    result = await agent.run(text, message_history=history, deps=deps, run_id=run_id)
+    # Compaction may shorten the run's history, so the turn is found by run id, not by length.
+    turn_messages = _this_turn(result.all_messages(), history, run_id, message_id)
     reply = str(result.output)
     flags = check_messages(reply, turn_messages, kinds=("money", "percent"))
     async with conn.transaction():
