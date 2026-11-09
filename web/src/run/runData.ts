@@ -47,6 +47,13 @@ export function clock(seconds: number | null | undefined): string {
   return `${minutes}:${String(Math.round(seconds % 60)).padStart(2, "0")}`;
 }
 
+export function stepTime(seconds: number | null | undefined): string {
+  if (seconds == null) return "—";
+  if (seconds > 0 && seconds < 0.001) return "<1 ms";
+  if (seconds < 1) return `${Math.max(0, Math.round(seconds * 1000))} ms`;
+  return clock(seconds);
+}
+
 export function elapsed(task: ImportTask): number {
   const end = task.finished_at ?? Date.now() / 1000;
   return end - task.started_at;

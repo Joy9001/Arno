@@ -4,7 +4,7 @@ import { askAgent } from "../ask";
 import { displayText } from "../chat/display-text";
 import { Orb } from "../Orb";
 import type { ImportTask, RunStage, RunStep } from "../types";
-import { CONTINUE_PROMPT, WHY_PROMPT, clock, elapsed, runEnding, useRun } from "./runData";
+import { CONTINUE_PROMPT, WHY_PROMPT, clock, elapsed, runEnding, stepTime, useRun } from "./runData";
 import "./run.css";
 
 function StepRow({
@@ -47,7 +47,7 @@ function StepRow({
           {step.status === "failed" ? ", failed" : step.status === "cut_off" ? ", cut off" : ""}
         </span>
       </span>
-      <span className="run-step-time">{step.status === "cut_off" ? "—" : clock(step.seconds)}</span>
+      <span className="run-step-time">{step.status === "cut_off" ? "—" : stepTime(step.seconds)}</span>
       {step.calls.length > 0 && (
         <span className="run-calls">
           {step.calls.map((call) => (
@@ -97,44 +97,58 @@ function StageNode({ stage, index }: { stage: RunStage; index: number }) {
   return <>{index + 1}</>;
 }
 
-/** Collapse runs of identical no-call steps so the spine stays readable. */
-function stepGroups(steps: RunStep[]): RunStep[] {
-  const out: RunStep[] = [];
-  for (const step of steps) {
-    const prev = out.at(-1);
-    if (
-      prev &&
-      step.status === "ok" &&
-      prev.status === "ok" &&
-      step.calls.length === 0 &&
-      prev.calls.length === 0 &&
-      prev.segment === step.segment
-    ) {
-      const count = Number(/^Worked on what it had read · (\d+) scripts$/.exec(prev.title)?.[1] ?? 1) + 1;
-      out[out.length - 1] = {
-        ...prev,
-        title: `Worked on what it had read · ${count} scripts`,
-        seconds: (prev.seconds ?? 0) + (step.seconds ?? 0),
-        purpose: step.purpose ?? prev.purpose,
-        reasoning: null,
-      };
-      continue;
-    }
-    out.push(step);
-  }
-  return out;
+const VISIBLE_STEPS = 4;
+
+function Stage({ stage, index, steps, selected, onSelect }: {
+  stage: RunStage;
+  index: number;
+  steps: RunStep[];
+  selected?: string | null;
+  onSelect?: (id: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const selectedIndex = steps.findIndex((step) => step.id === selected);
+  const start = Math.min(Math.max(0, steps.length - VISIBLE_STEPS), selectedIndex < 0 ? steps.length : selectedIndex);
+  const visible = expanded ? steps : steps.slice(start, start + VISIBLE_STEPS);
+  return (
+    <li className={`run-stage ${stage.status}`}>
+      <span className="run-node" aria-hidden="true"><StageNode stage={stage} index={index} /></span>
+      <div className="run-stage-head">
+        <b>{stage.title}</b>
+        <span>
+          {stage.status === "not_reached"
+            ? "Not reached"
+            : stage.steps.length
+              ? `${stage.steps.length} ${stage.steps.length === 1 ? "step" : "steps"} · ${clock(stage.seconds)}`
+              : ""}
+        </span>
+      </div>
+      {visible.length > 0 && (
+        <ol className="run-steps">
+          {visible.map((step, stepIndex) => (
+            <StepWithDivider key={step.id} step={step} prev={steps[(expanded ? 0 : start) + stepIndex - 1]}
+              selected={selected === step.id} onSelect={onSelect ? () => onSelect(step.id) : undefined} />
+          ))}
+        </ol>
+      )}
+      {steps.length > VISIBLE_STEPS && (
+        <button type="button" className="run-view-all" aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}>
+          {expanded ? "Show fewer" : `View all ${steps.length} steps`}
+        </button>
+      )}
+    </li>
+  );
 }
 
 export function RunBody({
   task,
   selected,
   onSelect,
-  collapseDone = true,
 }: {
   task: ImportTask;
   selected?: string | null;
   onSelect?: (id: string) => void;
-  collapseDone?: boolean;
 }) {
   const ending = runEnding(task);
   const byId = new Map(task.run.steps.map((step) => [step.id, step]));
@@ -197,40 +211,11 @@ export function RunBody({
       )}
 
       <ol className="run-spine">
-        {task.run.stages.map((stage, index) => {
-          const steps = stepGroups(stage.steps.map((id) => byId.get(id)).filter(Boolean) as RunStep[]);
-          const folded = collapseDone && stage.status === "done" && task.state !== "running";
-          return (
-            <li key={stage.key} className={`run-stage ${stage.status}`}>
-              <span className="run-node" aria-hidden="true">
-                <StageNode stage={stage} index={index} />
-              </span>
-              <div className="run-stage-head">
-                <b>{stage.title}</b>
-                <span>
-                  {stage.status === "not_reached"
-                    ? "Not reached"
-                    : stage.steps.length
-                      ? `${stage.steps.length} ${stage.steps.length === 1 ? "step" : "steps"} · ${clock(stage.seconds)}`
-                      : ""}
-                </span>
-              </div>
-              {!folded && steps.length > 0 && (
-                <ol className="run-steps">
-                  {steps.map((step, stepIndex) => (
-                    <StepWithDivider
-                      key={step.id}
-                      step={step}
-                      prev={steps[stepIndex - 1]}
-                      selected={selected === step.id}
-                      onSelect={onSelect ? () => onSelect(step.id) : undefined}
-                    />
-                  ))}
-                </ol>
-              )}
-            </li>
-          );
-        })}
+        {task.run.stages.map((stage, index) => (
+          <Stage key={stage.key} stage={stage} index={index}
+            steps={stage.steps.map((id) => byId.get(id)).filter((step): step is RunStep => step !== undefined)}
+            selected={selected} onSelect={onSelect} />
+        ))}
       </ol>
     </>
   );
@@ -326,7 +311,7 @@ function StepDetail({ step, index, total }: { step: RunStep; index: number; tota
           {step.status === "ok" ? "Done" : step.status === "running" ? "Running" : step.status === "cut_off" ? "Cut off" : "Failed"}
         </span>
         <span>{new Date(step.started_at).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", second: "2-digit" })}</span>
-        <span>{clock(step.seconds)}</span>
+        <span>{stepTime(step.seconds)}</span>
       </p>
       {step.calls.length > 0 && (
         <p className="run-calls">
@@ -405,7 +390,7 @@ export function RunPage({ taskId }: { taskId: string }) {
         <div className="run-page-cols">
           <div className="run-page-main">
             <RunHead task={task} />
-            <RunBody task={task} selected={current?.id ?? null} onSelect={setSelected} collapseDone={false} />
+            <RunBody task={task} selected={current?.id ?? null} onSelect={setSelected} />
           </div>
           {current && (
             <div className="run-page-detail">

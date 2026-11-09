@@ -176,7 +176,7 @@ async def _events(conn: Connection, task_id: str) -> list[dict[str, Any]]:
 def _seconds(start: str | None, end: str | None) -> float | None:
     if not start or not end:
         return None
-    return round((datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds(), 1)
+    return (datetime.fromisoformat(end) - datetime.fromisoformat(start)).total_seconds()
 
 
 def build_run(

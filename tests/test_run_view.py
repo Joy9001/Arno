@@ -124,6 +124,18 @@ def test_stages_follow_the_host_calls_not_the_models_plan():
     assert by_key["submit"]["steps"] == ["c4", "c5"]
 
 
+def test_step_duration_preserves_short_recorded_times():
+    events = [
+        _event(1, "tool_call_started", "run_code", "c1", at="2026-11-08T10:00:00+00:00"),
+        _event(2, "tool_call_completed", "run_code", "c1", at="2026-11-08T10:00:00.042123+00:00"),
+        _event(3, "tool_call_started", "run_code", "c2"),
+    ]
+    run = build_run(events=events, messages=[], running=True, outcome=None, limit=120)
+
+    assert run["steps"][0]["seconds"] == 0.042123
+    assert run["steps"][1]["seconds"] is None
+
+
 def test_a_live_run_shows_its_last_step_running_and_later_stages_to_do():
     events, messages = _run_fixture()
     run = build_run(

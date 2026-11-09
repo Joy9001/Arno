@@ -287,6 +287,29 @@
   margin: 6px 0 10px;
 }
 
+.run-view-all {
+  min-height: 40px;
+  margin-bottom: 8px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.run-view-all:hover {
+  background: var(--surface-3);
+}
+
+.run-view-all:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 2px;
+}
+
 .run-step {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr) auto;
