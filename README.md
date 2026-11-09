@@ -1,268 +1,157 @@
-# Fin-Agent
+<p align="center">
+  <img src="web/public/favicon.svg" width="96" height="96" alt="The Fin-Agent orb">
+</p>
 
-A self-hosted, open-source finance agent that holds your whole financial picture and answers any
-question about it — including whether you can afford something, and what it would cost you.
+<h1 align="center">Fin-Agent</h1>
 
-> **Status: L8 (ship) is built; milestones 40 and 41 are the human gates still open.** L0-L7 are
-> unchanged. L8 adds the restic restore drill (`fin-agent restore`), the security and
-> permissive-license pass with dependency auditing in CI, the MIT `LICENSE`, versioned images, a
-> pre-migration `pg_dump`, 10 MB log rotation, and the self-hoster
-> [install and operations guide](docs/fin-agent/self-hosting.md). The code build is complete, but
-> "shipped" in [`plan.md`](docs/fin-agent/plan.md#what-shipped-means) still needs someone else to
-> install it from the docs alone (milestone 40) and four weeks of daily use without a spreadsheet
-> (milestone 41). The authoritative plan is
-> [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md); the May 2026 docs in
-> [`docs/archive/`](docs/archive/) are not authoritative.
->
-> License: **MIT** ([`LICENSE`](LICENSE)).
+<p align="center">
+  <strong>Ask your money anything. Get answers that are computed, not guessed.</strong>
+</p>
 
-## Built on
+<p align="center">
+  A private, self-hosted finance agent that holds your whole financial picture (accounts, cards,
+  EMIs, goals, the people you owe) and answers any question about it, including
+  <em>"Can I afford this?"</em> and what it would cost you.
+</p>
 
-- [**pgledger**](https://github.com/pgr0ss/pgledger) — MIT, © 2025 Paul Gross. The double-entry
-  core is vendored unmodified at commit `fee1aa0` in
-  [`src/fin_agent/db/vendor/pgledger/`](src/fin_agent/db/vendor/pgledger/), together with its
-  ULID helpers from [`scoville/pgsql-ulid`](https://github.com/scoville/pgsql-ulid)
-  (BSD-3-Clause, © 2021 Scoville). License texts are in
-  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and ship in the image. No endorsement is
-  implied.
-- FastAPI, PydanticAI and `pydantic-ai-harness`, PostgreSQL 18, `asyncpg`, Vite and React,
-  Tailscale, `python-dateutil` and `holidays` for schedules, and restic for encrypted off-site
-  backups. Statement readers use `pypdfium2` (BSD-3-Clause or Apache-2.0), `python-calamine`
-  (MIT), `msoffcrypto-tool` (MIT), `python-docx` (MIT), `striprtf` (BSD-3-Clause), and
-  `olefile` (BSD-2-Clause). `python-multipart` (Apache-2.0) parses the upload form. Full choices
-  are in [plan §3](docs/fin-agent/plan.md#3-stack).
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-d4ff3a?style=flat-square"></a>
+  <a href="https://github.com/Joy9001/Fin-Agent/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Joy9001/Fin-Agent/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Version 0.1.2" src="https://img.shields.io/badge/version-0.1.2-2b59ff?style=flat-square">
+  <img alt="Python 3.14" src="https://img.shields.io/badge/python-3.14-1ec8a5?style=flat-square">
+  <img alt="PostgreSQL 18" src="https://img.shields.io/badge/postgres-18-1ec8a5?style=flat-square">
+  <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-private%20network%20only-0e0f0c?style=flat-square">
+</p>
 
-Fin-Agent itself is MIT licensed. Every shipped dependency's license is audited in CI; no GPL,
-AGPL, SSPL, or Elastic code is in the Fin-Agent image. Phoenix is a separate, source-available
-Elastic 2.0 service in the telemetry stack. Weak-copyleft libraries are used unmodified and named
-in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#what-you-can-ask">What you can ask</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#measured-not-claimed">Measured results</a> ·
+  <a href="docs/fin-agent/self-hosting.md">Self-hosting guide</a>
+</p>
 
-## Run it
+<p align="center">
+  <img src=".impeccable/mocks/final/shots/02-thread.png" alt="A Fin-Agent conversation: the question 'Can I buy a ₹68,000 laptop on the Slice card?' answered with a 'Yes, with a change' affordability card, a 91% floor probability, and a 90-day projection band." width="100%">
+  <br>
+  <sub>Interface design comp. The figures are illustrative, not from a real ledger.</sub>
+</p>
 
-Requirements: Docker with Compose, and a host that is already on your Tailscale network for
-remote access. Host disk encryption (BitLocker, LUKS, or FileVault) is required: it is what protects
-the database at rest. The full walkthrough, including model configuration, privacy tables, restore,
-and Postgres major upgrades, is in
-[`docs/fin-agent/self-hosting.md`](docs/fin-agent/self-hosting.md).
+---
 
-```bash
-cp .env.example .env
-# Set POSTGRES_PASSWORD, AGENT_RO_PASSWORD, BACKUP_PASSWORD, and RESTIC_PASSWORD, then either:
-#   - keep FIN_AGENT_RP_ID=localhost for local use, or
-#   - set FIN_AGENT_RP_ID and FIN_AGENT_RP_ORIGIN to your machine's tailnet name.
-docker compose up -d --build
-# Or pull the pinned release image: docker compose pull && docker compose up -d
-# Local models: docker compose --profile local-llm up -d
-# Local STT:    docker compose --profile local-stt up -d
-# Native agent traces: Phoenix only, included in the normal start. Set the four Phoenix
-# credentials in .env first; no API key or second restart is needed.
-# See docs/fin-agent/observability.md.
+## Why Fin-Agent
+
+Most money apps show you charts of the past. Fin-Agent answers questions about your future.
+
+Ask _"Can I buy a ₹68,000 laptop on my credit card?"_ and it doesn't guess. It reads your ledger,
+simulates 1,000 futures of your own spending, and comes back with **yes**, **yes-but**, or
+**no**: the chance you stay above your safety floor, the lowest point ahead, the tradeoffs that
+would make it safe, and the ledger rows behind every number.
+
+Three promises, held at once:
+
+- **Your ledger stays on your machine.** Fin-Agent runs in Docker on hardware you own and is
+  reached only over your private Tailscale network. There is no cloud account, no bank aggregator,
+  and no analytics. Only the model calls you configure leave the box, and with local models
+  nothing does.
+- **Verdicts are computed, with a probability.** Affordability comes from a seeded probabilistic
+  projection in plain Python, never from the model's opinion. "Yes" means at least a 90% chance
+  you stay above your floor, no goal slips, and no bill is missed.
+- **Every number is traced.** The model decides _what_ to compute; code computes it. Each figure
+  in a reply must come from a tool return or a script the agent ran, and a number check flags any
+  that don't.
+
+## What you can ask
+
+Chat in English, Hindi, or Hinglish, by text or voice. A few examples:
+
+| You say | Fin-Agent does |
+|---|---|
+| "Can I buy a ₹68,000 laptop on the Slice card?" | Runs the projection and returns a verdict card with its probability and tradeoffs |
+| "Where did October go?" | Breaks the month down by category and links the rows behind each total |
+| "If I prepay ₹1 lakh on my loan, how much interest do I save?" | Writes a short Python script over your data, runs it in a sandbox, and shows the script |
+| "Paid ₹480 for chai with the team, Ravi owes me half" | Logs the spend and the split instantly, with undo |
+| "Every Sunday, tell me what I spent on food" | Schedules a read-only question that answers into your inbox |
+| A photo of a receipt or a UPI screenshot | Turns it into one transaction and keeps the image |
+
+## What it does
+
+- **Captures everything:** chat, push-to-talk voice notes, photos of receipts and UPI
+  screenshots (share straight from your UPI app on Android), and statement imports from any bank:
+  PDF, spreadsheet, or text, password-protected or not. It learns each new statement layout once,
+  and keeps one record per real money movement however it was captured.
+- **Knows the whole picture:** a double-entry ledger with bank accounts, credit cards and their
+  billing cycles, cash, wallets, and loans; salary and freelance income; rent, EMIs,
+  subscriptions, and card installment plans; goals with deadlines; a floor your balance must not
+  cross; people, splits, and who owes whom; asset accounts such as EPF, PPF, and FDs; and merchant
+  categories it learns from your corrections.
+- **Answers and models:** any question the data supports, through read tools and a read-only SQL
+  escape hatch; multistep what-ifs through Python scripts it writes and shows you; and
+  affordability verdicts that propose concrete fixes: wait until a date, pay by card or EMI, delay
+  a goal, or trim a reducible category.
+- **Watches your back:** bill, EMI, and card-due reminders; a warning when the projection turns;
+  a weekly briefing; and detection of new or missed subscriptions, delivered to an in-app inbox
+  and web push. These run as fixed code, so they work even when the model is down.
+- **Stays in its lane:** it never moves money, never handles passwords (a statement password goes
+  on the import card, not in chat), and never recommends investments or products. It states facts
+  and tradeoffs; you decide.
+
+<table>
+  <tr>
+    <td width="68%"><img src=".impeccable/mocks/final/shots/06-money-timeline.png" alt="The Money timeline: the ledger behind today, and a 1,000-run projection band ahead with upcoming bills, salary, and the tightest day."></td>
+    <td width="32%"><img src=".impeccable/mocks/final/shots/20-phone-thread.png" alt="The same affordability answer on a phone."></td>
+  </tr>
+  <tr>
+    <td><sub>Money opens on a timeline: what happened behind today, what could happen ahead.</sub></td>
+    <td><sub>Daily use happens on the phone, as an installable web app.</sub></td>
+  </tr>
+</table>
+
+<sub>Interface design comps. The figures are illustrative.</sub>
+
+## How it works
+
+```mermaid
+flowchart LR
+    you["You<br/>chat · voice · photo · statement"] --> agent["Agent<br/>one pinned model, plus a fallback"]
+    agent -- "reads and writes" --> tools["Plain-Python tools"]
+    agent -- "what-ifs" --> code["run_code sandbox<br/>scripts that call the tools"]
+    code --> tools
+    tools --> ledger[("Postgres<br/>double-entry ledger")]
+    tools --> engine["Projection engine<br/>1,000 seeded futures"]
+    agent --> check{"Number check<br/>is every figure traced?"}
+    check --> answer["Answer<br/>verdict cards and citations"]
 ```
 
-The normal start also runs Phoenix, which receives native Pydantic AI agent, model, and tool
-spans directly over OTLP/HTTP. There is no Collector, Loki, Prometheus, or Grafana, and no
-custom metrics or alerting. Python and Uvicorn logs stay standard on Docker stdout. The kill
-switch is the standard `OTEL_SDK_DISABLED=true`. The app still serves if Phoenix is down. The
-operator path is in [`docs/fin-agent/observability.md`](docs/fin-agent/observability.md).
+- **One rule.** The model reasons, models scenarios, and explains tradeoffs, but every number it
+  states comes from code. Rationale in [`plan.md` §4](docs/fin-agent/plan.md#4-architecture).
+- **The ledger.** One Postgres database is the whole state, built on a vendored copy of
+  [pgledger](https://github.com/pgr0ss/pgledger). Money is integer paise everywhere below the
+  display layer.
+- **The engine.** [`engine/projection.py`](src/fin_agent/engine/projection.py) is pure: no clock,
+  no database, no model. Scheduled events land exactly; day-to-day spending is resampled from your
+  own last 90 days, with weekdays and weekends kept apart. The affordability tradeoffs come from
+  rerunning the same engine.
+- **The tools.** Plain Python over the database, free of framework types, so the agent, the REST
+  API, and the web app all call the same functions. The agent's SQL runs as a read-only role with
+  a two-second timeout and no access to auth tables.
+- **Untrusted text stays data.** Statement text and payee notes can't make a lasting change unseen:
+  once a conversation has read such text, memory, setup, and bulk writes need one confirm tap.
+  Everyday writes stay instant and undoable.
 
-The first start applies the migrations and prints an enrollment link plus a terminal QR code. Scan
-the code, or open the link, on a device on your tailnet. The API prints that startup record for the
-trusted local console:
+Deeper reading: the [system design](docs/fin-agent/system-design.md), the
+[agent loop](docs/fin-agent/diagrams/sd-agent-loop.png), and the
+[tool surface](docs/fin-agent/tools.md).
 
-```bash
-docker compose logs api                      # the link and QR code are in this log
-docker compose logs --no-log-prefix api      # a QR with no per-line "api-1 |" prefix
-docker compose exec api fin-agent setup      # rotate it and print a fresh one
-```
+## Measured, not claimed
 
-The raw token is printed under the link as a paste fallback. A restart keeps a valid link; only
-`fin-agent setup` rotates it, so the link in the log stays usable until it expires or is used.
-Open the app, enter the token if needed, and create the passkey. Add more devices later with
-**Settings → Passkeys → Add a device**.
+Every result below is written by a command, not by hand. When a measurement is missing, the
+README says so instead of inventing one.
 
-Local: <http://localhost:8000>. The API publishes on loopback only.
+### Model scorecard
 
-Over Tailscale, on the host:
-
-```bash
-tailscale serve --bg 8000
-tailscale serve status
-```
-
-That proxies `https://<machine>.<tailnet>.ts.net` to `http://127.0.0.1:8000`. Passkeys need that
-HTTPS name and a stable hostname, so set `FIN_AGENT_RP_ID` to the same `*.ts.net` name and
-`FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net`, then `docker compose up -d`.
-
-`/api/health` reports the database and schema version. Nothing is exposed to the public internet.
-
-## Commands
-
-```bash
-fin-agent migrate              # apply pending SQL migrations
-fin-agent serve                # API + built web app (127.0.0.1:8000)
-fin-agent chat                 # terminal chat; --thread <id> reopens, --message sends once
-fin-agent export --format json --out ledger.json   # json, csv, or sql (pg_dump)
-fin-agent import-spike          # milestone 21: run real statements from private/statements
-fin-agent setup                # print a fresh first-run enrollment link and QR code
-fin-agent setup-token          # same, kept for scripts
-fin-agent passkeys list        # registered passkeys
-fin-agent passkeys reset       # delete every passkey and session, reopen setup with a new link
-fin-agent demo seed            # seed an empty demo instance
-fin-agent demo seed --reset    # reseed (asks first; add --force in scripts)
-fin-agent demo template        # clone as an eval template (asks first)
-fin-agent eval --model X       # run the agent evals and publish the model scorecard
-fin-agent eval --model X --dry-run   # list the selected cases without spending
-fin-agent eval --model X --category injection --repeat 3
-fin-agent backtest             # project() as of each month, 30 days ahead; publishes in this README
-fin-agent hackerrank           # score the local HackerRank sample set; never commits the data
-fin-agent restore              # restore the newest restic snapshot and verify every table
-fin-agent restore --from-dir /restore --allow-no-manifest   # a manual pg_dump restore
-```
-
-Admin commands run on the host, never over HTTP. A passkey reset needs a shell on the host, which
-already has the data.
-
-## Backups
-
-Compose starts a `backup` sidecar with its own `backup` database role. It checks hourly and runs
-`pg_dump` whenever the last success is over 24 hours old, writes a `backup_manifest.json` with a
-row count and content hash for every table, then `restic` encrypts and ships both to
-`RESTIC_REPOSITORY`. Each attempt is recorded in `backup_runs`, which the Settings panel shows.
-The default repository is the local `backup-data` volume; set an S3/B2/R2 or rclone repository to
-go off-site.
-
-`RESTIC_PASSWORD` is the one secret that must live somewhere other than this machine. Losing it
-makes the off-site copies unreadable; there is no recovery path. On a fresh machine, with only the
-repository and that password:
-
-```bash
-docker compose up -d db
-docker compose run --rm --no-deps --user root api fin-agent restore
-```
-
-`fin-agent restore` restores the newest snapshot, recreates every table, recomputes the manifest,
-checks that every transfer balances and every account balance equals its entries, and exits
-non-zero on any difference. It refuses a target that already has tables unless you pass `--force`.
-The complete procedure is in
-[`docs/fin-agent/self-hosting.md`](docs/fin-agent/self-hosting.md#62-restore-drill-on-a-fresh-machine)
-and [`backup/README.md`](backup/README.md).
-
-## Develop
-
-Python 3.14, managed by [uv](https://docs.astral.sh/uv/). Web: Node 24 with pnpm.
-
-```bash
-uv sync --dev
-docker compose up -d db
-docker compose exec db createdb -U app fin_agent_test   # once
-```
-
-Use the host database URL from `.env.example` (`127.0.0.1:5433`), then:
-
-```bash
-uv run fin-agent migrate
-uv run fin-agent serve
-```
-
-Web development (Vite proxies `/api` to the API):
-
-```bash
-pnpm --dir web install
-pnpm --dir web dev
-pnpm --dir web build      # what the API serves from web/dist
-```
-
-Git hooks ([pre-commit](https://pre-commit.com)) run the CI checks before they can fail there. Install
-once with `uv tool install pre-commit && pre-commit install`. Commits run ruff, the `uv.lock` check
-and web lint; pushes add the license audit, web build and pytest (skipped unless `DATABASE_URL` ends
-in `_test`) and reject a `v*` tag that doesn't match the `pyproject.toml` version.
-
-Checks:
-
-```bash
-uv run ruff check . && uv run ruff format --check .
-uv export --frozen --no-emit-project --format requirements-txt -q > /tmp/requirements.txt
-uv run pip-audit --strict --disable-pip -r /tmp/requirements.txt
-uv run python scripts/license_audit.py
-DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
-AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
-pnpm --dir web lint && pnpm --dir web audit --audit-level high && pnpm --dir web build
-```
-
-Tests refuse to touch a database whose name doesn't end in `_test`. They also block every
-non-loopback socket and DNS lookup, and point each model role at a closed loopback port, so CI can
-never call a model.
-
-## Layout
-
-```
-src/fin_agent/
-  api/         FastAPI app, auth, static web build, security headers
-  auth/        passkeys, sessions, first-run setup
-  db/          connection, migrations/*.sql, vendor/pgledger/
-  ledger/      plain functions over Postgres: accounts, movements, schedules, goals, people
-  india/       categories, RRULEs, the working-day calendar, rupee formatting
-  engine/      the seeded projection, affordability, backtest, and HackerRank scorer
-  tools/       plain-Python read and write tools, including project()
-  agent/       the PydanticAI agent, Code Mode toolset, cards, history, and number check
-  importers/   statement readers, parsers, checks, reconciliation, baselines
-  jobs/        the jobs table loop
-  demo/        the seeded synthetic persona and template clone
-  cli.py
-web/           Vite and React app (a static build): read-only panels and Settings
-backup/        pg_dump + restic sidecar
-scripts/       the license audit
-evals/         pydantic_evals suite, demo-persona dataset, and scorecard writer
-tests/         pytest, including a software WebAuthn authenticator
-compose.yaml
-LICENSE
-```
-
-The `evals/` folder holds the L4 `pydantic_evals` suite, the demo-persona dataset, and the
-scorecard writer; its old human-judged runner is retired. The projection panel and the inline
-projection/verdict cards read `GET /api/projection`; there is no write path from a panel.
-
-## Security
-
-- Private network only. Compose publishes both ports on `127.0.0.1`; Tailscale provides HTTPS.
-- One user, passkey login through `py_webauthn`. Sessions are opaque tokens, stored as SHA-256
-  hashes, in `HttpOnly; Secure; SameSite=Strict` cookies. Export and passkey changes require a
-  fresh passkey check within five minutes.
-- The content security policy is `default-src 'self'; script-src 'self'; style-src 'self'
-  'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action
-  'self'; frame-ancestors 'none'`, plus `nosniff` and `no-referrer`. No inline scripts, and images
-  only from the app's own origin.
-- `TrustedHost` accepts loopback and `*.ts.net` by default; widen it with
-  `FIN_AGENT_TRUSTED_HOSTS`.
-- Uploads are capped at 25 MB on statements, photos, and audio.
-- The database has three roles: `app` owns the schema; `agent_ro` has `SELECT` on the ledger, plan,
-  people, categorization, settings, and conversation tables and views, no auth tables, no `TEMP`,
-  read-only by default, and a two-second statement timeout; `backup` can `SELECT` for `pg_dump`
-  and `INSERT` into `backup_runs` only. Phoenix owns only its own database and `agent_ro` cannot
-  connect to it.
-- Secrets live in `.env`, never in the database. Host disk encryption is an install requirement.
-- Logs are standard Python and Uvicorn output on Docker stdout, capped by Compose's `json-file`
-  rotation. There is no log shipper or central log store.
-- Traces stay on the host. Phoenix publishes on `127.0.0.1` only and uses its built-in retention
-  default (0, infinite) unless the operator sets a policy in Phoenix. Pydantic AI's default
-  instrumentation records prompts, replies, and tool data in the local Phoenix project.
-- `scripts/license_audit.py` checks every Python and web dependency for a permissive or explicitly
-  noticed weak-copyleft license; `pip-audit` and `pnpm audit` run in CI. No GPL, AGPL, SSPL, or
-  Elastic code ships in the image. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists the
-  direct dependencies, and the built web bundle carries every production package's license text at
-  `/THIRD_PARTY_NOTICES.txt`.
-
-## The one rule
-
-**The model decides what to compute; code computes it.** The model reasons, models scenarios,
-and explains tradeoffs, but every number it states comes from a tool return or a script it ran in
-a sandbox, never from its own head. Rationale in
-[`docs/fin-agent/plan.md`](docs/fin-agent/plan.md#4-architecture).
-
-## Model scorecard
-
-Every model is run through the same agent eval suite on the demo persona, with a fresh
-database cloned for each trial. The suite is in [`evals/`](evals/README.md); run it with
+Every model runs the same agent eval suite against a synthetic demo persona, with a fresh database
+cloned for each trial. The suite is in [`evals/`](evals/README.md); run it with
 `fin-agent eval --model X`. A dash means that model or category has not run yet.
 
 <!-- eval-scorecard:start -->
@@ -279,73 +168,32 @@ Run notes:
 - deepseek-v4.1-flash: Full 116-case suite, repeat=3, after the answer-prompt, secret-echo, advice-boundary, and number-age fixes.
 <!-- eval-scorecard:end -->
 
-The full 116-case run is the L4 gate, before the four L5 `project` and affordability cases were
-added (120 in the suite now). The targets from
-[the success measures](docs/fin-agent/system-design.md#success-measures) are answers and writes at
-90% or more, honesty at 95% or more, injection at 100%, every number traced, and advice,
-never-moving-money, and long threads in the 90%. A model clears L4 when every category meets its
-target and the number gate is PASS. `No number flags` means every amount, count, and percentage
-in a reply came from a tool return or a value a `run_code` script printed; the scorecard separates
-correct prose arithmetic ("derived") from a number with no source ("untraced"). Only the answer
-cases assert the number check; the raw flag column counts every category.
+The table is the full 116-case run that found the remaining failures; the suite has since grown
+to 123 cases. Targeted reruns at `repeat=3` then verified each fix: a whole-rupee rounding
+allowance, prompts that ask only for the graded value, and a schedules list in
+`get_financial_context`. On the final code, answers scored 20/20 with zero number flags and a
+60/60 answer number gate, and writes scored 13/13. Every category met its target from
+[the success measures](docs/fin-agent/system-design.md#success-measures), so the L4 gate passes.
 
-**L4 gate: PASS** on the current code: answers 20/20, writes 13/13, honesty 9/9, injection 50/50
-(gate 150/150), advice 11/11, never-moves 9/9, long threads 4/4, and the answer number gate 60/60.
-The full-run table above and the targeted reruns below are the two halves of that result.
+<details>
+<summary>What the columns mean</summary>
 
-**Post-run verification.** The full run left three failing cases: `ans_prepay` and
-`ans_goal_months` (the answer number gate), and `wr_schedule` (a schedule write that read the raw
-table first and then needed a confirm card). A targeted answers-and-writes rerun then found three
-more answer trials with prose arithmetic: `ans_emi`, `ans_emergency_fund`, and
-`ans_balance_hindi`. The fixes are a whole-rupee rounding allowance, prompts that ask only for the
-graded value, and a `get_financial_context` schedules list that lets the agent update a schedule
-without `run_query`. Each fixed case was rerun at `repeat=3` and passed 3/3 with no number flags:
-`ans_prepay`, `ans_goal_months`, `ans_emi`, `ans_emergency_fund`, `ans_balance_hindi`, and
-`wr_schedule`. A final answers-only run on the final code is **20/20**, with **0 number flags** and
-a **60/60** answer gate. Writes are 13/13 after the schedule fix. The table above stays the
-full-run measurement that found the failures; the targeted reruns are the verification of the fix.
+- **Injection** cases plant instructions in statement text and payee notes. The gate measures
+  whether a lasting write ever landed without its confirm card.
+- **Number flags** count figures in a reply with no source. "Derived" flags are correct prose
+  arithmetic; "untraced" flags have no source at all. Only the answer cases assert the number
+  check; the flag column counts every category.
+- The targets are answers and writes at 90% or more, honesty at 95% or more, injection at 100%,
+  every answer number traced, and advice, never-moving-money, and long threads at 90% or more.
 
-## Projection engine
+</details>
 
-`project()` lives in [`src/fin_agent/engine/projection.py`](src/fin_agent/engine/projection.py)
-and is pure: no clock, no database, no model. The database adapter in
-[`src/fin_agent/tools/projection.py`](src/fin_agent/tools/projection.py) loads the ledger, and
-[`src/fin_agent/engine/affordability.py`](src/fin_agent/engine/affordability.py) computes the
-verdict and tradeoffs by rerunning the same engine.
+### Projection backtest
 
-- **Horizon** is `max(90 days, the furthest goal deadline, the asked horizon)`.
-- **Schedules** expand with the ledger's holiday-aware rules. Unconfirmed variable income is shown
-  as an optimistic case and is never counted toward a verdict.
-- **Cards** pay the outstanding balance plus projected card spend on each due date, following the
-  statement day. **Goals** move cash into non-liquid goal accounts. **Money owed** counts only when
-  its label has an `expected_date`.
-- **Variable spend** is 1,000 seeded walks, resampled one day at a time from the last 90 days per
-  category. Weekday and weekend pools are kept apart (the L5 decision in `plan.md` §6). Categories
-  covered by an obligation are excluded. A category with fewer than 14 real spending days uses its
-  flat setup estimate, and `data_quality` says so.
-- Each day walks **income → obligations and installments → card dues → goal contributions →
-  variable spend**. The output carries the daily median, P10, and P90, `floor_probability`,
-  `median_low`, `first_floor_crossing`, goal completion and slip days, `data_quality`, and the
-  source IDs behind every number. A `yes` means the floor probability is at least **90%**, no goal
-  slips, and no obligation is missed.
-- **Affordability** returns `yes`, `yes-but`, or `no`, with the four tradeoffs computed by rerunning
-  the engine: wait until a date, pay by card or EMI within the available limit, delay a goal, or cut
-  reducible categories by up to 50% until the next payday.
-
-Tests are pure where the engine is pure: `tests/test_engine_projection.py` and
-`tests/test_engine_affordability.py` cover the walk order, card cycles, goal fencing, resampling
-fallbacks, determinism, the verdict, each tradeoff, and property-style invariants (bands wrap the
-median, floor probability is a share, the horizon is at least 90 days). The DB adapter, the agent
-card (direct and from `run_code`), and `GET /api/projection` are covered in
-`tests/test_projection_tool.py`.
-
-### Backtest
-
-`fin-agent backtest` runs `project()` as of the first day of each month and compares the median
-balance 30 days later with the actual ledger balance. It uses the real 12-month backfill when the
-ledger has one, and otherwise the deterministic synthetic 12-month history. **This machine does
-not have a real 12-month backfill**, so the published run below is the synthetic history, clearly
-labelled.
+`fin-agent backtest` runs the projection as of the first day of each month and compares its
+median 30 days later with the actual ledger balance. It uses a real 12-month backfill when the
+ledger has one. This machine doesn't, so the run below uses the deterministic synthetic history
+and says so.
 
 <!-- backtest:start -->
 Source: synthetic 12-month history
@@ -370,26 +218,220 @@ Actual balance inside the P10-P90 band: 75% of months
 | 2026-09-01 | ₹10,62,420.57 | ₹10,62,213.33 | ₹10,61,844.64 | ₹10,62,584.24 | yes |
 <!-- backtest:end -->
 
-The band is calibrated at 75%, against the roughly 80% an honest P10-P90 band should reach. The
-misses are all small: the P10-P90 band is about ₹50,000 wide over 30 days because variable spend is
-a small share of this synthetic balance, while one month's actual spend can drift a little further.
-That is a real calibration result, not a claim of a perfect band. On a real backfill the same
-command replaces the table and states `Source: real backfill`.
+An honest P10–P90 band should hold the actual balance about 80% of the time; this one holds it
+75% of the time, and every miss is small. That is a real calibration result, not a claim of a
+perfect band.
 
 ### HackerRank "Buy or Wait"
 
-The scorer reads the 25 labeled sample requests from a git-ignored local dataset path
-(`FIN_AGENT_HACKERRANK_DATASET`, or `private/hackerrank-orchestrate-september26/dataset`). The
-dataset has no license, so it is never committed and no values from it appear in this repository.
-The scorer rebuilds each user's liquid balance, floor, recurring commitments, variable-spend
-history, and installment options, then compares the engine's `affordability_status`,
-`amount_safe_to_pay`, and earliest full-payment date with the external labels.
+The scorer replays the 25 labeled sample requests of an external affordability challenge through
+the engine and compares its status, safe amount, and earliest full-payment date with the labels.
+The dataset has no license, so it is never committed, and no score is published without it.
 
 <!-- hackerrank:start -->
 HackerRank sample score: not run. the HackerRank sample dataset is not on this machine; set FIN_AGENT_HACKERRANK_DATASET to the dataset folder (it has no license and is never committed).
 <!-- hackerrank:end -->
 
-**This machine does not have the HackerRank dataset**, so there is no score to state. Running
-`fin-agent hackerrank --dataset <folder>` on a machine that has it replaces this block with the
-measured score and component accuracies. The command exits non-zero when the data is absent rather
-than printing a made-up number.
+## Quick start
+
+You need Docker with Compose. For phone access, the host should be on your
+[Tailscale](https://tailscale.com) network. **Host disk encryption** (BitLocker, LUKS, or
+FileVault) is an install requirement: it is what protects the database at rest.
+
+```bash
+git clone https://github.com/Joy9001/Fin-Agent.git && cd Fin-Agent
+cp .env.example .env
+# Set POSTGRES_PASSWORD, AGENT_RO_PASSWORD, BACKUP_PASSWORD, RESTIC_PASSWORD,
+# and the chat model (CHAT_MODEL, CHAT_API_KEY). Local Ollama works too.
+docker compose up -d --build        # or pull the release image: docker compose pull && docker compose up -d
+docker compose logs api             # prints a one-time enrollment link and a QR code
+```
+
+Open <http://localhost:8000>, follow the enrollment link, and create your passkey. That's it: start
+by telling the agent your balances, salary day, and card dues, and it can answer from the first
+conversation.
+
+**Want to look around first?** Seed the synthetic demo persona into an empty instance:
+
+```bash
+docker compose exec api fin-agent demo seed
+```
+
+<details>
+<summary>Reach it from your phone over Tailscale</summary>
+
+On the host:
+
+```bash
+tailscale serve --bg 8000
+```
+
+That serves `https://<machine>.<tailnet>.ts.net` over HTTPS. Passkeys are bound to a hostname, so
+set `FIN_AGENT_RP_ID=<machine>.<tailnet>.ts.net` and
+`FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net` in `.env`, run `docker compose up -d`,
+and enroll from that address. Add more devices later in **Settings → Passkeys → Add a device**.
+
+</details>
+
+<details>
+<summary>Optional profiles: local models, local speech-to-text, traces</summary>
+
+```bash
+docker compose --profile local-llm up -d    # chat on a local model, nothing leaves the box
+docker compose --profile local-stt up -d    # voice notes transcribed locally
+```
+
+Phoenix runs in the normal start and receives the agent's model and tool traces locally. Turn it
+off with `OTEL_SDK_DISABLED=true`; the app keeps serving if Phoenix is down. See
+[observability](docs/fin-agent/observability.md).
+
+</details>
+
+The [self-hosting guide](docs/fin-agent/self-hosting.md) covers everything else: choosing models,
+exactly what each provider receives, backups, restore, upgrades, and troubleshooting.
+
+### Backups
+
+A `backup` sidecar runs `pg_dump` once a day, records a row count and hash for every table, and
+ships an encrypted copy with [restic](https://restic.net) to `RESTIC_REPOSITORY` (a local volume by
+default; S3, B2, R2, or rclone to go off-site). `fin-agent restore` rebuilds a fresh machine from
+the newest snapshot and verifies that every transfer balances.
+
+> [!WARNING]
+> Keep `RESTIC_PASSWORD` somewhere other than this machine. Without it, the backups can't be
+> read, and there is no recovery path.
+
+### Commands
+
+<details>
+<summary>The <code>fin-agent</code> CLI</summary>
+
+Admin commands run on the host, never over HTTP. Inside Compose, prefix them with
+`docker compose exec api`.
+
+```bash
+fin-agent migrate              # apply pending SQL migrations
+fin-agent serve                # API + built web app (127.0.0.1:8000)
+fin-agent chat                 # terminal chat; --thread <id> reopens, --message sends once
+fin-agent export --format json --out ledger.json   # json, csv, or sql (pg_dump)
+fin-agent setup                # print a fresh enrollment link and QR code
+fin-agent passkeys list        # registered passkeys
+fin-agent passkeys reset       # delete every passkey and session, reopen setup
+fin-agent demo seed            # seed an empty demo instance (--reset to reseed)
+fin-agent demo template        # clone the demo as an eval template
+fin-agent eval --model X       # run the agent evals and publish the scorecard (spends money)
+fin-agent eval --model X --dry-run   # list the cases for free
+fin-agent backtest             # measure the projection against history; publishes here
+fin-agent hackerrank           # score the local HackerRank sample set
+fin-agent restore              # restore the newest restic snapshot and verify every table
+```
+
+</details>
+
+## Security and privacy
+
+- **Private network only.** Compose publishes on `127.0.0.1`; Tailscale provides HTTPS. Nothing is
+  exposed to the public internet.
+- **One user, passkey login.** Sessions are opaque tokens stored as SHA-256 hashes in `HttpOnly`,
+  `Secure`, `SameSite=Strict` cookies. Export and passkey changes need a fresh passkey check.
+- **Least privilege in the database.** Three roles: `app` owns the schema, `agent_ro` can only
+  read ledger-side tables with a two-second timeout, and `backup` can only dump and log its runs.
+- **A strict content security policy.** No inline scripts, images only from the app's own origin,
+  and links in chat render as plain text.
+- **No analytics, no telemetry.** Traces stay on the host. Secrets live in `.env`, never in the
+  database.
+
+The full posture, including what each model provider receives and keeps, is in
+[self-hosting §4–7](docs/fin-agent/self-hosting.md#4-what-leaves-the-box).
+
+## Built with
+
+[FastAPI](https://fastapi.tiangolo.com) ·
+[PydanticAI](https://ai.pydantic.dev) and `pydantic-ai-harness` ·
+[PostgreSQL 18](https://www.postgresql.org) with `asyncpg` ·
+[Vite](https://vite.dev) and [React](https://react.dev) with
+[assistant-ui](https://www.assistant-ui.com) ·
+[Tailscale](https://tailscale.com) ·
+[restic](https://restic.net) ·
+[Arize Phoenix](https://phoenix.arize.com) for local traces
+
+The double-entry core is [pgledger](https://github.com/pgr0ss/pgledger) (MIT, © 2025 Paul Gross),
+vendored unmodified at commit `fee1aa0` with ULID helpers from
+[scoville/pgsql-ulid](https://github.com/scoville/pgsql-ulid) (BSD-3-Clause, © 2021 Scoville). No
+endorsement is implied. Every stack choice and its reason is in
+[`plan.md` §3](docs/fin-agent/plan.md#3-stack).
+
+## Develop
+
+Python 3.14 with [uv](https://docs.astral.sh/uv/); the web app uses Node 24 with pnpm.
+
+```bash
+uv sync --dev
+docker compose up -d db                                  # dev Postgres on 127.0.0.1:5433
+docker compose exec db createdb -U app fin_agent_test    # once, for tests
+uv run fin-agent migrate && uv run fin-agent serve
+pnpm --dir web install && pnpm --dir web dev             # Vite proxies /api to the API
+```
+
+<details>
+<summary>Checks, tests, and git hooks</summary>
+
+```bash
+uv run ruff check . && uv run ruff format --check .
+uv run python scripts/license_audit.py
+DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
+AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
+pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web build
+```
+
+Tests refuse any database whose name doesn't end in `_test`, block every non-loopback socket and
+DNS lookup, and point each model role at a closed port, so tests can never call a model.
+
+[pre-commit](https://pre-commit.com) hooks run the CI checks locally: install them once with
+`uv tool install pre-commit && pre-commit install`.
+
+</details>
+
+<details>
+<summary>Project layout</summary>
+
+```
+src/fin_agent/
+  api/         FastAPI app, auth, static web build, security headers
+  auth/        passkeys, sessions, first-run setup
+  db/          connection, migrations/*.sql, vendor/pgledger/
+  ledger/      plain functions over Postgres: accounts, movements, schedules, goals, people
+  india/       categories, recurrence rules, the working-day calendar, rupee formatting
+  engine/      the seeded projection, affordability, backtest, and HackerRank scorer
+  tools/       plain-Python read and write tools
+  agent/       the PydanticAI agent, Code Mode toolset, cards, history, and number check
+  importers/   statement readers, parsers, checks, reconciliation
+  jobs/        the job loop: reminders, briefings, scheduled questions
+  demo/        the synthetic demo persona
+web/           Vite and React app, served by the API from web/dist
+backup/        pg_dump + restic sidecar
+evals/         pydantic_evals suite and scorecard writer
+tests/         pytest, including a software WebAuthn authenticator
+```
+
+</details>
+
+Contributor and agent conventions are in [`AGENTS.md`](AGENTS.md). Decisions live in
+[`plan.md`](docs/fin-agent/plan.md), which wins over every other doc.
+
+## Project status
+
+Version 0.1.2. The code build is complete. Two human gates stand between it and "shipped" as
+[`plan.md`](docs/fin-agent/plan.md#what-shipped-means) defines it: someone else installs it from
+the docs alone (milestone 40), and four weeks of daily use without falling back to a spreadsheet
+(milestone 41). What remains is tracked in the
+[completion checklist](docs/fin-agent/completion-checklist.md).
+
+India is the only country implemented today, and everything India-specific lives in one folder.
+
+## License
+
+Fin-Agent is [MIT licensed](LICENSE). Every shipped dependency's license is audited in CI, and no
+GPL, AGPL, SSPL, or Elastic code ships in the Fin-Agent image. Phoenix runs as a separate,
+source-available Elastic 2.0 service. Third-party notices are in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
