@@ -18,3 +18,11 @@ worth reading as *evidence*, not as conclusions:
 
 Known-stale specifics: `capabilities/v1.0.0.md` describes a Go backend that was never built
 and contradicts the later Python decision.
+
+## Web records, November 2026
+
+`web-2026-11/` holds the planning, audit, and migration records from the web redesign (assistant-ui
+adoption, quote contract, runtime review, readiness plan and evidence, feature coverage, the
+previous UX redesign, and the design mocks). Archived November 9, 2026, after
+[`web-interface-design.md`](../fin-agent/web-interface-design.md) replaced them. Their screen
+descriptions and verification claims are stale.

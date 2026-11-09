@@ -12,6 +12,9 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`import.md`](import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`recaps.md`](recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
+| [`web-interface-design.md`](web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
+| [`observability.md`](observability.md) | Operator view: Phoenix tracing, logs, settings, recovery, owner commands |
 | [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything

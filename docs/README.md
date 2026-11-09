@@ -26,6 +26,9 @@ plan wins. The project has the following docs:
 | [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 | [`observability.md`](fin-agent/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
+| [`recaps.md`](fin-agent/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
+| [`web-interface-design.md`](fin-agent/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
+| [`completion-checklist.md`](fin-agent/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 | [`e2e-user-journeys.md`](fin-agent/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
 | [`e2e-run-log.md`](fin-agent/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
 
