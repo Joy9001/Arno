@@ -82,6 +82,7 @@ def _hypothetical_inputs(
     }
 
     if hypothetical.method == "account":
+        meta["last_cash_date"] = when.isoformat()
         event = CashEvent(
             date=when,
             amount_paise=-amount,
@@ -119,6 +120,7 @@ def _hypothetical_inputs(
     if hypothetical.method == "card":
         due = card_due_date(card, when)
         meta["due_date"] = due.isoformat()
+        meta["last_cash_date"] = due.isoformat()
         event = CashEvent(
             date=when,
             amount_paise=-amount,
@@ -149,7 +151,19 @@ def _hypothetical_inputs(
         )
     meta["installments"] = installments
     meta["total_paise"] = amount
+    meta["last_cash_date"] = card_due_date(card, _month_add(when, months - 1)).isoformat()
     return replace(inputs, events=inputs.events + tuple(events)), meta, None
+
+
+def _extend_horizon(inputs: ProjectionInput, meta: dict[str, Any]) -> ProjectionInput:
+    """Cover the plan's last cash date, so an EMI's later installments are not ignored."""
+    last_cash = meta.get("last_cash_date")
+    if not last_cash:
+        return inputs
+    needed = (date.fromisoformat(last_cash) - inputs.as_of).days + 1
+    if needed > (inputs.ask_horizon_days or 0):
+        return replace(inputs, ask_horizon_days=needed)
+    return inputs
 
 
 def _goal_slips(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -234,7 +248,7 @@ def _card_tradeoff(
         modified, meta, reason = _hypothetical_inputs(inputs, candidate)
         if reason is not None:
             continue
-        result = project(modified, runs=runs, seed=seed)
+        result = project(_extend_horizon(modified, meta), runs=runs, seed=seed)
         if not _passes(result, threshold=threshold):
             continue
         if method == "card":
@@ -293,10 +307,16 @@ def _delay_goal_tradeoff(
         delay = next((slip for slip in slips if slip["id"] == goal.id), None)
         if delay is None:
             continue
-        detail = (
-            f"Delay the {goal.name} contribution until after the purchase; "
-            f"the goal completes {delay['slips_days']} days later."
-        )
+        if delay["slips_days"] is None:
+            detail = (
+                f"Delay the {goal.name} contribution until after the purchase; "
+                "the goal no longer completes within the projection."
+            )
+        else:
+            detail = (
+                f"Delay the {goal.name} contribution until after the purchase; "
+                f"the goal completes {delay['slips_days']} days later."
+            )
         return {
             "kind": "delay_goal",
             "goal": goal.name,
@@ -394,11 +414,14 @@ def afford(
     if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
     known_start = any(account.known for account in inputs.liquid)
-    needed = max(0, (hypothetical.date - inputs.as_of).days + 1)
-    if needed > (inputs.ask_horizon_days or 0):
-        inputs = replace(inputs, ask_horizon_days=needed)
-    baseline = project(inputs, runs=runs, seed=seed)
     modified, meta, reason = _hypothetical_inputs(inputs, hypothetical)
+    meta["last_cash_date"] = max(
+        meta.get("last_cash_date") or hypothetical.date.isoformat(),
+        hypothetical.date.isoformat(),
+    )
+    inputs = _extend_horizon(inputs, meta)
+    modified = _extend_horizon(modified, meta) if reason is None else inputs
+    baseline = project(inputs, runs=runs, seed=seed)
     if reason is not None:
         result = baseline
         slips: list[dict[str, Any]] = []

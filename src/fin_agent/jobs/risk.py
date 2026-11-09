@@ -24,6 +24,12 @@ logger = logging.getLogger("fin_agent.jobs.risk")
 async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str, Any] | None:
     """Check the projection and create at most one warning for the current episode."""
     projection = await projection_tools.project(conn, horizon_days=horizon_days)
+    ages = projection["data_quality"].get("balance_ages")
+    if ages is not None and not any(
+        row.get("known") and row.get("kind") in {"bank", "cash", "wallet"} for row in ages
+    ):
+        # No verified liquid balance: the curve is a provisional net change, not a low balance.
+        return None
     state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1")
     last_crossing = state["first_floor_crossing"] if state else None
     armed = bool(state["armed"]) if state else True

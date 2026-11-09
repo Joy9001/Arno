@@ -95,6 +95,24 @@ def next_occurrence(
     return found.astimezone(INDIA) if found is not None else None
 
 
+def _following_occurrence(
+    rule: str, occurrence: datetime, now: datetime, default_time: time
+) -> datetime | None:
+    """Advance from the last scheduled occurrence, not from now.
+
+    Anchoring an INTERVAL=2 rule at today moves its phase (a late biweekly run would fire a week
+    early), so walk the rule's own occurrences until one is in the future.
+    """
+    following = next_occurrence(rule, after=occurrence, default_time=default_time)
+    steps = 0
+    while following is not None and following <= now:
+        following = next_occurrence(rule, after=following, default_time=default_time)
+        steps += 1
+        if steps >= 10_000:  # pragma: no cover - only a pathological rule gets here
+            return next_occurrence(rule, after=now, default_time=default_time)
+    return following
+
+
 def period_for(kind: str, occurrence: datetime, payload: dict[str, Any] | None = None) -> str:
     local = occurrence.astimezone(INDIA)
     if kind == "weekly_briefing":
@@ -229,7 +247,7 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
 
 
 async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None) -> int:
-    """Turn every due schedule into at most one job per period, then move it from now."""
+    """Turn every due schedule into at most one job per period, then move past now."""
     now = now or datetime.now(INDIA)
     enqueued = 0
     async with conn.transaction():
@@ -259,10 +277,11 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
                 payload=job_payload,
                 run_at=now,
             )
-            following = next_occurrence(
+            following = _following_occurrence(
                 row["rule"],
-                after=now,
-                default_time=occurrence.time().replace(tzinfo=None),
+                occurrence,
+                now,
+                occurrence.time().replace(tzinfo=None),
             )
             await conn.execute(
                 """

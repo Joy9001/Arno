@@ -20,7 +20,9 @@ def _suggested_rule(interval: int, last_date: date) -> str:
         return f"FREQ=WEEKLY;BYDAY={days[last_date.weekday()]}"
     if interval == 365:
         return f"FREQ=YEARLY;BYMONTH={last_date.month};BYMONTHDAY={last_date.day}"
-    return f"FREQ=MONTHLY;BYMONTHDAY={last_date.day}"
+    # BYMONTHDAY=31 has no occurrence in a short month; the last day is the charge's real day.
+    day = -1 if last_date.day >= 29 else last_date.day
+    return f"FREQ=MONTHLY;BYMONTHDAY={day}"
 
 
 def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
@@ -84,8 +86,9 @@ async def run_pattern_detection(
 async def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
     async with connect() as conn:
         rows = await run_pattern_detection(conn)
-        if rows:
-            await send_push_for_kind(conn, "new_subscription")
+        for kind in ("new_subscription", "missed_recurring"):
+            if any(row["kind"] == kind for row in rows):
+                await send_push_for_kind(conn, kind)
         return {"created": len(rows), "ids": [row["id"] for row in rows]}
 
 

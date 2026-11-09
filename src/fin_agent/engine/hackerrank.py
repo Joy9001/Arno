@@ -121,6 +121,16 @@ def _add_months(day: date, months: int) -> date:
     return date(year, month, min(day.day, last_day))
 
 
+def _recurring_date(pattern: dict[str, Any], index: int) -> date:
+    """The pattern's occurrence ``index`` steps after its last settled date, anchored there."""
+    anchor = pattern["last"]
+    if pattern["step"] == "monthly":
+        return _add_months(anchor, index)
+    if pattern["step"] == "yearly":
+        return _add_months(anchor, 12 * index)
+    return anchor + timedelta(days=7 * index)
+
+
 def _events_for(
     user_events: list[dict[str, str]], request_date: date
 ) -> tuple[list[CashEvent], set[str], list[dict[str, Any]]]:
@@ -182,15 +192,11 @@ def _events_for(
         category, direction, event_type = key
         if (category, direction) in explicit:
             continue
-        when = pattern["last"]
+        step = 1
+        when = _recurring_date(pattern, step)
         while when <= request_date:
-            when = (
-                _add_months(when, 1)
-                if pattern["step"] == "monthly"
-                else _add_months(when, 12)
-                if pattern["step"] == "yearly"
-                else when + timedelta(days=7)
-            )
+            step += 1
+            when = _recurring_date(pattern, step)
         while when <= end:
             signed = -pattern["amount"] if direction == "debit" else pattern["amount"]
             kind = (
@@ -212,13 +218,8 @@ def _events_for(
             )
             if signed < 0:
                 covered.add(category)
-            when = (
-                _add_months(when, 1)
-                if pattern["step"] == "monthly"
-                else _add_months(when, 12)
-                if pattern["step"] == "yearly"
-                else when + timedelta(days=7)
-            )
+            step += 1
+            when = _recurring_date(pattern, step)
     return events, covered, sources
 
 

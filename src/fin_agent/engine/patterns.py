@@ -156,6 +156,7 @@ async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN payees p ON p.id = v.payee_id
+        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
         WHERE v.amount_paise > 0
           AND v.date BETWEEN $1 AND $2
           AND p.active
@@ -192,38 +193,9 @@ async def _load_schedules(conn: Connection) -> list[KnownSchedule]:
     ]
 
 
-async def _has_payment(
-    conn: Connection,
-    *,
-    expected: date,
-    amount_paise: int,
-    reversed_ids: list[str],
-) -> bool:
-    low = round(amount_paise * (1 - AMOUNT_TOLERANCE))
-    high = round(amount_paise * (1 + AMOUNT_TOLERANCE))
-    row = await conn.fetchrow(
-        """
-        SELECT 1 FROM v_spending
-        WHERE date BETWEEN $1 AND $2
-          AND amount_paise BETWEEN $3 AND $4
-          AND NOT (movement_id = ANY($5))
-        LIMIT 1
-        """,
-        expected - timedelta(days=INTERVAL_TOLERANCE_DAYS),
-        expected + timedelta(days=INTERVAL_TOLERANCE_DAYS),
-        low,
-        high,
-        reversed_ids,
-    )
-    return row is not None
-
-
 async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
-    """Expected obligation occurrences three or more days old with no matching payment."""
-    from fin_agent.tools.read import _reversed_ids
-
+    """Expected obligation occurrences three or more days old with no payment evidence."""
     day = as_of or ledger_today()
-    reversed_ids = await _reversed_ids(conn)
     start = day - timedelta(days=90)
     end = day - timedelta(days=MISSED_AFTER_DAYS)
     proposals: list[dict[str, Any]] = []
@@ -234,29 +206,24 @@ async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[
         ORDER BY name
         """
     ):
-        amount = int(row["amount_paise"])
-        if amount <= 0:
-            continue
-        occurrences = await schedules_mod.expand_schedule(conn, row, max(start, row["starts"]), end)
+        occurrences = await schedules_mod.expand_schedule(
+            conn, row, max(start, row["starts"]), end, as_of=day
+        )
         for occurrence in occurrences:
-            expected = date.fromisoformat(occurrence["date"])
-            if await _has_payment(
-                conn,
-                expected=expected,
-                amount_paise=amount,
-                reversed_ids=reversed_ids,
-            ):
+            amount = occurrence["amount_paise"]
+            if not amount or amount <= 0 or occurrence["paid_paise"]:
                 continue
+            expected = date.fromisoformat(occurrence["date"])
             proposals.append(
                 {
                     "kind": "missed_recurring",
                     "schedule_id": str(row["id"]),
-                    "merchant": str(row["name"]),
-                    "outside_text": bool(row["outside_text"]),
-                    "amount_paise": amount,
+                    "merchant": str(occurrence["name"]),
+                    "outside_text": bool(occurrence["outside_text"]),
+                    "amount_paise": int(amount),
                     "expected_date": expected.isoformat(),
                     "days_late": (day - expected).days,
-                    "subtype": row["subtype"],
+                    "subtype": occurrence["subtype"],
                 }
             )
     return proposals

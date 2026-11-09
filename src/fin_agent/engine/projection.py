@@ -148,18 +148,19 @@ def card_due_date(card: CardAccount, spend_date: date) -> date:
 
     Spend closes on the first statement day on or after it. The bill is then due on the next due
     day after that statement date, which may fall in the following month when the statement day is
-    later than the due day.
+    later than the due day, or when a short month clamps the due day onto the close itself.
     """
     close = _statement_close(card, spend_date)
-    if card.due_day > card.statement_day:
-        return _clamped_day(close.year, close.month, card.due_day)
+    due = _clamped_day(close.year, close.month, card.due_day)
+    if due > close:
+        return due
     next_month = _add_months(date(close.year, close.month, 1), 1)
     return _clamped_day(next_month.year, next_month.month, card.due_day)
 
 
-def _first_due_after(card: CardAccount, day: date) -> date:
+def _first_due_on_or_after(card: CardAccount, day: date) -> date:
     due = _clamped_day(day.year, day.month, card.due_day)
-    if due > day:
+    if due >= day:
         return due
     next_month = _add_months(date(day.year, day.month, 1), 1)
     return _clamped_day(next_month.year, next_month.month, card.due_day)
@@ -241,7 +242,7 @@ def _simulate(
     card_initial_due: dict[str, date] = {}
     for card in inputs.cards:
         if card.outstanding_paise > 0:
-            due = _first_due_after(card, start)
+            due = _first_due_on_or_after(card, start)
             if due <= end:
                 card_initial_due[card.id] = due
 
@@ -305,6 +306,11 @@ def _simulate(
                 return
             balance += amount
 
+        # A bill already due today is paid today; the first curve point is after it.
+        for card in inputs.cards:
+            if card_initial_due.get(card.id) == start and card.id not in paid_initial:
+                balance -= card.outstanding_paise
+                paid_initial.add(card.id)
         for event in start_events:
             apply_event(event)
         path: list[int] = [balance]
@@ -338,6 +344,11 @@ def _simulate(
 
             if obligation_today and balance < 0:
                 missed_obligation_runs += 1
+
+            # 3b. A one-off modelled purchase (the affordability hypothetical) lands on its date.
+            for event in day_events:
+                if event.kind in {"hypothetical", "hypothetical_emi"}:
+                    apply_event(event)
 
             # 4. Goal contributions: liquid cash moves into a non-liquid goal account.
             for event in day_events:

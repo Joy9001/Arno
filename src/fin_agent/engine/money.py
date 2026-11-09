@@ -78,6 +78,10 @@ def _walk(principal: Decimal, monthly_rate: Decimal, emi: Decimal, months: int) 
         interest.append(month_interest)
         principal_paid.append(month_principal)
         balance -= month_principal
+    if balance > 0 and principal_paid:
+        # A rounded EMI can leave a few paise after the last month; the final installment pays
+        # them, so the schedule's principal always sums to the loan.
+        principal_paid[-1] += balance
     return _Walk(emi=emi, interest=interest, principal=principal_paid, balances=balances)
 
 
@@ -131,7 +135,7 @@ def amortize(
         "emi": money(int(emi)),
         "months": len(walk.principal),
         "total_interest": money(int(total_interest)),
-        "total_paid": money(int(emi * len(walk.principal))),
+        "total_paid": money(int(principal + total_interest)),
         "payoff_date": _add_months(start_date, len(walk.principal)).isoformat()
         if start_date
         else None,
@@ -151,11 +155,14 @@ def amortize(
         amount = int(prepay.get("amount_paise") or 0)
         if amount <= 0:
             raise ValueError("a prepayment must be positive")
-        at_emi = int(prepay.get("at_emi") or 1)
+        raw_at_emi = prepay.get("at_emi")
+        at_emi = int(raw_at_emi) if raw_at_emi is not None else 1
+        if not 1 <= at_emi <= len(walk.principal):
+            raise ValueError("at_emi must be between the next EMI and the last one")
         reduce = str(prepay.get("reduce") or "tenure")
         if reduce not in {"tenure", "emi"}:
             raise ValueError("reduce is tenure or emi")
-        before = max(at_emi - 1, 0)
+        before = at_emi - 1
         paid_interest = sum(walk.interest[:before], Decimal(0))
         balance = principal - sum(walk.principal[:before], Decimal(0))
         balance = max(balance - Decimal(amount), Decimal(0))

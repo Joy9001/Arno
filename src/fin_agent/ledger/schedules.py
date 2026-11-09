@@ -339,16 +339,47 @@ async def expand_schedule(
 
 
 def _card_due_dates(card: dict[str, Any], start: date, end: date) -> list[date]:
+    """Each statement's due date, matching the engine's `card_due_date` rule.
+
+    The due day must follow the statement close, so a 30/31 pair does not fall due on the close
+    itself in a short month. Start a month early because that close can roll into the window.
+    """
     due_day = card["due_day"]
     if not due_day:
         return []
-    cursor = date(start.year, start.month, 1)
+    statement_day = card["statement_day"]
+    if start.month == 1:
+        cursor = date(start.year - 1, 12, 1)
+    else:
+        cursor = date(start.year, start.month - 1, 1)
     dates: list[date] = []
     while cursor <= end:
-        day = min(due_day, _calendar.monthrange(cursor.year, cursor.month)[1])
-        candidate = date(cursor.year, cursor.month, day)
-        if start <= candidate <= end:
-            dates.append(candidate)
+        if statement_day:
+            close = date(
+                cursor.year,
+                cursor.month,
+                min(statement_day, _calendar.monthrange(cursor.year, cursor.month)[1]),
+            )
+            due = date(
+                close.year,
+                close.month,
+                min(due_day, _calendar.monthrange(close.year, close.month)[1]),
+            )
+            if due <= close:
+                close = date(close.year + (close.month == 12), close.month % 12 + 1, 1)
+                due = date(
+                    close.year,
+                    close.month,
+                    min(due_day, _calendar.monthrange(close.year, close.month)[1]),
+                )
+        else:
+            due = date(
+                cursor.year,
+                cursor.month,
+                min(due_day, _calendar.monthrange(cursor.year, cursor.month)[1]),
+            )
+        if start <= due <= end and due not in dates:
+            dates.append(due)
         if cursor.month == 12:
             cursor = date(cursor.year + 1, 1, 1)
         else:

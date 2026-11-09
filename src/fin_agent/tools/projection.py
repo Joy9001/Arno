@@ -12,7 +12,7 @@ from typing import Any
 
 from fin_agent.db.conn import Connection
 from fin_agent.engine.affordability import Hypothetical, afford
-from fin_agent.engine.money import money
+from fin_agent.engine.money import _add_months, money
 from fin_agent.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -149,6 +149,9 @@ async def _spend_categories(
     as_of: date,
     covered_category_ids: set[str],
 ) -> tuple[list[SpendCategory], list[dict[str, Any]], list[str]]:
+    from fin_agent.tools.read import _reversed_ids  # one definition of a corrected-away row
+
+    reversed_ids = await _reversed_ids(conn)
     window_start = as_of - timedelta(days=HISTORY_DAYS)
     window_end = as_of - timedelta(days=1)
     categories = await conn.fetch("SELECT * FROM categories WHERE active ORDER BY name")
@@ -158,13 +161,16 @@ async def _spend_categories(
         SELECT tl.category_id, v.date, sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
+        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND tl.category_id IS NOT NULL
+          AND NOT (v.movement_id = ANY($3))
         GROUP BY tl.category_id, v.date
         """,
         window_start,
         window_end,
+        reversed_ids,
     )
     daily: dict[str, dict[date, int]] = {}
     for row in spend_rows:
@@ -175,12 +181,15 @@ async def _spend_categories(
         """
         SELECT coalesce(sum(v.amount_paise), 0)::bigint AS amount_paise
         FROM v_spending v
+        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND v.category_id IS NULL
+          AND NOT (v.movement_id = ANY($3))
         """,
         window_start,
         window_end,
+        reversed_ids,
     )
     if uncategorized and int(uncategorized["amount_paise"]) > 0:
         gaps.append(
@@ -198,14 +207,17 @@ async def _spend_categories(
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
         JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
+        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND tl.category_id IS NOT NULL
           AND (fa.kind = 'card' OR ta.kind = 'card')
+          AND NOT (v.movement_id = ANY($3))
         GROUP BY tl.category_id, 2
         """,
         window_start,
         window_end,
+        reversed_ids,
     )
     card_choice: dict[str, tuple[str, int]] = {}
     card_counts: dict[str, int] = {}
@@ -293,19 +305,26 @@ async def _spend_categories(
 async def _owed_events(
     conn: Connection, *, as_of: date, end: date
 ) -> tuple[list[CashEvent], list[dict[str, Any]], list[str]]:
+    # The person account's balance is what is still owed; a label's transfer amount is not.
+    # Reading the label amount counted a repaid or reversed split as an expected receipt.
     rows = await conn.fetch(
         """
-        SELECT p.id AS payee_id, p.display_name, p.outside_text, tl.expected_date,
-               t.amount::bigint AS amount_paise,
-               CASE WHEN t.to_account_id = a.ledger_account_id THEN 1 ELSE -1 END AS direction
-        FROM transfer_labels tl
-        JOIN pgledger_transfers t ON t.id = tl.transfer_id
-        JOIN accounts a ON a.kind = 'person'
+        SELECT p.id AS payee_id, p.display_name, p.outside_text,
+               coalesce(sum(e.amount), 0)::bigint AS balance_paise,
+               min(tl.expected_date) AS expected_date
+        FROM accounts a
         JOIN payees p ON p.person_account_id = a.id
-        WHERE tl.expected_date IS NOT NULL
-          AND (t.from_account_id = a.ledger_account_id OR t.to_account_id = a.ledger_account_id)
-        ORDER BY tl.expected_date, p.display_name
-        """
+        LEFT JOIN pgledger_entries e ON e.account_id = a.ledger_account_id
+        LEFT JOIN pgledger_transfers t ON t.id = e.transfer_id
+        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        LEFT JOIN transfer_labels tl ON tl.transfer_id = e.transfer_id
+        WHERE a.kind = 'person'
+          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $1
+        GROUP BY p.id, p.display_name, p.outside_text
+        HAVING coalesce(sum(e.amount), 0) <> 0 AND min(tl.expected_date) IS NOT NULL
+        ORDER BY min(tl.expected_date), p.display_name
+        """,
+        as_of,
     )
     events: list[CashEvent] = []
     sources: list[dict[str, Any]] = []
@@ -320,8 +339,8 @@ async def _owed_events(
                 f"{row['display_name']} expected {expected.isoformat()}; it is counted on "
                 f"{when.isoformat()} as still owed"
             )
-        amount = int(row["amount_paise"])
-        signed = amount if int(row["direction"]) > 0 else -amount
+        balance = int(row["balance_paise"])
+        signed = balance
         kind = "owed_receipt" if signed > 0 else "owed_payment"
         display_name = mark(row["display_name"]) if row["outside_text"] else row["display_name"]
         events.append(
@@ -369,7 +388,8 @@ async def load_inputs(
     events: list[CashEvent] = []
     schedule_sources: dict[str, dict[str, Any]] = {}
     covered_categories: set[str] = set()
-    for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name"):
+    schedule_rows = await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name")
+    for row in schedule_rows:
         amount = row["amount_paise"]
         occurrences = await schedules_mod.expand_schedule(
             conn, row, as_of + timedelta(days=1), end, as_of=as_of
@@ -448,8 +468,13 @@ async def load_inputs(
     )
     gaps.extend(category_gaps)
 
-    income_count = sum(1 for event in events if event.kind.startswith("income") and event.confirmed)
-    obligation_count = sum(1 for event in events if event.kind in {"obligation", "instalment"})
+    # Setup gaps describe what is configured, not what happens to fall inside this horizon: an
+    # annual salary or a fully paid one-off is still configured.
+    current = [row for row in schedule_rows if row["ends"] is None or row["ends"] >= as_of]
+    income_count = sum(
+        1 for row in current if row["kind"].startswith("income") and row["confirmed"]
+    )
+    obligation_count = sum(1 for row in current if row["kind"] in {"obligation", "instalment"})
     setup_gaps: list[str] = []
     if not liquid_rows:
         setup_gaps.append("no liquid account")
@@ -652,7 +677,14 @@ async def project(
     purchase = _hypothetical(hypothetical)
     load_horizon = horizon_days
     if purchase is not None:
-        needed = max(0, (purchase.date - (as_of or ledger_today())).days + 1)
+        base = as_of or ledger_today()
+        last = purchase.date
+        if purchase.method == "emi":
+            last = _add_months(purchase.date, (purchase.emi_months or 3) - 1)
+        if purchase.method in {"card", "emi"}:
+            # A card bill lands up to two statement cycles after the charge or instalment.
+            last += timedelta(days=62)
+        needed = max(0, (last - base).days + 1)
         load_horizon = max(load_horizon or 0, needed)
     inputs = await load_inputs(conn, as_of=as_of, horizon_days=load_horizon)
     if purchase is not None:

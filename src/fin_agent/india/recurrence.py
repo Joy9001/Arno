@@ -7,8 +7,10 @@ bills, "previous" for salary paid on the last working day).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from dateutil.rrule import rrule, rrulestr
 
@@ -19,11 +21,25 @@ from fin_agent.india.workdays import (
     calendar_for,
 )
 
+_UNTIL_DATETIME = re.compile(r"UNTIL=(\d{8})T(\d{6})(Z?)", re.IGNORECASE)
+INDIA = ZoneInfo("Asia/Kolkata")
+
+
+def _inclusive_until(match: re.Match[str]) -> str:
+    """A date-based schedule means "through" a date-time UNTIL, not up to its midnight."""
+    moment = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
+    if match.group(3):
+        moment = moment.replace(tzinfo=UTC).astimezone(INDIA)
+    return f"UNTIL={moment:%Y%m%d}T235959"
+
 
 def normalize_rule(rule: str) -> str:
     text = rule.strip()
     if not text:
         raise ValueError("A schedule needs an RRULE")
+    # dateutil rejects a UTC UNTIL against a naive DTSTART, and a date-time UNTIL would drop the
+    # final day's noon occurrence.
+    text = _UNTIL_DATETIME.sub(_inclusive_until, text)
     if not text.upper().startswith("RRULE:"):
         text = f"RRULE:{text}"
     return text
@@ -75,15 +91,12 @@ def expand_rule(
     land inside the requested window. Duplicate adjusted dates collapse to one.
     """
     parsed = parse_rule(rule, starts)
-    effective_end = min(end, ends) if ends is not None else end
-    if effective_end < start:
+    if end < start:
         return []
 
-    calendar = calendar or calendar_for(
-        start - timedelta(days=7), effective_end + timedelta(days=7)
-    )
+    calendar = calendar or calendar_for(start - timedelta(days=7), end + timedelta(days=7))
     buffer_start = start - timedelta(days=7)
-    buffer_end = effective_end + timedelta(days=7)
+    buffer_end = end + timedelta(days=7)
     dates: set[date] = set()
     for raw in _between(parsed, buffer_start, buffer_end):
         if raw < starts:
@@ -91,7 +104,9 @@ def expand_rule(
         if ends is not None and raw > ends:
             continue
         adjusted = adjust_to_working_day(raw, holiday_adjust, calendar)
-        if adjusted < start or adjusted > effective_end:
+        # `ends` bounds the raw occurrence, not its holiday-adjusted date: the last bill can
+        # move past the end date and must not disappear.
+        if adjusted < start or adjusted > end:
             continue
         dates.add(adjusted)
     return sorted(dates)

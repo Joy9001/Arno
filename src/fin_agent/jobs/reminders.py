@@ -39,15 +39,19 @@ async def send_reminders(
         row = await conn.fetchrow("SELECT reminder_lead_days FROM settings WHERE id = 1")
         lead_days = int(row["reminder_lead_days"]) if row else 3
     lead_days = max(0, min(int(lead_days), 30))
-    events = (await schedules_mod.upcoming(conn, days=lead_days, start=day))["events"]
+    # `upcoming` needs a positive window; a 0-day lead still means "today only".
+    events = (await schedules_mod.upcoming(conn, days=max(1, lead_days), start=day))["events"]
     created: list[dict[str, Any]] = []
     for event in events:
         if event["kind"] not in {"obligation", "instalment", "card_due"}:
             continue
+        if event["payment_status"] in {"paid", "recorded"}:
+            continue
         due = date.fromisoformat(event["date"])
         if due < day or due > day + timedelta(days=lead_days):
             continue
-        amount_paise = event["amount_paise"]
+        remaining = event["remaining_paise"]
+        amount_paise = remaining if remaining is not None else event["amount_paise"]
         source_id = event["schedule_id"] or event["account_id"]
         key = f"reminder:{source_id}:{event['date']}"
         outside = False
