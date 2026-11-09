@@ -11,13 +11,17 @@ const I = {
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 0 1-14 0M12 17v5"/>',
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
 };
 const svg = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${I[k]}</svg>`;
 window.icon = svg;
 const active = document.body.dataset.active;
 const rail = document.getElementById("rail");
 if (rail) {
-  const items = [["ask", "Ask"], ["chats", "Chats"], ["money", "Money"], ["activity", "Activity", 3], ["recaps", "Recaps", 1]];
+  const fresh = document.body.dataset.fresh !== undefined;
+  const items = [["ask", "Ask"], ["chats", "Chats"], ["money", "Money"], ["activity", "Activity", fresh ? 0 : 3], ["recaps", "Recaps", fresh ? 0 : 1]];
   rail.className = "rail";
   rail.innerHTML = `<span class="orb brand" style="--s:38px"><i></i></span>` +
     items.map(([k, l, n]) => `<span class="ri ${k === active ? "on" : ""}">${n ? `<b>${n}</b>` : ""}${svg(k)}${l}</span>`).join("") +

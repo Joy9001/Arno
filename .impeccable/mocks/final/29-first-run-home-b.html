@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>29 · First run · B · Cards in waiting</title><link rel="stylesheet" href="shell.css">
+<style>
+main{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:44px;overflow:hidden}
+main::before{content:"";position:absolute;width:1000px;height:640px;top:-330px;left:50%;transform:translateX(-50%);background:radial-gradient(closest-side,rgba(43,89,255,.30),rgba(30,200,165,.12) 50%,transparent);pointer-events:none}
+.top{position:absolute;top:20px;right:28px;display:flex;gap:8px;align-items:center}
+.halo{position:relative;display:grid;place-items:center}
+.halo::before{content:"";position:absolute;width:200px;height:200px;border-radius:50%;background:var(--iris);filter:blur(60px);opacity:.32}
+h1{position:relative;font-size:52px;font-weight:800;letter-spacing:-.04em;line-height:1;margin-top:22px;text-align:center}
+.lede{position:relative;margin-top:10px;color:var(--sub);font-size:17px}
+.comp{width:740px;margin-top:24px;border:1.5px solid rgba(212,255,58,.22);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.comp p{font-size:17px}
+.sug{display:flex;gap:8px;margin-top:12px}
+.noticed{width:1200px;margin-top:34px}
+.say{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px}
+.say span.s{color:var(--sub);font-weight:600}
+.cards{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr;gap:14px;margin-top:12px}
+.c{border-radius:26px;padding:20px;display:flex;flex-direction:column;min-height:230px;position:relative;overflow:hidden;background:var(--s)}
+.c .ghostfig{margin-top:auto;display:flex;align-items:flex-end;gap:8px;color:rgba(246,247,240,.28);font-size:40px;font-weight:800;line-height:1}
+.c .ghostfig i{display:block;height:30px;border-radius:9px;background:rgba(246,247,240,.09)}
+.c p{font-size:14.5px;font-weight:600;margin-top:8px;line-height:1.35;color:#c9ccbf}
+.c .act{display:flex;gap:6px;margin-top:14px}
+.c.lead{background:radial-gradient(120% 120% at 0% 0%,rgba(212,255,58,.16),rgba(30,200,165,.10) 45%,transparent 75%),var(--s);outline:1.5px dashed rgba(212,255,58,.35);outline-offset:-1.5px}
+.curve{margin-top:auto;height:70px}
+.curve svg{width:100%;height:100%}
+.thumb{position:absolute;right:18px;top:-6px;width:70px;height:112px;border-radius:14px;transform:rotate(6deg);background:linear-gradient(160deg,#2c2f27,#3a3e33);box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.recap p,.recap .k{max-width:62%}
+.recap p{margin-top:auto}
+.btn.off{opacity:.5}
+.btn svg{width:14px;height:14px}
+</style></head><body data-fresh data-active="ask"><div class="app"><nav id="rail"></nav>
+<main>
+<div class="top"><span class="sub" style="font-size:13px">Private · on your machine</span><span class="btn">History</span></div>
+<div class="halo"><span class="orb" style="--s:96px"><i></i></span></div>
+<h1>Good afternoon</h1>
+<p class="lede">Ask me anything about your money.</p>
+<div class="comp"><p>Message Fin-Agent…</p>
+<div class="row"><span class="tool"><span data-icon="camera"></span>Photo a bill</span><span class="tool"><span data-icon="mic"></span>Talk</span><span class="tool"><span data-icon="file"></span>Drop a statement</span><span class="send">↑</span></div></div>
+<div class="sug"><span class="chip out">What can you do?</span><span class="chip out">How do I download a statement?</span><span class="chip out">My savings balance is…</span></div>
+
+<section class="noticed" aria-label="What appears here">
+<div class="say"><span class="orb" style="--s:18px"><i></i></span>Nothing to notice yet.<span class="s">This is what appears once your money is in.</span></div>
+<div class="cards">
+  <div class="c lead"><span class="k">Cash on hand</span><span class="ghostfig">₹<i style="width:170px"></i></span><p>Appears once one account has a known balance. A statement brings it in.</p><div class="act"><span class="btn lime"><span data-icon="upload"></span>Import a statement</span></div></div>
+  <div class="c"><span class="k">Forecast</span><div class="curve"><svg viewBox="0 0 200 70" preserveAspectRatio="none"><path d="M0 46 C30 44 40 22 70 28 S120 52 146 34 S182 18 200 22 L200 70 L0 70Z" fill="rgba(30,200,165,.10)"/><path d="M0 46 C30 44 40 22 70 28 S120 52 146 34 S182 18 200 22" fill="none" stroke="rgba(30,200,165,.45)" stroke-width="2" stroke-dasharray="5 5"/></svg></div><p>Needs a known balance for every account you spend from.</p><div class="act"><span class="btn">See the accounts</span></div></div>
+  <div class="c"><span class="k">Floor</span><span class="ghostfig" style="font-size:32px">₹<i style="width:90px;height:24px"></i></span><p>The lowest balance you never want to cross. I check every purchase against it.</p><div class="act"><span class="btn">Set a floor</span></div></div>
+  <div class="c recap"><span class="thumb"></span><span class="k">Recaps</span><p>Your first story arrives with your first week of spending.</p><div class="act"><span class="btn off"><span data-icon="lock"></span>Watch</span></div></div>
+</div>
+</section>
+</main></div><script src="shell.js"></script></body></html>

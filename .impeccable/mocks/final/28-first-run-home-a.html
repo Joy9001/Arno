@@ -1,0 +1,71 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>28 · First run · A · One statement</title><link rel="stylesheet" href="shell.css">
+<style>
+main{position:relative;display:flex;flex-direction:column;align-items:center;padding-top:44px;overflow:hidden}
+main::before{content:"";position:absolute;width:1000px;height:640px;top:-330px;left:50%;transform:translateX(-50%);background:radial-gradient(closest-side,rgba(43,89,255,.30),rgba(30,200,165,.12) 50%,transparent);pointer-events:none}
+.top{position:absolute;top:20px;right:28px;display:flex;gap:8px;align-items:center}
+.halo{position:relative;display:grid;place-items:center}
+.halo::before{content:"";position:absolute;width:200px;height:200px;border-radius:50%;background:var(--iris);filter:blur(60px);opacity:.32}
+h1{position:relative;font-size:52px;font-weight:800;letter-spacing:-.04em;line-height:1;margin-top:22px;text-align:center}
+.lede{position:relative;margin-top:10px;color:var(--sub);font-size:17px}
+.comp{width:740px;margin-top:24px;border:1.5px solid rgba(212,255,58,.22);box-shadow:0 30px 80px rgba(0,0,0,.5)}
+.comp p{font-size:17px}
+.sug{display:flex;gap:8px;margin-top:12px}
+.start{width:1080px;margin-top:34px}
+.say{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px}
+.say span.s{color:var(--sub);font-weight:600}
+.grid{display:grid;grid-template-columns:1.15fr 1fr;gap:14px;margin-top:12px}
+.drop{position:relative;border-radius:28px;padding:26px 28px;display:flex;flex-direction:column;overflow:hidden;
+  background:radial-gradient(90% 120% at 0% 0%,rgba(212,255,58,.09),transparent 60%),var(--s);
+  outline:1.5px dashed rgba(212,255,58,.38);outline-offset:-1.5px}
+.drop .ic{width:52px;height:52px;border-radius:16px;background:var(--lime);color:#111;display:grid;place-items:center}
+.drop .ic svg{width:24px;height:24px}
+.drop h2{font-size:30px;font-weight:800;letter-spacing:-.035em;line-height:1.05;margin-top:18px}
+.drop p{color:#c9ccbf;font-size:15px;margin-top:8px;max-width:46ch}
+.drop .acts{display:flex;gap:8px;margin-top:20px}
+.drop .fine{margin-top:14px;font-size:13px;color:var(--sub);display:flex;gap:7px;align-items:center}
+.drop .fine svg{width:14px;height:14px}
+.unl{border-radius:28px;background:var(--s);padding:22px 22px 8px}
+.unl .hd{display:flex;align-items:baseline;gap:10px}
+.unl h3{font-size:18px;font-weight:800;letter-spacing:-.02em}
+.unl .hd span{margin-left:auto;color:var(--sub);font-size:13px;font-weight:700}
+.it{display:grid;grid-template-columns:26px 1fr 92px;gap:14px;align-items:center;padding:16px 0;border-top:1px solid var(--line)}
+.hd + .it{border-top:0;margin-top:6px}
+.ring{width:26px;height:26px;border-radius:50%;box-shadow:inset 0 0 0 2px var(--s3)}
+.it b{display:block;font-size:16px;font-weight:800;letter-spacing:-.01em}
+.it p{font-size:13.5px;color:var(--sub);margin-top:2px;line-height:1.35}
+.pv{height:58px;border-radius:14px;position:relative;overflow:hidden;background:var(--s2)}
+.pv.cash{background:var(--mesh);opacity:.32}
+.pv.cash::after{content:"₹ ••,•••";position:absolute;left:10px;bottom:9px;font-weight:800;color:#111;font-size:15px;letter-spacing:-.03em}
+.pv svg{position:absolute;inset:0;width:100%;height:100%}
+.pv.story{width:40px;justify-self:end;transform:rotate(6deg);background:linear-gradient(160deg,#2c2f27,#3a3e33)}
+.pv.story::after{content:"";position:absolute;left:7px;right:7px;bottom:9px;height:5px;border-radius:3px;background:rgba(255,255,255,.18);box-shadow:0 -9px 0 rgba(255,255,255,.12)}
+</style></head><body data-fresh data-active="ask"><div class="app"><nav id="rail"></nav>
+<main>
+<div class="top"><span class="sub" style="font-size:13px">Private · on your machine</span><span class="btn">History</span></div>
+<div class="halo"><span class="orb" style="--s:96px"><i></i></span></div>
+<h1>Good afternoon</h1>
+<p class="lede">Ask me anything about your money.</p>
+<div class="comp"><p>Message Fin-Agent…</p>
+<div class="row"><span class="tool"><span data-icon="camera"></span>Photo a bill</span><span class="tool"><span data-icon="mic"></span>Talk</span><span class="tool"><span data-icon="file"></span>Drop a statement</span><span class="send">↑</span></div></div>
+<div class="sug"><span class="chip out">What can you do?</span><span class="chip out">How do I download a statement?</span><span class="chip out">My savings balance is…</span></div>
+
+<section class="start" aria-label="Get started">
+<div class="say"><span class="orb" style="--s:18px"><i></i></span>I don’t know your money yet.<span class="s">One statement is enough to start.</span></div>
+<div class="grid">
+  <div class="drop">
+    <span class="ic"><span data-icon="upload"></span></span>
+    <h2>Drop a bank statement</h2>
+    <p>A PDF or CSV from your netbanking. I read every page, you check every row, and nothing reaches your ledger until you commit it.</p>
+    <div class="acts"><span class="btn lime">Choose a file</span><span class="btn">Tell me a balance instead</span></div>
+    <span class="fine"><span data-icon="lock"></span>A locked PDF asks for its password on the import card, never in chat.</span>
+  </div>
+  <div class="unl">
+    <div class="hd"><h3>What it unlocks</h3><span>0 of 3 ready</span></div>
+    <div class="it"><span class="ring"></span><div><b>Cash on hand</b><p>Your bank, cash, and wallet balances, added up.</p></div><span class="pv cash"></span></div>
+    <div class="it"><span class="ring"></span><div><b>“Can I afford it?”</b><p>Needs a known balance for every account you spend from.</p></div>
+      <span class="pv"><svg viewBox="0 0 92 58" preserveAspectRatio="none"><path d="M0 40 C14 38 20 22 34 26 S56 44 68 30 S84 18 92 20 L92 58 L0 58Z" fill="rgba(30,200,165,.16)"/><path d="M0 40 C14 38 20 22 34 26 S56 44 68 30 S84 18 92 20" fill="none" stroke="rgba(30,200,165,.55)" stroke-width="2"/></svg></span></div>
+    <div class="it"><span class="ring"></span><div><b>Recaps</b><p>Daily, weekly, and monthly stories, once there is spending to tell.</p></div><span class="pv story"></span></div>
+  </div>
+</div>
+</section>
+</main></div><script src="shell.js"></script></body></html>

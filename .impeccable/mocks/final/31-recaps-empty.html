@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>31 · Recaps · before the first story</title><link rel="stylesheet" href="shell.css">
+<style>
+.wrap{display:grid;grid-template-columns:330px 1fr;height:100%}
+.list{padding:20px 18px;border-right:1px solid var(--line);display:flex;flex-direction:column}
+.list h1{font-size:30px;font-weight:800;letter-spacing:-.035em;padding:0 6px}
+.list .intro{padding:6px 6px 0;color:var(--sub);font-size:13.5px}
+.none{margin:22px 6px 0;padding:16px;border-radius:18px;box-shadow:inset 0 0 0 1.5px var(--line);color:var(--sub);font-size:13.5px}
+.none b{display:block;color:var(--t);font-size:14.5px;margin-bottom:2px}
+.stage{position:relative;display:flex;align-items:center;justify-content:center;gap:64px;overflow:hidden}
+.stage::before{content:"";position:absolute;inset:0;background:radial-gradient(40% 50% at 38% 50%,rgba(30,200,165,.14),transparent)}
+.frame{position:relative;width:340px;height:600px;border-radius:32px;outline:1.5px dashed rgba(212,255,58,.32);outline-offset:-1.5px;
+  background:linear-gradient(170deg,rgba(212,255,58,.06),rgba(43,89,255,.05) 70%),var(--s);overflow:hidden}
+.frame .prog{position:absolute;top:16px;left:16px;right:16px;display:flex;gap:4px}.frame .prog i{flex:1;height:3px;border-radius:2px;background:var(--s3)}
+.frame .hd{position:absolute;top:32px;left:18px;display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;color:var(--sub)}
+.sk{position:absolute;left:22px;border-radius:10px;background:var(--s2)}
+.bars{position:absolute;left:22px;right:22px;top:330px;display:flex;flex-direction:column;gap:9px}
+.bars i{height:20px;border-radius:7px;background:var(--s2)}
+.frame .q{position:absolute;left:14px;right:14px;bottom:16px;height:46px;border-radius:99px;background:var(--s2)}
+.copy{position:relative;width:420px}
+.copy h2{font-size:40px;font-weight:800;letter-spacing:-.04em;line-height:1.02}
+.copy p{margin-top:14px;color:#c9ccbf;font-size:16px;max-width:42ch}
+.copy ul{list-style:none;margin-top:18px;display:flex;flex-direction:column;gap:8px}
+.copy li{display:flex;gap:10px;align-items:center;font-weight:700;font-size:15px}
+.copy li i{width:8px;height:8px;border-radius:50%;background:var(--cy)}
+.copy .acts{display:flex;gap:8px;margin-top:24px}
+.btn svg{width:14px;height:14px}
+</style></head><body data-fresh data-active="recaps"><div class="app"><nav id="rail"></nav>
+<div class="wrap">
+<aside class="list"><h1>Recaps</h1>
+<p class="intro">Built from your ledger rows. Every figure is a sum you can open.</p>
+<div class="none"><b>No recaps yet</b>Daily, weekly, and monthly recaps appear here once the ledger has spending.</div>
+</aside>
+<section class="stage">
+<div class="frame" aria-hidden="true">
+  <div class="prog"><i></i><i></i><i></i><i></i></div>
+  <div class="hd"><span class="orb" style="--s:26px"><i></i></span>Your first recap</div>
+  <span class="sk" style="top:112px;width:110px;height:16px"></span>
+  <span class="sk" style="top:144px;width:230px;height:84px;border-radius:16px"></span>
+  <span class="sk" style="top:250px;width:270px;height:18px"></span>
+  <span class="sk" style="top:276px;width:200px;height:18px"></span>
+  <div class="bars"><i style="width:84%"></i><i style="width:58%"></i><i style="width:36%"></i><i style="width:70%"></i></div>
+  <div class="q"></div>
+</div>
+<div class="copy">
+  <h2>Your first recap starts with a statement</h2>
+  <p>Import one and its days, weeks, and months become recaps you can play. Every figure in them opens to the rows it was added up from.</p>
+  <ul><li><i></i>What you spent, and how it compares</li><li><i></i>Where it went, category by category</li><li><i></i>The one change worth a look</li></ul>
+  <div class="acts"><span class="btn lime"><span data-icon="upload"></span>Import a statement</span><span class="btn ask">Ask what recaps show</span></div>
+</div>
+</section>
+</div></div><script src="shell.js"></script></body></html>

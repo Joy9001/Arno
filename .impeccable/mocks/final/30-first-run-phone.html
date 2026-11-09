@@ -1,0 +1,34 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>30 · Phone · First run, two of three ready</title><link rel="stylesheet" href="shell.css">
+<style>
+body::before{content:"";position:absolute;width:420px;height:420px;top:-170px;left:-15px;border-radius:50%;background:var(--iris);filter:blur(90px);opacity:.22}
+.top{position:relative;display:flex;justify-content:space-between;align-items:center;padding:54px 18px 0}
+.c{position:relative;display:flex;flex-direction:column;align-items:center;padding:10px 18px 0;text-align:center}
+h1{font-size:32px;font-weight:800;letter-spacing:-.04em;line-height:1.02;margin-top:14px}
+.lede{color:var(--sub);font-size:15px;margin-top:6px}
+.comp{width:100%;margin-top:16px;text-align:left;border:1.5px solid rgba(212,255,58,.22);padding:14px 12px 10px 18px}
+.comp p{font-size:16px}
+.say{position:relative;display:flex;align-items:center;gap:8px;padding:22px 18px 0;font-weight:700;font-size:14px}
+.say span.s{margin-left:auto;color:var(--sub);font-size:13px}
+.unl{position:relative;margin:10px 16px 0;border-radius:24px;background:var(--s);padding:4px 16px}
+.it{display:grid;grid-template-columns:24px 1fr auto;gap:12px;align-items:center;padding:14px 0;border-top:1px solid var(--line)}
+.it:first-child{border-top:0}
+.ring{width:24px;height:24px;border-radius:50%;box-shadow:inset 0 0 0 2px var(--s3)}
+.ok{width:24px;height:24px;border-radius:50%;background:var(--lime);color:#111;display:grid;place-items:center}
+.ok svg{width:14px;height:14px;stroke-width:3}
+.it b{display:block;font-size:15px;font-weight:800}
+.it p{font-size:13px;color:var(--sub);line-height:1.3;margin-top:1px}
+.it .fig{font-size:22px;display:block;margin-top:2px}
+.it .btn{font-size:13px;padding:7px 12px}
+</style></head><body class="phone" data-active="ask">
+<div class="top"><span class="pic" data-icon="chats"></span><span class="sub" style="font-size:12px;font-weight:700">Private · on your machine</span><span class="pic" data-icon="edit"></span></div>
+<div class="c"><span class="orb" style="--s:76px"><i></i></span>
+<h1>Good afternoon</h1><p class="lede">Ask me anything about your money.</p>
+<div class="comp"><p>Message Fin-Agent…</p><div class="row"><span class="tool"><span data-icon="camera"></span>Photo</span><span class="tool"><span data-icon="mic"></span>Talk</span><span class="send">↑</span></div></div></div>
+<div class="say"><span class="orb" style="--s:16px"><i></i></span>Almost there<span class="s">2 of 3 ready</span></div>
+<div class="unl">
+  <div class="it"><span class="ok"><span data-icon="check"></span></span><div><b>Cash on hand</b><span class="fig num">₹48,320</span><p>SBI Savings, as of 31 Oct</p></div><span class="btn">Open</span></div>
+  <div class="it"><span class="ring"></span><div><b>“Can I afford it?”</b><p>Needs HDFC Savings’ balance too.</p></div><span class="btn lime">Import</span></div>
+  <div class="it"><span class="ok"><span data-icon="check"></span></span><div><b>Recaps</b><p>Your October story is ready.</p></div><span class="btn">Watch</span></div>
+</div>
+<nav id="tabbar"></nav>
+<script src="shell.js"></script></body></html>
