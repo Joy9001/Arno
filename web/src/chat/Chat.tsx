@@ -26,7 +26,7 @@ import {
   APICallError,
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from "ai";
-import { Flag, History, Plus, Square, X } from "lucide-react";
+import { Flag, History, Plus, Scan, Square, X } from "lucide-react";
 import { api, errorMessage } from "../api";
 import { Typing } from "../Loading";
 import type { ProjectionPayload } from "../projection";
@@ -717,6 +717,8 @@ function ChatShell({
   const firstThreadId = useAuiState((state) => state.threads.threadIds[0]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [view, setView] = useState<"chat" | "flow">("chat");
+  const [fit, setFit] = useState(false);
+  const [chatFocus, setChatFocus] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [listError, setListError] = useState<string | null>(null);
   const pendingPhoto = useRef(new Map<string, File>());
@@ -804,6 +806,19 @@ function ChatShell({
     target.scrollIntoView({ block: "center" });
     target.focus({ preventScroll: true });
   }, [focusMessage, historyLoading, messageCount, threadId]);
+
+  // Flow's "Open in chat": the thread mounts on the next frame, so look for the message then.
+  useEffect(() => {
+    if (!chatFocus || view !== "chat") return;
+    const handle = requestAnimationFrame(() => {
+      const target = document.getElementById(`message-${chatFocus}`);
+      if (!target) return;
+      target.scrollIntoView({ block: "center" });
+      target.focus({ preventScroll: true });
+      setChatFocus(null);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [chatFocus, view, messageCount]);
 
   useEffect(() => {
     if (!seed?.text) return;
@@ -1036,25 +1051,39 @@ function ChatShell({
           running={running}
           viewControl={
             messageCount > 0 ? (
-              <div className="view-toggle" role="radiogroup" aria-label="Conversation view">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={view === "chat"}
-                  className={view === "chat" ? "on" : ""}
-                  onClick={() => setView("chat")}
-                >
-                  Chat
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={view === "flow"}
-                  className={view === "flow" ? "on" : ""}
-                  onClick={() => setView("flow")}
-                >
-                  Flow
-                </button>
+              <div className="view-controls">
+                <div className="view-toggle" role="radiogroup" aria-label="Conversation view">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={view === "chat"}
+                    className={view === "chat" ? "on" : ""}
+                    onClick={() => setView("chat")}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={view === "flow"}
+                    className={view === "flow" ? "on" : ""}
+                    onClick={() => setView("flow")}
+                  >
+                    Flow
+                  </button>
+                </div>
+                {view === "flow" && (
+                  <button
+                    type="button"
+                    className="pill-button flow-fit"
+                    aria-pressed={fit}
+                    aria-label="Fit to screen"
+                    title="Fit to screen"
+                    onClick={() => setFit((value) => !value)}
+                  >
+                    <Scan size={16} strokeWidth={2} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             ) : null
           }
@@ -1108,7 +1137,13 @@ function ChatShell({
               }}
             />
           ) : view === "flow" && messageCount > 0 ? (
-            <FlowView />
+            <FlowView
+              fit={fit}
+              onOpenChat={(messageId) => {
+                setView("chat");
+                setChatFocus(messageId);
+              }}
+            />
           ) : (
             <Thread components={THREAD_COMPONENTS} autoFocus={false} />
           )}
