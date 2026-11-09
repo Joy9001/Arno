@@ -59,6 +59,7 @@ _HOST_CALL = re.compile(
 )
 PURPOSE_LIMIT = 100
 RESULT_LIMIT = 4000
+FAILED_STATUSES = frozenset({"failed", "error", "timed_out", "discrepancy"})
 REASONING_LIMIT = 1500
 ERROR_LIMIT = 220
 
@@ -97,7 +98,9 @@ def _script_error(content: Any) -> str | None:
         return _last_line(content)
     text = str(content)
     status = re.search(r"['\"]status['\"]:\s*['\"](\w+)['\"]", text)
-    if status and status.group(1) not in ("parser_submitted", "ok", "verified"):
+    # Host calls report many normal outcomes ("unlocked", "VERIFIED", "suggested"); only these
+    # mean the step failed.
+    if status and status.group(1).lower() in FAILED_STATUSES:
         reason = re.search(r"['\"]reason['\"]:\s*['\"]([^'\"]{1,200})['\"]", text)
         return reason.group(1) if reason else f"The checks did not pass ({status.group(1)})"
     return None

@@ -160,7 +160,17 @@ one task mixes banks, submit one script for each bank's imports.
 | `transcribe_page(import_id, page)` | an isolated VISION call for a page with no text layer |
 | `suggest_transfers(import_id, suggestions)` | suggest moves between the user's own accounts |
 
-Text formats arrive as one-line cells. Every host call, and every nested call inside a script, uses
+What they return:
+- `doc_info`: a dict with `kind`, `pages`, and per-page text-layer facts.
+- `doc_words`: a list of words, each `{"text", "x0", "x1", "top", "bottom"}`; an empty page is
+  `[]`.
+- `doc_words_range`: one word list per page, in order; item 0 is page `first`.
+- `check_statement`: `{"status", "reason", "total_ok", "chain_ok", ...}`; `status` is
+  `VERIFIED`, `DISCREPANCY`, or `FAILED`.
+
+Read a result by these keys; never guess one. Check a list is not empty before you
+index it, and stop at the page count `doc_info` gives. Text formats arrive as one-line cells. Every
+host call, and every nested call inside a script, uses
 one step, so one `doc_words_range` costs less than many single-page reads.
 
 The helper block is prepended to the script you submit, and only to it. There, `money`,

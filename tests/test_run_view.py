@@ -218,3 +218,14 @@ async def test_the_chat_agent_is_told_which_parser_task_it_can_continue():
 
     plain = await _instructions(SimpleNamespace(deps=AgentDeps(conversation_id="thr_1")))
     assert "Paused statement import" not in plain
+
+
+def test_a_normal_host_outcome_is_not_a_failure():
+    from fin_agent.api.run_view import _script_error
+
+    for status in ("unlocked", "VERIFIED", "suggested", "parser_submitted", "needs_input"):
+        assert _script_error({"status": status}) is None, status
+    assert _script_error({"status": "FAILED", "reason": "closing balance differs"}) == (
+        "closing balance differs"
+    )
+    assert _script_error({"status": "timed_out"}) == "The checks did not pass (timed_out)"
