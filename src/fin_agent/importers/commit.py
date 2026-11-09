@@ -17,7 +17,7 @@ from fin_agent.importers.reconcile import credit_decision_required
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.audit import undo_group, write_group
-from fin_agent.ledger.common import get_account_row, system_account
+from fin_agent.ledger.common import system_account
 from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from fin_agent.ledger.postings import TransferSpec, create_movement_in_group
 from fin_agent.tools.write import resolve_payee
@@ -115,6 +115,7 @@ async def _new_movement(
         "upi_ref": line.get("upi_ref"),
     }
     payee = None
+    payee_groups: list[str] = []
     counterparty = detail.get("counterparty")
     if counterparty:
         hashes = detail.get("identifier_hashes") or []
@@ -126,6 +127,9 @@ async def _new_movement(
             match_hash=hashes[0] if hashes else None,
             outside_text=True,
         )
+        # A payee this import created is part of the import: undoing it archives the payee too.
+        if payee.get("undo_id"):
+            payee_groups.append(str(payee["undo_id"]))
     category_id = None
 
     other_id = detail.get("suggested_transfer_account_id")
@@ -150,7 +154,10 @@ async def _new_movement(
         capture_group = await _capture_statement_line(
             conn, movement_id=str(transfer["id"]), line=line
         )
-        return {"id": transfer["id"], "undo_id": [transfer["undo_id"], capture_group]}
+        return {
+            "id": transfer["id"],
+            "undo_id": [*payee_groups, transfer["undo_id"], capture_group],
+        }
     credit_kind = detail.get("credit_kind")
     if amount > 0 and account["kind"] == "card":
         if credit_kind not in ("refund", "transfer", "income"):
@@ -171,7 +178,10 @@ async def _new_movement(
             capture_group = await _capture_statement_line(
                 conn, movement_id=str(refund["id"]), line=line
             )
-            return {"id": refund["id"], "undo_id": [refund["undo_id"], capture_group]}
+            return {
+                "id": refund["id"],
+                "undo_id": [*payee_groups, refund["undo_id"], capture_group],
+            }
         if credit_kind == "transfer":
             source_id = detail.get("credit_source_account_id")
             if not source_id:
@@ -189,7 +199,10 @@ async def _new_movement(
             capture_group = await _capture_statement_line(
                 conn, movement_id=str(transfer["id"]), line=line
             )
-            return {"id": transfer["id"], "undo_id": [transfer["undo_id"], capture_group]}
+            return {
+                "id": transfer["id"],
+                "undo_id": [*payee_groups, transfer["undo_id"], capture_group],
+            }
     if amount < 0:
         record = await movements_mod.record_expense(
             conn,
@@ -204,7 +217,7 @@ async def _new_movement(
             actor="user",
             apply_rules=False,
         )
-        return {"id": record["id"], "undo_id": [record["undo_id"]]}
+        return {"id": record["id"], "undo_id": [record["undo_id"], *payee_groups]}
     record = await movements_mod.record_income(
         conn,
         account_id=account["id"],
@@ -216,7 +229,7 @@ async def _new_movement(
         capture=capture,
         actor="user",
     )
-    return {"id": record["id"], "undo_id": [record["undo_id"]]}
+    return {"id": record["id"], "undo_id": [record["undo_id"], *payee_groups]}
 
 
 async def _account_balance_at(conn: Connection, ledger_account_id: str, day: date) -> int:
@@ -275,7 +288,17 @@ async def commit_import(
     conn: Connection,
     import_id: str,
 ) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
+    """Book one reviewed import. One transaction: a failure leaves nothing behind."""
+    async with conn.transaction():
+        return await _commit(conn, import_id)
+
+
+async def _commit(
+    conn: Connection,
+    import_id: str,
+) -> dict[str, Any]:
+    # The row lock makes a double POST, a retry, and two concurrent commits book once.
+    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
     if row is None:
         raise InvalidLedgerError("No such import")
     if row["status"] == "committed":
@@ -285,7 +308,11 @@ async def commit_import(
     check = row["check_result"] or {}
     if check.get("status") != "VERIFIED":
         raise ConflictLedgerError("Only a VERIFIED import can be committed")
-    account = await get_account_row(conn, row["account_id"]) if row["account_id"] else None
+    account = (
+        await conn.fetchrow("SELECT * FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"])
+        if row["account_id"]
+        else None
+    )
     if account is None:
         raise InvalidLedgerError("The import has no account")
     lines = await conn.fetch(
@@ -358,15 +385,28 @@ async def commit_import(
     for line in lines:
         if line["match_state"] == "ignored":
             continue
+        line_amount = int(line["amount_paise"])
+        if line_amount == 0:
+            raise InvalidLedgerError(
+                "This statement has a line with no amount. Ignore it on the review screen "
+                "before committing."
+            )
         movement_id = line.get("movement_id")
         if movement_id:
             net = await _net_on_account(conn, movement_id, account["ledger_account_id"])
-            amount = abs(int(line["amount_paise"]))
+            # Money out is negative on both sides. A merge that flips the direction would tie a
+            # debit to a credit, so the closing adjustment would hide the real difference.
+            if net != 0 and (net < 0) != (line_amount < 0):
+                raise ConflictLedgerError(
+                    "The matched movement moves money the other way. Merge this line with a "
+                    "movement in the same direction, or keep it as new.",
+                    details={"line": line["id"], "movement_id": movement_id},
+                )
             changes: dict[str, Any] = {}
             if await _movement_date(conn, movement_id) != line["date"]:
                 changes["date"] = line["date"]
-            if abs(net) != amount:
-                changes["amount_paise"] = amount
+            if net != line_amount:
+                changes["amount_paise"] = abs(line_amount)
             if not await _touches_account(conn, movement_id, account["ledger_account_id"]):
                 changes["account_id"] = account["id"]
             if changes:
@@ -378,11 +418,12 @@ async def commit_import(
                 )
                 group_ids.append(str(result["undo_id"]))
                 corrected_id = str(result["movement"]["id"])
-                copy_group = await _copy_captures(
-                    conn, old_movement_id=movement_id, new_movement_id=corrected_id
-                )
-                if copy_group:
-                    group_ids.append(copy_group)
+                if corrected_id != movement_id:
+                    copy_group = await _copy_captures(
+                        conn, old_movement_id=movement_id, new_movement_id=corrected_id
+                    )
+                    if copy_group:
+                        group_ids.append(copy_group)
                 movement_id = corrected_id
             group_ids.append(
                 await _capture_statement_line(conn, movement_id=movement_id, line=line)
@@ -533,13 +574,19 @@ async def _pending_adjustment(conn: Connection, import_id: str) -> int | None:
 
 
 async def undo_import(conn: Connection, import_id: str) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
+    """Undo a committed import. One transaction: a conflicting group cannot half-revert it."""
+    async with conn.transaction():
+        return await _undo(conn, import_id)
+
+
+async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
     if row is None:
         raise InvalidLedgerError("No such import")
-    if row["status"] != "committed":
-        raise InvalidLedgerError("Only a committed import can be undone")
     if row["undone_at"] is not None:
         return {"status": "already_undone", "import_id": import_id}
+    if row["status"] != "committed":
+        raise InvalidLedgerError("Only a committed import can be undone")
     for group_id in reversed([str(group) for group in (row["commit_groups"] or [])]):
         try:
             await undo_group(conn, group_id, actor="user")

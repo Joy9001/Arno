@@ -59,6 +59,17 @@ async def settle_imports(
 async def reconcile(conn: Connection, records: dict[str, Any]) -> int:
     """At startup: imports left `parsing` by a task that is no longer running."""
     changed = 0
+    # An import whose run died before it got a task id would otherwise stay parsing forever.
+    untasked = await conn.fetch(
+        """
+        UPDATE imports
+        SET status = 'failed', progress = NULL, updated_at = now(),
+            reason = 'The app restarted while this file was being read. Upload it again.'
+        WHERE status = 'parsing' AND task_id IS NULL
+        RETURNING id
+        """
+    )
+    changed += len(untasked)
     rows = await conn.fetch(
         "SELECT DISTINCT task_id FROM imports WHERE status = 'parsing' AND task_id IS NOT NULL"
     )

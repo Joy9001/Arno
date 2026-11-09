@@ -49,7 +49,7 @@ async def insert_lines(
     own_last4 = {account["last4"]} if account.get("last4") else set()
     inserted: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
-    for row in parsed_account.get("rows") or []:
+    for index, row in enumerate(parsed_account.get("rows") or []):
         debit = int(row.get("debit") or 0)
         credit = int(row.get("credit") or 0)
         amount = credit - debit
@@ -67,7 +67,9 @@ async def insert_lines(
         if occurrence:
             digest = content_hash(str(row["date"]), amount, f"{safe_raw or ''}#{occurrence}")
         row_id = await new_id(conn, "stl")
-        detail = {"identifier_hashes": sorted(hashes)}
+        # Ids from one instant do not sort in insertion order, so the parser's own row order is
+        # stored beside the line. The gate's replay and the transfer suggestions read it.
+        detail = {"identifier_hashes": sorted(hashes), "row": index}
         counterparty = str(row.get("counterparty") or "").strip()[:120]
         if counterparty:
             detail["counterparty"] = counterparty
@@ -98,7 +100,8 @@ async def insert_lines(
     return inserted
 
 
-async def _duplicate_exists(conn: Connection, line: dict[str, Any]) -> bool:
+async def _duplicate_exists(conn: Connection, line: dict[str, Any], account_id: str | None) -> bool:
+    """A row already imported for the same account. Another account keeps its own copy."""
     row = await conn.fetchrow(
         """
         SELECT 1
@@ -106,12 +109,14 @@ async def _duplicate_exists(conn: Connection, line: dict[str, Any]) -> bool:
         JOIN imports i ON i.id = sl.import_id
         WHERE sl.content_hash = $1
           AND sl.import_id <> $2
+          AND i.account_id IS NOT DISTINCT FROM $3
           AND i.status IN ('committed', 'review')
           AND sl.match_state NOT IN ('ignored')
         LIMIT 1
         """,
         line["content_hash"],
         line["import_id"],
+        account_id,
     )
     return row is not None
 
@@ -122,6 +127,7 @@ async def _candidates(
     line: dict[str, Any],
     account: dict[str, Any],
     used: set[str],
+    hidden: set[str],
 ) -> list[dict[str, Any]]:
     day = line["date"]
     if not isinstance(day, date):
@@ -169,7 +175,7 @@ async def _candidates(
     )
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        if str(row["id"]) in used:
+        if str(row["id"]) in used or str(row["id"]) in hidden:
             continue
         captures = await conn.fetch(
             "SELECT upi_ref FROM captures WHERE movement_id = $1 AND upi_ref IS NOT NULL",
@@ -215,18 +221,23 @@ async def reconcile(
         "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
         import_id,
     )
+    # An undone movement is not money the statement can match: merging into it would hide the
+    # row behind a reversal and let the closing adjustment absorb the difference.
+    from fin_agent.ledger.movements import _effectively_reversed_ids
+
+    hidden = set(await _effectively_reversed_ids(conn))
     used: set[str] = set()
     counts = {"new": 0, "certain": 0, "ambiguous": 0, "ignored": 0}
     ambiguous: list[dict[str, Any]] = []
 
     for line in lines:
-        if await _duplicate_exists(conn, line):
+        if await _duplicate_exists(conn, line, account["id"]):
             await _set_match(
                 conn, line["id"], "ignored", None, {"reason": "content hash already imported"}
             )
             counts["ignored"] += 1
             continue
-        candidates = await _candidates(conn, line=line, account=account, used=used)
+        candidates = await _candidates(conn, line=line, account=account, used=used, hidden=hidden)
         want_debit = int(line["amount_paise"]) < 0
         line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
         exact = [
@@ -309,6 +320,7 @@ async def reconcile(
         account=account,
         period=period,
         matched=matched_ids,
+        hidden=hidden,
     )
     counts["logged_not_on_statement"] = len(logged_not_on_statement)
     review = {
@@ -354,9 +366,11 @@ async def _logged_not_on_statement(
     account: dict[str, Any],
     period: tuple[date, date] | None,
     matched: set[str],
+    hidden: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if period is None:
         return []
+    skip = hidden or set()
     ledger_id = account["ledger_account_id"]
     rows = await conn.fetch(
         """
@@ -403,7 +417,7 @@ async def _logged_not_on_statement(
             "amount_paise": int(row["amount_paise"]),
         }
         for row in rows
-        if str(row["id"]) not in matched
+        if str(row["id"]) not in matched and str(row["id"]) not in skip
     ]
 
 

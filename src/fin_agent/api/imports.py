@@ -15,6 +15,7 @@ from fin_agent.importers.pipeline import (
     import_payload,
     list_imports,
     retry_with_password,
+    set_manual_opening,
 )
 from fin_agent.importers.readers import DocError, sniff
 from fin_agent.ledger.audit import new_id
@@ -32,6 +33,11 @@ class ApiModel(BaseModel):
 
 class PasswordIn(ApiModel):
     password: str = Field(min_length=1, max_length=512)
+
+
+class OpeningIn(ApiModel):
+    # Paise. Bounded well inside the bigint columns and outside any real statement.
+    opening_paise: int = Field(ge=-(10**15), le=10**15)
 
 
 class ResolveLine(ApiModel):
@@ -145,6 +151,15 @@ async def import_password(import_id: str, body: PasswordIn, conn: Database) -> J
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
     await retry_with_password(conn, import_id=import_id, password=body.password)
     return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
+
+
+@router.post("/imports/{import_id}/opening")
+async def import_opening(import_id: str, body: OpeningIn, conn: Database) -> dict[str, Any]:
+    """The opening balance the user states for a statement that prints none."""
+    try:
+        return await set_manual_opening(conn, import_id=import_id, opening_paise=body.opening_paise)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/imports/{import_id}/commit")

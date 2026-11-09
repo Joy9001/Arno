@@ -12,7 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 from fin_agent.db.conn import Connection, connect
-from fin_agent.importers.checks import opening_is_evidenced
+from fin_agent.importers.checks import check_statement, opening_is_evidenced
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.readers import Doc
@@ -483,6 +483,75 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     }
 
 
+async def set_manual_opening(
+    conn: Connection, *, import_id: str, opening_paise: int
+) -> dict[str, Any]:
+    """Record the opening the user states, then re-check the stored rows against it.
+
+    A first card statement prints no opening, so the review screen asks for one. The answer is
+    evidence only if the rows still add up to the printed closing; otherwise the check says why.
+    """
+    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
+    if row is None:
+        raise ValueError("No such import")
+    if row["status"] not in ("review", "needs_input", "failed"):
+        raise ValueError(f"That import is {row['status']}")
+    if row["account_id"] is None:
+        raise ValueError("Choose the account for this statement first")
+    lines = await conn.fetch(
+        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
+    )
+    rows = [
+        {
+            "date": line["date"].isoformat(),
+            "debit": int(line["debit_paise"] or 0),
+            "credit": int(line["credit_paise"] or 0),
+            "balance": line["balance_paise"],
+        }
+        for line in lines
+    ]
+    check = dict(row["check_result"] or {})
+    if rows:
+        period = None
+        if row["period_start"] and row["period_end"]:
+            period = [row["period_start"].isoformat(), row["period_end"].isoformat()]
+        recomputed = check_statement(
+            rows,
+            row["opening_balance_paise"],
+            row["closing_balance_paise"],
+            period=period,
+            manual_opening=opening_paise,
+        )
+        # The header check passed when the parser was gated; the manual opening cannot undo it.
+        for key in ("fingerprint", "header_match"):
+            if key in check:
+                recomputed.setdefault(key, check[key])
+        check = recomputed
+    review = dict(row["review"] or {})
+    review["manual_opening_paise"] = opening_paise
+    status = row["status"]
+    reason = row["reason"]
+    if rows:
+        status = "review" if check.get("status") == "VERIFIED" else "needs_input"
+        reason = None if status == "review" else check.get("reason")
+    async with conn.transaction():
+        await conn.execute(
+            """
+            UPDATE imports
+            SET review = $1, check_result = $2, opening_balance_paise = $3,
+                status = $4, reason = $5, updated_at = now()
+            WHERE id = $6
+            """,
+            review,
+            check,
+            opening_paise,
+            status,
+            reason,
+            import_id,
+        )
+    return await import_payload(conn, import_id)
+
+
 async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]]:
     rows = await conn.fetch(
         """
@@ -523,5 +592,6 @@ __all__ = [
     "import_payload",
     "list_imports",
     "retry_with_password",
+    "set_manual_opening",
     "set_progress",
 ]

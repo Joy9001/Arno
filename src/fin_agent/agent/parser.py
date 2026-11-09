@@ -315,6 +315,17 @@ async def _too_large(conn: Connection, import_id: str, doc: Doc) -> dict[str, An
     return {"too_large": True, "pages": pages, "reason": reason}
 
 
+def _archive_refusal(docs: list[Doc]) -> dict[str, Any] | None:
+    """One upload is one statement. An archive is refused rather than half-imported."""
+    if len(docs) <= 1:
+        return None
+    reason = (
+        f"This archive holds {len(docs)} files. Upload each statement on its own, so each one "
+        "gets its own review."
+    )
+    return {"archive_files": len(docs), "reason": reason}
+
+
 async def _load_doc(ctx: RunContext[AgentDeps], import_id: str) -> Doc:
     doc = ctx.deps.parse_docs.get(import_id)
     if doc is not None:
@@ -479,6 +490,20 @@ async def open_imports(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
                     )
                 continue
             doc = docs[0]
+            archive = _archive_refusal(docs)
+            if archive:
+                await _set_status(conn, row["id"], "failed", reason=archive["reason"])
+                opened.append(
+                    {
+                        "import_id": row["id"],
+                        "kind": doc.kind,
+                        "locked": False,
+                        "institution": None,
+                        "variant": None,
+                        **archive,
+                    }
+                )
+                continue
             too_large = await _too_large(conn, row["id"], doc)
             if too_large:
                 opened.append(
@@ -521,6 +546,11 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
             too_large = await _too_large(conn, import_id, docs[0])
         if too_large:
             return {"status": "failed", **too_large}
+        archive = _archive_refusal(docs)
+        if archive:
+            async with connect() as conn:
+                await _set_status(conn, import_id, "failed", reason=archive["reason"])
+            return {"status": "failed", **archive}
         ctx.deps.parse_docs[import_id] = docs[0]
         async with connect() as conn:
             await _set_status(conn, import_id, "parsing", reason=None)
@@ -549,6 +579,11 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
         too_large = await _too_large(conn, import_id, docs[0])
     if too_large:
         return {"status": "failed", **too_large}
+    archive = _archive_refusal(docs)
+    if archive:
+        async with connect() as conn:
+            await _set_status(conn, import_id, "failed", reason=archive["reason"])
+        return {"status": "failed", **archive}
     await _store_unlocked(attachment_id, data, docs)
     ctx.deps.parse_docs[import_id] = docs[0]
     async with connect() as conn:
@@ -705,6 +740,14 @@ async def submit_parser_code(
     prepared: list[dict[str, Any]] = []
     for import_id in import_ids:
         row = await _row(conn, import_id)
+        if row["status"] in ("committed", "rejected"):
+            # Rewriting a committed import's lines would re-book money already in the ledger.
+            await set_progress(conn, import_id, None)
+            return _report(
+                "failed",
+                reason=f"Import {import_id} is already {row['status']}; start a new import.",
+                imports=prepared,
+            )
         _attachment_id, data = await _data(conn, import_id)
         try:
             docs = open_documents(data)
@@ -880,9 +923,14 @@ async def suggest_transfers(
             row["account_id"],
         )
         accounts = [dict(item) for item in own]
-        # Lines are inserted in the script's row order with monotonic ids, so `row` maps by id.
+        # The line's stored row index is the script's own row order; ids from one instant do
+        # not sort in insertion order.
         lines = await conn.fetch(
-            "SELECT id FROM statement_lines WHERE import_id = $1 ORDER BY id", import_id
+            """
+            SELECT id FROM statement_lines WHERE import_id = $1
+            ORDER BY coalesce((match_detail ->> 'row')::int, 2147483647), id
+            """,
+            import_id,
         )
         valid = {str(item["id"]) for item in lines}
         own_ids = {str(item["id"]) for item in own}

@@ -42,6 +42,11 @@ _MONTHS = {
 }
 
 _DATE = r"(\d{1,2})[/\-. ]([A-Za-z]{3,9}|\d{1,2})[/\-. ](\d{4}|\d{2})"
+_ISO_RANGE = re.compile(
+    r"\b(\d{4})-(\d{2})-(\d{2})\b\s*(?:to|through|until|till|[-–—])\s*"
+    r"\b(\d{4})-(\d{2})-(\d{2})\b",
+    re.IGNORECASE,
+)
 _RANGE = re.compile(
     rf"{_DATE}\s*(?:to|through|until|till|[-–—])\s*{_DATE}",
     re.IGNORECASE,
@@ -101,6 +106,22 @@ def derive_period(
     today: dt.date | None = None,
 ) -> dict[str, Any] | None:
     text = _document_text(doc)
+    # An ISO range first: the day-first pattern would read "2026-04-01" as a 26 April 2001.
+    iso = _ISO_RANGE.search(text)
+    if iso:
+        try:
+            iso_start = dt.date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
+            iso_end = dt.date(int(iso.group(4)), int(iso.group(5)), int(iso.group(6)))
+        except ValueError:
+            iso_start = iso_end = None
+        if iso_start and iso_end:
+            if iso_end < iso_start:
+                iso_start, iso_end = iso_end, iso_start
+            return {
+                "start": iso_start.isoformat(),
+                "end": iso_end.isoformat(),
+                "source": "header",
+            }
     match = _RANGE.search(text)
     if match:
         start = _one_date(*match.group(1, 2, 3))

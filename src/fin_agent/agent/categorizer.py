@@ -455,7 +455,9 @@ async def save_categories(
                         conn,
                         group,
                         movement_ids=movement_ids,
-                        category_id=str(category_id),
+                        # A user rule for this payee wins the upsert; label with the rule that
+                        # actually stands, never the answer it overrode.
+                        category_id=str(rule["category_id"]),
                         rule_id=str(rule["id"]),
                     )
                     rules_written += 1

@@ -242,7 +242,10 @@ async def _replay(
             }
             return result
         expected = await conn.fetch(
-            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY id",
+            """
+            SELECT * FROM statement_lines WHERE import_id = $1
+            ORDER BY coalesce((match_detail ->> 'row')::int, 2147483647), id
+            """,
             row["import_id"],
         )
         own_last4 = {row["last4"]} if row["last4"] else set()
