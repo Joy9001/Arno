@@ -14,8 +14,8 @@ def resolve_period(period: str | None, today: date) -> tuple[date, date]:
     """Return inclusive `(start, end)` dates for a period the model or API named.
 
     The ledger never holds a date after today, so a period that runs into the future ends
-    today: an open month means "so far", matching the recaps. Otherwise coverage would call
-    every day left in the month a missing statement.
+    today: an open month or week means "so far", matching the recaps. Otherwise coverage would
+    call every day left in the month a missing statement. Weeks start on Monday.
     """
     if not period or period == "this_month":
         return today.replace(day=1), today
@@ -23,6 +23,11 @@ def resolve_period(period: str | None, today: date) -> tuple[date, date]:
         first = today.replace(day=1)
         end = first - timedelta(days=1)
         return end.replace(day=1), end
+    if period == "this_week":
+        return today - timedelta(days=today.weekday()), today
+    if period == "last_week":
+        monday = today - timedelta(days=today.weekday() + 7)
+        return monday, monday + timedelta(days=6)
     if period == "today":
         return today, today
     if period == "last_7_days":
@@ -42,8 +47,9 @@ def resolve_period(period: str | None, today: date) -> tuple[date, date]:
         match = _RANGE.match(period)
         if match is None:
             raise ValueError(
-                f"Unknown period {period!r}; use this_month, last_month, YYYY-MM, or "
-                "YYYY-MM-DD..YYYY-MM-DD"
+                f"Unknown period {period!r}; use this_month, last_month, this_week, last_week, "
+                'this_year, today, last_7_days, last_30_days, "YYYY-MM", or '
+                '"YYYY-MM-DD..YYYY-MM-DD"'
             )
         start = date.fromisoformat(match.group(1))
         end = date.fromisoformat(match.group(2))

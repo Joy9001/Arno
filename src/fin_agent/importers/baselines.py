@@ -11,6 +11,7 @@ from typing import Any
 
 from fin_agent.db.conn import Connection, connect
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.ledger.movements import _effectively_reversed_ids
 
 WINDOW_DAYS = 90
 MIN_ROWS = 3
@@ -29,15 +30,18 @@ async def recompute_baselines(conn: Connection, *, as_of: date | None = None) ->
             count(DISTINCT v.movement_id)::bigint AS movements,
             count(DISTINCT v.date)::bigint AS days
         FROM v_spending v
+        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
         JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
         JOIN categories c ON c.id = tl.category_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND c.active
+          AND NOT (v.movement_id = ANY($3))
         GROUP BY tl.category_id, c.name
         """,
         start,
         day,
+        await _effectively_reversed_ids(conn),
     )
     computed: list[str] = []
     for row in rows:

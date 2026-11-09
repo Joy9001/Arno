@@ -28,7 +28,7 @@ presentation-only `show_table` and `present` tools described below ([note](diagr
 | Two payloads | Short content for the model; cards, curves, and source IDs for the UI, as `ToolReturn` metadata. Metadata from a tool called inside a script isn't streamed, so Fin-Agent emits those cards itself from the `run_code` return |
 | Read returns | Only JSON-native types: `dict`, `list`, `str`, `int`, `float`, `bool`, `None`. Dates are ISO strings, and every balance has an `as_of` |
 | Calling from a script | `await` and keyword arguments only: `await amortize(loan="Home loan")` |
-| Coverage | `coverage()` reports which dates have statements. A gap is reported, never summed as zero |
+| Coverage | `coverage()` reports which dates have statements. A gap is reported, never summed as zero. Without an account filter, every active account that has ever committed a statement must cover the period; accounts that never import statements (cash, a loan) don't hold it back |
 | Outside text | `mark()` wraps the text in markers, strips any closing marker and invisible character inside it, caps it at 200 characters, and sets `conversations.outside_text_at`. The model can't set or clear this. The flag is the boundary, and the markers are only a hint ([write tiers](design.md#untrusted-text-and-write-tiers)) |
 | Lists | 50 rows by default, with a cursor |
 | Writes | `write_group()` is one short transaction whose audit rows share a group, returned as `undo_id`. The message ID and `ctx.tool_call_id` come from context, so they're never inputs |
@@ -110,7 +110,8 @@ it to find a row or see what's behind a number. For totals, use summarize_spendi
 query_movements(filters: MovementFilters | None = None, limit: int = 50, cursor: str | None = None)
 
 class MovementFilters:
-    period: str | None          # "this_month", "last_month", "2026-09", "2026-09-01..2026-09-15"
+    period: str | None          # "this_month", "last_month", "this_week", "last_week",
+                                # "2026-09", "2026-09-01..2026-09-15"
     account: str | None
     category: str | None
     payee: str | None
@@ -174,6 +175,8 @@ twice."
 ```python
 summarize_spending(group_by: Literal["category", "payee", "account", "month", "week", "none"],
                    period: str, filters: SpendFilters | None = None)
+                   # period: "this_month", "last_month", "this_week", "last_week", "2026-09",
+                   # or "2026-09-01..2026-09-15"
 
 class SpendFilters:                 # what the sum honors; any other key is an error
     account: str | None
@@ -200,7 +203,8 @@ if nothing logged and no statement covers the period: return total = null with t
 groups = SELECT key, SUM(amount), COUNT(effective movements) FROM v_spending ... GROUP BY key
          # the sum nets a reversal against its original; the count leaves the pair out
 if group_by == payee: mark() outside names         # grouping by category flags nothing
-return groups, total, cov                          # complete = false when part has no statement
+return groups, total, cov                          # complete = false when part of the period has
+                                                   # no statement for every statement account
 ```
 
 ### `project`

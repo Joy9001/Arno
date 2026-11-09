@@ -55,7 +55,10 @@ class SpendFilters(BaseModel):
 class MovementFilters(SpendFilters):
     period: str | None = Field(
         default=None,
-        description='"this_month", "last_month", "2026-09", or a range "2026-09-01..2026-09-15".',
+        description=(
+            'this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09", or '
+            'a range "2026-09-01..2026-09-15". Weeks start Monday; an open period ends today.'
+        ),
     )
     kind: str | None = Field(default=None, description="expense, income, transfer, split, ...")
     min_paise: int | None = Field(default=None, description="Smallest transfer amount, paise.")
@@ -182,7 +185,8 @@ async def summarize_spending(
 ) -> ToolReturn:
     """Totals of money spent, net of refunds, grouped however you need. Loan principal, card
     bills, investments, and money others owe never count as spending. To compare periods, call it
-    twice. period is "last_month", "2026-09", or a range "2026-09-01..2026-09-15". count is the
+    twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year,
+    "2026-09", or a range "2026-09-01..2026-09-15" (weeks start Monday). count is the
     number of entries, with a corrected entry and its reversal left out."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:

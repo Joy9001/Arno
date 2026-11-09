@@ -27,7 +27,7 @@ In this order. A story with nothing to say is left out, except the first.
 | Key | Label | Figure | Line | Rows behind it |
 | --- | --- | --- | --- | --- |
 | `total` | You spent | Net spend (refunds offset purchases), from `summarize_spending` | Change against the compared period, or that nothing was recorded then | Every spending row in the period |
-| `in_out` | Money in and out | What was left (in minus out) | In and out amounts; only when income was recorded | The income rows |
+| `in_out` | Money in and out | What was left (in minus out) | In and out amounts; only when income was recorded | The income rows; the story also carries `in` and `out` |
 | `where` | Where it went | The top category | Its share of the total, and its row count; bars for the top four plus everything else | That category's rows (each bar opens its own) |
 | `change` | The change worth a look | The category whose spend moved the most, up or down | Both amounts and the compared period; only when both periods have spending | That category's rows in this period |
 | `biggest` | The biggest single spend | Its amount | Payee and date | That one row |

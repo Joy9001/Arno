@@ -36,6 +36,16 @@ def _month_keys(start: date, end: date) -> list[str]:
     return keys
 
 
+def _merge(intervals: list[tuple[date, date]]) -> list[list[date]]:
+    merged: list[list[date]] = []
+    for interval_start, interval_end in sorted(intervals):
+        if merged and interval_start <= merged[-1][1] + timedelta(days=1):
+            merged[-1][1] = max(merged[-1][1], interval_end)
+        else:
+            merged.append([interval_start, interval_end])
+    return merged
+
+
 async def coverage(
     conn: Connection,
     *,
@@ -47,7 +57,10 @@ async def coverage(
     """Which months have a committed statement. A missing month is a gap, never zero.
 
     Days after `today` are not a gap: the ledger cannot hold them, so no statement can cover
-    them. A month that has not started is unknown, never complete.
+    them. A month that has not started is unknown, never complete. Without an account filter,
+    every active account that has ever committed a statement must cover the month: one
+    account's statement must not make another account's spending look known. An account that
+    never imports statements (cash, a loan) never holds completeness back.
     """
     day = today or ledger_today()
     params: list[Any] = [start, end]
@@ -60,24 +73,35 @@ async def coverage(
         SELECT account_id, period_start, period_end
         FROM imports
         WHERE status = 'committed'
+          AND undone_at IS NULL
           AND period_start IS NOT NULL AND period_end IS NOT NULL
           AND period_end >= $1 AND period_start <= $2
           {account_clause}
         """,  # noqa: S608
         *params,
     )
+    intervals: dict[str, list[tuple[date, date]]] = {}
+    for row in rows:
+        intervals.setdefault(str(row["account_id"]), []).append(
+            (row["period_start"], row["period_end"])
+        )
+    merged = {account: _merge(found) for account, found in intervals.items()}
+    if account_id is not None:
+        required = [str(account_id)]
+    else:
+        required = [
+            str(row["id"])
+            for row in await conn.fetch(
+                """
+                SELECT DISTINCT i.account_id AS id
+                FROM imports i
+                JOIN accounts a ON a.id = i.account_id
+                WHERE i.status = 'committed' AND i.undone_at IS NULL AND a.active
+                ORDER BY 1
+                """
+            )
+        ]
     gaps: list[str] = []
-    intervals = sorted(
-        (row["period_start"], row["period_end"])
-        for row in rows
-        if row["period_start"] is not None and row["period_end"] is not None
-    )
-    merged: list[list[date]] = []
-    for interval_start, interval_end in intervals:
-        if merged and interval_start <= merged[-1][1] + timedelta(days=1):
-            merged[-1][1] = max(merged[-1][1], interval_end)
-        else:
-            merged.append([interval_start, interval_end])
     for key in _month_keys(start, end):
         year, month = (int(part) for part in key.split("-"))
         month_start = date(year, month, 1)
@@ -90,14 +114,18 @@ async def coverage(
         if required_start > day:
             gaps.append(key)
             continue
-        covered = any(
-            interval_start <= required_start and interval_end >= min(required_end, day)
-            for interval_start, interval_end in merged
+        covered = bool(required) and all(
+            any(
+                interval_start <= required_start and interval_end >= min(required_end, day)
+                for interval_start, interval_end in merged.get(account, [])
+            )
+            for account in required
         )
         if not covered:
             gaps.append(key)
-    covered_from = max(merged[0][0], start) if merged else None
-    covered_to = min(merged[-1][1], end) if merged else None
+    span = _merge([interval for found in intervals.values() for interval in found])
+    covered_from = max(span[0][0], start) if span else None
+    covered_to = min(span[-1][1], end) if span else None
     return {
         "complete": not gaps,
         "gaps": gaps,
@@ -368,7 +396,7 @@ async def _resolve_named(conn: Connection, table: str, value: str | None) -> str
         rows = await conn.fetch(
             """
             SELECT id, display_name AS name FROM payees
-            WHERE active AND (lower(display_name) = lower($1) OR upi_id = $2)
+            WHERE active AND (lower(display_name) = lower($1) OR lower(upi_id) = lower($2))
             ORDER BY display_name, id
             """,
             value,
@@ -416,6 +444,12 @@ async def _reversed_ids(conn: Connection) -> list[str]:
     """Movements a live reversal cancels. A corrected entry and its reversal are bookkeeping, not
     activity, so lists and counts leave both out. One definition, shared with the ledger."""
     return await movements_mod._effectively_reversed_ids(conn)  # noqa: SLF001
+
+
+def _like(value: str) -> str:
+    """A search is literal: `%`, `_`, and `\\` match themselves, never act as a wildcard."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 async def query_movements(
@@ -478,7 +512,7 @@ async def query_movements(
     if filters.get("text"):
         # A description lives on the movement, so it must match even when the row has no label
         # (a plain expense with no payee, category, or note). The note needs a label row.
-        pattern = f"%{filters['text']}%"
+        pattern = _like(filters["text"])
         params.extend([pattern, pattern])
         clauses.append(
             f"(m.description ILIKE ${len(params) - 1} OR EXISTS ("
@@ -611,7 +645,8 @@ async def summarize_spending(
     _check_filters(
         filters,
         SPEND_FILTERS,
-        'The period is its own argument: "last_month", "2026-09", or "YYYY-MM-DD..YYYY-MM-DD".',
+        'The period is its own argument: "this_month", "last_month", "this_week", "last_week", '
+        '"2026-09", or "YYYY-MM-DD..YYYY-MM-DD".',
     )
     day = ledger_today()
     start, end = resolve_period(period, day)
@@ -648,7 +683,7 @@ async def summarize_spending(
         params.append(payee_id)
         clauses.append(f"tl.payee_id = ${len(params)}")
     if filters.get("text"):
-        pattern = f"%{filters['text']}%"
+        pattern = _like(filters["text"])
         params.extend([pattern, pattern])
         clauses.append(f"(tl.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})")
 
