@@ -51,7 +51,7 @@ The API exposes the following surfaces:
 | Uploads | `POST /api/attachments` (statement, photo, audio), up to 25 MB. Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo; a voice note sends at once and shows its transcript. `GET /api/attachments/{id}` serves a photo or voice note back to the same origin under `img-src 'self'` |
 | Capture | `POST /api/transcribe` saves the audio and returns a transcript or a retry card; `POST /api/chat/{thread}/photo` saves the image, runs the isolated `VISION_*` call, logs one movement at once, and returns the image-plus-fields undo card. Retries use the saved attachment ID |
 | Conversations | List, read, rename, and full-text search of threads, and flag a reply. A chat request with no thread ID creates one. Reading a thread also returns a running turn's message and merges saved cards back in ([step 10](system-design.md#the-chat-contract)) |
-| Inbox and push | List and mark read, open a notification in a new chat, subscribe or unsubscribe; the scheduler's job status and the user's scheduled questions |
+| Inbox and push | List and mark read, open a notification in a new chat, subscribe or unsubscribe; the scheduler's job status, a pure-read activity poll, retry of a failed job, and the user's scheduled questions |
 | Export | Full CSV and JSON export, plus a `pg_dump` |
 | Auth | See [Auth](#auth) |
 
@@ -201,6 +201,20 @@ The loop works as follows:
   Imports aren't jobs: the parser subagent is a delegated task ([`import.md`](import.md#the-subagents-run)).
 - **A job can commit in the same transaction as its data,** so a write and its follow-up job exist
   together or not at all.
+- **A finished job keeps what its handler returned,** so the app can say what the job did—how many
+  rows a categorize run labeled, for example. A handler that knows another attempt cannot help
+  raises `JobGaveUp` and fails at once, without retries; a spend ceiling does this.
+- **A failed job can be retried from the app,** which resets the same row and clears its inbox
+  alert.
+
+Categorizing a committed statement reports `done`, `partial` when the model gave no answer for some
+payees, `nothing_to_do`, or `batch_submitted`. A finished run lands one counts-only
+`categorize_done` inbox item that never names a payee; only a batch run pushes, since it can take
+hours.
+
+The app shows background work while it runs: a rail indicator, toasts, the import's own status,
+and Settings > Background work. It reads `GET /api/jobs/activity`, a pure read of active jobs plus
+what finished after a cursor, polled every 3 s while work is active and every 30 s otherwise.
 
 Backups are not a job. They run in their own sidecar, so they keep running when the
 app is broken.

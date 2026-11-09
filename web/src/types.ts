@@ -328,6 +328,8 @@ export type ImportRecord = {
   } | null;
   reason: string | null;
   parser_saved: boolean;
+  /** Null until the import is committed, or when no categorization job exists. */
+  categorize?: CategorizeState | null;
   created_at: string | null;
   committed_at: string | null;
   rejected_at: string | null;
@@ -403,20 +405,50 @@ export type JobScheduleStatus = {
   active: boolean;
 };
 
-export type JobRunStatus = {
+export type JobView = {
   id: string;
   key: string;
   kind: string;
   status: "pending" | "running" | "done" | "failed";
+  /** Failed attempts so far: 0 while the first attempt runs. */
   attempts: number;
+  /** The 1-based attempt now running, or the last one that ran. */
+  attempt: number;
+  max_attempts: number;
+  /** For pending jobs, when the next attempt starts. */
   run_at: string;
+  created_at: string;
+  started_at: string | null;
   finished_at: string | null;
   last_error: string | null;
+  result: Record<string, unknown> | null;
+  subject: string | null;
+  import_id: string | null;
+};
+
+export type JobActivity = {
+  active: JobView[];
+  finished: JobView[];
+  now: string;
+};
+
+export type CategorizeState = {
+  state: "queued" | "running" | "retrying" | "waiting_on_batch" | "done" | "partial" | "failed";
+  labeled: number | null;
+  uncategorized: number | null;
+  failed_payees: number | null;
+  error: string | null;
+  attempt: number;
+  max_attempts: number;
+  next_run_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  job_id: string | null;
 };
 
 export type JobStatus = {
   schedules: JobScheduleStatus[];
-  recent: JobRunStatus[];
+  recent: JobView[];
   counts: Record<string, number>;
   as_of: string;
 };

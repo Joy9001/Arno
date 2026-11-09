@@ -437,6 +437,7 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 ### L6: Watch
 
 32. Job schedules, notification inbox, web push from the installed PWA; an alert when backups stop.
+    Background work is visible while it runs and says what it did.
 33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
     Your own scheduled questions, run by the agent read-only, with a spend limit for each run.
 34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never

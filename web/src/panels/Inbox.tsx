@@ -51,7 +51,11 @@ function NeedRow({ item, busy, dismissing, onOpen, onDismiss }: { item: Notifica
             ) : (
               <>
                 <ArrowUpRight size={14} strokeWidth={2} aria-hidden="true" />
-                {item.kind === "new_subscription" ? "Decide in chat" : "Open in chat"}
+                {item.kind === "new_subscription"
+                  ? "Decide in chat"
+                  : item.kind === "categorize_done"
+                    ? "Review"
+                    : "Open in chat"}
               </>
             )}
           </button>

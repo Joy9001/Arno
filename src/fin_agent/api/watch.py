@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +16,7 @@ from fin_agent.api.notification_query import list_page as list_notification_page
 from fin_agent.jobs.schedules import (
     ensure_builtin_schedules,
     job_status,
+    job_views,
     sync_scheduled_questions,
 )
 from fin_agent.ledger.audit import new_id
@@ -199,6 +201,78 @@ async def get_jobs(conn: Database, limit: int = Query(default=20, ge=1, le=100))
     await ensure_builtin_schedules(conn)
     await sync_scheduled_questions(conn)
     return await job_status(conn, limit=limit)
+
+
+@router.get("/jobs/activity")
+async def get_job_activity(conn: Database, since: datetime | None = None) -> dict[str, Any]:
+    """A pure read the app polls: what is running, and what finished after `since`.
+
+    The cursor is read first and runs a little behind, so a job that finishes during this read
+    or commits late is reported on the next poll, never lost. The app dedupes the overlap.
+    """
+    now = await conn.fetchval("SELECT now() - interval '2 seconds'")
+    active_rows = await conn.fetch(
+        """
+        SELECT * FROM jobs
+        WHERE status IN ('pending', 'running')
+        ORDER BY (status = 'running') DESC, run_at, id
+        """
+    )
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    finished_rows = (
+        await conn.fetch(
+            """
+            SELECT * FROM jobs
+            WHERE status IN ('done', 'failed') AND finished_at > $1
+            ORDER BY finished_at, id
+            LIMIT 50
+            """,
+            since,
+        )
+        if since is not None
+        else []
+    )
+    views = await job_views(conn, [*active_rows, *finished_rows])
+    split = len(active_rows)
+    return {
+        "active": views[:split],
+        "finished": views[split:],
+        "now": now.isoformat(),
+    }
+
+
+@router.post("/jobs/{job_id}/retry")
+async def post_job_retry(job_id: str, conn: Database) -> dict[str, Any]:
+    """Run a failed job again on the same row, and clear the alert the user acted on.
+
+    The old alert gives up its dedupe key, so failing again raises a fresh one.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE jobs
+        SET status = 'pending', attempts = 0, run_at = now(), started_at = NULL,
+            finished_at = NULL, last_error = NULL, timed_out_at = NULL, result = NULL,
+            updated_at = now()
+        WHERE id = $1 AND status = 'failed'
+        RETURNING *
+        """,
+        job_id,
+    )
+    if row is None:
+        if await conn.fetchval("SELECT 1 FROM jobs WHERE id = $1", job_id) is None:
+            raise HTTPException(status_code=404, detail="That job does not exist.")
+        raise HTTPException(status_code=409, detail="Only a failed job can be retried.")
+    await conn.execute(
+        """
+        UPDATE notifications
+        SET read_at = coalesce(read_at, now()), dedupe_key = NULL
+        WHERE dedupe_key = $1
+        """,
+        f"job_failed:{job_id}",
+    )
+    views = await job_views(conn, [row])
+    return views[0]
 
 
 __all__ = ["router"]

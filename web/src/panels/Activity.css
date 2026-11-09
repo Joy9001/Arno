@@ -596,6 +596,39 @@
   color: var(--blue-text);
 }
 
+.act-categorize[data-tone="good"] {
+  border-color: rgba(62, 224, 127, 0.3);
+}
+
+.act-categorize[data-tone="good"] > svg {
+  flex: none;
+  color: var(--green);
+}
+
+.act-categorize[data-tone="danger"] {
+  border-color: rgba(255, 90, 79, 0.4);
+}
+
+.act-categorize[data-tone="danger"] > svg {
+  flex: none;
+  color: var(--red);
+}
+
+.act-categorize-text {
+  flex: 1 1 16rem;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.act-categorize-text .fine {
+  display: block;
+  margin-top: 2px;
+}
+
+.act-categorize > button {
+  margin-left: auto;
+}
+
 .act-summary-note {
   margin: 8px 0 0;
 }

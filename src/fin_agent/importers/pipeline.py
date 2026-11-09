@@ -8,7 +8,7 @@ commit.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from fin_agent.db.conn import Connection, connect
@@ -17,6 +17,7 @@ from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.readers import Doc
 from fin_agent.importers.reconcile import credit_decision_required, insert_lines, reconcile
+from fin_agent.jobs.runner import MAX_ATTEMPTS
 from fin_agent.ledger.audit import new_id
 
 logger = logging.getLogger("fin_agent.importers")
@@ -262,6 +263,114 @@ def _fingerprint_from_headers(parsed: dict[str, Any]) -> str | None:
     return normalize_headers(headers) if headers else None
 
 
+def _moment(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+async def categorize_state(conn: Connection, import_id: str) -> dict[str, Any] | None:
+    """Where this import's categorization stands, from its newest job (and one legacy query)."""
+    rows = await conn.fetch(
+        """
+        SELECT * FROM jobs
+        WHERE kind IN ('categorize_import', 'collect_batch')
+          AND payload ->> 'import_id' = $1
+        ORDER BY created_at DESC, id DESC
+        LIMIT 10
+        """,
+        import_id,
+    )
+    if not rows:
+        return None
+    job = rows[0]
+    status = str(job["status"])
+    attempts = int(job["attempts"] or 0)
+    result = job["result"] or {}
+
+    def state(**overrides: Any) -> dict[str, Any]:
+        view: dict[str, Any] = {
+            "state": "queued",
+            "labeled": None,
+            "uncategorized": None,
+            "failed_payees": None,
+            "error": None,
+            # The app shows the attempt in progress, so a failed job shows the one that failed.
+            "attempt": attempts if status == "failed" else attempts + 1,
+            "max_attempts": MAX_ATTEMPTS,
+            "next_run_at": None,
+            "started_at": _moment(job["started_at"]),
+            "finished_at": _moment(job["finished_at"]),
+            "job_id": str(job["id"]),
+        }
+        view.update(overrides)
+        return view
+
+    if job["kind"] == "collect_batch":
+        if status == "failed":
+            return state(state="failed", error=job["last_error"])
+        return state(
+            state="waiting_on_batch",
+            next_run_at=_moment(job["run_at"]) if status == "pending" else None,
+        )
+
+    if status == "pending":
+        retrying = attempts > 0
+        return state(
+            state="retrying" if retrying else "queued",
+            next_run_at=_moment(job["run_at"]),
+            error=job["last_error"] if retrying else None,
+        )
+    if status == "running":
+        return state(state="running")
+    if status == "failed":
+        return state(state="failed", error=job["last_error"])
+
+    outcome = result.get("status")
+    counts = {
+        "labeled": result.get("labeled"),
+        "uncategorized": result.get("uncategorized"),
+        "failed_payees": result.get("failed_payees"),
+    }
+    if outcome == "batch_submitted":
+        run_id = str(result.get("run_id") or result.get("batch_id") or "")
+        pending = next(
+            (
+                row
+                for row in rows
+                if row["kind"] == "collect_batch"
+                and row["status"] == "pending"
+                and str((row["payload"] or {}).get("run_id")) == run_id
+            ),
+            None,
+        )
+        return state(
+            state="waiting_on_batch",
+            next_run_at=_moment(pending["run_at"]) if pending is not None else None,
+        )
+    if outcome == "partial":
+        return state(state="partial", **counts)
+    if outcome is not None:
+        return state(state="done", **counts)
+
+    # Rows written before `jobs.result` existed: the run row still has the counts.
+    run = await conn.fetchrow(
+        """
+        SELECT * FROM categorize_runs
+        WHERE import_id = $1
+        ORDER BY started_at DESC, id DESC
+        LIMIT 1
+        """,
+        import_id,
+    )
+    if run is None:
+        return state(state="done")
+    return state(
+        state="done",
+        labeled=run["labeled"],
+        uncategorized=run["uncategorized"],
+        finished_at=_moment(run["finished_at"]),
+    )
+
+
 async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
     if row is None:
@@ -311,6 +420,9 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         and not opening_evidenced
         and (bool(lines) or "opening" in str(row["reason"] or "").lower())
     )
+    categorize = None
+    if row["status"] == "committed":
+        categorize = await categorize_state(conn, import_id)
     return {
         "import_id": row["id"],
         "status": row["status"],
@@ -333,6 +445,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         "review": row["review"],
         "reason": row["reason"],
         "parser_saved": row["layout_id"] is not None,
+        "categorize": categorize,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "committed_at": row["committed_at"].isoformat() if row["committed_at"] else None,
         "rejected_at": row["rejected_at"].isoformat() if row["rejected_at"] else None,

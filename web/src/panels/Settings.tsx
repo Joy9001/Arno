@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
 import {
@@ -39,9 +39,19 @@ import {
 import { motion, useReducedMotion } from "motion/react";
 import { api, errorMessage } from "../api";
 import { ensureFreshPasskey } from "../auth";
+import { NAVIGATE_EVENT } from "../nav";
 import { RuntimeInfo } from "./RuntimeInfo";
 import type { Preference, PreferenceList } from "../chat/types";
-import { formatMoment } from "../format";
+import { formatMoment, formatMomentShort, formatRelative } from "../format";
+import {
+  jobKindTitle,
+  jobOutcome,
+  jobStatusLabel,
+  jobStatusText,
+  kickActivity,
+  useJobs,
+  useNow,
+} from "../jobs";
 import { Busy } from "../Loading";
 import { Orb } from "../Orb";
 import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
@@ -49,6 +59,7 @@ import type {
   BackupStatus,
   CategoryTree,
   JobStatus,
+  JobView,
   ScheduledQuestion,
   ScheduledQuestionList,
   Settings as SettingsPayload,
@@ -76,7 +87,7 @@ const SECTION_GROUPS: Array<{
   {
     label: "Advanced",
     items: [
-      { id: "jobs", label: "Jobs", Icon: Activity },
+      { id: "jobs", label: "Background work", Icon: Activity },
       { id: "backups", label: "Backups", Icon: DatabaseBackup },
       { id: "export", label: "Export", Icon: Download },
     ],
@@ -101,11 +112,18 @@ function useHashSection(): [string, (next: string) => void] {
 
   useEffect(() => {
     const sync = () => setSection(sectionFromHash());
+    // goTo() pushes the hash without a popstate event, so the rail's job link needs this.
+    const onNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ page?: string }>).detail;
+      if (detail?.page === "settings") sync();
+    };
     window.addEventListener("hashchange", sync);
     window.addEventListener("popstate", sync);
+    window.addEventListener(NAVIGATE_EVENT, onNavigate);
     return () => {
       window.removeEventListener("hashchange", sync);
       window.removeEventListener("popstate", sync);
+      window.removeEventListener(NAVIGATE_EVENT, onNavigate);
     };
   }, []);
 
@@ -367,10 +385,6 @@ function spendLimitError(raw: string): string | null {
 
 function usd(value: string | number): string {
   return `$${Number(value).toFixed(2)}`;
-}
-
-function titleCase(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function ProfileSection({ settings }: { settings: ApiState<SettingsPayload> }) {
@@ -1688,20 +1702,80 @@ function ScheduledQuestionsCard({
   );
 }
 
+function jobTone(job: JobView): "good" | "danger" | "warn" | "muted" {
+  if (job.status === "failed") return "danger";
+  if (job.status === "done") return "good";
+  if (job.status === "running" || job.attempts > 0) return "warn";
+  return "muted";
+}
+
+function jobWhen(job: JobView): string {
+  if (job.status === "pending") return job.run_at;
+  if (job.status === "running") return job.started_at ?? job.run_at;
+  return job.finished_at ?? job.run_at;
+}
+
+function JobStatusCell({ job }: { job: JobView }) {
+  const now = useNow(job.status === "running" || job.status === "pending");
+  return (
+    <>
+      <span className={`badge ${jobTone(job)}`}>{jobStatusLabel(job)}</span>
+      <span className="fine stg-table-sub">{jobStatusText(job, now)}</span>
+    </>
+  );
+}
+
+function RunningJobRow({ job }: { job: JobView }) {
+  const now = useNow(job.status === "running" || job.status === "pending");
+  const title = jobKindTitle(job.kind);
+  return (
+    <li className="stg-running-row">
+      <div className="stg-running-head">
+        <div>
+          <strong>{title}</strong>
+          {job.subject && <span className="fine stg-table-sub">{job.subject}</span>}
+        </div>
+        <span className="fine">{jobStatusText(job, now)}</span>
+      </div>
+      <div className="stg-progress" role="progressbar" aria-label={`${title} in progress`}>
+        <span />
+      </div>
+    </li>
+  );
+}
+
 function JobsSection() {
   const jobs = useApi<JobStatus>("/api/jobs");
+  const active = useJobs((state) => state.active);
+  const version = useJobs((state) => state.version);
+  const reload = jobs.reload;
+  const seenVersion = useRef(version);
+
+  // A finished job changes what the recent list should say; the first fetch is already fresh.
+  useEffect(() => {
+    if (version === seenVersion.current) return;
+    seenVersion.current = version;
+    reload();
+  }, [version, reload]);
+
+  useEffect(() => {
+    if (!active.length) return;
+    const timer = window.setInterval(reload, 5_000);
+    return () => window.clearInterval(timer);
+  }, [active.length, reload]);
+
   return (
     <SettingsSection
       id="jobs"
-      title="Jobs"
-      description="The one loop in the API process runs recurring schedules. A missed run fires once when the machine wakes."
+      title="Background work"
+      description="What Fin-Agent does on its own, and when each task next runs. A missed run starts once when the machine wakes."
     >
       <Loadable
         state={jobs}
-        label="jobs"
-        skeleton={<SettingsSkeleton label="Loading jobs…" rows={5} />}
+        label="background work"
+        skeleton={<SettingsSkeleton label="Loading background work…" rows={5} />}
       >
-        {(data) => <JobsCard data={data} />}
+        {(data) => <JobsCard data={data} active={active} reload={reload} />}
       </Loadable>
       <div className="stg-card">
         <h4>Models and diagnostics</h4>
@@ -1711,21 +1785,65 @@ function JobsSection() {
   );
 }
 
-function JobsCard({ data }: { data: JobStatus }) {
-  const counts = Object.entries(data.counts);
+function JobsCard({
+  data,
+  active,
+  reload,
+}: {
+  data: JobStatus;
+  active: JobView[];
+  reload: () => void;
+}) {
+  const [retrying, setRetrying] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const now = useNow(active.length > 0, 10_000);
+  // From the runs on screen: the all-time counts would keep an old failure in the summary forever.
+  const count = (statuses: JobView["status"][]) =>
+    data.recent.filter((job) => statuses.includes(job.status)).length;
+  const running = count(["running", "pending"]);
+  const failed = count(["failed"]);
+  const done = count(["done"]);
+  const summary = [
+    running > 0 ? `${running} running` : null,
+    failed > 0 ? `${failed} failed` : null,
+    done > 0 ? `${done} done` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  async function retry(job: JobView) {
+    setRetrying(job.id);
+    setRetryError(null);
+    try {
+      await api(`/api/jobs/${job.id}/retry`, { method: "POST" });
+      reload();
+      kickActivity();
+    } catch (caught) {
+      setRetryError(errorMessage(caught));
+    } finally {
+      setRetrying(null);
+    }
+  }
+
   return (
     <div className="stg-card">
-      <div className="stg-status-line">
-        {counts.length === 0 ? (
-          <span className="badge muted">No job runs recorded yet</span>
-        ) : (
-          counts.map(([status, count]) => (
-            <span key={status} className={`badge ${status === "failed" ? "danger" : "muted"}`}>
-              {count} {titleCase(status)}
-            </span>
-          ))
-        )}
+      <p className={summary ? "stg-status-line" : "stg-status-line stg-hint"}>
+        {summary || "Nothing has run yet"}
+      </p>
+
+      <div className="stg-subhead">
+        <h4>Running now</h4>
+        {active.length > 0 && <span className="stg-hint">{active.length} active</span>}
       </div>
+      {active.length === 0 ? (
+        <p className="stg-hint stg-nothing-running">Nothing running.</p>
+      ) : (
+        <ul className="stg-running">
+          {active.map((job) => (
+            <RunningJobRow key={job.id} job={job} />
+          ))}
+        </ul>
+      )}
 
       <div className="stg-subhead">
         <h4>Schedules</h4>
@@ -1738,12 +1856,11 @@ function JobsCard({ data }: { data: JobStatus }) {
       ) : (
         <>
           <p className="stg-scroll-hint">Scroll the table sideways to see every column.</p>
-          <TableRegion label="Job schedules">
+          <TableRegion label="Scheduled background work">
             <table>
               <thead>
                 <tr>
                   <th>Schedule</th>
-                  <th>Rule</th>
                   <th>Status</th>
                   <th>Next</th>
                   <th>Last</th>
@@ -1752,14 +1869,19 @@ function JobsCard({ data }: { data: JobStatus }) {
               <tbody>
                 {data.schedules.map((schedule) => (
                   <tr key={schedule.id} className={schedule.active ? "" : "muted-row"}>
-                    <td>{schedule.label}</td>
-                    <td className="fine">{schedule.rule}</td>
+                    <td>
+                      {schedule.label}
+                      <span className="fine stg-table-sub">{schedule.rule}</span>
+                    </td>
                     <td>
                       <span className={`badge ${schedule.active ? "good" : "muted"}`}>
                         {schedule.active ? "Active" : "Paused"}
                       </span>
                     </td>
-                    <td>{formatMoment(schedule.next_run_at)}</td>
+                    <td>
+                      {formatRelative(schedule.next_run_at, now)} ·{" "}
+                      {formatMomentShort(schedule.next_run_at)}
+                    </td>
                     <td>{formatMoment(schedule.last_run_at)}</td>
                   </tr>
                 ))}
@@ -1773,46 +1895,67 @@ function JobsCard({ data }: { data: JobStatus }) {
         <h4>Recent runs</h4>
         <span className="stg-hint">{data.recent.length} shown</span>
       </div>
+      {retryError && (
+        <p className="error" role="alert">
+          {retryError}
+        </p>
+      )}
       {data.recent.length === 0 ? (
         <div className="stg-empty">
-          <p>No job runs have been recorded.</p>
+          <p>No background work has run yet.</p>
         </div>
       ) : (
         <>
           <p className="stg-scroll-hint">Scroll the table sideways to see every column.</p>
-          <TableRegion label="Recent job runs">
+          <TableRegion label="Recent background work">
             <table>
               <thead>
                 <tr>
-                  <th>Job</th>
+                  <th>Task</th>
                   <th>Status</th>
-                  <th>Attempts</th>
-                  <th>Finished</th>
-                  <th>Error</th>
+                  <th>Result</th>
+                  <th>When</th>
                 </tr>
               </thead>
               <tbody>
                 {data.recent.map((job) => (
                   <tr key={job.id}>
-                    <td>{titleCase(job.kind.replaceAll("_", " "))}</td>
                     <td>
-                      <span
-                        className={`badge ${
-                          job.status === "failed"
-                            ? "danger"
-                            : job.status === "done"
-                              ? "good"
-                              : job.status === "running"
-                                ? "warn"
-                                : "muted"
-                        }`}
-                      >
-                        {titleCase(job.status)}
-                      </span>
+                      <strong>{jobKindTitle(job.kind)}</strong>
+                      {job.subject && <span className="fine stg-table-sub">{job.subject}</span>}
                     </td>
-                    <td className="num">{job.attempts}</td>
-                    <td>{formatMoment(job.finished_at)}</td>
-                    <td className="fine">{job.last_error ?? ""}</td>
+                    <td>
+                      <JobStatusCell job={job} />
+                    </td>
+                    <td>
+                      {jobOutcome(job) ?? (job.status === "failed" ? "" : "—")}
+                      {job.status === "failed" && (
+                        <>
+                          {job.last_error && (
+                            <details className="stg-job-error">
+                              <summary>What went wrong</summary>
+                              <p>{job.last_error}</p>
+                            </details>
+                          )}
+                          <button
+                            type="button"
+                            className="ghost small stg-job-retry"
+                            disabled={retrying !== null}
+                            onClick={() => void retry(job)}
+                          >
+                            {retrying === job.id ? (
+                              <>
+                                <Busy />
+                                Retrying…
+                              </>
+                            ) : (
+                              "Retry"
+                            )}
+                          </button>
+                        </>
+                      )}
+                    </td>
+                    <td>{formatRelative(jobWhen(job), now)}</td>
                   </tr>
                 ))}
               </tbody>

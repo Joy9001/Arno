@@ -9,12 +9,13 @@ six Sundays gets one briefing, and a restart can't send the same one twice. The 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from fin_agent.db.conn import Connection
-from fin_agent.jobs.runner import enqueue_job
+from fin_agent.jobs.runner import MAX_ATTEMPTS, enqueue_job
 from fin_agent.ledger.common import today as ledger_today
 
 logger = logging.getLogger("fin_agent.jobs.schedules")
@@ -278,6 +279,99 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
     return enqueued
 
 
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _period_text(start: date | None, end: date | None) -> str | None:
+    if end is None:
+        return start.strftime("%b %Y") if start is not None else None
+    if start is None or (start.year, start.month) == (end.year, end.month):
+        return end.strftime("%b %Y")
+    if start.year == end.year:
+        return f"{start.strftime('%b')}–{end.strftime('%b %Y')}"
+    return f"{start.strftime('%b %Y')}–{end.strftime('%b %Y')}"
+
+
+def _import_subject(row: Mapping[str, Any]) -> str:
+    institution = row["institution"] or "Statement"
+    period = _period_text(row["period_start"], row["period_end"])
+    return f"{institution} statement, {period}" if period else institution
+
+
+async def _subjects(
+    conn: Connection, rows: Sequence[Mapping[str, Any]]
+) -> dict[str, Mapping[str, Any]]:
+    """Batch-load the import and question rows the subjects are built from."""
+    import_ids: set[str] = set()
+    question_ids: set[str] = set()
+    for row in rows:
+        payload = row["payload"] or {}
+        if row["kind"] == "scheduled_question":
+            if payload.get("scheduled_question_id"):
+                question_ids.add(str(payload["scheduled_question_id"]))
+        elif payload.get("import_id"):
+            import_ids.add(str(payload["import_id"]))
+    if not import_ids and not question_ids:
+        return {}
+    found = await conn.fetch(
+        """
+        SELECT 'import' AS source, id, institution, period_start, period_end, NULL AS prompt
+        FROM imports WHERE id = ANY($1::text[])
+        UNION ALL
+        SELECT 'question', id, NULL, NULL, NULL, prompt
+        FROM scheduled_questions WHERE id = ANY($2::text[])
+        """,
+        list(import_ids),
+        list(question_ids),
+    )
+    return {f"{row['source']}:{row['id']}": row for row in found}
+
+
+def _subject(row: Mapping[str, Any], subjects: Mapping[str, Mapping[str, Any]]) -> str | None:
+    payload = row["payload"] or {}
+    if row["kind"] == "scheduled_question":
+        question = subjects.get(f"question:{payload.get('scheduled_question_id')}")
+        prompt = str(question["prompt"]) if question is not None else ""
+        return prompt[:60] or None
+    import_id = payload.get("import_id")
+    if import_id:
+        statement = subjects.get(f"import:{import_id}")
+        if statement is not None:
+            return _import_subject(statement)
+    return None
+
+
+def job_view(row: Mapping[str, Any], subjects: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    """One job as the app shows it: what it did, where it is, and a human subject."""
+    status = str(row["status"])
+    attempts = int(row["attempts"] or 0)
+    payload = row["payload"] or {}
+    return {
+        "id": row["id"],
+        "key": row["key"],
+        "kind": row["kind"],
+        "status": status,
+        "attempts": attempts,
+        "attempt": attempts if status == "failed" else attempts + 1,
+        "max_attempts": MAX_ATTEMPTS,
+        "run_at": row["run_at"].isoformat(),
+        "created_at": row["created_at"].isoformat(),
+        "started_at": _iso(row["started_at"]),
+        "finished_at": _iso(row["finished_at"]),
+        "last_error": row["last_error"],
+        "result": row["result"],
+        "subject": _subject(row, subjects),
+        "import_id": payload.get("import_id"),
+    }
+
+
+async def job_views(conn: Connection, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Serialize any number of jobs with one batch query for their subjects."""
+    subjects = await _subjects(conn, rows)
+    return [job_view(row, subjects) for row in rows]
+
+
 async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
     schedules = await conn.fetch(
         """
@@ -288,9 +382,10 @@ async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
         ORDER BY js.active DESC, js.next_run_at
         """
     )
-    recent = await conn.fetch(
+    recent_rows = await conn.fetch(
         "SELECT * FROM jobs ORDER BY created_at DESC, id DESC LIMIT $1", limit
     )
+    recent = await job_views(conn, recent_rows)
     counts = {
         str(row["status"]): int(row["n"])
         for row in await conn.fetch("SELECT status, count(*) AS n FROM jobs GROUP BY status")
@@ -309,19 +404,7 @@ async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
             }
             for row in schedules
         ],
-        "recent": [
-            {
-                "id": row["id"],
-                "key": row["key"],
-                "kind": row["kind"],
-                "status": row["status"],
-                "attempts": row["attempts"],
-                "run_at": row["run_at"].isoformat(),
-                "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None,
-                "last_error": row["last_error"],
-            }
-            for row in recent
-        ],
+        "recent": recent,
         "counts": counts,
         "as_of": ledger_today().isoformat(),
     }
@@ -335,6 +418,8 @@ __all__ = [
     "ensure_builtin_schedules",
     "job_key",
     "job_status",
+    "job_view",
+    "job_views",
     "next_occurrence",
     "period_for",
     "sync_scheduled_questions",

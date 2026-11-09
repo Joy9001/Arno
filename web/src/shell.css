@@ -87,6 +87,40 @@ h3 {
   font: 800 10px/17px var(--font);
 }
 
+.rail-job {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 64px;
+  padding: 8px 0 7px;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--blue-text);
+  font: 700 10px/1.1 var(--font);
+  cursor: pointer;
+}
+
+.rail-job:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.job-spin {
+  display: grid;
+  place-items: center;
+  height: 21px;
+  color: var(--blue-text);
+}
+
+.rail-job-label {
+  max-width: 62px;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.15;
+}
+
 .stage {
   position: relative;
   display: flex;
@@ -1427,12 +1461,49 @@ h3 {
     color: #111;
     font: 800 10px/16px var(--font);
   }
+
+  .tabbar-item,
+  .tabbar-job {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .tabbar-job {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--blue-text);
+    font: 700 10px/1 var(--font);
+    cursor: pointer;
+  }
+
+  .tabbar-job .job-spin {
+    height: 22px;
+  }
+
+  .tabbar-job .rail-job-label {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tl-line,
   .tl-band {
     animation: none;
+  }
+
+  .rail-job .busy-dot,
+  .tabbar-job .busy-dot {
+    display: none;
   }
 }
 

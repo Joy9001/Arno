@@ -62,6 +62,8 @@ class CategorizerDeps:
     batch_id: str | None = None
     batch_answers: list[dict[str, Any]] | None = None
     submitted_batch: str | None = None
+    # Payee keys the model gave no answer for, after any re-ask. They stay uncategorized.
+    failed_keys: set[str] = field(default_factory=set)
 
 
 class KeyChoice(BaseModel):
@@ -158,6 +160,9 @@ def _chunk_agent(model: Any) -> Agent[None, list[KeyChoice]]:
         instructions=LABEL_INSTRUCTIONS,
         # Naming a category needs no long reasoning; it was 90% of the output and the timeouts.
         model_settings=merge_model_settings(MODEL_SETTINGS, ModelSettings(thinking=False)),
+        # A reply that breaks the output schema (malformed tool-call markup, say) is usually a
+        # one-off; one retry left whole chunks unanswered.
+        retries={"output": 3},
         name="categorizer-chunk",
     )
 
@@ -282,7 +287,10 @@ async def categorize_now(ctx: RunContext[CategorizerDeps], keys: list[str]) -> d
         payloads, model=ctx.deps.model, spend_store=ctx.deps.spend_store
     )
     agreement = _measure(ctx, answers)
-    return {"answers": _hold(ctx, answers), "agreement": agreement, "failed": failed}
+    held = _hold(ctx, answers)
+    ctx.deps.failed_keys.update(failed)
+    ctx.deps.failed_keys.difference_update(held)
+    return {"answers": held, "agreement": agreement, "failed": failed}
 
 
 async def batch_results(ctx: RunContext[CategorizerDeps], batch_id: str) -> dict[str, Any]:
@@ -351,7 +359,7 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
             conn,
             key=f"collect_batch:{batch_id}",
             kind="collect_batch",
-            payload={"run_id": batch_id, "polls": 0},
+            payload={"run_id": batch_id, "import_id": ctx.deps.import_id, "polls": 0},
         )
     ctx.deps.submitted_batch = batch_id
     return {"batch_id": batch_id, "requests": len(saved), "status": "pending"}

@@ -4,6 +4,11 @@ The job runner starts `categorize_import` after a commit. It labels every row a 
 runs the agent on the rest. `submit_batch` suspends one labeling run per chunk and queues
 `collect_batch`; that job re-checks the batch, stores its answers, and starts one fresh
 categorizer run to save them.
+
+A run says what happened: `done`, `partial` (some payees got no answer from the model and stay
+uncategorized), `nothing_to_do`, or `batch_submitted`, and a finished run puts a counts-only item
+in the inbox. A run the agent could not finish raises, so the job runner retries it and, at the
+end, reports the failure; a spend or usage ceiling gives up at once, since a retry hits it again.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic_ai.capabilities import BatchModelRequests
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.output import PendingModelResponse
 
@@ -28,8 +34,9 @@ from fin_agent.agent.models import primary_model
 from fin_agent.agent.spend import ceiling_name, spend_store_scope
 from fin_agent.db.conn import Connection, connect
 from fin_agent.importers import rules as rules_mod
-from fin_agent.jobs.runner import enqueue_job
+from fin_agent.jobs.runner import JobGaveUp, enqueue_job
 from fin_agent.ledger.audit import new_id
+from fin_agent.notifications import create_notification, send_push_for_kind
 
 logger = logging.getLogger("fin_agent.importers.categorize")
 
@@ -79,6 +86,46 @@ async def _finish_run(conn: Connection, run_id: str, import_id: str, deps: Categ
     )
 
 
+def _done_body(labeled: int, uncategorized: int, failed_payees: int) -> str:
+    """Counts only: an inbox item never names a payee."""
+    rows = "transaction" if labeled == 1 else "transactions"
+    if uncategorized:
+        need = "needs" if uncategorized == 1 else "need"
+        body = f"{labeled} {rows} labeled; {uncategorized} {need} a category from you."
+    else:
+        body = f"All {labeled} {rows} have a category."
+    if failed_payees:
+        payees = "payee" if failed_payees == 1 else "payees"
+        body += (
+            f" The model gave no answer for {failed_payees} {payees}, so they stay uncategorized."
+        )
+    return body
+
+
+async def _announce(
+    conn: Connection, import_id: str, result: dict[str, Any], *, batch: bool
+) -> None:
+    if result["labeled"] + result["uncategorized"] == 0:
+        return
+    created = await create_notification(
+        conn,
+        kind="categorize_done",
+        title="Statement categorized",
+        body=_done_body(result["labeled"], result["uncategorized"], result["failed_payees"]),
+        data={
+            "import_id": import_id,
+            "run_id": result["run_id"],
+            "labeled": result["labeled"],
+            "uncategorized": result["uncategorized"],
+            "failed_payees": result["failed_payees"],
+        },
+        dedupe_key=f"categorize_done:{result['run_id']}",
+    )
+    # A batch can take hours, so its end earns a ping; a run started a minute ago doesn't.
+    if created is not None and batch:
+        await send_push_for_kind(conn, "categorize_done")
+
+
 async def run_categorize(
     conn: Connection,
     import_id: str,
@@ -106,12 +153,15 @@ async def run_categorize(
         deps = CategorizerDeps(import_id=import_id, run_id=run_id)
         await _finish_run(conn, run_id, import_id, deps)
         labeled, uncategorized = await _counts(conn, import_id)
-        return {
+        result = {
             "status": "nothing_to_do",
             "labeled": labeled,
             "uncategorized": uncategorized,
+            "failed_payees": 0,
             "run_id": run_id,
         }
+        await _announce(conn, import_id, result, batch=batch_id is not None)
+        return result
 
     checks: dict[str, str] = {}
     if batch_id:
@@ -143,25 +193,31 @@ async def run_categorize(
                 usage_limits=CATEGORIZE_USAGE_LIMITS,
                 event_stream_handler=drain_events,
             )
-        except Exception as exc:  # noqa: BLE001 - a failed label must not fail a committed import
+        except Exception as exc:
+            # The import stays committed either way; this only decides how the job ends.
+            await _finish_run(conn, run_id, import_id, deps)
             ceiling = ceiling_name(exc)
             if ceiling:
-                logger.warning("categorizer stopped at the %s ceiling", ceiling)
-            else:
-                logger.warning("categorizer failed: %s", type(exc).__name__)
+                raise JobGaveUp(f"Stopped at the {ceiling} spend ceiling.") from exc
+            if isinstance(exc, UsageLimitExceeded):
+                raise JobGaveUp(f"Stopped at the categorizer's step limit: {exc}") from exc
+            raise
 
     if deps.submitted_batch:
         return {"status": "batch_submitted", "batch_id": deps.submitted_batch, "run_id": run_id}
 
     await _finish_run(conn, run_id, import_id, deps)
     labeled, uncategorized = await _counts(conn, import_id)
-    return {
-        "status": "done",
+    result = {
+        "status": "partial" if deps.failed_keys else "done",
         "run_id": run_id,
         "labeled": labeled,
         "uncategorized": uncategorized,
+        "failed_payees": len(deps.failed_keys),
         "agreement": deps.agreement_rate,
     }
+    await _announce(conn, import_id, result, batch=batch_id is not None)
+    return result
 
 
 def _poll_delay(polls: int) -> timedelta:
@@ -229,7 +285,7 @@ async def collect_batch(
             conn,
             key=f"collect_batch:{run_id}:{polls}",
             kind="collect_batch",
-            payload={"run_id": run_id, "polls": polls},
+            payload={"run_id": run_id, "import_id": str(row["import_id"]), "polls": polls},
             run_at=datetime.now(UTC) + _poll_delay(polls - 1),
         )
         return {"status": "pending", "polls": polls}

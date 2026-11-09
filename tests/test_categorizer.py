@@ -508,6 +508,15 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
     result = await run_categorize(ledger, import_id, model=streaming_model(run_agent))
 
     assert result["status"] == "done"
+    notice = await ledger.fetchrow("SELECT * FROM notifications WHERE kind = 'categorize_done'")
+    assert notice["data"] == {
+        "import_id": import_id,
+        "run_id": result["run_id"],
+        "labeled": 3,
+        "uncategorized": 3,
+        "failed_payees": 0,
+    }
+    assert "Swiggy" not in f"{notice['title']} {notice['body']}"
     run = await ledger.fetchrow("SELECT * FROM categorize_runs WHERE id = $1", result["run_id"])
     assert float(run["agreement_rate"]) == 1.0
     assert run["agreement_checked"] == 2
@@ -878,3 +887,89 @@ async def test_save_categories_refuses_no_answers_and_an_unknown_distrust_key(le
     with pytest.raises(ModelRetry):
         await categorizer_mod.save_categories(ctx, ["not a payee"])
     assert await ledger.fetchval("SELECT count(*) FROM category_rules WHERE source = 'llm'") == 0
+
+
+# What a run reports ------------------------------------------------------------------------
+
+
+def _outer_returns(messages: list[ModelMessage]) -> list[str]:
+    return [
+        part.tool_name
+        for message in messages
+        for part in message.parts
+        if isinstance(part, ToolReturnPart)
+    ]
+
+
+async def test_a_chunk_with_no_valid_output_leaves_a_partial_run_and_a_counts_only_item(
+    ledger,
+):
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger,
+        account,
+        [
+            _row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha"),
+            _row("UPI/DR/2/BETA STORE", debit=2000, day="2026-04-02", counterparty="Beta"),
+        ],
+    )
+
+    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if "pending_payees" not in {tool.name for tool in info.function_tools}:
+            # A reply that never satisfies the chunk schema, however often it is retried.
+            return _output([ToolCallPart(info.output_tools[0].name, {"response": "not a list"})])
+        returns = _outer_returns(messages)
+        if not returns:
+            return _output([ToolCallPart("pending_payees", {"import_id": import_id})])
+        if "categorize_now" not in returns:
+            return _output([ToolCallPart("categorize_now", {"keys": ["alpha", "beta"]})])
+        return _output(
+            [
+                ToolCallPart(
+                    info.output_tools[0].name, {"status": "saved", "labeled": 0, "uncategorized": 2}
+                )
+            ]
+        )
+
+    result = await run_categorize(ledger, import_id, model=streaming_model(run_agent))
+
+    assert result["status"] == "partial"
+    assert result["failed_payees"] > 0
+    notice = await ledger.fetchrow("SELECT * FROM notifications WHERE kind = 'categorize_done'")
+    assert notice["data"]["failed_payees"] == result["failed_payees"]
+    assert notice["data"]["uncategorized"] == result["uncategorized"]
+    assert "Alpha" not in f"{notice['title']} {notice['body']}"
+    assert "Beta" not in f"{notice['title']} {notice['body']}"
+
+
+async def test_an_agent_failure_reraises_so_the_runner_retries(ledger):
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger, account, [_row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha")]
+    )
+
+    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        raise RuntimeError("model exploded")
+
+    with pytest.raises(RuntimeError, match="model exploded"):
+        await run_categorize(ledger, import_id, model=streaming_model(run_agent))
+
+
+async def test_a_spend_ceiling_gives_up_at_once(ledger):
+    from fin_agent.jobs.runner import JobGaveUp
+
+    class SpendLimitExceeded(Exception):
+        """Named like the harness error `ceiling_name` recognizes."""
+
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger, account, [_row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha")]
+    )
+
+    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        raise SpendLimitExceeded("Budget 'daily' exceeded")
+
+    with pytest.raises(JobGaveUp, match="daily"):
+        await run_categorize(ledger, import_id, model=streaming_model(run_agent))

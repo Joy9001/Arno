@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from fin_agent.jobs.runner import (
+    JobGaveUp,
     JobRunner,
     enqueue_job,
     recover_interrupted_jobs,
@@ -83,6 +85,52 @@ async def test_a_failing_job_retries_three_times_then_fails_and_notifies(db):
     assert row["status"] == "failed" and row["attempts"] == 3
     assert row["last_error"].startswith("RuntimeError")
     assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'job_failed'") == 1
+
+
+async def test_a_done_job_keeps_what_its_handler_returned(db):
+    def handler(payload):
+        del payload
+        return {
+            "status": "done",
+            "rows": 2,
+            "day": date(2026, 11, 1),
+            "rate": Decimal("0.5"),
+        }
+
+    runner = JobRunner(registry={"report": handler}, timeouts={"report": 5})
+    await db.execute("INSERT INTO jobs (key, kind) VALUES ('report:1', 'report')")
+
+    await runner.run_once()
+
+    row = await _job(db, "report:1")
+    assert row["status"] == "done"
+    # Dates and Decimals are stored as text; only the display reads the result.
+    assert row["result"] == {
+        "status": "done",
+        "rows": 2,
+        "day": "2026-11-01",
+        "rate": "0.5",
+    }
+
+
+async def test_a_job_that_gives_up_fails_after_one_attempt_and_notifies(db):
+    def handler(payload):
+        del payload
+        raise JobGaveUp("Stopped at the daily spend ceiling.")
+
+    runner = JobRunner(registry={"ceiling": handler}, timeouts={"ceiling": 5})
+    job = await db.fetchrow(
+        "INSERT INTO jobs (key, kind) VALUES ('ceiling:1', 'ceiling') RETURNING id"
+    )
+
+    await runner.run_once()
+
+    row = await _job(db, "ceiling:1")
+    assert row["status"] == "failed" and row["attempts"] == 1
+    assert row["last_error"] == "Stopped at the daily spend ceiling."
+    notice = await db.fetchrow("SELECT * FROM notifications WHERE kind = 'job_failed'")
+    assert notice["dedupe_key"] == f"job_failed:{job['id']}"
+    assert notice["data"] == {"job_id": job["id"], "kind": "ceiling"}
 
 
 async def test_a_timeout_is_a_failure_with_a_marker(db):

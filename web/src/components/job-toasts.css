@@ -1,0 +1,145 @@
+/* Job toasts: quiet confirmations, loud failures. Mounted once by the shell. */
+
+.job-toast-viewport {
+  position: fixed;
+  z-index: 80;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(380px, calc(100vw - 32px));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  outline: none;
+}
+
+.job-toast {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+.job-toast[data-tone="danger"] {
+  border-color: rgba(255, 90, 79, 0.4);
+}
+
+.job-toast-icon {
+  display: grid;
+  place-items: center;
+  padding-top: 1px;
+  color: var(--green);
+}
+
+.job-toast[data-tone="danger"] .job-toast-icon {
+  color: var(--red);
+}
+
+.job-toast-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.job-toast-body {
+  margin: 3px 0 0;
+  color: var(--sub);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.job-toast-error {
+  margin: 6px 0 0;
+  color: var(--red);
+  font-size: 12.5px;
+}
+
+.job-toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.job-toast-action {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(118, 118, 128, 0.16);
+  color: var(--text);
+  font: 600 12.5px/1.2 var(--font);
+}
+
+.job-toast-action:hover {
+  background: rgba(118, 118, 128, 0.28);
+}
+
+.job-toast-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.job-toast-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+}
+
+.job-toast-close:hover {
+  background: rgba(118, 118, 128, 0.18);
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .job-toast-viewport {
+    right: 12px;
+    bottom: calc(76px + env(safe-area-inset-bottom) + 10px);
+    left: 12px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .job-toast[data-state="open"] {
+    animation: job-toast-in 0.18s ease-out;
+  }
+
+  .job-toast[data-state="closed"] {
+    animation: job-toast-out 0.15s ease-in;
+  }
+}
+
+@keyframes job-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes job-toast-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}

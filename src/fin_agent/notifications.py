@@ -33,6 +33,7 @@ PUSH_BODIES = {
     "backup_stale": "Fin-Agent needs a backup check",
     "job_failed": "A background job needs attention",
     "recap": "Your monthly recap is ready",
+    "categorize_done": "Your statement is categorized",
 }
 DEFAULT_PUSH_BODY = "You have a new notification"
 PUSH_TITLE = "Fin-Agent"

@@ -3,13 +3,15 @@
 One process owns the loop, so a `running` row at boot was interrupted and goes back to
 `pending`. A job can be enqueued in the same transaction as its data. Keys are unique, so a
 restart cannot send the same job twice. A failing job retries three times with backoff, then
-turns `failed` and lands in the inbox.
+turns `failed` and lands in the inbox. A handler that knows another attempt cannot help raises
+`JobGaveUp` to fail at once. What a handler returns is kept as the job's `result`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
@@ -62,6 +64,10 @@ def default_handlers() -> dict[str, Handler]:
 
 
 DEFAULT_HANDLERS: dict[str, Handler] = {}
+
+
+class JobGaveUp(Exception):  # noqa: N818 - it reads as what happened, like `TimeoutError`
+    """A failure another attempt cannot fix (a spend ceiling, say): fail now, without retries."""
 
 
 def handlers() -> dict[str, Handler]:
@@ -176,6 +182,7 @@ async def _finish(
     status: str,
     error: str | None = None,
     timed_out: bool = False,
+    result: Any = None,
 ) -> None:
     await conn.execute(
         """
@@ -184,20 +191,30 @@ async def _finish(
             finished_at = now(),
             updated_at = now(),
             last_error = coalesce($2, last_error),
-            timed_out_at = CASE WHEN $3 THEN now() ELSE timed_out_at END
+            timed_out_at = CASE WHEN $3 THEN now() ELSE timed_out_at END,
+            result = $5
         WHERE id = $4
         """,
         status,
         error,
         timed_out,
         job_id,
+        # A handler may return dates or Decimals; the stored result is for display only.
+        json.loads(json.dumps(result, default=str)) if isinstance(result, dict) else None,
     )
 
 
-async def _fail(conn: Connection, job: dict[str, Any], error: str, *, timed_out: bool) -> None:
+async def _fail(
+    conn: Connection,
+    job: dict[str, Any],
+    error: str,
+    *,
+    timed_out: bool,
+    final: bool = False,
+) -> None:
     attempts = int(job["attempts"]) + 1
     failed_notification = None
-    if attempts >= MAX_ATTEMPTS:
+    if final or attempts >= MAX_ATTEMPTS:
         await conn.execute(
             """
             UPDATE jobs
@@ -216,7 +233,11 @@ async def _fail(conn: Connection, job: dict[str, Any], error: str, *, timed_out:
             conn,
             kind="job_failed",
             title=f"{job['kind']} failed",
-            body="It was tried three times. Settings shows the job status and the last error.",
+            body=(
+                "It stopped without retrying. Settings shows the job and why."
+                if final and attempts < MAX_ATTEMPTS
+                else "It was tried three times. Settings shows the job status and the last error."
+            ),
             data={"job_id": job["id"], "kind": job["kind"]},
             dedupe_key=f"job_failed:{job['id']}",
         )
@@ -353,13 +374,19 @@ class JobRunner:
         try:
             payload = dict(job.get("payload") or {})
             if inspect.iscoroutinefunction(handler):
-                await asyncio.wait_for(handler(payload), timeout=timeout)
+                result = await asyncio.wait_for(handler(payload), timeout=timeout)
             else:
-                await asyncio.wait_for(asyncio.to_thread(handler, payload), timeout=timeout)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(handler, payload), timeout=timeout
+                )
             async with connect() as conn:
-                await _finish(conn, job_id, status="done")
+                await _finish(conn, job_id, status="done", result=result)
         except asyncio.CancelledError:
             raise
+        except JobGaveUp as exc:
+            logger.warning("job %s gave up: %s", job["key"], exc)
+            async with connect() as conn:
+                await _fail(conn, job, str(exc), timed_out=False, final=True)
         except TimeoutError:
             after = f" after {float(timeout):.0f}s" if timeout is not None else ""
             logger.warning("job %s timed out%s", job["key"], after)

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Theme } from "@radix-ui/themes";
 import {
@@ -16,10 +16,20 @@ import { api, errorMessage } from "./api";
 import { ASK_EVENT, ATTACH_EVENT, type AskDetail } from "./ask";
 import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
+import { JobToasts } from "./components/job-toasts";
 import { EvidencePanel } from "./EvidencePanel";
 import { EVIDENCE_EVENT, PLANNER_EVENT, RUN_EVENT } from "./evidence";
+import {
+  activeJobSummary,
+  jobRailLabel,
+  jobTitle,
+  useJobs,
+  useNow,
+  userFacingJobs,
+} from "./jobs";
+import { Busy } from "./Loading";
 import { RunPage, RunPanel } from "./run/Run";
-import { NAVIGATE_EVENT, UserContext, type PageId } from "./nav";
+import { NAVIGATE_EVENT, UserContext, goTo, type PageId } from "./nav";
 import { Orb } from "./Orb";
 import { ActivityPage, type ActivityTab } from "./pages/Activity";
 import { MoneyPage, type MoneyTab } from "./pages/Money";
@@ -27,7 +37,7 @@ import { PlannerPanel } from "./panels/Planner";
 import { RecapsPage } from "./pages/Recaps";
 import { SettingsPanel } from "./panels/Settings";
 import type { ProjectionPayload } from "./projection";
-import type { NotificationList, RecapList } from "./types";
+import type { JobActivity, NotificationList, RecapList } from "./types";
 
 const NAV: Array<{ id: PageId; label: string; title: string; Icon: LucideIcon }> = [
   { id: "ask", label: "Ask", title: "Ask", Icon: Sparkle },
@@ -43,6 +53,40 @@ const TABBAR: PageId[] = ["ask", "money", "activity", "recaps", "settings"];
 
 const MONEY_TABS: MoneyTab[] = ["timeline", "accounts", "schedules", "goals", "people"];
 const ACTIVITY_TABS: ActivityTab[] = ["ledger", "imports", "inbox"];
+
+/** A live, quiet sign that the agent is working, for the rail and the phone tab bar. */
+function BackgroundWork({ variant }: { variant: "rail" | "tabbar" }) {
+  const active = useJobs((state) => state.active);
+  const jobs = userFacingJobs(active);
+  const now = useNow(jobs.length > 0);
+  if (!jobs.length) return null;
+  const label =
+    jobs.length === 1 ? jobRailLabel(jobs[0].kind) : `${jobs.length} tasks running`;
+  return (
+    <button
+      type="button"
+      className={variant === "rail" ? "rail-job" : "tabbar-job"}
+      aria-label={`Background work: ${activeJobSummary(active, now)}`}
+      onClick={() => goTo("settings", "jobs")}
+    >
+      <span className="job-spin" aria-hidden="true">
+        <Busy />
+      </span>
+      <span className="rail-job-label">{label}</span>
+    </button>
+  );
+}
+
+/** Announced only when the set of running jobs changes, not on every clock tick. */
+function BackgroundWorkStatus() {
+  const active = useJobs((state) => state.active);
+  const jobs = userFacingJobs(active);
+  return (
+    <p className="sr-only" role="status" aria-live="polite">
+      {jobs.length ? `Background work: ${jobs.map(jobTitle).join(", ")}` : ""}
+    </p>
+  );
+}
 
 /** The 1180px edge is where the canvas leaves the side of the conversation for a sheet. */
 function useCompactViewport(): boolean {
@@ -326,18 +370,48 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     };
   }, []);
 
+  // One loop for the badges and background work: fast while a job is active, idle otherwise.
+  const applyActivity = useJobs((state) => state.applyActivity);
+  const kick = useJobs((state) => state.kick);
   useEffect(() => {
-    const refresh = () => {
-      void refreshUnread();
-      void refreshRecaps();
+    let cancelled = false;
+    let timer: number | undefined;
+    let lastBadge = 0;
+
+    const poll = async () => {
+      // Jobs may poll every 3s; the inbox and recap badges keep their 30s pace.
+      const badgeDue = Date.now() - lastBadge >= 30_000;
+      if (badgeDue) {
+        lastBadge = Date.now();
+        void refreshUnread();
+        void refreshRecaps();
+      }
+      let delay = 30_000;
+      try {
+        const since = useJobs.getState().since;
+        const query = since ? `?since=${encodeURIComponent(since)}` : "";
+        const activity = await api<JobActivity>(`/api/jobs/activity${query}`);
+        if (cancelled) return;
+        applyActivity(activity);
+        if (activity.finished.length) void refreshUnread();
+        // Fast only while something runs or is about to: a batch can wait 30 min between checks.
+        const soon = Date.now() + 30_000;
+        const busy = activity.active.some(
+          (job) => job.status === "running" || new Date(job.run_at).getTime() <= soon,
+        );
+        delay = busy ? 3_000 : 30_000;
+      } catch {
+        // Best effort: a badge or an indicator; the next tick tries again.
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), delay);
     };
-    const kick = window.setTimeout(refresh, 0);
-    const handle = window.setInterval(refresh, 30_000);
+
+    timer = window.setTimeout(() => void poll(), 0);
     return () => {
-      window.clearTimeout(kick);
-      window.clearInterval(handle);
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [refreshUnread, refreshRecaps]);
+  }, [refreshUnread, refreshRecaps, applyActivity, kick]);
 
   // Opening a recap clears its New mark on the page; the rail follows at once.
   useEffect(() => {
@@ -432,6 +506,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               <span>{label}</span>
             </button>
           ))}
+          <BackgroundWork variant="rail" />
           <button
             type="button"
             className={page === "settings" ? "rail-item rail-foot on" : "rail-item rail-foot"}
@@ -562,32 +637,37 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
             const on = page === id || (id === "ask" && page === "chats");
             const label = id === "settings" ? "More" : item.label;
             return (
-              <button
-                key={id}
-                type="button"
-                className={on ? "tabbar-item on" : "tabbar-item"}
-                aria-current={on ? "page" : undefined}
-                aria-label={
-                  id === "activity" && unread > 0
-                    ? `Activity, ${unread} unread`
-                    : id === "recaps" && recapsNew > 0
-                      ? `Recaps, ${recapsNew} new`
-                      : label
-                }
-                onClick={() => navigate(id)}
-              >
-                {id === "ask" ? (
-                  <Orb size={24} />
-                ) : (
-                  <item.Icon size={22} strokeWidth={1.9} aria-hidden="true" />
-                )}
-                <span>{label}</span>
-                {id === "activity" && unread > 0 && <span className="tabbar-badge">{unread}</span>}
-                {id === "recaps" && recapsNew > 0 && <span className="tabbar-badge">{recapsNew}</span>}
-              </button>
+              <Fragment key={id}>
+                {id === "settings" && <BackgroundWork variant="tabbar" />}
+                <button
+                  type="button"
+                  className={on ? "tabbar-item on" : "tabbar-item"}
+                  aria-current={on ? "page" : undefined}
+                  aria-label={
+                    id === "activity" && unread > 0
+                      ? `Activity, ${unread} unread`
+                      : id === "recaps" && recapsNew > 0
+                        ? `Recaps, ${recapsNew} new`
+                        : label
+                  }
+                  onClick={() => navigate(id)}
+                >
+                  {id === "ask" ? (
+                    <Orb size={24} />
+                  ) : (
+                    <item.Icon size={22} strokeWidth={1.9} aria-hidden="true" />
+                  )}
+                  <span>{label}</span>
+                  {id === "activity" && unread > 0 && <span className="tabbar-badge">{unread}</span>}
+                  {id === "recaps" && recapsNew > 0 && <span className="tabbar-badge">{recapsNew}</span>}
+                </button>
+              </Fragment>
             );
           })}
         </nav>
+
+        <BackgroundWorkStatus />
+        <JobToasts />
       </div>
     </UserContext.Provider>
   );

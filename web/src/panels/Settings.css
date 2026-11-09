@@ -407,6 +407,102 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   margin: 0;
 }
 
+.stg-table-sub {
+  display: block;
+  margin-top: 2px;
+}
+
+.stg-nothing-running {
+  margin: 0;
+}
+
+.stg-running {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stg-running-row {
+  padding: 12px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.stg-running-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.stg-running-head strong {
+  font-size: 14px;
+}
+
+.stg-running-head > .fine {
+  margin: 0;
+  text-align: right;
+}
+
+.stg-progress {
+  height: 4px;
+  margin-top: 9px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-3);
+}
+
+.stg-progress > span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue-text);
+  animation: stg-progress 1.4s ease-in-out infinite;
+}
+
+@keyframes stg-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+
+.stg-job-error {
+  margin-top: 6px;
+  color: var(--sub);
+  font-size: 12.5px;
+}
+
+.stg-job-error summary {
+  cursor: pointer;
+  color: var(--ter);
+}
+
+.stg-job-error p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.stg-job-retry {
+  margin-top: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stg-progress > span {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+
 .stg-status {
   display: inline-flex;
   align-items: center;

@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  CircleCheck,
   FileUp,
   MessageCircle,
   RefreshCw,
@@ -12,10 +13,19 @@ import {
 import { askAgent, attachAgent } from "../ask";
 import { api, errorMessage } from "../api";
 import { STATEMENT_ACCEPT } from "../chat/statement-attachment";
-import { formatDate, formatMoment, formatPaise } from "../format";
+import { formatDate, formatDuration, formatMoment, formatPaise } from "../format";
+import {
+  categorizeSummary,
+  kickActivity,
+  openUncategorized,
+  shortJobError,
+  useJobs,
+  useNow,
+} from "../jobs";
 import { Busy } from "../Loading";
 import type {
   AccountSummary,
+  CategorizeState,
   ImportLine,
   ImportList,
   ImportRecord,
@@ -752,6 +762,142 @@ function ParserLayouts() {
   );
 }
 
+/** What the categorization job behind a committed import is doing, in place. */
+function CategorizeStatus({
+  state,
+  onRefresh,
+}: {
+  state: CategorizeState;
+  onRefresh: () => void;
+}) {
+  const ticking = state.state === "running" || state.state === "retrying";
+  const now = useNow(ticking);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+
+  async function retry() {
+    if (!state.job_id) return;
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      await api(`/api/jobs/${state.job_id}/retry`, { method: "POST" });
+      kickActivity();
+      onRefresh();
+    } catch (caught) {
+      setRetryError(errorMessage(caught));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  if (state.state === "failed") {
+    return (
+      <div className="act-poll act-categorize" data-tone="danger" role="alert">
+        <AlertCircle size={16} strokeWidth={1.8} aria-hidden="true" />
+        <span className="act-categorize-text">
+          Categorizing stopped. {shortJobError(state.error, 140)}
+        </span>
+        {state.job_id && (
+          <button
+            type="button"
+            className="ghost small"
+            disabled={retrying}
+            onClick={() => void retry()}
+          >
+            {retrying ? (
+              <>
+                <Busy />
+                Retrying…
+              </>
+            ) : (
+              "Retry"
+            )}
+          </button>
+        )}
+        {retryError && <span className="error">{retryError}</span>}
+      </div>
+    );
+  }
+
+  if (state.state === "done" || state.state === "partial") {
+    const uncategorized = state.uncategorized ?? 0;
+    const failedPayees = state.failed_payees ?? 0;
+    return (
+      <div className="act-poll act-categorize" data-tone="good" role="status">
+        <CircleCheck size={16} strokeWidth={1.8} aria-hidden="true" />
+        <span className="act-categorize-text">
+          {categorizeSummary(state.labeled ?? 0, uncategorized, failedPayees)}
+          {state.state === "partial" && failedPayees > 0 && (
+            <span className="fine">
+              {failedPayees} {failedPayees === 1 ? "payee" : "payees"} got no answer from the
+              model and stay uncategorized.
+            </span>
+          )}
+        </span>
+        {uncategorized > 0 && (
+          <button type="button" className="ghost small" onClick={openUncategorized}>
+            Review
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (state.state === "waiting_on_batch") {
+    const minutes = state.next_run_at
+      ? Math.max(1, Math.round((new Date(state.next_run_at).getTime() - now) / 60_000))
+      : 6;
+    return (
+      <div className="act-poll act-categorize" role="status">
+        <span className="act-categorize-text">
+          Sent as a batch. Next check in ~{minutes} min.
+        </span>
+      </div>
+    );
+  }
+
+  if (state.state === "retrying") {
+    const seconds = state.next_run_at
+      ? Math.max(0, (new Date(state.next_run_at).getTime() - now) / 1000)
+      : 0;
+    return (
+      <div className="act-poll act-categorize">
+        <span className="act-categorize-text" role="status">
+          The model hiccuped; trying again{" "}
+          <span aria-hidden="true">
+            {seconds > 1 ? `in ${formatDuration(seconds)}` : "now"}
+          </span>{" "}
+          (attempt {state.attempt} of {state.max_attempts}).
+        </span>
+      </div>
+    );
+  }
+
+  if (state.state === "running") {
+    const started = state.started_at ? new Date(state.started_at).getTime() : now;
+    return (
+      <div className="act-poll act-categorize">
+        <span className="act-busy" aria-hidden="true">
+          <Busy />
+        </span>
+        <span className="act-categorize-text" role="status">
+          Categorizing transactions…{" "}
+          <span aria-hidden="true">running {formatDuration((now - started) / 1000)}</span>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="act-poll act-categorize" role="status">
+      <span className="act-busy">
+        <Busy />
+        Categorizing will start in a moment.
+      </span>
+    </div>
+  );
+}
+
 export function ImportsPanel({
   importId,
   onImportId,
@@ -824,9 +970,14 @@ export function ImportsPanel({
     selected?.counts?.ambiguous ??
     selectedLines.filter((line) => line.match_state === "ambiguous").length;
   const decisions = ambiguousCount + pendingTransferCount + pendingCreditCount;
-  const needsPoll = Boolean(
+  const categorizePolling = Boolean(
+    selected?.categorize &&
+      ["queued", "running", "retrying"].includes(selected.categorize.state),
+  );
+  const parsePolling = Boolean(
     selected && ["parsing", "needs_password", "needs_input"].includes(selected.status),
   );
+  const needsPoll = parsePolling || categorizePolling;
 
   const refreshSelected = useCallback(async () => {
     const id = selected?.import_id;
@@ -849,6 +1000,14 @@ export function ImportsPanel({
     const timer = window.setInterval(() => void refreshSelected(), 2500);
     return () => window.clearInterval(timer);
   }, [needsPoll, busy, refreshSelected]);
+
+  // A finished background job may be the one this import was waiting on.
+  const jobsVersion = useJobs((state) => state.version);
+  useEffect(() => {
+    if (jobsVersion === 0) return;
+    const timer = window.setTimeout(() => void refreshSelected(), 0);
+    return () => window.clearTimeout(timer);
+  }, [jobsVersion, refreshSelected]);
 
   async function openImport(importId: string) {
     writeSeq.current += 1;
@@ -922,6 +1081,7 @@ export function ImportsPanel({
       setPassword("");
       setPollError(null);
       reloadList();
+      if (path === "commit") kickActivity();
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -1232,7 +1392,11 @@ export function ImportsPanel({
 
               {selected.reason && <p className="notice">{selected.reason}</p>}
 
-              {needsPoll && (
+              {selected.categorize && (
+                <CategorizeStatus state={selected.categorize} onRefresh={() => void refreshSelected()} />
+              )}
+
+              {parsePolling && (
                 <div className="act-poll" role="status">
                   <span className="act-busy">
                     <Busy />
