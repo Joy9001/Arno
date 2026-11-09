@@ -321,7 +321,7 @@ def test_amortize_total_paid_is_the_sum_of_the_actual_installments():
 # --- recurrence ----------------------------------------------------------------------------
 
 
-def test_monthly_on_the_31st_skips_months_without_one():
+def test_monthly_on_the_31st_falls_on_the_last_day_of_a_short_month():
     dates = expand_rule(
         "FREQ=MONTHLY;BYMONTHDAY=31",
         date(2026, 1, 1),
@@ -330,23 +330,28 @@ def test_monthly_on_the_31st_skips_months_without_one():
     )
     assert dates == [
         date(2026, 1, 31),
+        date(2026, 2, 28),
         date(2026, 3, 31),
+        date(2026, 4, 30),
         date(2026, 5, 31),
+        date(2026, 6, 30),
         date(2026, 7, 31),
         date(2026, 8, 31),
+        date(2026, 9, 30),
         date(2026, 10, 31),
+        date(2026, 11, 30),
         date(2026, 12, 31),
     ]
 
 
-def test_monthly_on_the_29th_appears_in_february_only_in_a_leap_year():
+def test_monthly_on_the_29th_clamps_to_february():
     plain = expand_rule(
         "FREQ=MONTHLY;BYMONTHDAY=29",
         date(2026, 1, 1),
         start=date(2026, 1, 1),
         end=date(2026, 12, 31),
     )
-    assert date(2026, 2, 28) not in plain
+    assert date(2026, 2, 28) in plain
     leap = expand_rule(
         "FREQ=MONTHLY;BYMONTHDAY=29",
         date(2028, 1, 1),

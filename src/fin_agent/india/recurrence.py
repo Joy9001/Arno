@@ -33,6 +33,30 @@ def _inclusive_until(match: re.Match[str]) -> str:
     return f"UNTIL={moment:%Y%m%d}T235959"
 
 
+def _clamp_month_end(text: str) -> str:
+    """A month-end day means the last day in a short month, not a skipped month.
+
+    RFC 5545 gives `BYMONTHDAY=31` no February occurrence, so a rent "on the 31st" would silently
+    under-reserve one month a year. Every monthly obligation on a day 29-31 falls on min(day, the
+    last day of that month): the earliest of that day and the last day, which is
+    `BYMONTHDAY=<day>,-1;BYSETPOS=1`. Applied while parsing, so stored rules behave correctly too.
+    """
+    parts = text.split(";")
+    if not any(part.strip().upper() == "FREQ=MONTHLY" for part in parts):
+        return text
+    if any(part.strip().upper().startswith(("BYSETPOS=", "BYDAY=", "BYMONTH=")) for part in parts):
+        return text
+    monthdays = [part for part in parts if part.strip().upper().startswith("BYMONTHDAY=")]
+    if len(monthdays) != 1:
+        return text
+    day = monthdays[0].split("=", 1)[1]
+    if not day.isdigit() or not 29 <= int(day) <= 31:
+        return text
+    return ";".join(f"BYMONTHDAY={day},-1" if part is monthdays[0] else part for part in parts) + (
+        ";BYSETPOS=1"
+    )
+
+
 def normalize_rule(rule: str) -> str:
     text = rule.strip()
     if not text:
@@ -42,7 +66,7 @@ def normalize_rule(rule: str) -> str:
     text = _UNTIL_DATETIME.sub(_inclusive_until, text)
     if not text.upper().startswith("RRULE:"):
         text = f"RRULE:{text}"
-    return text
+    return text[:6] + _clamp_month_end(text[6:])
 
 
 def parse_rule(rule: str, starts: date) -> rrule:

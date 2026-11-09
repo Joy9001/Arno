@@ -373,7 +373,7 @@ def _cut_category_tradeoff(
     start_ratio = min(max(needed_daily / total_daily, 0.0), MAX_CUT_RATIO)
     for step in range(6):
         ratio = min(MAX_CUT_RATIO, start_ratio + step * 0.02)
-        reduced, rows = reduce_categories(inputs, ratio)
+        reduced, rows = reduce_categories(inputs, ratio, until=payday)
         with_purchase, _meta, reason = _hypothetical_inputs(reduced, hypothetical)
         if reason is not None:
             continue
@@ -387,8 +387,8 @@ def _cut_category_tradeoff(
             "ratio": round(ratio, 4),
             "categories": rows,
             "detail": (
-                f"Cut {names} by about {round(ratio * 100)}% until {payday.isoformat()} "
-                f"to free the shortfall."
+                f"Cut {names} by about {round(ratio * 100)}% until {payday.isoformat()}, "
+                f"then back to normal spending, to free the shortfall."
             ),
         }
     return None

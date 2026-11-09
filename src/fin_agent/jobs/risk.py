@@ -1,9 +1,10 @@
 """Risk warnings: rerun the projection after a write and nightly, warn once per episode.
 
-An episode begins when the floor probability falls below the engine's own threshold, or when the
-first projected floor crossing moves earlier. The state row is updated in the same transaction as
-the warning, so a retried job cannot send the same episode twice. When the picture recovers the
-state re-arms, and a later turn warns again.
+An episode begins when the floor probability falls below the engine's own threshold (against the
+floor, or against zero when no floor is set), or when the first projected floor crossing moves
+earlier. The state row is updated in the same transaction as the warning, so a retried job cannot
+send the same episode twice. When the picture recovers the state re-arms, and a later turn warns
+again.
 """
 
 from __future__ import annotations
@@ -40,9 +41,12 @@ async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str,
     crossing = date.fromisoformat(crossing_text) if crossing_text else None
     floor = int(projection["floor_paise"])
 
-    probability_low = floor > 0 and probability < threshold
+    probability_low = probability < threshold
     crossing_moved = crossing is not None and last_crossing is not None and crossing < last_crossing
     at_risk = probability_low or crossing_moved
+    # No floor set is not "nothing to check": the same threshold applies to going below zero.
+    level = "your floor" if floor > 0 else "zero"
+    below = "below your floor" if floor > 0 else "below zero"
 
     row = None
     if at_risk and armed:
@@ -50,17 +54,21 @@ async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str,
         parts = []
         if probability_low:
             parts.append(
-                f"The chance of staying above your floor over the next horizon is "
+                f"The chance of staying above {level} over the next horizon is "
                 f"{round(probability * 100)}%, below the {round(threshold * 100)}% line."
             )
         if crossing_moved:
             parts.append(
-                f"The projection now first crosses your floor on {crossing_text}, earlier than "
+                f"The projection now first goes {below} on {crossing_text}, earlier than "
                 f"{last_crossing.isoformat()} before."
             )
         parts.append(
-            f"Floor {money(floor)['text'] if floor else 'unknown'}. "
-            "This is a projection, not a prediction; the data-quality notes are in the app."
+            (
+                f"Floor {money(floor)['text']}. "
+                if floor
+                else "No floor is set, so the check is against zero. "
+            )
+            + "This is a projection, not a prediction; the data-quality notes are in the app."
         )
         row = await create_notification(
             conn,

@@ -1,9 +1,10 @@
 """Backtest: run the projection as of past days and compare with what actually happened.
 
-Two sources are supported. `db` uses the real ledger and only what a balance and spending history
-knew on each month's first day. `synthetic` generates a deterministic 12-month Indian-style history
-when the real 12-month backfill is absent, and says so in the report. The README records which one
-produced the published numbers.
+Two sources are supported. `db` uses the real ledger and only the rows that already existed on
+each month's first day: an account, schedule, or goal created later is excluded, though a later
+edit to one that already existed is read in its current form. `synthetic` generates a deterministic
+12-month Indian-style history when the real 12-month backfill is absent, and says so in the report.
+The README records which one produced the published numbers.
 """
 
 from __future__ import annotations
@@ -373,7 +374,9 @@ async def backtest_db(
     rows: list[dict[str, Any]] = []
     for as_of in starts:
         try:
-            projected = await project_tool(conn, as_of=as_of, horizon_days=90, runs=runs, seed=seed)
+            projected = await project_tool(
+                conn, as_of=as_of, horizon_days=90, runs=runs, seed=seed, known_then=True
+            )
         except ValueError:
             continue
         actual = sum(
@@ -419,8 +422,13 @@ async def backtest(
 def format_report(result: dict[str, Any]) -> str:
     if not result["months"]:
         return f"No completed 30-day windows were available for the {result['source']}."
-    lines = [
-        f"Source: {result['source']}",
+    lines = [f"Source: {result['source']}"]
+    if result["source"] == "real backfill":
+        lines.append(
+            "Known limit: accounts, schedules, and goals created after a month start are "
+            "excluded, but a later edit to one that already existed is read in its current form."
+        )
+    lines += [
         f"Months: {result['months']}",
         f"Median 30-day error: {money(result['median_error_paise'])['text']}",
         f"Median absolute 30-day error: {money(result['median_absolute_error_paise'])['text']}",

@@ -51,21 +51,34 @@ async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> 
     return int(row["balance_paise"]) if row else 0
 
 
-async def _horizon_for_loading(conn: Connection, as_of: date, ask_horizon_days: int | None) -> int:
+async def _horizon_for_loading(
+    conn: Connection, as_of: date, ask_horizon_days: int | None, *, known_then: bool
+) -> int:
     rows = await conn.fetch(
-        "SELECT deadline FROM goals WHERE status = 'active' AND deadline IS NOT NULL"
+        """
+        SELECT deadline FROM goals
+        WHERE status = 'active' AND deadline IS NOT NULL
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        """,
+        as_of,
+        known_then,
     )
     furthest = max(((row["deadline"] - as_of).days for row in rows), default=0)
     return min(3_650, max(90, ask_horizon_days or 0, furthest))
 
 
-async def _card_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
+async def _card_rows(
+    conn: Connection, as_of: date, *, known_then: bool
+) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
         """
         SELECT * FROM accounts
         WHERE kind = 'card' AND active
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
         ORDER BY name
-        """
+        """,
+        as_of,
+        known_then,
     )
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
@@ -91,13 +104,18 @@ async def _card_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, Any]
     return cards, gaps
 
 
-async def _liquid_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, Any]], list[str]]:
+async def _liquid_rows(
+    conn: Connection, as_of: date, *, known_then: bool
+) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
         """
         SELECT * FROM accounts
         WHERE liquid AND active
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
         ORDER BY name
-        """
+        """,
+        as_of,
+        known_then,
     )
     accounts: list[dict[str, Any]] = []
     gaps: list[str] = []
@@ -126,9 +144,16 @@ async def _liquid_rows(conn: Connection, as_of: date) -> tuple[list[dict[str, An
     return accounts, gaps
 
 
-async def _goals(conn: Connection, as_of: date) -> list[dict[str, Any]]:
+async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dict[str, Any]]:
     rows = await conn.fetch(
-        "SELECT * FROM goals WHERE status = 'active' ORDER BY priority, deadline NULLS LAST"
+        """
+        SELECT * FROM goals
+        WHERE status = 'active'
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        ORDER BY priority, deadline NULLS LAST
+        """,
+        as_of,
+        known_then,
     )
     goals: list[dict[str, Any]] = []
     for row in rows:
@@ -303,7 +328,7 @@ async def _spend_categories(
 
 
 async def _owed_events(
-    conn: Connection, *, as_of: date, end: date
+    conn: Connection, *, as_of: date, end: date, known_then: bool
 ) -> tuple[list[CashEvent], list[dict[str, Any]], list[str]]:
     # The person account's balance is what is still owed; a label's transfer amount is not.
     # Reading the label amount counted a repaid or reversed split as an expected receipt.
@@ -319,12 +344,14 @@ async def _owed_events(
         LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
         LEFT JOIN transfer_labels tl ON tl.transfer_id = e.transfer_id
         WHERE a.kind = 'person'
+          AND (NOT $2 OR (a.created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
           AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $1
         GROUP BY p.id, p.display_name, p.outside_text
         HAVING coalesce(sum(e.amount), 0) <> 0 AND min(tl.expected_date) IS NOT NULL
         ORDER BY min(tl.expected_date), p.display_name
         """,
         as_of,
+        known_then,
     )
     events: list[CashEvent] = []
     sources: list[dict[str, Any]] = []
@@ -368,18 +395,26 @@ async def load_inputs(
     *,
     as_of: date | None = None,
     horizon_days: int | None = None,
+    known_then: bool = False,
 ) -> ProjectionInput:
-    """Build the pure engine's inputs from the ledger as of ``as_of``."""
+    """Build the pure engine's inputs from the ledger as of ``as_of``.
+
+    ``known_then`` asks for the ledger as it stood on that day: an account, schedule, or goal
+    created later is left out. The backtest uses it; a projection requested "as of" an earlier
+    date from today's data does not.
+    """
     as_of = as_of or ledger_today()
     settings = await read_settings(conn)
     floor = int(settings["floor_paise"] or 0)
-    end = as_of + timedelta(days=await _horizon_for_loading(conn, as_of, horizon_days))
+    end = as_of + timedelta(
+        days=await _horizon_for_loading(conn, as_of, horizon_days, known_then=known_then)
+    )
 
-    liquid_rows, gaps = await _liquid_rows(conn, as_of)
-    card_rows, card_gaps = await _card_rows(conn, as_of)
+    liquid_rows, gaps = await _liquid_rows(conn, as_of, known_then=known_then)
+    card_rows, card_gaps = await _card_rows(conn, as_of, known_then=known_then)
     gaps.extend(card_gaps)
 
-    goal_rows = await _goals(conn, as_of)
+    goal_rows = await _goals(conn, as_of, known_then=known_then)
     goal_by_schedule = {
         row["contribution_schedule_id"]: row for row in goal_rows if row["contribution_schedule_id"]
     }
@@ -388,7 +423,16 @@ async def load_inputs(
     events: list[CashEvent] = []
     schedule_sources: dict[str, dict[str, Any]] = {}
     covered_categories: set[str] = set()
-    schedule_rows = await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name")
+    schedule_rows = await conn.fetch(
+        """
+        SELECT * FROM schedules
+        WHERE active
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        ORDER BY name
+        """,
+        as_of,
+        known_then,
+    )
     for row in schedule_rows:
         amount = row["amount_paise"]
         occurrences = await schedules_mod.expand_schedule(
@@ -459,7 +503,9 @@ async def load_inputs(
                         f"{row['name']} is not linked to a goal; it still leaves liquid cash"
                     )
 
-    owed_events, owed_sources, owed_gaps = await _owed_events(conn, as_of=as_of, end=end)
+    owed_events, owed_sources, owed_gaps = await _owed_events(
+        conn, as_of=as_of, end=end, known_then=known_then
+    )
     events.extend(owed_events)
     gaps.extend(owed_gaps)
 
@@ -672,6 +718,7 @@ async def project(
     as_of: date | None = None,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
+    known_then: bool = False,
 ) -> dict[str, Any]:
     """The full projection or affordability result, including the daily curve and sources."""
     purchase = _hypothetical(hypothetical)
@@ -686,7 +733,7 @@ async def project(
             last += timedelta(days=62)
         needed = max(0, (last - base).days + 1)
         load_horizon = max(load_horizon or 0, needed)
-    inputs = await load_inputs(conn, as_of=as_of, horizon_days=load_horizon)
+    inputs = await load_inputs(conn, as_of=as_of, horizon_days=load_horizon, known_then=known_then)
     if purchase is not None:
         return afford(inputs, purchase, runs=runs, seed=seed)
     return run_projection(inputs, runs=runs, seed=seed)

@@ -98,6 +98,10 @@ class SpendCategory:
     card_id: str | None = None
     history: tuple[tuple[date, int], ...] = ()
     covered_by_obligation: bool = False
+    # A tradeoff cut: spend (1 - reduce_ratio) of the baseline until reduce_until, then the full
+    # baseline. A cut "until payday" must not keep cutting for the rest of the horizon.
+    reduce_ratio: float = 0.0
+    reduce_until: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +371,12 @@ def _simulate(
                     amount = category.baseline_per_day_paise
                 if amount <= 0:
                     continue
+                if category.reduce_ratio and (
+                    category.reduce_until is None or day <= category.reduce_until
+                ):
+                    amount = int(round(amount * (1 - category.reduce_ratio)))
+                    if amount <= 0:
+                        continue
                 card_part = int(round(amount * category.card_share))
                 card_part = max(0, min(card_part, amount))
                 cash_part = amount - card_part
@@ -655,9 +665,14 @@ def first_full_payment_date(
 
 
 def reduce_categories(
-    inputs: ProjectionInput, ratio: float
+    inputs: ProjectionInput, ratio: float, *, until: date | None = None
 ) -> tuple[ProjectionInput, list[dict[str, Any]]]:
-    """Scale reducible categories' history and baselines by ``1 - ratio``."""
+    """Spend ``ratio`` less on reducible categories, going back to normal after ``until``.
+
+    The ratio is applied to each simulated day rather than to the history, so a cut that runs
+    "until payday" raises the baseline again on the days after it. The rows still report the
+    daily rates the user is agreeing to.
+    """
     ratio = max(0.0, min(ratio, MAX_CUT_RATIO))
     rows: list[dict[str, Any]] = []
     categories: list[SpendCategory] = []
@@ -666,8 +681,7 @@ def reduce_categories(
             categories.append(category)
             continue
         baseline = int(round(category.baseline_per_day_paise * (1 - ratio)))
-        history = tuple((day, int(round(amount * (1 - ratio)))) for day, amount in category.history)
-        categories.append(replace(category, baseline_per_day_paise=baseline, history=history))
+        categories.append(replace(category, reduce_ratio=ratio, reduce_until=until))
         rows.append(
             {
                 "category": category.name,
@@ -675,6 +689,7 @@ def reduce_categories(
                 "percent": round(ratio * 100, 1),
                 "baseline_per_day_paise": category.baseline_per_day_paise,
                 "new_baseline_per_day_paise": baseline,
+                "until": until.isoformat() if until else None,
             }
         )
     return replace(inputs, categories=tuple(categories)), rows

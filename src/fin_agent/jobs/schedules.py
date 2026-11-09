@@ -79,14 +79,26 @@ def builtin_rules(settings: dict[str, Any]) -> dict[str, str]:
 
 
 def next_occurrence(
-    rule: str, *, after: datetime, default_time: time | None = None
+    rule: str,
+    *,
+    after: datetime,
+    default_time: time | None = None,
+    anchor: datetime | None = None,
 ) -> datetime | None:
-    """The first occurrence strictly after `after`, in India time."""
+    """The first occurrence strictly after `after`, in India time.
+
+    `anchor` is the rule's stored first run (``job_schedules.dtstart``). An RRULE counts `COUNT`
+    and phases `INTERVAL` from its start, so anchoring at `after` would make a finite rule recur
+    forever; the caller stores the anchor once and passes it every time.
+    """
     from dateutil.rrule import rrulestr
 
     local_after = after.astimezone(INDIA)
-    at = default_time or local_after.time().replace(second=0, microsecond=0)
-    dtstart = datetime.combine(local_after.date(), at, tzinfo=INDIA)
+    if anchor is not None:
+        dtstart = anchor.astimezone(INDIA)
+    else:
+        at = default_time or local_after.time().replace(second=0, microsecond=0)
+        dtstart = datetime.combine(local_after.date(), at, tzinfo=INDIA)
     try:
         parsed = rrulestr(_rule_text(rule), dtstart=dtstart)
         found = parsed.after(local_after, inc=False)
@@ -96,20 +108,24 @@ def next_occurrence(
 
 
 def _following_occurrence(
-    rule: str, occurrence: datetime, now: datetime, default_time: time
+    rule: str,
+    occurrence: datetime,
+    now: datetime,
+    default_time: time,
+    anchor: datetime | None = None,
 ) -> datetime | None:
     """Advance from the last scheduled occurrence, not from now.
 
     Anchoring an INTERVAL=2 rule at today moves its phase (a late biweekly run would fire a week
     early), so walk the rule's own occurrences until one is in the future.
     """
-    following = next_occurrence(rule, after=occurrence, default_time=default_time)
+    following = next_occurrence(rule, after=occurrence, default_time=default_time, anchor=anchor)
     steps = 0
     while following is not None and following <= now:
-        following = next_occurrence(rule, after=following, default_time=default_time)
+        following = next_occurrence(rule, after=following, default_time=default_time, anchor=anchor)
         steps += 1
         if steps >= 10_000:  # pragma: no cover - only a pathological rule gets here
-            return next_occurrence(rule, after=now, default_time=default_time)
+            return next_occurrence(rule, after=now, default_time=default_time, anchor=anchor)
     return following
 
 
@@ -148,8 +164,8 @@ async def ensure_builtin_schedules(
                 continue
             await conn.execute(
                 """
-                INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-                VALUES ($1, '{}'::jsonb, $2, $3)
+                INSERT INTO job_schedules (kind, payload, rule, next_run_at, dtstart)
+                VALUES ($1, '{}'::jsonb, $2, $3, $3)
                 ON CONFLICT (kind, payload) DO NOTHING
                 """,
                 kind,
@@ -164,7 +180,7 @@ async def ensure_builtin_schedules(
             await conn.execute(
                 """
                 UPDATE job_schedules
-                SET rule = $1, next_run_at = $2, active = true, updated_at = now()
+                SET rule = $1, next_run_at = $2, dtstart = $2, active = true, updated_at = now()
                 WHERE id = $3
                 """,
                 rule,
@@ -206,8 +222,8 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
                 continue
             await conn.execute(
                 """
-                INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-                VALUES ('scheduled_question', $1, $2, $3)
+                INSERT INTO job_schedules (kind, payload, rule, next_run_at, dtstart)
+                VALUES ('scheduled_question', $1, $2, $3, $3)
                 ON CONFLICT (kind, payload) DO NOTHING
                 """,
                 payload,
@@ -225,7 +241,7 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
                 await conn.execute(
                     """
                     UPDATE job_schedules
-                    SET rule = $1, next_run_at = $2, active = true, updated_at = now()
+                    SET rule = $1, next_run_at = $2, dtstart = $2, active = true, updated_at = now()
                     WHERE id = $3
                     """,
                     question["rule"],
@@ -282,6 +298,7 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
                 occurrence,
                 now,
                 occurrence.time().replace(tzinfo=None),
+                row["dtstart"],
             )
             await conn.execute(
                 """

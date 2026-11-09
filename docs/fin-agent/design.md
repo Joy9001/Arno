@@ -149,7 +149,7 @@ table lists its fields:
 | `kind` | `income_fixed`, `income_variable`, `income_oneoff`, `obligation`, `instalment`, `goal_contribution` |
 | `subtype` | For obligations: `rent`, `emi`, `subscription`, `insurance`, `family_transfer`, `other` |
 | `name`, `amount`, `account_id`, `category_id` | |
-| `rule` | iCalendar RRULE, handled by `python-dateutil`—"monthly on the 5th", "last weekday", "yearly on Mar 14", `COUNT=3` for "slice in 3". Holiday adjustment from the India calendar |
+| `rule` | iCalendar RRULE, handled by `python-dateutil`—"monthly on the 5th", "last weekday", "yearly on Mar 14", `COUNT=3` for "slice in 3". Holiday adjustment from the India calendar. A monthly rule on the 29th, 30th, or 31st falls on the last day of a shorter month (rent "on the 31st" is due Feb 28), so no month is skipped |
 | `confirmed` | For variable income: confirmed amounts count toward verdicts, expected ones only show as an optimistic case |
 | `starts`, `ends`, `active` | |
 
@@ -233,7 +233,7 @@ The following tables hold memory, conversations, and provenance:
 | `attachments` | Receipt photos, UPI screenshots, and statement files as `bytea`. A statement is kept as an unlocked copy, because its password is never stored; the kept files are what a new parser version is replayed on. You can delete one. Changed November 7, 2026: statements were deleted at commit or reject ([`import.md`](import.md#parser-versions)) |
 | `spend_counters`, `spend_dedup` | Spend ceilings. The harness's `PostgresSpendStore` creates and owns them ([step 9](system-design.md#traces-phoenix)) |
 | `notifications`, `push_subscriptions` | Inbox items and web-push endpoints |
-| `jobs`, `job_schedules` | The [job loop](platform.md#notifications-and-scheduler). `jobs`: unique `key` (a job and its period), `kind`, `payload`, `status` (`pending`, `running`, `done`, or `failed`), `run_at`, `attempts`, `last_error`; never a statement password, and `agent_ro` can't read it. `job_schedules`: `kind`, `payload`, `rule` (the same rules `schedules` use), `next_run_at` |
+| `jobs`, `job_schedules` | The [job loop](platform.md#notifications-and-scheduler). `jobs`: unique `key` (a job and its period), `kind`, `payload`, `status` (`pending`, `running`, `done`, or `failed`), `run_at`, `attempts`, `last_error`; never a statement password, and `agent_ro` can't read it. `job_schedules`: `kind`, `payload`, `rule` (the same rules `schedules` use), `next_run_at`, and `dtstart` (the rule's first occurrence, so `COUNT` and `INTERVAL` are counted from a fixed start) |
 
 ---
 
@@ -442,7 +442,7 @@ The engine computes each tradeoff by rerunning the projection:
 | Wait until date X | Earliest purchase date within the horizon that meets the threshold |
 | Pay by card or EMI | Card float to the next due date, or `n` installments, within the card's available limit |
 | Delay a goal | Goal completion dates before versus after—"Goa slips three weeks" |
-| Cut a category | Shortfall spread over `reducible` categories' baselines until next payday; feasible only below a sensible cut ratio |
+| Cut a category | Shortfall spread over `reducible` categories' baselines until next payday, when the normal baseline resumes; feasible only below a sensible cut ratio |
 
 The agent phrases the verdict and picks which tradeoffs to mention. The numbers come from the
 function.
@@ -454,7 +454,7 @@ results are published in the README:
 
 | Measure | How |
 |---|---|
-| Backtest | For each month in the 12-month backfill, run `project()` as of its first day using only what was known then, and compare with the real statement balance 30 days later. Report the median error, and how often the real balance landed inside the P10-P90 band—close to 80% means the band is honest |
+| Backtest | For each month in the 12-month backfill, run `project()` as of its first day using only the rows that existed then—an account, schedule, or goal created later is excluded, though a later edit to one that already existed is read in its current form—and compare with the real statement balance 30 days later. Report the median error, and how often the real balance landed inside the P10-P90 band—close to 80% means the band is honest |
 | HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Used locally, never committed—its source repository has no license |
 
 ### Why it's built, not bought
@@ -476,6 +476,6 @@ The detector looks for the following patterns:
 | Recurring charge | Same normalized merchant, ≥3 occurrences, interval ~7, 30, or 365 days ±3, amount ±10% |
 | New subscription | A recurring charge that has no matching schedule |
 | Missed recurring | An expected occurrence is 3+ days late |
-| Risk | After any write and nightly, rerun the projection. If the floor probability drops below the threshold, or a crossing moves earlier, warn once for each episode |
+| Risk | After any write and nightly, rerun the projection. If the floor probability drops below the threshold (against the floor, or against zero when no floor is set), or a crossing moves earlier, warn once for each episode |
 
 Large-transaction and category-spike detection are parked ([`parked.md`](parked.md)).
