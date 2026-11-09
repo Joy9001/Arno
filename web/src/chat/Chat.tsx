@@ -352,12 +352,23 @@ type AssistantProps = {
   listInline?: boolean;
   /** A reply started; Ask hands the conversation over to Chats. */
   onConversationStarted?: () => void;
+  /** The open conversation was left (New, or another thread); panels about it close. */
+  onConversationLeft?: () => void;
 };
 
 export function Assistant(props: AssistantProps) {
   const [activeId, setActiveId] = useState<string | undefined>(
     () => props.focusThreadId ?? sessionStorage.getItem(THREAD_STORAGE) ?? undefined,
   );
+  // A new chat getting its first id is not leaving one, so only a known id that changes counts.
+  const previousId = useRef(activeId);
+  const { onConversationLeft } = props;
+  useEffect(() => {
+    if (previousId.current !== undefined && previousId.current !== activeId) {
+      onConversationLeft?.();
+    }
+    previousId.current = activeId;
+  }, [activeId, onConversationLeft]);
   const [boot, setBoot] = useState(() => Boolean(props.focusThreadId));
   const [bootError, setBootError] = useState<string | null>(null);
   const [focusMessage, setFocusMessage] = useState<{ id: string; token: number } | null>(null);

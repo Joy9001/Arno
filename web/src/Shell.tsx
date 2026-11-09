@@ -147,6 +147,12 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
   const [planner, setPlanner] = useState<ProjectionPayload | null>(null);
   const [runTask, setRunTask] = useState<string | null>(null);
+  /** The canvas is about the open conversation, so leaving it closes the canvas. */
+  const closeCanvas = useCallback(() => {
+    setEvidence(null);
+    setPlanner(null);
+    setRunTask(null);
+  }, []);
   const [runPage, setRunPage] = useState<string | null>(initial.runId);
   const compact = useCompactViewport();
   const talking = page === "ask" || page === "chats";
@@ -438,6 +444,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               onConversationStarted={() => {
                 if (page === "ask") go("chats");
               }}
+              onConversationLeft={closeCanvas}
               onActivity={() => void refreshUnread()}
               onEvidence={setEvidence}
             />
@@ -494,9 +501,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
             open
             onOpenChange={(open) => {
               if (open) return;
-              setEvidence(null);
-              setPlanner(null);
-              setRunTask(null);
+              closeCanvas();
             }}
           >
             <Dialog.Portal>
