@@ -8,12 +8,16 @@ answer text is composed from the account row.
 from __future__ import annotations
 
 import json
+import re
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -23,6 +27,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai_harness.subagents import DelegationTask, DelegationTasks
 
 from fin_agent.agent.parser import PARSE_USAGE_LIMITS
 from fin_agent.api.deps import Database, current_session
@@ -35,6 +40,40 @@ ACCOUNT_KINDS = ("bank", "card", "wallet")
 
 # A tool result can be a whole page of statement rows; the transcript is a receipt, not a dump.
 RESULT_LIMIT = 1200
+
+_TASK_ID = re.compile(r"[0-9a-f]{32}\Z")
+_TASK_RECORD = TypeAdapter(DelegationTask)
+_SAVE_LOCKS: dict[str, anyio.Lock] = {}
+
+
+class TaskOwner(DelegationTasks):
+    """The app's delegation tasks, saved so a second writer can never lose a saved record.
+
+    The harness serialises saves per owner and writes one fixed `<id>.tmp` before renaming it,
+    so two owners on one directory — a second app instance in this process, or a test's own
+    owner — consume each other's temp file between the write and the rename, and the loser
+    fails with `FileNotFoundError`. A temp name unique to this write, and a directory made
+    again if it was cleaned up under us, keep the rename atomic for any number of writers. The
+    per-directory lock keeps two of them off one destination at the same time, which Windows
+    refuses; the app itself writes from one event loop.
+    """
+
+    async def save(self, record: DelegationTask) -> None:
+        if self.directory is None:
+            return
+        if not _TASK_ID.fullmatch(record.id):
+            raise ValueError("Invalid task identity")
+        lock = _SAVE_LOCKS.setdefault(str(self.directory), anyio.Lock())
+        async with lock:
+            await anyio.Path(self.directory).mkdir(parents=True, exist_ok=True)
+            temporary = anyio.Path(self.directory / f"{record.id}.{uuid4().hex}.tmp")
+            try:
+                await temporary.write_bytes(_TASK_RECORD.dump_json(record))
+                await temporary.replace(anyio.Path(self.directory / f"{record.id}.json"))
+            except BaseException:
+                with suppress(OSError):
+                    await temporary.unlink(missing_ok=True)
+                raise
 
 
 class ApiModel(BaseModel):
@@ -353,4 +392,4 @@ async def layout_rollback(layout_id: str, body: RollbackIn, conn: Database) -> d
     raise HTTPException(status_code=404, detail="No such layout")
 
 
-__all__ = ["router", "task_payload"]
+__all__ = ["TaskOwner", "router", "task_payload"]

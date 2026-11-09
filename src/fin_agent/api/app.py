@@ -11,7 +11,6 @@ import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic_ai_harness.step_persistence import PostgresStepStore
-from pydantic_ai_harness.subagents import DelegationTasks
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -37,6 +36,7 @@ from fin_agent.api import (
 )
 from fin_agent.api.middleware import SecurityHeadersMiddleware
 from fin_agent.api.problems import problem
+from fin_agent.api.tasks import TaskOwner
 from fin_agent.api.wake import wake
 from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.setup import ensure_setup_token, setup_required
@@ -128,7 +128,7 @@ async def lifespan(app: FastAPI):
         if event.event is None and task.status == "finished" and turns is not None:
             turns.schedule_wake(task.conversation_id)
 
-    tasks = DelegationTasks(
+    tasks = TaskOwner(
         directory=app.state.settings.tasks_dir, step_store=step_store, observer=observe
     )
     parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)

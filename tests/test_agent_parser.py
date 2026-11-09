@@ -20,13 +20,13 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.step_persistence import PostgresStepStore
-from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks, SubAgents
+from pydantic_ai_harness.subagents import DelegationReports, SubAgents
 
 from fin_agent.agent.builder import AUTO_BACKGROUND_SECONDS, build_agent
 from fin_agent.agent.capabilities import MODEL_SETTINGS
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
-from fin_agent.api.tasks import task_payload
+from fin_agent.api.tasks import TaskOwner, task_payload
 from fin_agent.importers.commit import commit_import
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.pipeline import create_import, import_payload
@@ -369,7 +369,7 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
     pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=1, max_size=2)
     try:
         store = PostgresStepStore(pool)
-        first_owner = DelegationTasks(directory=tmp_path, step_store=store)
+        first_owner = TaskOwner(directory=tmp_path, step_store=store)
         async with first_owner.opened():
             with first_owner.bind():
                 await parent.run(
@@ -395,7 +395,7 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
             assert import_id in history
 
         (tmp_path / f"{task_id}.json").write_text(accept_json, encoding="utf-8")
-        second_owner = DelegationTasks(directory=tmp_path, step_store=store)
+        second_owner = TaskOwner(directory=tmp_path, step_store=store)
         async with second_owner.opened():
             restored = second_owner.records[task_id]
             assert restored.status == "finished"
@@ -509,7 +509,7 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
             parser_agent=parser,
         )
         store = PostgresStepStore(pool)
-        owner = DelegationTasks(directory=tmp_path, step_store=store)
+        owner = TaskOwner(directory=tmp_path, step_store=store)
         async with owner.opened():
 
             async def inject() -> None:
@@ -603,7 +603,7 @@ async def test_a_background_parser_opens_the_turns_attachment_without_an_id_in_t
         ),
         parser_agent=parser,
     )
-    owner = DelegationTasks(directory=tmp_path)
+    owner = TaskOwner(directory=tmp_path)
     async with owner.opened():
         with owner.bind():
             await parent.run(
@@ -666,7 +666,7 @@ async def test_open_imports_links_the_task_and_writes_then_clears_progress(ledge
         ),
         parser_agent=parser,
     )
-    owner = DelegationTasks(directory=tmp_path)
+    owner = TaskOwner(directory=tmp_path)
     async with owner.opened():
         with owner.bind():
             await parent.run(
@@ -744,7 +744,7 @@ async def test_a_report_with_parser_text_flags_the_conversation(ledger):
     import tempfile
 
     with tempfile.TemporaryDirectory() as folder:
-        owner = DelegationTasks(directory=Path(folder) / owner_path)
+        owner = TaskOwner(directory=Path(folder) / owner_path)
         async with owner.opened():
             reports = [DelegationReports(owner, conversation_id="conv_flag_report")]
             with owner.bind():
@@ -797,7 +797,7 @@ async def test_the_task_api_serves_the_parser_transcript(ledger, tmp_path):
         ),
         parser_agent=parser,
     )
-    owner = DelegationTasks(directory=tmp_path)
+    owner = TaskOwner(directory=tmp_path)
     async with owner.opened():
         with owner.bind():
             await parent.run(
@@ -865,7 +865,7 @@ async def test_a_parser_question_flags_the_conversation(ledger):
     import tempfile
 
     with tempfile.TemporaryDirectory() as folder:
-        owner = DelegationTasks(directory=Path(folder))
+        owner = TaskOwner(directory=Path(folder))
         async with owner.opened():
             reports = [DelegationReports(owner, conversation_id="conv_flag_question")]
             with owner.bind():
