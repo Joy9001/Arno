@@ -33,6 +33,7 @@ from fin_agent.ledger.accounts import LoanTermsError, loan_terms
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import projection as projection_tools
 from fin_agent.tools import read as read_tools
+from fin_agent.tools import recaps as recaps_tools
 from fin_agent.tools import write as write_tools
 from fin_agent.tools.mark import clear_mark, flag_outside_text
 
@@ -195,6 +196,19 @@ async def summarize_spending(
         kind="spending",
         context={"group_by": group_by, "filters": plain},
     )
+
+
+async def recap(ctx: RunContext[AgentDeps], period: str) -> ToolReturn:
+    """The recap of a day, week, or month: what was spent against the period before, money in and
+    out, where it went, the biggest change, the biggest and most frequent spends, and repeat
+    charges with no schedule. The same stories the Recaps page shows. period is a recap ID
+    ("month-2026-10", "week-2026-11-02", "day-2026-11-08") or yesterday, this_week, last_week,
+    this_month, last_month, or "2026-10"."""
+    try:
+        payload = await _read_call(lambda conn: recaps_tools.recap(conn, period))
+    except ValueError as exc:
+        raise ModelRetry(str(exc)) from exc
+    return await _finish_read(ctx, payload)
 
 
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
@@ -425,6 +439,7 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
             get_financial_context,
             query_movements,
             summarize_spending,
+            recap,
             project,
             run_query,
             amortize,

@@ -136,6 +136,7 @@ RESET_TABLES = (
     "preferences",
     "audit_log",
     "notifications",
+    "recap_views",
     "push_subscriptions",
     "jobs",
     "job_schedules",

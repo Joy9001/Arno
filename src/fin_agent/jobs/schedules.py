@@ -27,6 +27,7 @@ BUILTIN_KINDS = (
     "pattern_detection",
     "recompute_baselines",
     "backup_check",
+    "recaps",
 )
 WEEKDAYS = ("SU", "MO", "TU", "WE", "TH", "FR", "SA")
 NIGHTLY = {
@@ -68,6 +69,8 @@ def builtin_rules(settings: dict[str, Any]) -> dict[str, str]:
             f"BYHOUR={notification.hour};BYMINUTE={notification.minute}"
         ),
         "reminders": (f"FREQ=DAILY;BYHOUR={notification.hour};BYMINUTE={notification.minute}"),
+        # Daily, so a machine that slept through a Monday or the 1st still announces the recap.
+        "recaps": (f"FREQ=DAILY;BYHOUR={notification.hour};BYMINUTE={notification.minute}"),
     }
     for kind, time_of_day in NIGHTLY.items():
         rules[kind] = f"FREQ=DAILY;BYHOUR={time_of_day.hour};BYMINUTE={time_of_day.minute}"

@@ -43,6 +43,7 @@ def default_handlers() -> dict[str, Handler]:
     from fin_agent.jobs.briefing import handle_weekly_briefing
     from fin_agent.jobs.patterns import handle_pattern_detection
     from fin_agent.jobs.questions import handle_scheduled_question
+    from fin_agent.jobs.recaps import handle_recaps
     from fin_agent.jobs.reminders import handle_reminders
     from fin_agent.jobs.risk import handle_risk_check
 
@@ -53,6 +54,7 @@ def default_handlers() -> dict[str, Handler]:
         "risk_check": handle_risk_check,
         "pattern_detection": handle_pattern_detection,
         "backup_check": handle_backup_check,
+        "recaps": handle_recaps,
         "scheduled_question": handle_scheduled_question,
         "categorize_import": handle_categorize_import,
         "collect_batch": handle_collect_batch,

@@ -405,6 +405,11 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     retry gets no further retry, and only the user continues a paused run. The harness keeps the
     report and leaves the wake to the host; the host's rules are in `agent/wake.py`. Decided
     November 9, 2026 ([wake turn](harness.md#the-wake-turn)).
+    Recaps are a server feature: one engine (`tools/recaps.py`) computes every story from
+    ledger rows on demand, and the Recaps page, the agent's `recap` tool, and the ready
+    notifications all read it. Stories are templates, never model prose; every figure opens the
+    rows that sum to it. A new month pushes and a new week goes to the inbox; only "opened" is
+    stored. Decided November 9, 2026 ([recaps](recaps.md)).
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
 ### L4: Evals (gate: engine work starts when this exists)

@@ -150,6 +150,19 @@ mark() the description and payee on outside rows
 return rows, total_count, next_cursor, coverage(account, period)
 ```
 
+### `recap`
+
+**Description:** "The recap of a day, week, or month: what was spent against the period before,
+money in and out, where it went, the biggest change, the biggest and most frequent spends, and
+repeat charges with no schedule."
+
+**Input:** `recap(period: str)`: a recap ID (`month-2026-10`, `week-2026-11-02`,
+`day-2026-11-08`) or `yesterday`, `this_week`, `last_week`, `this_month`, `last_month`, `2026-10`.
+
+**Output:** the period, its stories (`key`, `label`, `figure`, `line`, and the rows reference), and
+coverage. The Recaps page reads the same engine, `tools/recaps.py`; the stories and periods are in
+[`recaps.md`](recaps.md). Statement merchant names come back marked as outside text.
+
 ### `summarize_spending`
 
 **Description:** "Totals of money spent, net of refunds, grouped however you need. Loan principal,

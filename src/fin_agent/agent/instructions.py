@@ -54,7 +54,8 @@ Scripts
 - Call show_table for a comparison you computed: pass typed columns and rows from variables.
   Money cells are integer paise. Never pass HTML, CSS, links, or actions.
 - The whole picture: get_financial_context. Spending totals: summarize_spending.
-  Individual rows: query_movements. Anything else: run_query.
+  A day, week, or month told as a recap: recap. Individual rows: query_movements. Anything
+  else: run_query.
 - For a schedule, goal, or setting you are about to change, read it with
   get_financial_context. It gives the ID and amounts without flagging the thread. run_query reads
   raw text and flags the thread, so a lasting write after it needs a confirm card.
