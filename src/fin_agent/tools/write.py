@@ -8,7 +8,7 @@ same audited `write_group` the REST API uses.
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from fin_agent import scheduled_questions as questions_mod
@@ -34,13 +34,42 @@ class ToolInputError(ValueError):
     """A message the model can act on, delivered as ModelRetry by the wrapper."""
 
 
-def _rupees(value: Any, field: str = "amount") -> int:
+# `amount_paise` columns are BIGINT. Reject earlier, with words the model can retry on.
+MAX_PAISE = 9_223_372_036_854_775_807
+
+
+def _decimal_paise(value: Any, field: str) -> int:
+    """Rupees to whole paise, exact: sub-paise input rounds half up, like engine/money.py."""
     if value is None:
         raise ToolInputError(f"{field} is required")
-    paise = int(Decimal(str(value)) * 100)
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ToolInputError(f"{field} must be a number of rupees") from exc
+    if not amount.is_finite():
+        raise ToolInputError(f"{field} must be a finite number of rupees")
+    paise = int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+    if abs(paise) > MAX_PAISE:
+        raise ToolInputError(f"{field} is too large")
+    return paise
+
+
+def _rupees(value: Any, field: str = "amount") -> int:
+    """A positive rupee amount as paise."""
+    paise = _decimal_paise(value, field)
     if paise <= 0:
         raise ToolInputError(f"{field} must be positive")
     return paise
+
+
+def _balance_rupees(value: Any, field: str = "balance_rupees") -> int:
+    """A signed rupee balance as paise: an overdrawn bank account is negative."""
+    return _decimal_paise(value, field)
+
+
+def _percent_to_bps(value: Any) -> int:
+    """An annual percent as integer basis points, rounded half up like every other amount."""
+    return int((Decimal(str(value)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
 def _date(value: Any) -> date | None:
@@ -57,9 +86,14 @@ def _date(value: Any) -> date | None:
 async def resolve_account_id(conn: Connection, name: str | None) -> str:
     if not name:
         raise ToolInputError("which account?")
-    row = await conn.fetchrow(
-        "SELECT id, name FROM accounts WHERE active AND lower(name) = lower($1) LIMIT 1", name
+    rows = await conn.fetch(
+        "SELECT id, name FROM accounts WHERE active AND lower(name) = lower($1) "
+        "ORDER BY name LIMIT 2",
+        name,
     )
+    row = rows[0] if rows else None
+    if len(rows) > 1:
+        raise ToolInputError(f"{name!r} names more than one account; pass the account's ID instead")
     if row is None:
         row = await conn.fetchrow("SELECT id, name FROM accounts WHERE id = $1 AND active", name)
     if row is None:
@@ -132,7 +166,7 @@ async def _usual_account(conn: Connection, payee_id: str) -> str | None:
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN transfer_labels tl ON tl.transfer_id = t.id
         JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE tl.payee_id = $1 AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
+        WHERE tl.payee_id = $1 AND fa.active AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
         GROUP BY fa.id
         ORDER BY n DESC, fa.name
         LIMIT 1
@@ -199,7 +233,7 @@ async def _possible_duplicate(
         JOIN transfer_labels tl ON tl.transfer_id = t.id
         JOIN captures c ON c.movement_id = m.id AND c.kind = 'chat'
         WHERE m.kind = 'expense'
-          AND (m.idempotency_key IS NULL OR m.idempotency_key <> $1)
+          AND ($1::text IS NULL OR m.idempotency_key IS NULL OR m.idempotency_key <> $1)
           AND fa.id = $2
           AND t.amount = $3
           AND tl.payee_id IS NOT DISTINCT FROM $4
@@ -225,6 +259,13 @@ async def _possible_duplicate(
 
 def _card(kind: str, **values: Any) -> dict[str, Any]:
     return {"card": kind, **values}
+
+
+def _required(data: dict[str, Any], key: str, label: str) -> Any:
+    value = data.get(key)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise ToolInputError(f"{label} is required")
+    return value
 
 
 async def _audited_undo_id(conn: Connection, undo_id: str | None) -> str | None:
@@ -270,7 +311,13 @@ async def record_movement(
     note = movement.get("note")
     description = movement.get("description")
     payee_name = movement.get("payee") or movement.get("person")
-    idempotency_key = f"{message_id}:{movement.get('tool_call_id')}" if message_id else None
+    tool_call_id = movement.get("tool_call_id")
+    # A woken turn has no message id; the tool call id alone still makes its retry idempotent.
+    idempotency_key = (
+        f"{message_id}:{tool_call_id}"
+        if message_id
+        else (str(tool_call_id) if tool_call_id else None)
+    )
     evidence = (
         {"kind": capture_kind, "ref": capture_ref or message_id}
         if (capture_ref or message_id)
@@ -287,7 +334,8 @@ async def record_movement(
         payee = await resolve_payee(
             conn,
             str(payee_name),
-            kind="person" if kind in {"split", "settlement"} else "merchant",
+            # A settlement names the person on the other side; a split's payee is the vendor.
+            kind="person" if kind == "settlement" else "merchant",
             upi_id=movement.get("upi_id"),
             outside_text=named_outside(str(payee_name)),
         )
@@ -412,7 +460,9 @@ async def record_movement(
 
     if kind == "split":
         total = _rupees(movement.get("total_rupees"), "total_rupees")
-        my_share = _rupees(movement.get("my_share_rupees"), "my_share_rupees")
+        my_share = _balance_rupees(movement.get("my_share_rupees"), "my_share_rupees")
+        if my_share < 0:
+            raise ToolInputError("my_share_rupees cannot be negative")
         people = []
         for person in movement.get("people") or []:
             if isinstance(person, dict):
@@ -478,7 +528,7 @@ async def record_movement(
         loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
         if loan is None or loan["kind"] != "loan":
             raise ToolInputError("a loan payment names a loan account")
-        outstanding = max(await ledger_balance(conn, loan["ledger_account_id"]), 0)
+        outstanding = max(-await ledger_balance(conn, loan["ledger_account_id"]), 0)
         principal = amount
         interest = 0
         if loan["rate_bps"]:
@@ -642,7 +692,7 @@ async def correct_movement(
     undo_id = await _audited_undo_id(conn, result["undo_id"])
     return {
         "status": result["status"],
-        "undo_id": result["undo_id"],
+        "undo_id": undo_id,
         "summary": summary,
         "rule": rule_text if result.get("rule") else None,
         "rows_changed": result["rows_changed"],
@@ -658,6 +708,9 @@ async def correct_movement(
     }
 
 
+_NAME_COLUMNS = {"payees": "display_name"}
+
+
 async def _find_one(
     conn: Connection, table: str, name: str | None, key: str | None
 ) -> dict[str, Any]:
@@ -667,14 +720,17 @@ async def _find_one(
             return row
     if not name:
         raise ToolInputError(f"{table[:-1]} needs a name or id")
-    row = await conn.fetchrow(
-        f"SELECT * FROM {quote_ident(table)} WHERE lower(name) = lower($1) "
-        "ORDER BY created_at LIMIT 1",
+    column = quote_ident(_NAME_COLUMNS.get(table, "name"))
+    rows = await conn.fetch(
+        f"SELECT * FROM {quote_ident(table)} WHERE lower({column}) = lower($1) "
+        "ORDER BY created_at LIMIT 2",
         name,
     )
-    if row is None:
+    if not rows:
         raise ToolInputError(f"No {table[:-1]} named {name!r}")
-    return row
+    if len(rows) > 1:
+        raise ToolInputError(f"More than one {table[:-1]} is named {name!r}; use its ID")
+    return rows[0]
 
 
 async def update_setup_item(
@@ -691,17 +747,20 @@ async def update_setup_item(
 
     if entity == "account":
         if action == "add":
+            name = _required(data, "name", "an account name")
+            kind = data.get("kind") or "bank"
+            opening = data.get("opening_balance_rupees")
+            opening_paise = _balance_rupees(opening) if opening is not None else None
+            # A card or a loan is a liability: the balance the user states is what is owed.
+            if opening_paise is not None and kind in {"card", "loan"} and opening_paise > 0:
+                opening_paise = -opening_paise
             result = await accounts_mod.create_account(
                 conn,
-                kind=data.get("kind") or "bank",
-                name=data["name"],
+                kind=kind,
+                name=name,
                 institution=data.get("institution"),
                 last4=data.get("last4"),
-                opening_balance_paise=(
-                    _rupees(data["opening_balance_rupees"])
-                    if data.get("opening_balance_rupees") is not None
-                    else None
-                ),
+                opening_balance_paise=opening_paise,
                 opening_balance_as_of=_date(data.get("as_of")),
                 liquid=data.get("liquid"),
                 credit_limit_paise=(
@@ -712,7 +771,7 @@ async def update_setup_item(
                 statement_day=data.get("statement_day"),
                 due_day=data.get("due_day"),
                 rate_bps=(
-                    int(Decimal(str(data["rate_percent"])) * 100)
+                    _percent_to_bps(data["rate_percent"])
                     if data.get("rate_percent") is not None
                     else None
                 ),
@@ -720,9 +779,16 @@ async def update_setup_item(
                 actor="agent",
                 message_id=message_id,
             )
-            summary = f"Added account {data['name']}"
+            summary = f"Added account {name}"
         else:
+            if data.get("opening_balance_rupees") is not None:
+                raise ToolInputError(
+                    "An existing account's balance is restated with entity=balance, "
+                    "not an opening balance"
+                )
             row = await _find_one(conn, "accounts", data.get("name"), data.get("id"))
+            if data.get("kind") is not None and data["kind"] != row["kind"]:
+                raise ToolInputError("An account's kind cannot change; add a new account instead")
             if action == "archive":
                 result = await accounts_mod.archive_account(
                     conn, row["id"], actor="agent", message_id=message_id
@@ -744,7 +810,7 @@ async def update_setup_item(
                     statement_day=data.get("statement_day"),
                     due_day=data.get("due_day"),
                     rate_bps=(
-                        int(Decimal(str(data["rate_percent"])) * 100)
+                        _percent_to_bps(data["rate_percent"])
                         if data.get("rate_percent") is not None
                         else None
                     ),
@@ -766,17 +832,27 @@ async def update_setup_item(
 
     if entity == "balance":
         account_id = await resolve_account_id(conn, data.get("account"))
+        account = await accounts_mod.get_account(conn, account_id)
+        # A card or a loan is a liability: "the balance is 5,000" means 5,000 owed. The ledger
+        # stores that as -500000, the sign `card_outstanding_paise` and the UI already use.
+        paise = _balance_rupees(data.get("balance_rupees"))
+        owing = account["kind"] in {"card", "loan"}
+        if owing and paise > 0:
+            paise = -paise
         result = await accounts_mod.set_statement_balance(
             conn,
             account_id,
-            balance_paise=_rupees(data.get("balance_rupees"), "balance_rupees"),
+            balance_paise=paise,
             as_of=_date(data.get("as_of")),
             actor="agent",
             message_id=message_id,
         )
-        rupees = data["balance_rupees"]
-        paise = rupees * 100 if isinstance(rupees, int) else Decimal(str(rupees)) * 100
-        summary = f"Set {result['account']['name']} balance to {format_paise(paise)}"
+        shown = money(paise)["text"]
+        summary = f"Set {result['account']['name']} balance to {shown}"
+        if owing and paise < 0:
+            summary = f"Set {result['account']['name']} balance to {money(-paise)['text']} due"
+        elif owing and paise > 0:
+            summary = f"Set {result['account']['name']} balance to {shown} credit"
         return {
             "status": "saved",
             "undo_id": result["undo_id"],
@@ -792,11 +868,13 @@ async def update_setup_item(
 
     if entity == "schedule":
         if action == "add":
+            name = _required(data, "name", "a schedule name")
+            rule = _required(data, "rule", "a schedule rule")
             result = await schedules_mod.create_schedule(
                 conn,
                 kind=data.get("kind") or "obligation",
-                name=data["name"],
-                rule=data["rule"],
+                name=name,
+                rule=rule,
                 starts=_date(data.get("starts")) or ledger_today(),
                 amount_paise=(
                     _rupees(data["amount_rupees"])
@@ -814,9 +892,11 @@ async def update_setup_item(
                 actor="agent",
                 message_id=message_id,
             )
-            summary = f"Added schedule {data['name']}"
+            summary = f"Added schedule {name}"
         else:
             row = await _find_one(conn, "schedules", data.get("name"), data.get("id"))
+            if data.get("kind") is not None and data["kind"] != row["kind"]:
+                raise ToolInputError("A schedule's kind cannot change; add a new schedule instead")
             if action == "archive":
                 result = await schedules_mod.archive_schedule(
                     conn, row["id"], actor="agent", message_id=message_id
@@ -861,16 +941,17 @@ async def update_setup_item(
 
     if entity == "goal":
         if action == "add":
+            name = _required(data, "name", "a goal name")
             result = await goals_mod.create_goal(
                 conn,
-                name=data["name"],
+                name=name,
                 target_paise=_rupees(data.get("target_rupees"), "target_rupees"),
                 deadline=_date(data.get("deadline")),
                 priority=int(data.get("priority") or 3),
                 actor="agent",
                 message_id=message_id,
             )
-            summary = f"Added goal {data['name']}"
+            summary = f"Added goal {name}"
         else:
             row = await _find_one(conn, "goals", data.get("name"), data.get("id"))
             if action == "archive":
@@ -907,14 +988,15 @@ async def update_setup_item(
 
     if entity == "category":
         if action == "add":
+            name = _required(data, "name", "a category name")
             result = await categories_mod.create_category(
                 conn,
-                name=data["name"],
+                name=name,
                 reducible=bool(data.get("reducible", False)),
                 actor="agent",
                 message_id=message_id,
             )
-            summary = f"Added category {data['name']}"
+            summary = f"Added category {name}"
         else:
             row = await _find_one(conn, "categories", data.get("name"), data.get("id"))
             result = (
@@ -944,9 +1026,10 @@ async def update_setup_item(
 
     if entity == "payee":
         if action == "add":
+            name = _required(data, "name", "a payee name")
             result = await payees_mod.create_payee(
                 conn,
-                display_name=data["name"],
+                display_name=name,
                 kind=data.get("kind") or "merchant",
                 upi_id=data.get("upi_id"),
                 default_category_id=await _resolve_category_id(conn, data.get("default_category")),
@@ -954,7 +1037,7 @@ async def update_setup_item(
                 actor="agent",
                 message_id=message_id,
             )
-            summary = f"Added payee {data['name']}"
+            summary = f"Added payee {name}"
         else:
             row = await _find_one(conn, "payees", data.get("name"), data.get("id"))
             result = (
@@ -991,9 +1074,12 @@ async def update_setup_item(
 
     if entity == "settings":
         floor = data.get("floor_rupees")
+        floor_paise = _balance_rupees(floor, "floor_rupees") if floor is not None else None
+        if floor_paise is not None and floor_paise < 0:
+            raise ToolInputError("The floor cannot be negative")
         result = await settings_mod.update_settings(
             conn,
-            floor_paise=_rupees(floor) if floor is not None else None,
+            floor_paise=floor_paise,
             base_currency=data.get("base_currency"),
             time_zone=data.get("time_zone"),
             default_horizon_days=data.get("default_horizon_days"),
@@ -1005,8 +1091,8 @@ async def update_setup_item(
             message_id=message_id,
         )
         summary = "Updated settings"
-        if floor is not None:
-            summary = f"Set the floor to {format_paise(_rupees(floor))}"
+        if floor_paise is not None:
+            summary = f"Set the floor to {money(floor_paise)['text']}"
         return {
             "status": "saved",
             "undo_id": result["undo_id"],
@@ -1055,8 +1141,8 @@ async def update_setup_item(
             try:
                 result = await questions_mod.create_question(
                     conn,
-                    prompt=data["prompt"],
-                    rule=data["rule"],
+                    prompt=_required(data, "prompt", "a scheduled question"),
+                    rule=_required(data, "rule", "a scheduled question rule"),
                     spend_limit_usd=data.get("spend_limit_usd"),
                     actor="agent",
                     message_id=message_id,

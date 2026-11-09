@@ -18,6 +18,7 @@ from fin_agent.ledger.categories import (
     upsert_rule_in_group,
 )
 from fin_agent.ledger.common import (
+    SYSTEM_KINDS,
     get_account_row,
     resolve_account,
     system_account,
@@ -339,7 +340,9 @@ async def record_income(
     if amount_paise <= 0:
         raise InvalidLedgerError("Income must be positive")
     when = _movement_date(date)
-    await resolve_account(conn, account_id)
+    account = await resolve_account(conn, account_id)
+    if account["kind"] in SYSTEM_KINDS:
+        raise InvalidLedgerError("Income arrives in a real account, not a system account")
     await _validated_label(conn, None, payee_id)
     income = await system_account(conn, "income")
     async with write_group(conn, actor=actor, message_id=message_id) as group:
@@ -944,6 +947,10 @@ async def correct_movement(
 ) -> dict[str, Any]:
     if scope not in CORRECTABLE_SCOPES:
         raise InvalidLedgerError("scope is this, future, or all")
+    if changes.get("date") is not None:
+        changes = {**changes, "date": _movement_date(changes["date"])}
+    if changes.get("amount_paise") is not None and changes["amount_paise"] <= 0:
+        raise InvalidLedgerError("A corrected amount must be positive")
     movement = await _movement_row(conn, movement_id)
     if movement["kind"] == "reversal":
         raise InvalidLedgerError("A reversal is not edited")

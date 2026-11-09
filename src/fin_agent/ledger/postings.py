@@ -59,6 +59,17 @@ async def _existing_by_key(conn: Connection, key: str) -> dict[str, Any] | None:
     return await conn.fetchrow("SELECT * FROM movements WHERE idempotency_key = $1", key)
 
 
+async def _existing_record(conn: Connection, existing: dict[str, Any]) -> MovementRecord:
+    rows = await conn.fetch(
+        """
+        SELECT t.id FROM pgledger_transfers t
+        WHERE t.metadata ->> 'movement_id' = $1 ORDER BY t.id
+        """,
+        existing["id"],
+    )
+    return MovementRecord(movement=existing, transfer_ids=tuple(row["id"] for row in rows))
+
+
 async def create_movement_in_group(
     conn: Connection,
     group: WriteGroup,
@@ -84,14 +95,7 @@ async def create_movement_in_group(
     if idempotency_key:
         existing = await _existing_by_key(conn, idempotency_key)
         if existing is not None:
-            rows = await conn.fetch(
-                """
-                SELECT t.id FROM pgledger_transfers t
-                WHERE t.metadata ->> 'movement_id' = $1 ORDER BY t.id
-                """,
-                existing["id"],
-            )
-            return MovementRecord(movement=existing, transfer_ids=tuple(row["id"] for row in rows))
+            return await _existing_record(conn, existing)
 
     resolved: list[tuple[TransferSpec, dict[str, Any], dict[str, Any]]] = []
     for transfer in transfers:
@@ -110,6 +114,7 @@ async def create_movement_in_group(
         """
         INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key)
         VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
         """,
         movement_id,
@@ -119,6 +124,12 @@ async def create_movement_in_group(
         reverses_id,
         idempotency_key,
     )
+    if movement is None:
+        # A concurrent call with the same key committed first: return its movement, not a second.
+        existing = await _existing_by_key(conn, idempotency_key)
+        if existing is None:  # pragma: no cover - the unique index guarantees the row exists
+            raise InvalidLedgerError("An idempotency key conflict left no movement")
+        return await _existing_record(conn, existing)
     group.record_created("movements", movement)
 
     row_placeholders: list[str] = []

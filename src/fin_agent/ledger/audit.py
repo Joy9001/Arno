@@ -287,7 +287,7 @@ async def _restore_before(
             return
         if table == "accounts":
             await _update_row(conn, group, table, row_id, {"active": False})
-        elif table in {"payees", "categories", "schedules"}:
+        elif table in {"payees", "categories", "schedules", "preferences", "scheduled_questions"}:
             await _update_row(conn, group, table, row_id, {"active": False})
         elif table == "goals":
             await _update_row(conn, group, table, row_id, {"status": "abandoned"})
@@ -298,6 +298,7 @@ async def _restore_before(
             "users",
             "schedule_occurrences",
             "schedule_payments",
+            "baselines",
         }:
             if current is not None:
                 await conn.execute(
@@ -378,6 +379,14 @@ async def undo_group(
         )
 
     touched = {entry["table_name"] for entry in entries}
+    # A movement and the labels written with it share one group. Undo reverses the movement and
+    # keeps its labels, because the reversal copied them: the pair then nets to zero inside its
+    # category. Only a label added later (created for a movement from an earlier group) goes away.
+    created_movements = {
+        str(entry["row_id"])
+        for entry in entries
+        if entry["table_name"] == "movements" and entry["before"] is None
+    }
     # Movements first: a reversal copies the labels, so deleting the original labels before the
     # reversal would lose the category that makes the net spending zero.
     ordered = [entry for entry in entries if entry["table_name"] == "movements"]
@@ -394,8 +403,18 @@ async def undo_group(
                 continue
             if table == "movements":
                 await _restore_movement(conn, undo, row_id, entry["before"])
+            elif (
+                table == "transfer_labels"
+                and (entry["after"] or {}).get("movement_id") in created_movements
+            ):
+                continue
             else:
                 await _restore_before(conn, undo, table, row_id, entry["before"])
+        if "scheduled_questions" in touched:
+            # Undoing a scheduled question must also stop its next run, as archiving it does.
+            from fin_agent.jobs.schedules import sync_scheduled_questions
+
+            await sync_scheduled_questions(conn)
         await conn.execute(
             "UPDATE audit_log SET undone_at = now() WHERE group_id = $1 AND undone_at IS NULL",
             undo_id,
@@ -416,7 +435,7 @@ async def undo_latest(
     row = await conn.fetchrow(
         """
         SELECT group_id FROM audit_log
-        WHERE undone_at IS NULL
+        WHERE undone_at IS NULL AND actor <> 'system'
         GROUP BY group_id
         ORDER BY max(created_at) DESC, max(id) DESC
         LIMIT 1
