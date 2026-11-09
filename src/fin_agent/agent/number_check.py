@@ -2,7 +2,8 @@
 
 Every money amount and percentage in a reply is compared with what the model was given: tool
 returns and arguments, the snapshot, and the user's messages. It understands rounding, lakh,
-crore, percentages, and values shown without their sign. An untraced number gets a note, and the
+crore, thousand, and k scales, Indian digit grouping as an amount even without a rupee sign,
+percentages, and values shown without their sign. An untraced number gets a note, and the
 trace counts it. The check is deliberately permissive about labels: a real number used wrongly is
 an eval's job, not this check's.
 
@@ -19,6 +20,11 @@ from typing import Any
 
 SCALE = {
     "k": 1e3,
+    "thousand": 1e3,
+    "thousands": 1e3,
+    "hazaar": 1e3,
+    "hazar": 1e3,
+    "hajaar": 1e3,
     "lakh": 1e5,
     "lakhs": 1e5,
     "lac": 1e5,
@@ -29,9 +35,10 @@ SCALE = {
     "cr": 1e7,
 }
 NUM = r"\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+_SCALES = r"k|thousand|thousands|hazaar|hazar|hajaar|lakhs?|lacs?|crores?|cr"
 MONEY = re.compile(
-    rf"(?:₹|\bRs\.?\s?|\bINR\s?)\s?({NUM})\s?(k|lakhs?|lacs?|crores?|cr|l)?\b"
-    rf"|\b({NUM})\s?(lakhs?|lacs?|crores?|cr)\b"
+    rf"(?:₹|\bRs\.?\s?|\bINR\s?)\s?({NUM})\s?({_SCALES}|l)?\b"
+    rf"|\b({NUM})\s?({_SCALES})\b"
     rf"|\b({NUM})\s?(?:rupees?|rs\b|rupaye)",
     re.I,
 )
@@ -66,11 +73,15 @@ TIME = re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b|\b\d{1,2}\s?(?:am|pm)\b", re.I)
 # Names and labels that carry a digit but claim no quantity: "Top 3", "Form 16", "section 24",
 # "last 4 digits", "16-digit", and a masked card "•••• 1234".
 LABEL = re.compile(
-    r"\b(?:top|form|section|sec\.)\s+\d+[a-z]?\b|\b\d+[-\s]?digits?\b|[•*xX]{2,}\s?\d{4}\b",
+    rf"\b(?:top|form|section|sec\.)\s+(?!{NUM}\s?(?:%|percent|per\s?cent))\d+[a-z]?\b"
+    rf"|\b\d+[-\s]?digits?\b|[•*xX]{{2,}}\s?\d{{4}}\b",
     re.I,
 )
 # A minus sign in a script's printed output: "-1804797.0" is the number 1804797.
 SIGNED = re.compile(rf"(?<![\w.,])-({NUM})(?![\w/]|[.,]\d)")
+# The same sign in a reply ("Net is **-18,04,797**"). A hyphen inside a word or between two
+# numbers ("10-20", "A-1234") is not a sign, and a date is blanked before this runs.
+NEGATIVE = re.compile(rf"(?<![\w.,/])-({NUM})(?![\w/]|[.,]\d)")
 # A day range tied to a month ("October (1–31)", "1–31 October") is a date, not a count.
 DAY_RANGE = re.compile(
     rf"\b(?:{MONTHS})\s*\(?\s*\d{{1,2}}\s*[-–—]\s*\d{{1,2}}\s*\)?"
@@ -139,7 +150,20 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
         PERCENT,
         lambda m: ("percent", _value(m.group(1)), _unit(m.group(1)), m.group().strip()),
     )
-    found += take(BARE, lambda m: ("bare", _value(m.group(1)), _unit(m.group(1)), m.group(1)))
+
+    def plain(prefix: str = "") -> Any:
+        def handler(match: re.Match[str]) -> tuple[str, float, float, str]:
+            shown = match.group(1)
+            # Indian digit grouping ("18,04,797") is how this product writes money, so a
+            # grouped number counts as an amount even without a rupee sign. A plain integer
+            # stays a bare count: the production note checks amounts only.
+            kind = "money" if "," in shown else "bare"
+            return (kind, _value(shown), _unit(shown), prefix + shown)
+
+        return handler
+
+    found += take(NEGATIVE, plain("-"))
+    found += take(BARE, plain())
     return found
 
 

@@ -52,17 +52,42 @@ class PreferenceKindUpdate(ApiModel):
     kind: Literal["preference", "fact", "rule"]
 
 
-def _approval_submission(messages: list[dict[str, Any]]) -> bool:
+def _approval_responses(messages: list[dict[str, Any]]) -> list[str]:
+    """The tool call ids this request answers, waiting for the server to run them.
+
+    The AI SDK keeps `approval.approved` on a tool part after its result arrives, so a settled
+    part is not a submission: only `approval-responded` is still waiting. Matching any part that
+    carries an approval made every later message in the thread look like an approval turn.
+    """
+    ids: list[str] = []
     for message in messages:
         for part in message.get("parts") or []:
-            if not isinstance(part, dict):
+            if not isinstance(part, dict) or part.get("state") != "approval-responded":
                 continue
-            if part.get("state") in {"approval-responded", "output-denied"}:
-                return True
             approval = part.get("approval")
-            if isinstance(approval, dict) and "approved" in approval:
-                return True
-    return False
+            if not isinstance(approval, dict) or not isinstance(approval.get("approved"), bool):
+                continue
+            tool_call_id = part.get("toolCallId") or part.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                ids.append(tool_call_id)
+    return ids
+
+
+def _approval_only(messages: list[dict[str, Any]], approval_ids: list[str]) -> bool:
+    """True when the request only answers a confirm card, with no new user turn after it."""
+    return bool(approval_ids) and bool(messages) and messages[-1].get("role") == "assistant"
+
+
+def _answered_tool_calls(history: list[Any]) -> set[str]:
+    """The tool call ids the stored history already has a result for."""
+    answered: set[str] = set()
+    for message in history:
+        for part in getattr(message, "parts", []):
+            if getattr(part, "part_kind", "") in {"tool-return", "retry-prompt"}:
+                tool_call_id = getattr(part, "tool_call_id", None)
+                if tool_call_id:
+                    answered.add(str(tool_call_id))
+    return answered
 
 
 def _last_user(messages: list[dict[str, Any]]) -> tuple[str, str] | None:
@@ -202,6 +227,21 @@ def _stream_response(iterator: Any, *, thread_id: str | None = None) -> Streamin
     return StreamingResponse(iterator, media_type="text/event-stream", headers=headers)
 
 
+async def _saved_reply(conn: Any, thread_id: str) -> StreamingResponse | None:
+    """The thread's last saved reply, replayed instead of running a turn again."""
+    saved = await conn.fetchrow(
+        """
+        SELECT content FROM messages
+        WHERE conversation_id = $1 AND role = 'assistant' AND run_id IS NOT NULL
+        ORDER BY created_at DESC, id DESC LIMIT 1
+        """,
+        thread_id,
+    )
+    if saved is None:
+        return None
+    return _stream_response(iter(encode_saved_turn(saved["content"])), thread_id=thread_id)
+
+
 @router.post("/chat")
 async def post_chat(request: Request, session: Session, preparation: PreparationDep) -> Response:
     # `preparation` is a function-scoped dependency: it holds the thread's preparation guard
@@ -211,7 +251,8 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
     if not isinstance(body, dict):
         raise HTTPException(status_code=422, detail="The chat body is not an object.")
     messages = body.get("messages") or []
-    approval_turn = _approval_submission(messages)
+    approval_ids = _approval_responses(messages)
+    approval_turn = _approval_only(messages, approval_ids)
     last = _last_user(messages)
     if last is None and not approval_turn:
         raise HTTPException(status_code=422, detail="A chat request needs a user message.")
@@ -259,28 +300,13 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                     turn.follow(0),
                     thread_id=str(existing["conversation_id"]),
                 )
-            saved = await conn.fetchrow(
-                """
-                SELECT content FROM messages
-                WHERE conversation_id = $1 AND role = 'assistant' AND run_id IS NOT NULL
-                ORDER BY created_at DESC, id DESC LIMIT 1
-                """,
-                str(existing["conversation_id"]),
-            )
-            if saved is None:
+            replay = await _saved_reply(conn, str(existing["conversation_id"]))
+            if replay is None:
                 raise HTTPException(
                     status_code=409,
                     detail="That message ID was already used; send a new message.",
                 )
-            return StreamingResponse(
-                iter(encode_saved_turn(saved["content"])),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache, no-transform",
-                    "X-Thread-Id": str(existing["conversation_id"]),
-                    "x-resumable-stream-id": str(existing["conversation_id"]),
-                },
-            )
+            return replay
 
         active_turn = app.state.turns.get(thread_id)
         if active_turn is not None and not active_turn.done.is_set():
@@ -320,6 +346,13 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         history, outside_swap = await history_mod.refresh_snapshot(
             conn, thread, history, cache_ttl_seconds=ttl
         )
+        if approval_turn and set(approval_ids) <= _answered_tool_calls(history):
+            # A retry or a duplicate POST of a tap that already landed. Replaying its reply
+            # keeps the write applied once; it also replaces the failed note a replayed
+            # deferred-tool run would otherwise leave in the thread.
+            replay = await _saved_reply(conn, thread_id)
+            if replay is not None:
+                return replay
         if approval_turn:
             user_row = await conn.fetchrow(
                 "SELECT id, body_text FROM messages WHERE conversation_id = $1 "

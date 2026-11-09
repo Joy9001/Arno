@@ -58,7 +58,8 @@ async def get_thread(conn: Connection, thread_id: str) -> dict[str, Any] | None:
 
 
 def title_for(text: str) -> str:
-    cleaned = " ".join(text.split())
+    # A title is stored and listed, so a pasted card number must not reach it.
+    cleaned = " ".join(redact_text(text).split())
     return cleaned[:80] or "New chat"
 
 

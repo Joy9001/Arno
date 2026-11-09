@@ -7,6 +7,7 @@ card from a tool called inside a script is picked up from the `run_code` return 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from datetime import date
 from decimal import Decimal
@@ -36,6 +37,8 @@ from fin_agent.tools import read as read_tools
 from fin_agent.tools import recaps as recaps_tools
 from fin_agent.tools import write as write_tools
 from fin_agent.tools.mark import clear_mark, flag_outside_text
+
+logger = logging.getLogger("fin_agent.agent.toolset")
 
 
 # Typed read arguments, so a script sees the keys and a misspelled one fails instead of being
@@ -370,9 +373,17 @@ async def show_chart(
         for point in points:
             if not isinstance(point, dict) or "x" not in point or "y" not in point:
                 raise ModelRetry("each point is {'x': str, 'y': int}")
-            if isinstance(point["y"], bool) or not isinstance(point["y"], (int, float)):
+            value = point["y"]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise ModelRetry("chart values must be numbers")
-            cleaned.append({"x": str(point["x"]), "y": int(point["y"])})
+            if isinstance(value, float):
+                if not value.is_integer():
+                    raise ModelRetry(
+                        "chart values must be whole numbers; round the value in your script "
+                        "and pass the rounded number"
+                    )
+                value = int(value)
+            cleaned.append({"x": str(point["x"]), "y": value})
         checked.append({"name": name, "points": cleaned})
     chart_id = f"cht_{abs(hash((title, type, str(checked)))):x}"
     spec = {
@@ -620,9 +631,12 @@ async def update_setup(
         )
     )
     if ctx.tool_call_approved:
-        await _clear_confirmed_marks(
-            [str(value) for value in payload_data.values() if isinstance(value, str)]
-        )
+        try:
+            await _clear_confirmed_marks(
+                [str(value) for value in payload_data.values() if isinstance(value, str)]
+            )
+        except Exception:  # noqa: BLE001 - the write landed; a stale mark is not a failed write
+            logger.warning("could not clear a confirmed outside-text mark")
     return _write_return(payload)
 
 
