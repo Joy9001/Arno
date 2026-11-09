@@ -96,32 +96,20 @@ Chat in English, Hindi, or Hinglish, by text or voice. A few examples:
   on the import card, not in chat), and never recommends investments or products. It states facts
   and tradeoffs; you decide.
 
-<table>
-  <tr>
-    <td width="68%"><img src=".impeccable/mocks/final/shots/06-money-timeline.png" alt="The Money timeline: the ledger behind today, and a 1,000-run projection band ahead with upcoming bills, salary, and the tightest day."></td>
-    <td width="32%"><img src=".impeccable/mocks/final/shots/20-phone-thread.png" alt="The same affordability answer on a phone."></td>
-  </tr>
-  <tr>
-    <td><sub>Money opens on a timeline: what happened behind today, what could happen ahead.</sub></td>
-    <td><sub>Daily use happens on the phone, as an installable web app.</sub></td>
-  </tr>
-</table>
-
-<sub>Interface design comps. The figures are illustrative.</sub>
+<p align="center">
+  <img src=".impeccable/mocks/final/shots/06-money-timeline.png" alt="The Money timeline: the ledger behind today, and a 1,000-run projection band ahead with upcoming bills, salary, and the tightest day." width="76%">
+  <img src=".impeccable/mocks/final/shots/20-phone-thread.png" alt="The same affordability answer on a phone." width="22%">
+  <br>
+  <sub>Money opens on a timeline: the ledger behind today, the projection ahead. Daily use happens
+  on the phone, as an installable web app. Interface design comps; the figures are
+  illustrative.</sub>
+</p>
 
 ## How it works
 
-```mermaid
-flowchart LR
-    you["You<br/>chat · voice · photo · statement"] --> agent["Agent<br/>one pinned model, plus a fallback"]
-    agent -- "reads and writes" --> tools["Plain-Python tools"]
-    agent -- "what-ifs" --> code["run_code sandbox<br/>scripts that call the tools"]
-    code --> tools
-    tools --> ledger[("Postgres<br/>double-entry ledger")]
-    tools --> engine["Projection engine<br/>1,000 seeded futures"]
-    agent --> check{"Number check<br/>is every figure traced?"}
-    check --> answer["Answer<br/>verdict cards and citations"]
-```
+<p align="center">
+  <img src="docs/fin-agent/diagrams/readme-how-it-works.png" alt="How a Fin-Agent answer is made: your message goes to the agent, which calls plain-Python tools directly or through Code Mode scripts; the tools read the Postgres ledger and run the projection engine, and every reply passes a number check before it reaches you with verdict cards and citations." width="100%">
+</p>
 
 - **One rule.** The model reasons, models scenarios, and explains tradeoffs, but every number it
   states comes from code. Rationale in [`plan.md` §4](docs/fin-agent/plan.md#4-architecture).
