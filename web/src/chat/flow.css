@@ -2,6 +2,8 @@
 
 .flow-shell {
   position: relative;
+  /* The board lays out by the room Flow has, not the window: a canvas beside it narrows it. */
+  container: flow / inline-size;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -118,6 +120,8 @@
   font-size: 12px;
   font-weight: 700;
   opacity: 0.85;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .flow-steps {
@@ -194,7 +198,7 @@
 
 .flow-step-dl {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
   gap: 5px 14px;
   margin: 10px 0 0;
   font-size: 13px;
@@ -214,7 +218,7 @@
   text-align: right;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .flow-step-dl dd.warn {
@@ -478,15 +482,14 @@
   color: var(--sub);
 }
 
-@media (max-width: 900px) {
+@container flow (max-width: 860px) {
   .flow {
     background: none;
   }
 
   .flow-wires,
   .flow-direct,
-  .flow-minimap,
-  .pill-button.flow-fit {
+  .flow-minimap {
     display: none;
   }
 
@@ -530,5 +533,12 @@
 
   .flow-branches {
     gap: 12px;
+  }
+}
+
+/* The Fit button sits in the header, outside the container, so it keeps a window rule. */
+@media (max-width: 900px) {
+  .pill-button.flow-fit {
+    display: none;
   }
 }
