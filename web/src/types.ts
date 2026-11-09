@@ -512,6 +512,8 @@ export type RunStep = {
   /** The model's reasoning for this step: its own words. */
   reasoning: string | null;
   code: string | null;
+  /** What the script printed or returned, cut at 4,000 characters. */
+  result?: string | null;
   started_at: string;
   seconds: number | null;
 };

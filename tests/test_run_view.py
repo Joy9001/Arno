@@ -105,6 +105,9 @@ def test_the_run_view_titles_steps_from_host_calls_and_marks_failures():
     assert run["steps"][1]["purpose"] is None
     assert run["steps"][2]["reasoning"] == "Pages one by one"
     assert {"name": "doc_words", "count": 3, "failed": False} in run["steps"][2]["calls"]
+    # Each script's output is shown, so the page can say what a step found.
+    assert run["steps"][3]["result"] and "NameError" in run["steps"][3]["result"]
+    assert run["steps"][4]["result"] is None
     assert run["stop"] == "budget"
     assert run["used"] == 11
 

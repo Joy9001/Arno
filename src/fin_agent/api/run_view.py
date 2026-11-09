@@ -9,6 +9,7 @@ fields so the UI can label them as the agent's note.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -57,6 +58,7 @@ _HOST_CALL = re.compile(
     r"\b(" + "|".join(sorted({*STAGE_OF, *LABEL}, key=len, reverse=True)) + r")\("
 )
 PURPOSE_LIMIT = 100
+RESULT_LIMIT = 4000
 REASONING_LIMIT = 1500
 ERROR_LIMIT = 220
 
@@ -99,6 +101,24 @@ def _script_error(content: Any) -> str | None:
         reason = re.search(r"['\"]reason['\"]:\s*['\"]([^'\"]{1,200})['\"]", text)
         return reason.group(1) if reason else f"The checks did not pass ({status.group(1)})"
     return None
+
+
+def _result_text(content: Any) -> str | None:
+    """What a script printed or returned, bounded for the page; the statement's own words."""
+    if content is None or content == "":
+        return None
+    if isinstance(content, str):
+        text = content
+    else:
+        try:
+            text = json.dumps(content, ensure_ascii=False, indent=1, default=str)
+        except TypeError, ValueError:
+            text = str(content)
+    text = text.strip()
+    if len(text) > RESULT_LIMIT:
+        more = len(text) - RESULT_LIMIT
+        text = text[:RESULT_LIMIT] + "\n" + f"… {more:,} more characters"
+    return text or None
 
 
 def _scripts(messages: list[ModelMessage]) -> dict[str, dict[str, Any]]:
@@ -266,6 +286,7 @@ def build_run(
                 "purpose": _purpose(script.get("code", "")),
                 "reasoning": script.get("reasoning"),
                 "code": script.get("code") or None,
+                "result": _result_text(script.get("result")),
                 "started_at": step["started_at"],
                 "seconds": _seconds(step["started_at"], step["ended_at"]),
             }

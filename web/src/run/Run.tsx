@@ -340,7 +340,7 @@ function StepDetail({ step, index, total }: { step: RunStep; index: number; tota
       )}
       {step.error && (
         <>
-          <h4>Result</h4>
+          <h4>What went wrong</h4>
           <pre className="run-result">{displayText(step.error)}</pre>
         </>
       )}
@@ -358,6 +358,14 @@ function StepDetail({ step, index, total }: { step: RunStep; index: number; tota
             Script <span className="run-tag">{lines.length > 14 ? "first 14 lines" : "in full"}</span>
           </h4>
           <pre className="run-code">{shown}</pre>
+        </>
+      )}
+      {step.result && (
+        <>
+          <h4>
+            Result <span className="run-tag">what the script printed or returned</span>
+          </h4>
+          <pre className="run-output">{displayText(step.result)}</pre>
         </>
       )}
       {step.reasoning && (

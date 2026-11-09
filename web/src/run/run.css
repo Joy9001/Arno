@@ -572,6 +572,20 @@
   white-space: pre-wrap;
 }
 
+.run-output {
+  max-height: 320px;
+  margin: 0;
+  padding: 14px 16px;
+  overflow: auto;
+  border-radius: 16px;
+  background: #0b0c09;
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: #cfd3c6;
+  font: 500 12.5px/1.65 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .run-thinking {
   margin-top: 20px;
   color: var(--sub);
