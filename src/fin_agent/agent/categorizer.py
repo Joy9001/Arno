@@ -482,6 +482,11 @@ async def save_categories(
                     )
                     group.record_updated("movements", movement_id, dict(before), dict(after))
                     uncategorized += 1
+            if group.entries:
+                # The import owns this group: undoing the import reverts these labels and rules.
+                await rules_mod.record_categorize_group(
+                    conn, import_id=ctx.deps.import_id, group_id=group.group_id
+                )
         return {
             "undo_id": group.group_id,
             "labeled": labeled,

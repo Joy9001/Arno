@@ -14,6 +14,7 @@ from typing import Any
 
 from fin_agent.db.conn import Connection
 from fin_agent.importers.seed_rules import PAYMENT_APPS
+from fin_agent.ledger.audit import WriteGroup, write_group
 
 SOURCE_RANK = {"user": 3, "llm": 2, "seed": 1}
 RAILS = ("upi/dr", "upi/cr", "upi", "neft", "imps", "rtgs", "pos", "nach", "wdl tfr", "atm wdl")
@@ -153,25 +154,60 @@ def row_key(row: dict[str, Any]) -> str:
     return payee_key(row.get("description_raw"), other)
 
 
-async def _label(conn: Connection, movement_id: str, category_id: str, rule_id: str | None) -> None:
+async def record_categorize_group(conn: Connection, *, import_id: str, group_id: str) -> None:
+    """Attribute one categorization write group to its import, so undoing the import reverts it."""
     await conn.execute(
         """
-        UPDATE transfer_labels
-        SET category_id = $1, updated_at = now()
-        WHERE movement_id = $2 AND category_id IS DISTINCT FROM $1
+        UPDATE imports SET categorize_groups = categorize_groups || to_jsonb($2::text)
+        WHERE id = $1
         """,
-        category_id,
-        movement_id,
+        import_id,
+        group_id,
     )
+
+
+async def _label(
+    conn: Connection,
+    group: WriteGroup,
+    movement_id: str,
+    category_id: str,
+    rule_id: str | None,
+) -> None:
+    labels = await conn.fetch("SELECT * FROM transfer_labels WHERE movement_id = $1", movement_id)
+    for label in labels:
+        if label["category_id"] == category_id:
+            continue
+        await conn.execute(
+            """
+            UPDATE transfer_labels
+            SET category_id = $1, updated_at = now()
+            WHERE transfer_id = $2
+            """,
+            category_id,
+            label["transfer_id"],
+        )
+        after = await conn.fetchrow(
+            "SELECT * FROM transfer_labels WHERE transfer_id = $1", label["transfer_id"]
+        )
+        if after is not None:
+            group.record_updated(
+                "transfer_labels", str(label["transfer_id"]), dict(label), dict(after)
+            )
+    before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
+    if before is None:
+        return
     await conn.execute(
         """
         UPDATE movements
         SET category_rule_id = $1, category_hint = NULL
-        WHERE id = $2 AND (category_rule_id IS DISTINCT FROM $1 OR category_hint IS NOT NULL)
+        WHERE id = $2
         """,
         rule_id,
         movement_id,
     )
+    after = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
+    if after is not None and dict(after) != dict(before):
+        group.record_updated("movements", movement_id, dict(before), dict(after))
 
 
 async def _refund_source(
@@ -215,40 +251,51 @@ async def _refund_source(
 
 
 async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
-    """Label every committed row of an import that a rule or a refund covers."""
+    """Label every committed row of an import that a rule or a refund covers.
+
+    One write group per import, attributed to it: undoing the import reverts these labels.
+    """
     rules = await load_rules(conn)
     rows = await _import_rows(conn, import_id)
     labeled = 0
-    for row in rows:
-        if row["category_id"] is not None:
-            continue
-        key = row_key(row)
-        if not key:
-            continue
-        rule = match_rule(key, rules)
-        if rule is None:
-            continue
-        await _label(conn, str(row["movement_id"]), str(rule["category_id"]), str(rule["id"]))
-        await conn.execute("UPDATE category_rules SET hits = hits + 1 WHERE id = $1", rule["id"])
-        labeled += 1
+    async with write_group(conn, actor="agent") as group:
+        for row in rows:
+            if row["category_id"] is not None:
+                continue
+            key = row_key(row)
+            if not key:
+                continue
+            rule = match_rule(key, rules)
+            if rule is None:
+                continue
+            await _label(
+                conn, group, str(row["movement_id"]), str(rule["category_id"]), str(rule["id"])
+            )
+            await conn.execute(
+                "UPDATE category_rules SET hits = hits + 1 WHERE id = $1", rule["id"]
+            )
+            labeled += 1
 
-    # A refund is a credit that reverses an earlier debit from the same payee.
-    for row in rows:
-        if row["category_id"] is not None or int(row["amount_paise"]) <= 0:
-            continue
-        key = row_key(row)
-        if not key:
-            continue
-        source = await _refund_source(conn, row=row, key=key, amount=int(row["amount_paise"]))
-        if source is None:
-            continue
-        await _label(
-            conn,
-            str(row["movement_id"]),
-            str(source["category_id"]),
-            str(source["category_rule_id"]) if source["category_rule_id"] else None,
-        )
-        labeled += 1
+        # A refund is a credit that reverses an earlier debit from the same payee.
+        for row in rows:
+            if row["category_id"] is not None or int(row["amount_paise"]) <= 0:
+                continue
+            key = row_key(row)
+            if not key:
+                continue
+            source = await _refund_source(conn, row=row, key=key, amount=int(row["amount_paise"]))
+            if source is None:
+                continue
+            await _label(
+                conn,
+                group,
+                str(row["movement_id"]),
+                str(source["category_id"]),
+                str(source["category_rule_id"]) if source["category_rule_id"] else None,
+            )
+            labeled += 1
+        if group.entries:
+            await record_categorize_group(conn, import_id=import_id, group_id=group.group_id)
     return {"labeled": labeled, "rows": len(rows)}
 
 

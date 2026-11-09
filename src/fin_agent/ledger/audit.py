@@ -190,7 +190,9 @@ async def _load_group(conn: Connection, group_id: str) -> list[dict[str, Any]]:
     )
 
 
-async def _conflicts(conn: Connection, group_id: str) -> list[dict[str, Any]]:
+async def _conflicts(
+    conn: Connection, group_id: str, *, ignore: frozenset[str] = frozenset()
+) -> list[dict[str, Any]]:
     return await conn.fetch(
         """
         SELECT a.table_name, a.row_id, a.group_id
@@ -201,6 +203,7 @@ async def _conflicts(conn: Connection, group_id: str) -> list[dict[str, Any]]:
         ) touched USING (table_name, row_id)
         WHERE a.group_id <> $2
           AND a.undone_at IS NULL
+          AND NOT (a.group_id = ANY($4::text[]))
           AND a.created_at >= (
               SELECT min(created_at) FROM audit_log WHERE group_id = $3
           )
@@ -209,6 +212,33 @@ async def _conflicts(conn: Connection, group_id: str) -> list[dict[str, Any]]:
         group_id,
         group_id,
         group_id,
+        list(ignore),
+    )
+
+
+# How a conflict reads to the user: what changed, and the one way out.
+_CONFLICT_WORDS = {
+    "movements": "movement",
+    "transfer_labels": "label",
+    "category_rules": "rule",
+    "payees": "payee",
+    "categories": "category",
+    "accounts": "account",
+}
+
+
+def _describe_conflicts(conflicts: list[dict[str, Any]]) -> str:
+    counts: dict[str, int] = {}
+    for row in conflicts:
+        counts[str(row["table_name"])] = counts.get(str(row["table_name"]), 0) + 1
+    parts = [
+        f"{count} {_CONFLICT_WORDS.get(table, table.replace('_', ' '))}{'s' if count > 1 else ''}"
+        for table, count in sorted(counts.items())
+    ]
+    changed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    return (
+        f"A later write changed {changed} this undo would revert. "
+        "Undo that change first, then try again."
     )
 
 
@@ -358,8 +388,14 @@ async def undo_group(
     *,
     actor: Actor = "user",
     message_id: str | None = None,
+    ignore_groups: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Revert one write group. Ledger movements get reversals; editable rows get old values."""
+    """Revert one write group. Ledger movements get reversals; editable rows get old values.
+
+    `ignore_groups` names undo groups this same operation just wrote. Their audit rows are not
+    later writes; they are the previous step of one undo, such as an import's categorization
+    groups before its commit groups.
+    """
     entries = await _load_group(conn, undo_id)
     if not entries:
         raise NotFoundLedgerError(f"No write group {undo_id}")
@@ -370,11 +406,11 @@ async def undo_group(
             "summary": "That write was already undone.",
         }
 
-    conflicts = await _conflicts(conn, undo_id)
+    conflicts = await _conflicts(conn, undo_id, ignore=ignore_groups)
     if conflicts:
         names = sorted({f"{row['table_name']}:{row['row_id']}" for row in conflicts})
         raise ConflictLedgerError(
-            "A later write changed rows this group touched.",
+            _describe_conflicts(conflicts),
             details={"conflicts": names},
         )
 

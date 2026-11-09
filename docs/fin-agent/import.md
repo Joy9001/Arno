@@ -385,6 +385,23 @@ model can tell rent from a friend's dinner share by name. The Uncategorized list
 person, with the total: "₹18,400 to RAMESH K across 12 payments—who is this?" One answer becomes a
 rule for that person. Nothing interrupts you; the agent never starts a conversation.
 
+## Undoing an import
+
+A committed import is undone from the Imports screen, not by the agent. One transaction reverts
+all of it: every movement it wrote, and the payees and categories it created. Committed rows a
+rule or the categorizer labelled would otherwise count as a later write on the same rows, so the
+commit also owns its categorization: the write groups the rules engine and the categorizer made
+are recorded on the import (`imports.categorize_groups`), and undo reverts them first, newest
+first, then the commit's own groups. The labels go back to unlabelled, and an `llm` rule learned
+from this import's payees goes with it, so a payee you un-imported is not kept labelled by a rule
+derived from it. Balances, spending, labels, payees, and rules return to exactly their pre-commit
+values.
+
+A change you made afterwards is a genuine conflict and the undo is refused with a 409. That covers
+a row you recategorized and a rule the categorizer wrote that you edited. The message names what
+changed—how many movements, labels, or rules a later change touched—and says to undo that change
+first. Nothing is half-reverted: undo the later change, then undo the import again.
+
 ## Photos and voice
 
 **Photos.** A receipt photo or a UPI payment screenshot (GPay, PhonePe, Paytm) → isolated vision

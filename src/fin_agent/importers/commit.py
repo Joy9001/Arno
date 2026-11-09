@@ -590,12 +590,25 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
         return {"status": "already_undone", "import_id": import_id}
     if row["status"] != "committed":
         raise InvalidLedgerError("Only a committed import can be undone")
-    for group_id in reversed([str(group) for group in (row["commit_groups"] or [])]):
+    groups = [str(group) for group in (row["commit_groups"] or [])]
+    groups += [str(group) for group in (row["categorize_groups"] or [])]
+    # The categorizer runs after the commit, so its groups are listed after the commit groups and
+    # reversing the list reverts them first. Its audit rows are the later writes a commit group's
+    # undo would call a conflict, and its labels and `llm` rules were derived from this import: an
+    # un-imported payee must not stay labelled by a rule it wrote.
+    undoing: set[str] = set()
+    for group_id in reversed(groups):
         try:
-            await undo_group(conn, group_id, actor="user")
+            result = await undo_group(
+                conn, group_id, actor="user", ignore_groups=frozenset(undoing)
+            )
         except ConflictLedgerError:
             logger.warning("import %s undo conflict in group %s", import_id, group_id)
             raise
+        # This undo's own audit rows touch the same rows; the next step must not call them later
+        # writes when it reverts the movement and labels the commit group created.
+        if result.get("undo_undo_id"):
+            undoing.add(str(result["undo_undo_id"]))
     review = dict(row["review"] or {})
     before = review.get("account_before") or {}
     statement_updated = review.get("statement_updated", True)
