@@ -815,6 +815,164 @@ function ledgerSpan() {
   return { movements: 212, spending: 168, first_date: "2026-09-01" };
 }
 
+const RECAP_PERIODS = [
+  {
+    id: "day-2026-11-08",
+    kind: "day",
+    title: "Yesterday",
+    start: "2026-11-08",
+    end: "2026-11-08",
+    complete: true,
+    compared_with: { start: "2026-11-01", end: "2026-11-01", label: "the same day last week" },
+    spent: { paise: 184000, text: "₹1,840" },
+    new: false,
+  },
+  {
+    id: "week-2026-11-02",
+    kind: "week",
+    title: "Week of 2 Nov",
+    start: "2026-11-02",
+    end: "2026-11-08",
+    complete: true,
+    compared_with: { start: "2026-10-26", end: "2026-11-01", label: "the week before" },
+    spent: { paise: 642000, text: "₹6,420" },
+    new: false,
+  },
+  {
+    id: "month-2026-10",
+    kind: "month",
+    title: "October",
+    start: "2026-10-01",
+    end: "2026-10-31",
+    complete: true,
+    compared_with: { start: "2026-09-01", end: "2026-09-30", label: "September" },
+    spent: { paise: 2220000, text: "₹22,200" },
+    new: true,
+  },
+];
+
+const RECAP_ROWS = [
+  {
+    id: "mv_fix_rent",
+    date: "2026-10-03",
+    description: "Rent for October",
+    payee: "Landlord",
+    category: "Rent",
+    amount_paise: 600000,
+  },
+  {
+    id: "mv_fix_basket",
+    date: "2026-10-08",
+    description: "BigBasket order",
+    payee: "BigBasket",
+    category: "Food & dining",
+    amount_paise: 842000,
+  },
+  {
+    id: "mv_fix_toit",
+    date: "2026-10-12",
+    description: "Dinner at Toit",
+    payee: "Toit",
+    category: "Food & dining",
+    amount_paise: 426000,
+  },
+  {
+    id: "mv_fix_metro",
+    date: "2026-10-21",
+    description: "Metro card top-up",
+    payee: null,
+    category: "Transport",
+    amount_paise: 352000,
+  },
+];
+
+function recapBare(periodId) {
+  const period = RECAP_PERIODS.find((item) => item.id === periodId) ?? RECAP_PERIODS[2];
+  const { spent, new: fresh, ...bare } = period;
+  return bare;
+}
+
+function recapDetail(periodId) {
+  return {
+    period: recapBare(periodId),
+    stories: [
+      {
+        key: "total",
+        label: "You spent",
+        figure: { paise: 2220000, text: "₹22,200" },
+        line: "About the same as September.",
+        rows: { story: "total", key: null },
+      },
+      {
+        key: "in_out",
+        label: "Money in and out",
+        figure: { paise: 840000, text: "₹8,400" },
+        line: "₹30,600 came in and ₹22,200 went out, so you kept ₹8,400.",
+        in: { paise: 3060000, text: "₹30,600" },
+        out: { paise: 2220000, text: "₹22,200" },
+        rows: { story: "in_out", key: null },
+      },
+      {
+        key: "where",
+        label: "Where it went",
+        figure: { paise: 842000, text: "₹8,420", name: "Food & dining" },
+        line: "Food & dining: ₹8,420, 38% of the total, across 2 rows.",
+        bars: [
+          {
+            name: "Food & dining",
+            amount: { paise: 842000, text: "₹8,420" },
+            rows: { story: "where", key: "Food & dining" },
+          },
+          {
+            name: "Rent",
+            amount: { paise: 600000, text: "₹6,000" },
+            rows: { story: "where", key: "Rent" },
+          },
+          {
+            name: "Transport",
+            amount: { paise: 426000, text: "₹4,260" },
+            rows: { story: "where", key: "Transport" },
+          },
+        ],
+        rows: { story: "where", key: "Food & dining" },
+      },
+      {
+        key: "change",
+        label: "The change worth a look",
+        figure: { paise: 169000, text: "₹1,690", name: "Food & dining", direction: "down" },
+        line: "Food & dining went down by ₹1,690: ₹8,420, against ₹10,110 in September.",
+        rows: { story: "change", key: "Food & dining" },
+      },
+      {
+        key: "biggest",
+        label: "The biggest single spend",
+        figure: { paise: 245000, text: "₹2,450" },
+        line: "Toit on 12 Oct.",
+        rows: { story: "biggest", key: "mv_fix_toit" },
+      },
+      {
+        key: "frequent",
+        label: "Your most frequent",
+        figure: { paise: 124000, text: "₹1,240", name: "Blue Tokai", count: 4 },
+        line: "4 times, ₹1,240 in all.",
+        rows: { story: "frequent", key: "Blue Tokai" },
+      },
+      {
+        key: "recurring",
+        label: "Repeat charges with no schedule",
+        figure: { count: 1 },
+        line: "Netflix, ₹649 every month.",
+        charges: [
+          { merchant: "Netflix", amount: { paise: 64900, text: "₹649" }, every: "month", last_date: "2026-10-18" },
+        ],
+        rows: null,
+      },
+    ],
+    coverage: { complete: true, gaps: [], from: "2026-10-01", to: "2026-10-31" },
+    outside_text: false,
+  };
+}
+
 function homePayload() {
   if (homeState === "empty") {
     return {
@@ -1571,6 +1729,40 @@ const server = createServer(async (req, res) => {
   }
   if (path === "/api/home") {
     json(res, 200, homePayload());
+    return;
+  }
+  if (path === "/api/recaps/unseen" && req.method === "GET") {
+    json(res, 200, { unseen: homeState === "empty" ? 0 : 1 });
+    return;
+  }
+  if (path === "/api/recaps" && req.method === "GET") {
+    json(res, 200,
+      homeState === "empty"
+        ? { as_of: asOf(), periods: [], unseen: 0 }
+        : { as_of: asOf(), periods: RECAP_PERIODS, unseen: 1 },
+    );
+    return;
+  }
+  const recapRows = path.match(/^\/api\/recaps\/([^/]+)\/rows$/);
+  if (recapRows && req.method === "GET") {
+    const rows = RECAP_ROWS.map((row) => ({ ...row, kind: "expense", outside_text: false }));
+    json(res, 200, {
+      period: recapBare(recapRows[1]),
+      story: url.searchParams.get("story") ?? "total",
+      key: url.searchParams.get("key"),
+      rows,
+      sum: { paise: rows.reduce((total, row) => total + row.amount_paise, 0), text: "₹22,200" },
+    });
+    return;
+  }
+  const recapSeen = path.match(/^\/api\/recaps\/([^/]+)\/seen$/);
+  if (recapSeen && req.method === "POST") {
+    json(res, 200, { period_id: recapSeen[1], seen: true });
+    return;
+  }
+  const recapDetailPath = path.match(/^\/api\/recaps\/([^/]+)$/);
+  if (recapDetailPath && req.method === "GET") {
+    json(res, 200, recapDetail(recapDetailPath[1]));
     return;
   }
   if (path === "/api/notifications") {

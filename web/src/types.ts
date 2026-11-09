@@ -561,3 +561,75 @@ export type StatementLayout = {
 export type LayoutList = {
   items: StatementLayout[];
 };
+
+export type RecapMoney = {
+  paise: number;
+  text: string;
+};
+
+export type RecapPeriod = {
+  id: string;
+  kind: "day" | "week" | "month";
+  title: string;
+  start: string;
+  end: string;
+  complete: boolean;
+  compared_with: { start: string; end: string; label: string };
+  spent: RecapMoney | null;
+  new: boolean;
+};
+
+export type RecapList = {
+  as_of: string;
+  periods: RecapPeriod[];
+  unseen: number;
+};
+
+/** A total or an amount with the name it belongs to; `recurring` carries only a count. */
+export type RecapFigure = Partial<RecapMoney> & {
+  name?: string;
+  count?: number;
+  direction?: "up" | "down";
+};
+
+export type RecapStory = {
+  key: "total" | "in_out" | "where" | "change" | "biggest" | "frequent" | "recurring";
+  label: string;
+  figure: RecapFigure;
+  line: string;
+  rows: { story: string; key: string | null } | null;
+  bars?: {
+    name: string;
+    amount: RecapMoney;
+    rows: { story: string; key: string } | null;
+  }[];
+  in?: RecapMoney;
+  out?: RecapMoney;
+  charges?: { merchant: string; amount: RecapMoney; every: string; last_date: string }[];
+};
+
+export type RecapDetail = {
+  period: Omit<RecapPeriod, "spent" | "new">;
+  stories: RecapStory[];
+  coverage: { complete: boolean; gaps: string[]; from: string | null; to: string | null };
+  outside_text: boolean;
+};
+
+export type RecapRow = {
+  id: string;
+  date: string;
+  description: string;
+  payee: string | null;
+  category: string | null;
+  amount_paise: number;
+  kind?: string;
+  outside_text?: boolean;
+};
+
+export type RecapRows = {
+  period: Omit<RecapPeriod, "spent" | "new">;
+  story: string;
+  key: string | null;
+  rows: RecapRow[];
+  sum: RecapMoney;
+};

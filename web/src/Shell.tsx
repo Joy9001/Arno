@@ -27,7 +27,7 @@ import { PlannerPanel } from "./panels/Planner";
 import { RecapsPage } from "./pages/Recaps";
 import { SettingsPanel } from "./panels/Settings";
 import type { ProjectionPayload } from "./projection";
-import type { NotificationList } from "./types";
+import type { NotificationList, RecapList } from "./types";
 
 const NAV: Array<{ id: PageId; label: string; title: string; Icon: LucideIcon }> = [
   { id: "ask", label: "Ask", title: "Ask", Icon: Sparkle },
@@ -137,6 +137,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [activityTab, setActivityTab] = useState<ActivityTab>(initial.activity);
   const [error, setError] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
+  const [recapsNew, setRecapsNew] = useState(0);
   const [focusThreadId, setFocusThreadId] = useState<string | null>(null);
   const [focusMessageId, setFocusMessageId] = useState<string | null>(null);
   const [focusImportId, setFocusImportId] = useState<string | null>(initial.importId);
@@ -257,6 +258,15 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     }
   }, []);
 
+  const refreshRecaps = useCallback(async () => {
+    try {
+      const recaps = await api<Pick<RecapList, "unseen">>("/api/recaps/unseen");
+      setRecapsNew(recaps.unseen);
+    } catch {
+      // The badge is best effort; the page shows its own error.
+    }
+  }, []);
+
   // Asking from a data page carries the question into the conversation.
   useEffect(() => {
     const onAsk = (event: Event) => {
@@ -317,13 +327,24 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   }, []);
 
   useEffect(() => {
-    const kick = window.setTimeout(() => void refreshUnread(), 0);
-    const handle = window.setInterval(() => void refreshUnread(), 30_000);
+    const refresh = () => {
+      void refreshUnread();
+      void refreshRecaps();
+    };
+    const kick = window.setTimeout(refresh, 0);
+    const handle = window.setInterval(refresh, 30_000);
     return () => {
       window.clearTimeout(kick);
       window.clearInterval(handle);
     };
-  }, [refreshUnread]);
+  }, [refreshUnread, refreshRecaps]);
+
+  // Opening a recap clears its New mark on the page; the rail follows at once.
+  useEffect(() => {
+    const onSeen = () => void refreshRecaps();
+    window.addEventListener("fin-agent:recaps-seen", onSeen);
+    return () => window.removeEventListener("fin-agent:recaps-seen", onSeen);
+  }, [refreshRecaps]);
 
   async function signOut() {
     try {
@@ -340,6 +361,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     else if (id === "activity") go("activity", activityTab);
     else go(id);
     void refreshUnread();
+    void refreshRecaps();
   }
 
   const plannerPanel = planner ? (
@@ -387,12 +409,23 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               type="button"
               className={page === id ? "rail-item on" : "rail-item"}
               aria-current={page === id ? "page" : undefined}
-              aria-label={id === "activity" && unread > 0 ? `${label}, ${unread} unread` : label}
+              aria-label={
+                id === "activity" && unread > 0
+                  ? `${label}, ${unread} unread`
+                  : id === "recaps" && recapsNew > 0
+                    ? `${label}, ${recapsNew} new`
+                    : label
+              }
               onClick={() => navigate(id)}
             >
               {id === "activity" && unread > 0 && (
                 <span className="rail-badge" aria-hidden="true">
                   {unread > 99 ? "99+" : unread}
+                </span>
+              )}
+              {id === "recaps" && recapsNew > 0 && (
+                <span className="rail-badge" aria-hidden="true">
+                  {recapsNew > 99 ? "99+" : recapsNew}
                 </span>
               )}
               <Icon size={21} strokeWidth={1.9} aria-hidden="true" />
@@ -534,7 +567,13 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
                 type="button"
                 className={on ? "tabbar-item on" : "tabbar-item"}
                 aria-current={on ? "page" : undefined}
-                aria-label={id === "activity" && unread > 0 ? `Activity, ${unread} unread` : label}
+                aria-label={
+                  id === "activity" && unread > 0
+                    ? `Activity, ${unread} unread`
+                    : id === "recaps" && recapsNew > 0
+                      ? `Recaps, ${recapsNew} new`
+                      : label
+                }
                 onClick={() => navigate(id)}
               >
                 {id === "ask" ? (
@@ -544,6 +583,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
                 )}
                 <span>{label}</span>
                 {id === "activity" && unread > 0 && <span className="tabbar-badge">{unread}</span>}
+                {id === "recaps" && recapsNew > 0 && <span className="tabbar-badge">{recapsNew}</span>}
               </button>
             );
           })}

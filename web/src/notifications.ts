@@ -1,4 +1,5 @@
 import { api } from "./api";
+import { goTo } from "./nav";
 import type { NotificationChat, NotificationItem } from "./types";
 
 export const KIND_LABELS: Record<string, string> = {
@@ -10,10 +11,16 @@ export const KIND_LABELS: Record<string, string> = {
   backup_stale: "Backup",
   scheduled_question: "Scheduled answer",
   job_failed: "Job",
+  recap: "Recap",
 };
 
-/** Opens the notification's conversation (the server creates or reuses it). */
+/** Opens the notification's conversation (the server creates or reuses it), or its recap. */
 export async function openNotification(item: NotificationItem): Promise<void> {
+  if (item.kind === "recap" && typeof item.data.period_id === "string") {
+    await markNotificationRead(item);
+    goTo("recaps", item.data.period_id);
+    return;
+  }
   const result = await api<NotificationChat>(`/api/notifications/${item.id}/chat`, {
     method: "POST",
   });

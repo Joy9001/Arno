@@ -1,160 +1,40 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
+import { api } from "../api";
 import { askAgent } from "../ask";
-import { formatDate, formatPaise, isoDate } from "../format";
+import { displayText } from "../chat/display-text";
+import { formatDate } from "../format";
 import { Loading } from "../Loading";
 import { goTo } from "../nav";
 import { Orb } from "../Orb";
-import { readExpenses, totalsBy, type Spending } from "../spending";
 import { useApi } from "../useApi";
+import type { RecapDetail, RecapList, RecapPeriod, RecapStory } from "../types";
+import { RecapRows } from "./RecapRows";
 import "../chat/first-run.css";
 
-type LedgerSpan = { movements: number; spending: number; first_date: string | null };
-
-type Period = {
-  id: string;
-  kind: "Daily" | "Weekly" | "Monthly";
-  title: string;
-  start: string;
-  end: string;
-  /** The same-length period before, for the comparison. */
-  previous: { start: string; end: string; label: string };
-  tone: string;
+const KINDS: RecapPeriod["kind"][] = ["day", "week", "month"];
+const KIND_LABEL: Record<RecapPeriod["kind"], string> = {
+  day: "Daily",
+  week: "Weekly",
+  month: "Monthly",
+};
+const TONE: Record<RecapPeriod["kind"], string> = {
+  day: "cobalt",
+  week: "sun",
+  month: "mesh",
 };
 
-function shift(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function monthName(date: Date): string {
-  return date.toLocaleDateString("en-IN", { month: "long" });
-}
-
-/** The recap periods, newest first. Weeks start on Monday. */
-function periods(now = new Date()): Period[] {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = shift(today, -1);
-  const monday = shift(today, -((today.getDay() + 6) % 7));
-  const lastMonday = shift(monday, -7);
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-  const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-  const lastMonthEnd = shift(monthStart, -1);
-  const twoMonthsStart = new Date(today.getFullYear(), today.getMonth() - 2, 1);
-  const elapsed = Math.round((today.getTime() - monthStart.getTime()) / 86_400_000);
-  return [
-    {
-      id: "yesterday",
-      kind: "Daily",
-      title: "Yesterday",
-      start: isoDate(yesterday),
-      end: isoDate(yesterday),
-      previous: { start: isoDate(shift(yesterday, -7)), end: isoDate(shift(yesterday, -7)), label: "the same day last week" },
-      tone: "cobalt",
-    },
-    {
-      id: "this-week",
-      kind: "Weekly",
-      title: "This week so far",
-      start: isoDate(monday),
-      end: isoDate(today),
-      previous: { start: isoDate(lastMonday), end: isoDate(shift(today, -7)), label: "the same days last week" },
-      tone: "sun",
-    },
-    {
-      id: "last-week",
-      kind: "Weekly",
-      title: `Week of ${formatDate(isoDate(lastMonday)).slice(0, 6)}`,
-      start: isoDate(lastMonday),
-      end: isoDate(shift(monday, -1)),
-      previous: { start: isoDate(shift(lastMonday, -7)), end: isoDate(shift(lastMonday, -1)), label: "the week before" },
-      tone: "sun",
-    },
-    {
-      id: "this-month",
-      kind: "Monthly",
-      title: `${monthName(today)} so far`,
-      start: isoDate(monthStart),
-      end: isoDate(today),
-      previous: {
-        start: isoDate(lastMonthStart),
-        end: isoDate(shift(lastMonthStart, elapsed)),
-        label: `the same days of ${monthName(lastMonthStart)}`,
-      },
-      tone: "mesh",
-    },
-    {
-      id: "last-month",
-      kind: "Monthly",
-      title: monthName(lastMonthStart),
-      start: isoDate(lastMonthStart),
-      end: isoDate(lastMonthEnd),
-      previous: { start: isoDate(twoMonthsStart), end: isoDate(shift(lastMonthStart, -1)), label: monthName(twoMonthsStart) },
-      tone: "mesh",
-    },
-  ];
-}
-
-type Story = { key: string; label: string; big: string; line: string; bars?: Array<{ name: string; paise: number }> };
-
-/** Stories are sums over ledger rows; the sentences are templates, not model text. */
-function buildStories(period: Period, current: Spending, previous: Spending): Story[] {
-  const total = current.rows.reduce((sum, row) => sum + row.amount_paise, 0);
-  const before = previous.rows.reduce((sum, row) => sum + row.amount_paise, 0);
-  if (!current.rows.length) {
-    return [
-      {
-        key: "empty",
-        label: period.title,
-        big: "₹0",
-        line: "No spending recorded in this period. If you spent, it isn't in the ledger yet.",
-      },
-    ];
-  }
-  const change = before > 0 ? Math.round(((total - before) / before) * 100) : null;
-  const comparison =
-    change === null
-      ? `Nothing was recorded for ${period.previous.label} to compare with.`
-      : total * 100 < before
-        ? `Under 1% of the ${formatPaise(before)} spent in ${period.previous.label}.`
-        : change === 0
-        ? `About the same as ${period.previous.label}.`
-        : `${Math.abs(change)}% ${change < 0 ? "less" : "more"} than ${period.previous.label}.`;
-  const categories = totalsBy(current.rows, (row) => row.category_name ?? "Uncategorized");
-  const top = categories.slice(0, 4).map((entry) => ({ name: entry.key, paise: entry.paise }));
-  const rest = categories.slice(4).reduce((sum, entry) => sum + entry.paise, 0);
-  if (rest > 0) top.push({ name: "Everything else", paise: rest });
-  const biggest = current.rows.reduce((max, row) => (row.amount_paise > max.amount_paise ? row : max));
-  const payees = totalsBy(current.rows, (row) => row.payee_name ?? row.description);
-  const frequent = [...payees].sort((a, b) => b.count - a.count)[0];
-  const stories: Story[] = [
-    { key: "total", label: "You spent", big: formatPaise(total), line: comparison },
-    {
-      key: "where",
-      label: "Where it went",
-      big: categories[0].key,
-      line: `${formatPaise(categories[0].paise)} of ${formatPaise(total)}, across ${categories[0].count} ${
-        categories[0].count === 1 ? "row" : "rows"
-      }.`,
-      bars: top,
-    },
-    {
-      key: "biggest",
-      label: "The biggest single spend",
-      big: formatPaise(biggest.amount_paise),
-      line: `${biggest.payee_name ?? biggest.description} on ${formatDate(biggest.date)}.`,
-    },
-  ];
-  if (frequent && frequent.count > 1) {
-    stories.push({
-      key: "frequent",
-      label: "Your most frequent",
-      big: frequent.key,
-      line: `${frequent.count} times, ${formatPaise(frequent.paise)} in all.`,
-    });
-  }
-  return stories;
+/** The open recap: the hash's id when it is listed, else the newest unopened one. */
+function initialPeriod(periods: RecapPeriod[]): RecapPeriod {
+  const prefix = "#recaps/";
+  const hash = window.location.hash;
+  const fromHash = hash.startsWith(prefix) ? hash.slice(prefix.length) : "";
+  return (
+    periods.find((entry) => entry.id === fromHash) ??
+    periods.find((entry) => entry.new) ??
+    periods.find((entry) => entry.kind === "month") ??
+    periods[0]
+  );
 }
 
 /** Before the ledger has any spending there is no story to tell; this says how one starts. */
@@ -219,76 +99,94 @@ function RecapsEmpty() {
   );
 }
 
+/** The headline figure, as the server named it; `recurring` counts charges instead of money. */
+function bigText(story: RecapStory): string {
+  if (story.key === "recurring") {
+    const count = story.figure.count ?? 0;
+    return `${count} ${count === 1 ? "charge" : "charges"}`;
+  }
+  if (story.key === "where" || story.key === "frequent" || story.key === "change") {
+    return displayText(story.figure.name ?? "");
+  }
+  return displayText(story.figure.text ?? "");
+}
+
 export function RecapsPage() {
-  const span = useApi<LedgerSpan>("/api/ledger/span");
-  if (!span.data && !span.error) {
+  const list = useApi<RecapList>("/api/recaps");
+  if (!list.data && !list.error) {
     return (
       <section className="recaps">
         <Loading label="Reading the ledger…" />
       </section>
     );
   }
-  // A failed read falls back to every period: a recap can still say "no spending" honestly.
-  if (span.data && span.data.spending === 0) return <RecapsEmpty />;
-  return <RecapStories firstDate={span.data?.first_date ?? null} />;
+  if (list.error) {
+    return (
+      <section className="recaps">
+        <aside className="recap-list" aria-label="Recaps">
+          <h2>Recaps</h2>
+        </aside>
+        <div className="recap-stage">
+          <p className="story-line">The recaps couldn&apos;t be read: {list.error}</p>
+          <button type="button" className="pill-button" onClick={list.reload}>
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
+  const periods = list.data?.periods ?? [];
+  if (!periods.length || periods.every((entry) => !entry.spent || entry.spent.paise === 0)) {
+    return <RecapsEmpty />;
+  }
+  return <RecapStories periods={periods} />;
 }
 
-function RecapStories({ firstDate }: { firstDate: string | null }) {
-  // A period that ended before the ledger's first row has nothing to tell.
-  const list = useMemo(
-    () => periods().filter((entry) => !firstDate || entry.end >= firstDate),
-    [firstDate],
-  );
-  const [selected, setSelected] = useState(
-    () => (list.find((entry) => entry.id === "this-month") ?? list[0]).id,
-  );
+function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
+  const [periods, setPeriods] = useState(initial);
+  const [selected, setSelected] = useState(() => initialPeriod(initial).id);
   const [index, setIndex] = useState(0);
-  const [state, setState] = useState<{
-    id: string;
-    stories: Story[] | null;
-    rows: number;
-    truncated: boolean;
-    error: string | null;
-  }>({ id: "", stories: null, rows: 0, truncated: false, error: null });
-  const period = list.find((entry) => entry.id === selected) ?? list[0];
+  const [sheet, setSheet] = useState<{
+    reference: { story: string; key: string | null };
+    title: string;
+  } | null>(null);
 
+  const period = periods.find((entry) => entry.id === selected) ?? periods[0];
+  const detail = useApi<RecapDetail>(`/api/recaps/${period.id}`);
+  const ready = detail.loading ? null : detail.data;
+  const stories = detail.error ? [] : ready?.stories ?? [];
+  const story = stories[Math.min(index, stories.length - 1)];
+
+  // Opening a recap clears its New mark once; a failure leaves the pill for the next visit.
   useEffect(() => {
-    let alive = true;
-    void Promise.all([
-      readExpenses(period.start, period.end),
-      readExpenses(period.previous.start, period.previous.end),
-    ])
-      .then(([current, previous]) => {
-        if (!alive) return;
-        setState({
-          id: period.id,
-          stories: buildStories(period, current, previous),
-          rows: current.rows.length,
-          truncated: current.truncated,
-          error: null,
-        });
+    if (!period.new) return;
+    void api<{ period_id: string; seen: boolean }>(`/api/recaps/${period.id}/seen`, {
+      method: "POST",
+    })
+      .then(() => {
+        setPeriods((entries) =>
+          entries.map((entry) => (entry.id === period.id ? { ...entry, new: false } : entry)),
+        );
+        window.dispatchEvent(new Event("fin-agent:recaps-seen"));
       })
-      .catch((caught: unknown) => {
-        if (alive) {
-          setState({ id: period.id, stories: null, rows: 0, truncated: false, error: String(caught) });
-        }
+      .catch(() => {
+        // The badge and the pill retry on the next open.
       });
-    return () => {
-      alive = false;
-    };
-  }, [period]);
-
-  const loading = state.id !== period.id;
-  const stories = loading ? null : state.stories;
-  const story = stories?.[Math.min(index, stories.length - 1)];
+  }, [period.id, period.new]);
 
   function choose(id: string) {
     setSelected(id);
     setIndex(0);
+    setSheet(null);
+    window.history.replaceState(null, "", "#recaps/" + id);
+  }
+
+  function openRows(reference: { story: string; key: string | null }, title: string) {
+    setSheet({ reference, title });
   }
 
   function step(delta: number) {
-    if (!stories) return;
+    if (!stories.length) return;
     setIndex((value) => Math.min(stories.length - 1, Math.max(0, value + delta)));
   }
 
@@ -297,19 +195,20 @@ function RecapStories({ firstDate }: { firstDate: string | null }) {
     if (event.key === "ArrowLeft") step(-1);
   }
 
-  const peak = Math.max(...(story?.bars ?? []).map((bar) => bar.paise), 1);
+  const peak = Math.max(...(story?.bars ?? []).map((bar) => bar.amount.paise), 1);
 
   return (
     <section className="recaps">
       <aside className="recap-list" aria-label="Recaps">
         <h2>Recaps</h2>
         <p className="fine">Built from your ledger rows. Every figure is a sum you can open.</p>
-        {(["Daily", "Weekly", "Monthly"] as const).map((kind) => (
-          <div key={kind} className="recap-group">
-            <span className="recap-kind">{kind}</span>
-            {list
-              .filter((entry) => entry.kind === kind)
-              .map((entry) => (
+        {KINDS.map((kind) => {
+          const group = periods.filter((entry) => entry.kind === kind);
+          if (!group.length) return null;
+          return (
+            <div key={kind} className="recap-group">
+              <span className="recap-kind">{KIND_LABEL[kind]}</span>
+              {group.map((entry) => (
                 <button
                   key={entry.id}
                   type="button"
@@ -317,60 +216,132 @@ function RecapStories({ firstDate }: { firstDate: string | null }) {
                   aria-current={entry.id === selected ? "true" : undefined}
                   onClick={() => choose(entry.id)}
                 >
-                  <span className={`recap-thumb ${entry.tone}`} aria-hidden="true" />
+                  <span className={`recap-thumb ${TONE[entry.kind]}`} aria-hidden="true" />
                   <span>
-                    <b>{entry.title}</b>
+                    <b>
+                      {displayText(entry.title)}
+                      {entry.new && <em className="recap-new">New</em>}
+                    </b>
                     <span>
                       {formatDate(entry.start)}
                       {entry.end !== entry.start ? ` – ${formatDate(entry.end)}` : ""}
+                      {entry.spent ? ` · ${displayText(entry.spent.text)}` : ""}
                     </span>
                   </span>
                 </button>
               ))}
-          </div>
-        ))}
+            </div>
+          );
+        })}
       </aside>
+
+      <nav className="recap-picker" aria-label="Recap periods">
+        {periods.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className={entry.id === selected ? "recap-pick on" : "recap-pick"}
+            aria-current={entry.id === selected ? "true" : undefined}
+            onClick={() => choose(entry.id)}
+          >
+            {displayText(entry.title)}
+            {entry.new && <em className="recap-new">New</em>}
+          </button>
+        ))}
+      </nav>
 
       <div className="recap-stage">
         <button type="button" className="recap-nav" aria-label="Previous story" disabled={index === 0} onClick={() => step(-1)}>
           <ChevronLeft size={22} aria-hidden="true" />
         </button>
         <div
-          className={`story ${period.tone}`}
+          className={`story ${TONE[period.kind]}`}
           tabIndex={0}
           role="group"
           aria-roledescription="story"
-          aria-label={`${period.title}, story ${index + 1} of ${stories?.length ?? 1}`}
+          aria-label={`${displayText(period.title)}, story ${index + 1} of ${stories.length || 1}`}
           onKeyDown={onKey}
         >
           <div className="story-progress" aria-hidden="true">
-            {(stories ?? [null]).map((_, position) => (
+            {(stories.length ? stories : [null]).map((_, position) => (
               <i key={position} className={position <= index ? "done" : ""} />
             ))}
           </div>
           <div className="story-head">
             <Orb size={28} />
             <b>Fin-Agent</b>
-            <span>· {period.title}</span>
+            <span>· {displayText(period.title)}</span>
           </div>
-          {loading ? (
+          {detail.loading ? (
             <div className="story-loading">
               <Loading label="Adding up the rows…" />
             </div>
-          ) : state.error ? (
-            <p className="story-line">The ledger couldn&apos;t be read: {state.error}</p>
+          ) : detail.error ? (
+            <>
+              <p className="story-line">The recap couldn&apos;t be read: {detail.error}</p>
+              <button type="button" className="pill-button" onClick={detail.reload}>
+                Retry
+              </button>
+            </>
           ) : story ? (
             <>
-              <span className="story-label">{story.label}</span>
-              <strong className={story.big.length > 9 ? "story-big long" : "story-big"}>{story.big}</strong>
-              <p className="story-line">{story.line}</p>
+              <span className="story-label">{displayText(story.label)}</span>
+              <strong className={bigText(story).length > 9 ? "story-big long" : "story-big"}>
+                {bigText(story)}
+              </strong>
+              <p className="story-line">{displayText(story.line)}</p>
+              {story.key === "total" && ready && !ready.coverage.complete && (
+                <p className="story-note">
+                  No statement covers part of this period, so some spending may be missing.
+                </p>
+              )}
               {story.bars && (
                 <div className="story-bars">
-                  {story.bars.map((bar) => (
-                    <div key={bar.name} className="story-bar">
-                      <span>{bar.name}</span>
-                      <i style={{ width: `${Math.max(4, (bar.paise / peak) * 100)}%` }} />
-                      <b>{formatPaise(bar.paise)}</b>
+                  {story.bars.map((bar) => {
+                    const content = (
+                      <>
+                        <span>{displayText(bar.name)}</span>
+                        <i style={{ width: `${Math.max(4, (bar.amount.paise / peak) * 100)}%` }} />
+                        <b>{displayText(bar.amount.text)}</b>
+                      </>
+                    );
+                    const rows = bar.rows;
+                    return rows ? (
+                      <button
+                        key={bar.name}
+                        type="button"
+                        className="story-bar story-bar-button"
+                        onClick={() => openRows(rows, story.label)}
+                      >
+                        {content}
+                      </button>
+                    ) : (
+                      <div key={bar.name} className="story-bar">
+                        {content}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {story.key === "recurring" && story.charges && (
+                <div className="story-charges">
+                  {story.charges.map((charge) => (
+                    <div key={`${charge.merchant}-${charge.last_date}`} className="story-charge">
+                      <span>{displayText(charge.merchant)}</span>
+                      <b>
+                        {displayText(charge.amount.text)} every {charge.every}
+                      </b>
+                      <button
+                        type="button"
+                        className="pill-button"
+                        onClick={() =>
+                          askAgent(
+                            `Track ${displayText(charge.merchant)} as a recurring charge: ${charge.amount.text} every ${charge.every}.`,
+                          )
+                        }
+                      >
+                        Track it
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -378,16 +349,19 @@ function RecapStories({ firstDate }: { firstDate: string | null }) {
             </>
           ) : null}
           <div className="story-foot">
-            <button type="button" className="story-cite" onClick={() => goTo("activity", "ledger")}>
-              From {state.rows.toLocaleString("en-IN")} ledger {state.rows === 1 ? "row" : "rows"}
-              {state.truncated ? " (first 2,000)" : ""} · open the ledger
-            </button>
+            {story?.rows ? (
+              <button type="button" className="story-cite" onClick={() => openRows(story.rows!, story.label)}>
+                Open the rows behind this
+              </button>
+            ) : (
+              <div className="story-cite" />
+            )}
             <button
               type="button"
               className="story-ask"
-              onClick={() => askAgent(`About my spending ${period.title.toLowerCase()}: `)}
+              onClick={() => askAgent(`Tell me my recap for ${period.title} (${period.id}). `)}
             >
-              Ask about {period.title.toLowerCase()}…
+              Ask about {displayText(period.title).toLowerCase()}…
             </button>
           </div>
         </div>
@@ -395,12 +369,21 @@ function RecapStories({ firstDate }: { firstDate: string | null }) {
           type="button"
           className="recap-nav"
           aria-label="Next story"
-          disabled={!stories || index >= stories.length - 1}
+          disabled={!stories.length || index >= stories.length - 1}
           onClick={() => step(1)}
         >
           <ChevronRight size={22} aria-hidden="true" />
         </button>
       </div>
+
+      {sheet && (
+        <RecapRows
+          periodId={period.id}
+          reference={sheet.reference}
+          title={sheet.title}
+          onClose={() => setSheet(null)}
+        />
+      )}
     </section>
   );
 }
