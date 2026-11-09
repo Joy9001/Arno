@@ -1055,6 +1055,29 @@ async def correct_movement(
     }
 
 
+async def ledger_span(conn: Connection) -> dict[str, Any]:
+    """How much the ledger holds: movements, spending rows, and the first date.
+
+    The first-run screens read it: an empty ledger has nothing to notice or recap, and a recap
+    period before the first row has nothing to tell.
+    """
+    # ponytail: counts include movements a later reversal cancelled; the screens only ask
+    # "anything yet?" and "since when?", where that is close enough.
+    row = await conn.fetchrow(
+        """
+        SELECT count(*) FILTER (WHERE kind <> 'reversal') AS movements,
+               count(*) FILTER (WHERE kind = 'expense') AS spending,
+               min(date) FILTER (WHERE kind <> 'reversal') AS first_date
+        FROM movements
+        """
+    )
+    return {
+        "movements": int(row["movements"]),
+        "spending": int(row["spending"]),
+        "first_date": row["first_date"].isoformat() if row["first_date"] else None,
+    }
+
+
 async def list_movements(
     conn: Connection,
     *,

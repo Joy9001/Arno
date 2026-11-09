@@ -31,6 +31,7 @@ async def get_home(
     unread = await count_unread(conn)
     needs_you = await unread_first(conn, limit=4)
     recent = await movements.list_movements(conn, limit=5)
+    span = await movements.ledger_span(conn)
     return {
         "as_of": projection["as_of"],
         "spendable_paise": summary["liquid_total_paise"],
@@ -39,4 +40,5 @@ async def get_home(
         "unread_count": unread,
         "needs_you": needs_you,
         "recent": recent["items"],
+        "ledger": span,
     }

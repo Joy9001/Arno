@@ -1,4 +1,4 @@
-import { useContext, useState } from "react";
+import { useContext, useState, type ReactNode } from "react";
 import { ArrowUpRight, Check, Play } from "lucide-react";
 import { errorMessage } from "../api";
 import { formatDate, formatPaise, percent } from "../format";
@@ -10,6 +10,8 @@ import { lowAmount, projectionReadiness } from "../projectionData";
 import type { ProjectionPayload } from "../projection";
 import type { CashQuality, Movement, NotificationItem } from "../types";
 import { useApi } from "../useApi";
+import { FirstRun, FirstRunStarters } from "./FirstRun";
+import { firstRunSteps } from "./firstRunSteps";
 
 /** `/api/home`: cash on hand, the projection, unread notifications, and recent movements. */
 export type HomePayload = {
@@ -20,6 +22,8 @@ export type HomePayload = {
   unread_count: number;
   needs_you: NotificationItem[];
   recent: Movement[];
+  /** How much the ledger holds; an empty one is a first run. */
+  ledger: { movements: number; spending: number; first_date: string | null };
 };
 
 function partOfDay(hour: number): string {
@@ -49,13 +53,21 @@ export function AskGreeting() {
   );
 }
 
-function NoticedCards() {
+function NoticedCards({ starters }: { starters: ReactNode }) {
   const home = useApi<HomePayload>("/api/home?horizon_days=90");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (!home.data) {
-    return home.error ? <p className="ask-noticed-error">{home.error}</p> : null;
+    return home.error ? (
+      <>
+        {starters}
+        <p className="ask-noticed-error">{home.error}</p>
+      </>
+    ) : null;
   }
+  const data = home.data;
+  // Until cash, the forecast, and recaps all have something to show, the home says what each needs.
+  const firstRun = firstRunSteps(data).some((step) => !step.ready);
 
   async function act(item: NotificationItem, open: boolean) {
     setBusy(item.id);
@@ -71,13 +83,29 @@ function NoticedCards() {
     }
   }
 
-  return (
+  const view = (notificationsOnly: boolean) => (
     <NoticedView
-      data={home.data}
+      data={data}
       busy={busy}
       error={error}
+      notificationsOnly={notificationsOnly}
       onAct={(item, open) => void act(item, open)}
     />
+  );
+  if (!firstRun) {
+    return (
+      <>
+        {starters}
+        {view(false)}
+      </>
+    );
+  }
+  return (
+    <>
+      {data.ledger.movements === 0 ? <FirstRunStarters /> : starters}
+      <FirstRun data={data} />
+      {view(true)}
+    </>
   );
 }
 
@@ -98,11 +126,14 @@ export function NoticedView({
   busy = null,
   error = null,
   onAct = () => {},
+  notificationsOnly = false,
 }: {
   data: HomePayload;
   busy?: string | null;
   error?: string | null;
   onAct?: (item: NotificationItem, open: boolean) => void;
+  /** Only the unread cards, under the first-run list. */
+  notificationsOnly?: boolean;
 }) {
   const projection = data.projection;
   const readiness = projectionReadiness(projection);
@@ -113,6 +144,45 @@ export function NoticedView({
   const low = lowAmount(projection);
   const unread = data.needs_you.filter((item) => !item.read_at).slice(0, 2);
   const forecast = readiness.ready && cashKnown;
+  const unreadCards = unread.map((item) => (
+          <article key={item.id} className={item.kind === "reminder" ? "ask-card due" : "ask-card"}>
+            <span className="ask-card-k">{KIND_LABELS[item.kind] ?? item.kind.replaceAll("_", " ")}</span>
+            <strong className="ask-card-title">{item.title}</strong>
+            <div className="ask-card-actions">
+              <button
+                type="button"
+                className="pill-button light"
+                disabled={busy === item.id}
+                onClick={() => onAct(item, true)}
+              >
+                {busy === item.id ? <Busy /> : <ArrowUpRight size={14} aria-hidden="true" />}
+                {item.kind === "new_subscription" ? "Decide" : "Open"}
+              </button>
+              <button
+                type="button"
+                className="pill-button"
+                disabled={busy === item.id}
+                onClick={() => onAct(item, false)}
+              >
+                <Check size={14} aria-hidden="true" />
+                Mark read
+              </button>
+            </div>
+          </article>
+  ));
+
+  if (notificationsOnly) {
+    return unread.length ? (
+      <section className="ask-noticed" aria-label="Needs you">
+        {error && (
+          <p className="ask-noticed-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="ask-cards">{unreadCards}</div>
+      </section>
+    ) : null;
+  }
 
   return (
     <section className="ask-noticed" aria-label="What I noticed">
@@ -179,32 +249,7 @@ export function NoticedView({
           </article>
         )}
 
-        {unread.map((item) => (
-          <article key={item.id} className={item.kind === "reminder" ? "ask-card due" : "ask-card"}>
-            <span className="ask-card-k">{KIND_LABELS[item.kind] ?? item.kind.replaceAll("_", " ")}</span>
-            <strong className="ask-card-title">{item.title}</strong>
-            <div className="ask-card-actions">
-              <button
-                type="button"
-                className="pill-button light"
-                disabled={busy === item.id}
-                onClick={() => onAct(item, true)}
-              >
-                {busy === item.id ? <Busy /> : <ArrowUpRight size={14} aria-hidden="true" />}
-                {item.kind === "new_subscription" ? "Decide" : "Open"}
-              </button>
-              <button
-                type="button"
-                className="pill-button"
-                disabled={busy === item.id}
-                onClick={() => onAct(item, false)}
-              >
-                <Check size={14} aria-hidden="true" />
-                Mark read
-              </button>
-            </div>
-          </article>
-        ))}
+        {unreadCards}
 
         {unread.length < 2 && (
           <article className="ask-card recap">
@@ -223,7 +268,7 @@ export function NoticedView({
   );
 }
 
-/** Below the composer on the agent's home. */
-export function AskBelow() {
-  return <NoticedCards />;
+/** Below the composer on the agent's home: starter prompts, then what the agent noticed. */
+export function AskBelow({ starters }: { starters: ReactNode }) {
+  return <NoticedCards starters={starters} />;
 }

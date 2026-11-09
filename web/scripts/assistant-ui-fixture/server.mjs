@@ -45,6 +45,7 @@ function resetState() {
   turns.clear();
   taskThread = null;
   wakeTurn = null;
+  homeState = "ready";
   counters.chatPosts.length = 0;
   counters.stopPosts.length = 0;
   counters.streamGets.length = 0;
@@ -806,8 +807,44 @@ function projectionFixture() {
   };
 }
 
+// Test-only: `ready` (default), `empty` (a first run), or `partial` (one balance still unknown).
+let homeState = "ready";
+
+function ledgerSpan() {
+  if (homeState === "empty") return { movements: 0, spending: 0, first_date: null };
+  return { movements: 212, spending: 168, first_date: "2026-09-01" };
+}
+
 function homePayload() {
+  if (homeState === "empty") {
+    return {
+      as_of: asOf(),
+      spendable_paise: 0,
+      cash_quality: { status: "no_accounts", known_paise: 0, known_count: 0, unknown_count: 0, unknown_accounts: [] },
+      projection: { ...projectionFixture(), data_quality: { setup_gaps: ["no liquid account"], balance_ages: [] } },
+      unread_count: 0,
+      needs_you: [],
+      recent: [],
+      ledger: ledgerSpan(),
+    };
+  }
+  if (homeState === "partial") {
+    return {
+      as_of: asOf(),
+      spendable_paise: 4_832_000,
+      cash_quality: { status: "unknown", known_paise: 4_832_000, known_count: 1, unknown_count: 1, unknown_accounts: ["HDFC Savings"] },
+      projection: {
+        ...projectionFixture(),
+        data_quality: { balance_ages: [{ account: "HDFC Savings", known: false }], setup_gaps: [] },
+      },
+      unread_count: 0,
+      needs_you: [],
+      recent: [],
+      ledger: ledgerSpan(),
+    };
+  }
   return {
+    ledger: ledgerSpan(),
     as_of: asOf(),
     spendable_paise: 4_812_400,
     cash_quality: {
@@ -1521,6 +1558,15 @@ const server = createServer(async (req, res) => {
   }
   if (path === "/api/chat" && req.method === "POST") {
     await handleChat(req, res);
+    return;
+  }
+  if (path === "/__fixture/home" && req.method === "POST") {
+    homeState = String((await readJson(req)).state ?? "ready");
+    json(res, 200, { ok: true });
+    return;
+  }
+  if (path === "/api/ledger/span") {
+    json(res, 200, ledgerSpan());
     return;
   }
   if (path === "/api/home") {

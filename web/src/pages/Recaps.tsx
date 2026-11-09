@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { askAgent } from "../ask";
 import { formatDate, formatPaise, isoDate } from "../format";
 import { Loading } from "../Loading";
 import { goTo } from "../nav";
 import { Orb } from "../Orb";
 import { readExpenses, totalsBy, type Spending } from "../spending";
+import { useApi } from "../useApi";
+import "../chat/first-run.css";
+
+type LedgerSpan = { movements: number; spending: number; first_date: string | null };
 
 type Period = {
   id: string;
@@ -153,9 +157,91 @@ function buildStories(period: Period, current: Spending, previous: Spending): St
   return stories;
 }
 
+/** Before the ledger has any spending there is no story to tell; this says how one starts. */
+function RecapsEmpty() {
+  return (
+    <section className="recaps">
+      <aside className="recap-list" aria-label="Recaps">
+        <h2>Recaps</h2>
+        <p className="fine">Built from your ledger rows. Every figure is a sum you can open.</p>
+        <p className="recap-none">
+          <b>No recaps yet</b>
+          Daily, weekly, and monthly recaps appear here once the ledger has spending.
+        </p>
+      </aside>
+      <div className="recap-stage recap-first">
+        <div className="recap-frame" aria-hidden="true">
+          <div className="story-progress">
+            <i />
+            <i />
+            <i />
+            <i />
+          </div>
+          <div className="recap-frame-head">
+            <Orb size={26} />
+            Your first recap
+          </div>
+          <span className="recap-sk" style={{ top: 112, width: 110, height: 16 }} />
+          <span className="recap-sk" style={{ top: 144, width: 230, height: 84, borderRadius: 16 }} />
+          <span className="recap-sk" style={{ top: 250, width: 270, height: 18 }} />
+          <span className="recap-sk" style={{ top: 276, width: 200, height: 18 }} />
+          <div className="recap-frame-bars">
+            <i style={{ width: "84%" }} />
+            <i style={{ width: "58%" }} />
+            <i style={{ width: "36%" }} />
+            <i style={{ width: "70%" }} />
+          </div>
+          <span className="recap-frame-ask" />
+        </div>
+        <div className="recap-first-copy">
+          <h3>Your first recap starts with a statement</h3>
+          <p>
+            Import one and its days, weeks, and months become recaps you can play. Every figure in
+            them opens to the rows it was added up from.
+          </p>
+          <ul>
+            <li>What you spent, and how it compares</li>
+            <li>Where it went, category by category</li>
+            <li>The biggest and the most frequent spends</li>
+          </ul>
+          <div className="recap-first-actions">
+            <button type="button" className="pill-button lime" onClick={() => goTo("activity", "imports")}>
+              <Upload size={14} aria-hidden="true" />
+              Import a statement
+            </button>
+            <button type="button" className="ask-link" onClick={() => askAgent("What will my recaps show?")}>
+              Ask what recaps show
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function RecapsPage() {
-  const list = useMemo(() => periods(), []);
-  const [selected, setSelected] = useState(list[3].id);
+  const span = useApi<LedgerSpan>("/api/ledger/span");
+  if (!span.data && !span.error) {
+    return (
+      <section className="recaps">
+        <Loading label="Reading the ledger…" />
+      </section>
+    );
+  }
+  // A failed read falls back to every period: a recap can still say "no spending" honestly.
+  if (span.data && span.data.spending === 0) return <RecapsEmpty />;
+  return <RecapStories firstDate={span.data?.first_date ?? null} />;
+}
+
+function RecapStories({ firstDate }: { firstDate: string | null }) {
+  // A period that ended before the ledger's first row has nothing to tell.
+  const list = useMemo(
+    () => periods().filter((entry) => !firstDate || entry.end >= firstDate),
+    [firstDate],
+  );
+  const [selected, setSelected] = useState(
+    () => (list.find((entry) => entry.id === "this-month") ?? list[0]).id,
+  );
   const [index, setIndex] = useState(0);
   const [state, setState] = useState<{
     id: string;

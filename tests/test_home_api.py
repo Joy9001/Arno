@@ -32,6 +32,7 @@ async def test_home_composes_one_payload(authed_client):
         "unread_count",
         "needs_you",
         "recent",
+        "ledger",
     }
     assert body["spendable_paise"] == 18_395_000
     assert body["cash_quality"] == {
@@ -46,6 +47,11 @@ async def test_home_composes_one_payload(authed_client):
     assert body["unread_count"] == 0
     assert body["needs_you"] == []
     assert body["recent"][0]["description"] == "Lunch"
+    # The first-run screens read this: one spending row, and the ledger starts today or earlier.
+    assert body["ledger"]["spending"] == 1
+    assert body["ledger"]["movements"] >= 1
+    assert body["ledger"]["first_date"] <= body["as_of"]
+    assert authed_client.get("/api/ledger/span").json() == body["ledger"]
 
 
 async def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
@@ -54,6 +60,7 @@ async def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
     assert body["spendable_paise"] == 0
     assert body["cash_quality"]["status"] == "no_accounts"
     assert body["cash_quality"]["unknown_count"] == 0
+    assert body["ledger"] == {"movements": 0, "spending": 0, "first_date": None}
 
 
 async def test_home_marks_an_account_without_a_balance_as_unknown(authed_client):

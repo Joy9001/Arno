@@ -352,6 +352,11 @@ async def delete_account(account_id: str, conn: Database) -> dict[str, Any]:
     return await accounts.archive_account(conn, account_id)
 
 
+@router.get("/ledger/span")
+async def get_ledger_span(conn: Database) -> dict[str, Any]:
+    return await movements.ledger_span(conn)
+
+
 @router.get("/movements")
 async def get_movements(
     conn: Database,

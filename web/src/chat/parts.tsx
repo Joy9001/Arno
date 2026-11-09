@@ -333,12 +333,13 @@ export function ChatWelcome() {
 /** Under the composer on a new conversation: starters, then what the agent noticed. */
 export function ChatWelcomeAfter() {
   return (
-    <>
-      <div className="aui-starters">
-        <ThreadPrimitive.Suggestions>{renderStarter}</ThreadPrimitive.Suggestions>
-      </div>
-      <AskBelow />
-    </>
+    <AskBelow
+      starters={
+        <div className="aui-starters">
+          <ThreadPrimitive.Suggestions>{renderStarter}</ThreadPrimitive.Suggestions>
+        </div>
+      }
+    />
   );
 }
 
