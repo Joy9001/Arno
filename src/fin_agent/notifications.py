@@ -10,6 +10,7 @@ proposal, the weekly briefing, and a scheduled answer each key on their own peri
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -220,7 +221,10 @@ async def _push(
     sent = 0
     for subscription in subscriptions:
         try:
-            webpush(
+            # pywebpush is blocking and can wait up to its timeout, and the job loop shares this
+            # event loop with requests, so one slow push service must not stall the API.
+            await asyncio.to_thread(
+                webpush,
                 subscription_info={
                     "endpoint": subscription["endpoint"],
                     "keys": {"p256dh": subscription["p256dh"], "auth": subscription["auth"]},
@@ -236,8 +240,8 @@ async def _push(
             )
             sent += 1
         except WebPushException as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status in {404, 410}:
+            # `WebPushException.status_code` reads both a requests response and an aiohttp one.
+            if exc.status_code in {404, 410}:
                 await conn.execute(
                     "DELETE FROM push_subscriptions WHERE id = $1", subscription["id"]
                 )
@@ -267,14 +271,16 @@ def seed_chat_text(notification: dict[str, Any]) -> tuple[str, bool]:
     data = notification.get("data") or {}
     title = str(notification.get("title") or "Notification")
     body = str(notification.get("body") or "").strip()
-    merchant = data.get("merchant")
+    # A pattern proposal names a merchant; a reminder names a schedule. Both can carry a payee
+    # name that came from a statement, so both are marked when the item is outside text.
+    label = data.get("merchant") or data.get("name")
     outside = bool(data.get("outside_text"))
-    if outside and merchant:
+    if outside and label:
         from fin_agent.tools.mark import mark
 
-        marked = mark(str(merchant)) or str(merchant)
-        title = title.replace(str(merchant), marked)
-        body = body.replace(str(merchant), marked)
+        marked = mark(str(label)) or str(label)
+        title = title.replace(str(label), marked)
+        body = body.replace(str(label), marked)
     text = f"From my inbox: {title}"
     if body:
         text += f"\n\n{body}"

@@ -119,6 +119,20 @@ async def run_scheduled_question(
     period = period or period_for(
         "scheduled_question", datetime.now(INDIA), {"scheduled_question_id": question_id}
     )
+    dedupe_key = f"scheduled_question:{question_id}:{period}"
+    if await conn.fetchval("SELECT 1 FROM notifications WHERE dedupe_key = $1", dedupe_key):
+        # A crash-retried job must not spend a second model call on an answer already written.
+        await conn.execute(
+            "UPDATE scheduled_questions SET last_run_at = coalesce(last_run_at, now()), "
+            "updated_at = now() WHERE id = $1",
+            question_id,
+        )
+        return {
+            "notification_id": None,
+            "period": period,
+            "spend_limit_usd": str(spend_budget(dict(question))),
+            "skipped": "already answered",
+        }
     if agent is None:
         if spend_store is None:
             raise RuntimeError("A scheduled question needs a spend store")

@@ -10,9 +10,9 @@ from datetime import date, timedelta
 from typing import Any
 
 from fin_agent.agent.models import primary_model
+from fin_agent.agent.number_check import check as check_numbers
 from fin_agent.db.conn import Connection, connect
 from fin_agent.engine.money import money
-from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import accounts as accounts_mod
 from fin_agent.ledger import goals as goals_mod
 from fin_agent.ledger import schedules as schedules_mod
@@ -36,7 +36,8 @@ def _sum_paise(value: Any) -> int | None:
 
 
 def _percent_change(current: int | None, previous: int | None) -> float | None:
-    if current is None or previous is None or previous == 0:
+    # A percentage against a net-refund week (a negative base) is not a real comparison.
+    if current is None or previous is None or previous <= 0:
         return None
     return round((current - previous) / previous * 100, 1)
 
@@ -76,6 +77,12 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
     bills_total = sum(int(event["amount_paise"]) for event in bills)
 
     projection = await projection_tools.project(conn, horizon_days=90, as_of=day)
+    floor_paise = int(projection["floor_paise"])
+    floor_set = floor_paise > 0
+    quality_gaps = [
+        *projection["data_quality"].get("gaps", []),
+        *projection["data_quality"].get("setup_gaps", []),
+    ]
 
     goal_rows = [row for row in await goals_mod.list_goals(conn) if row["status"] == "active"]
     top_goals = sorted(goal_rows, key=lambda row: row["remaining_paise"], reverse=True)[:3]
@@ -130,13 +137,14 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
             ],
         },
         "floor": {
-            "paise": int(projection["floor_paise"]),
-            "money": money(int(projection["floor_paise"])),
-            "probability": projection["floor_probability"],
-            "threshold": projection["floor_threshold"],
-            "first_crossing": projection["first_floor_crossing"],
+            "set": floor_set,
+            "paise": floor_paise if floor_set else None,
+            "money": money(floor_paise if floor_set else None),
+            "probability": projection["floor_probability"] if floor_set else None,
+            "threshold": projection["floor_threshold"] if floor_set else None,
+            "first_crossing": projection["first_floor_crossing"] if floor_set else None,
             "median_low": projection["median_low"],
-            "data_quality": projection["data_quality"].get("gaps", [])[:3],
+            "data_quality": quality_gaps[:5],
         },
         "goals": [
             {
@@ -153,10 +161,6 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
         ],
         "source_ids": projection["source_ids"],
     }
-
-
-def _text(paise: int | None) -> str:
-    return format_paise(paise) if paise is not None else "unknown"
 
 
 def render_template(numbers: dict[str, Any]) -> str:
@@ -181,7 +185,11 @@ def render_template(numbers: dict[str, Any]) -> str:
         else "no scheduled bills"
     )
     floor = numbers["floor"]
-    if floor["first_crossing"]:
+    if not floor["set"]:
+        floor_text = (
+            "No floor is set, so the projection's 90-day chance of staying above one is unknown."
+        )
+    elif floor["first_crossing"]:
         floor_text = (
             f"The projection's median path crosses your floor on {floor['first_crossing']}."
         )
@@ -259,17 +267,33 @@ async def send_weekly_briefing(
     model: Any = None,
     spend_store: Any = None,
 ) -> dict[str, Any] | None:
-    numbers = await briefing_numbers(conn, as_of=as_of)
+    day = as_of or ledger_today()
+    period = period or day.strftime("%G-W%V")
+    dedupe_key = f"weekly_briefing:{period}"
+    # A crash-retried job must not spend a second model call on a briefing already sent.
+    if await conn.fetchval("SELECT 1 FROM notifications WHERE dedupe_key = $1", dedupe_key):
+        return None
+    numbers = await briefing_numbers(conn, as_of=day)
     template = render_template(numbers)
     body = template
     prose_error = None
     try:
-        body = await write_prose(numbers, model=model, spend_store=spend_store)
+        prose = await write_prose(numbers, model=model, spend_store=spend_store)
+        flagged = check_numbers(prose, numbers, kinds=("money", "percent"))
+        if flagged:
+            # The template already carries exactly the computed numbers, so a prose number
+            # without a source in `numbers` is never published.
+            prose_error = "untraced number"
+            logger.info(
+                "weekly briefing prose carried untraced numbers (%s); using the template",
+                ", ".join(flagged[:3]),
+            )
+        else:
+            body = prose
     except Exception as exc:  # noqa: BLE001 - the numbers still go out
         prose_error = type(exc).__name__
-        logger.info(
-            "weekly briefing prose failed (%s); using the template", type(prose_error).__name__
-        )
+        logger.info("weekly briefing prose failed (%s); using the template", prose_error)
+    if prose_error is not None:
         await conn.execute(
             """
             UPDATE settings
@@ -278,8 +302,6 @@ async def send_weekly_briefing(
             """,
             prose_error[:200],
         )
-    day = as_of or ledger_today()
-    period = period or day.strftime("%G-W%V")
     row = await create_notification(
         conn,
         kind="weekly_briefing",
@@ -292,7 +314,7 @@ async def send_weekly_briefing(
             "prose": "model" if prose_error is None else "template",
             "prose_error": prose_error,
         },
-        dedupe_key=f"weekly_briefing:{period}",
+        dedupe_key=dedupe_key,
     )
     return row
 

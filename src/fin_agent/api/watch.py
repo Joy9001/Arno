@@ -220,13 +220,14 @@ async def get_job_activity(conn: Database, since: datetime | None = None) -> dic
     )
     if since is not None and since.tzinfo is None:
         since = since.replace(tzinfo=UTC)
+    # Every finish after the cursor, not a capped page: the cursor moves to `now` below, so a
+    # row dropped here would never be reported. The client polls often, so this stays small.
     finished_rows = (
         await conn.fetch(
             """
             SELECT * FROM jobs
             WHERE status IN ('done', 'failed') AND finished_at > $1
             ORDER BY finished_at, id
-            LIMIT 50
             """,
             since,
         )
