@@ -155,7 +155,12 @@ async def import_password(import_id: str, body: PasswordIn, conn: Database) -> J
 
 @router.post("/imports/{import_id}/opening")
 async def import_opening(import_id: str, body: OpeningIn, conn: Database) -> dict[str, Any]:
-    """The opening balance the user states for a statement that prints none."""
+    """The opening the user states for a statement that prints none.
+
+    `opening_paise` is the amount as the user reads it: an amount owed on a card (negative when
+    the card is in credit), a balance on any other account. The server converts it to the
+    ledger's sign once, by account kind.
+    """
     try:
         return await set_manual_opening(conn, import_id=import_id, opening_paise=body.opening_paise)
     except ValueError as exc:

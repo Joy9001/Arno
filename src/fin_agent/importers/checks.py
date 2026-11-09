@@ -25,6 +25,17 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def stated_opening_to_ledger(paise: int, account_kind: str | None) -> int:
+    """The ledger value of an opening the user states as an amount owed.
+
+    Balances are ledger-signed everywhere in the pipeline: a card that owes money holds a
+    negative balance, and a statement's printed dues are negated by the parser. So the one
+    place a printed figure arrives from the user (the review screen's opening answer) is
+    converted here, by account kind.
+    """
+    return -paise if account_kind == "card" else paise
+
+
 def _opening_value(
     opening: Any,
     ledger_opening: int | None,
@@ -56,7 +67,13 @@ def check_statement(
     expected_fingerprint: str | None = None,
     empty_statement: bool = False,
 ) -> dict[str, Any]:
-    """Integer paise. A row has date, debit, credit, and optionally balance."""
+    """Integer paise. A row has date, debit, credit, and optionally balance.
+
+    Everything here is ledger-signed: `opening`, `closing`, the rows' running `balance`, and
+    both opening sources. A card that owes money is negative, so a parser returns a printed
+    amount owed negated (`PARSE_INSTRUCTIONS` in `agent/parser.py` and `import.md` §Signs say
+    so).
+    """
     result: dict[str, Any] = {
         "status": "FAILED",
         "rows": 0,
@@ -248,5 +265,6 @@ __all__ = [
     "account_check",
     "check_statement",
     "opening_is_evidenced",
+    "stated_opening_to_ledger",
     "worst_status",
 ]

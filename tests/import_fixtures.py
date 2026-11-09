@@ -85,7 +85,8 @@ def slice_csv() -> bytes:
         "Date,Transaction Details,Amount",
     ]
     lines += [",".join(row) for row in SLICE_ROWS]
-    lines += ['"Closing Balance: 4,450.00"']
+    # The amount owed, as a card prints it: a negative owed balance is a card in credit.
+    lines += ['"Closing Balance: -2,450.00"']
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
@@ -303,7 +304,7 @@ else:
     for row in rows:
         text = ' '.join(str(c) for c in row)
         if 'closing balance' in text.lower():
-            closing = money(text.split(':')[-1])
+            closing = -money(text.split(':')[-1])
     out = []
     for row in rows[header_index + 1:]:
         if not row or not to_iso(row[0]):

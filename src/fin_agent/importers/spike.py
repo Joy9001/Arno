@@ -24,7 +24,7 @@ BANKS = ("sbi", "union", "slice")
 SYNTHETIC = {
     "sbi": ("sbi_csv", "SBI_PARSER", 24567890),
     "union": ("union_tsv", "UNION_PARSER", 10000000),
-    "slice": ("slice_csv", "SLICE_PARSER", 100000),
+    "slice": ("slice_csv", "SLICE_PARSER", -100000),
 }
 
 

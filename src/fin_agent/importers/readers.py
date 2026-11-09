@@ -317,15 +317,17 @@ class Doc:
             return [[line] for line in lines]
         sample = [line for line in lines if line.strip()][:60]
         best: str | None = None
-        best_frequency = 0.0
+        best_score = (0.0, 0)
         for delimiter in ("\t", ";", "|", ","):
             counts = [line.count(delimiter) for line in sample if line.count(delimiter)]
             if not counts:
                 continue
             modal = max(set(counts), key=counts.count)
             frequency = counts.count(modal) / len(counts)
-            if modal >= 1 and frequency >= 0.5 and frequency > best_frequency + 1e-9:
-                best, best_frequency = delimiter, frequency
+            # One stray `;` in a narration is frequent but shallow; the real delimiter repeats
+            # the same count on most rows, so the score compares both.
+            if modal >= 1 and frequency >= 0.5 and (frequency, modal) > best_score:
+                best, best_score = delimiter, (frequency, modal)
         if best:
             self.delimiter = best
             csv.field_size_limit(4 * 1024 * 1024)

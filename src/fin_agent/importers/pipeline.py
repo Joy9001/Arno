@@ -12,7 +12,11 @@ from datetime import date, datetime
 from typing import Any
 
 from fin_agent.db.conn import Connection, connect
-from fin_agent.importers.checks import check_statement, opening_is_evidenced
+from fin_agent.importers.checks import (
+    check_statement,
+    opening_is_evidenced,
+    stated_opening_to_ledger,
+)
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.readers import Doc
@@ -488,8 +492,10 @@ async def set_manual_opening(
 ) -> dict[str, Any]:
     """Record the opening the user states, then re-check the stored rows against it.
 
-    A first card statement prints no opening, so the review screen asks for one. The answer is
-    evidence only if the rows still add up to the printed closing; otherwise the check says why.
+    A first card statement prints no opening, so the review screen asks for one. `opening_paise`
+    is what the user typed: an amount owed on a card, a balance on any other account. It is
+    converted to the ledger's sign once, here, and the answer is evidence only if the rows still
+    add up to the printed closing; otherwise the check says why.
     """
     row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
     if row is None:
@@ -498,6 +504,8 @@ async def set_manual_opening(
         raise ValueError(f"That import is {row['status']}")
     if row["account_id"] is None:
         raise ValueError("Choose the account for this statement first")
+    account = await conn.fetchrow("SELECT kind FROM accounts WHERE id = $1", row["account_id"])
+    opening_paise = stated_opening_to_ledger(opening_paise, account["kind"] if account else None)
     lines = await conn.fetch(
         "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
     )

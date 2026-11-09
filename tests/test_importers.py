@@ -202,7 +202,7 @@ def test_a_manual_opening_wins_over_a_parser_claim_and_is_labeled_manual():
     [
         (sbi_csv(), SBI_PARSER, 24567890, 34402890),
         (union_tsv(), UNION_PARSER, 10000000, 14865000),
-        (slice_csv(), SLICE_PARSER, 100000, 445000),
+        (slice_csv(), SLICE_PARSER, -100000, 245000),
     ],
 )
 async def test_synthetic_indian_parsers_verify(payload, parser, opening, closing):

@@ -271,6 +271,22 @@ that the ledger will no longer match the bank, and the next import's opening che
 The subagent can call the checks itself as tools, and does so while it works. The gate runs the same
 checks again in code, so the model can't skip them or claim they passed.
 
+### Signs
+
+Balances are ledger-signed everywhere below the statement text: `opening`, `closing`, a row's
+running balance, the check's verdict, and the account's stored statement balance. A bank's statement
+prints that already. A credit card prints the amount owed as a positive number while its ledger
+balance is negative, so a parser returns a card's printed balances negated: ₹4,450 owed is
+`-445000`, and a card in credit is positive. `debit` is money leaving the account (a card purchase)
+and `credit` is money arriving (a repayment or refund), so a row's own sign never flips.
+
+The one place a printed figure arrives from the user is the review screen's opening answer for a
+statement that prints none. That box asks for the amount owed, and the server converts it to the
+ledger sign once, by account kind (`stated_opening_to_ledger` in `importers/checks.py`), before it
+is stored in the review or checked. A negative amount owed is a card in credit, which is how an
+overpaid card is entered. The closing adjustment then measures only what the ledger is missing: it
+is zero on a statement whose rows balance against an opening the ledger already holds.
+
 ---
 
 ## Reconciliation: Logged rows versus statement rows

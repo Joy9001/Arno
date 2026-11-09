@@ -13,7 +13,10 @@ from typing import Any
 from fin_agent.db.conn import Connection
 from fin_agent.importers.checks import opening_is_evidenced
 from fin_agent.importers.layouts import save_version
-from fin_agent.importers.reconcile import credit_decision_required
+from fin_agent.importers.reconcile import (
+    credit_decision_required,
+    release_suppressed_duplicates,
+)
 from fin_agent.jobs.runner import enqueue_job
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.audit import undo_group, write_group
@@ -651,6 +654,9 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
             """,
             import_id,
         )
+        # This import's rows no longer count as duplicates, so a waiting statement keeps its own.
+        await release_suppressed_duplicates(conn, account_id=row["account_id"])
+
         await enqueue_job(
             conn,
             key=f"baselines:{date.today().isoformat()}:undo:{import_id}",
@@ -662,16 +668,20 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
 
 async def reject_import(conn: Connection, import_id: str, reason: str | None = None) -> None:
     async with conn.transaction():
-        await conn.execute(
+        row = await conn.fetchrow(
             """
             UPDATE imports
             SET status = 'rejected', rejected_at = now(), reason = $1
             WHERE id = $2 AND status IN ('review', 'needs_input', 'needs_password', 'failed',
                                          'not_a_statement')
+            RETURNING account_id
             """,
             reason,
             import_id,
         )
+        # Rows another statement suppressed as duplicates of this one belong to them again.
+        if row is not None:
+            await release_suppressed_duplicates(conn, account_id=row["account_id"])
 
 
 __all__ = ["commit_import", "reject_import", "undo_import"]

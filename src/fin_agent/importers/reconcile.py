@@ -16,6 +16,7 @@ from fin_agent.importers.identifiers import find_upi_ref, scrub
 from fin_agent.ledger.audit import new_id
 
 CREDIT_KINDS = ("refund", "transfer", "income")
+DUPLICATE_REASON = "content hash already imported"
 
 
 def content_hash(day: str, amount_paise: int, description: str) -> str:
@@ -210,6 +211,77 @@ async def _candidates(
     return candidates
 
 
+async def _settle_line(
+    conn: Connection,
+    *,
+    line: dict[str, Any],
+    account: dict[str, Any],
+    used: set[str],
+    hidden: set[str],
+) -> dict[str, Any]:
+    """One line's match state: its detail, and the movement it matched, if any."""
+    if await _duplicate_exists(conn, line, account["id"]):
+        return {
+            "state": "ignored",
+            "movement_id": None,
+            "detail": {"reason": DUPLICATE_REASON},
+        }
+    candidates = await _candidates(conn, line=line, account=account, used=used, hidden=hidden)
+    want_debit = int(line["amount_paise"]) < 0
+    line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
+    exact = [
+        candidate
+        for candidate in candidates
+        if candidate["amount_paise"] == abs(line["amount_paise"])
+        and (candidate["net_paise"] < 0) == want_debit
+    ]
+    upi = [candidate for candidate in exact if candidate["upi_match"]]
+    by_hash = [
+        candidate
+        for candidate in exact
+        if line_hashes and line_hashes.intersection(candidate["match_hashes"])
+    ]
+    chosen = None
+    state = "new"
+    detail: dict[str, Any] = dict(line.get("match_detail") or {})
+    detail["candidates"] = candidates
+    detail["identifier_hashes"] = sorted(line_hashes)
+    if len(upi) == 1:
+        chosen = upi[0]
+        state = "certain"
+        detail["rule"] = "upi_ref"
+    elif len(by_hash) == 1:
+        chosen = by_hash[0]
+        state = "certain"
+        detail["rule"] = "identifier-hash"
+    elif len(exact) == 1:
+        chosen = exact[0]
+        state = "certain"
+        detail["rule"] = "amount-account-date"
+    elif len(exact) > 1:
+        state = "ambiguous"
+        detail["rule"] = "several exact candidates"
+        detail["candidates"] = exact
+    else:
+        tolerance = max(100, min(5000, abs(line["amount_paise"]) // 200))
+        close = [
+            candidate
+            for candidate in candidates
+            if (candidate["net_paise"] < 0) == want_debit
+            and abs(candidate["amount_paise"] - abs(line["amount_paise"])) <= tolerance
+        ]
+        if close:
+            state = "ambiguous"
+            detail["rule"] = "amount within tolerance"
+            detail["tolerance_paise"] = tolerance
+            detail["candidates"] = close
+    return {
+        "state": state,
+        "movement_id": chosen["movement_id"] if chosen else None,
+        "detail": detail,
+    }
+
+
 async def reconcile(
     conn: Connection,
     *,
@@ -231,67 +303,13 @@ async def reconcile(
     ambiguous: list[dict[str, Any]] = []
 
     for line in lines:
-        if await _duplicate_exists(conn, line, account["id"]):
-            await _set_match(
-                conn, line["id"], "ignored", None, {"reason": "content hash already imported"}
-            )
-            counts["ignored"] += 1
-            continue
-        candidates = await _candidates(conn, line=line, account=account, used=used, hidden=hidden)
-        want_debit = int(line["amount_paise"]) < 0
-        line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
-        exact = [
-            candidate
-            for candidate in candidates
-            if candidate["amount_paise"] == abs(line["amount_paise"])
-            and (candidate["net_paise"] < 0) == want_debit
-        ]
-        upi = [candidate for candidate in exact if candidate["upi_match"]]
-        by_hash = [
-            candidate
-            for candidate in exact
-            if line_hashes and line_hashes.intersection(candidate["match_hashes"])
-        ]
-        chosen = None
-        state = "new"
-        detail: dict[str, Any] = dict(line.get("match_detail") or {})
-        detail["candidates"] = candidates
-        detail["identifier_hashes"] = sorted(line_hashes)
-        if len(upi) == 1:
-            chosen = upi[0]
-            state = "certain"
-            detail["rule"] = "upi_ref"
-        elif len(by_hash) == 1:
-            chosen = by_hash[0]
-            state = "certain"
-            detail["rule"] = "identifier-hash"
-        elif len(exact) == 1:
-            chosen = exact[0]
-            state = "certain"
-            detail["rule"] = "amount-account-date"
-        elif len(exact) > 1:
-            state = "ambiguous"
-            detail["rule"] = "several exact candidates"
-            detail["candidates"] = exact
-        else:
-            tolerance = max(100, min(5000, abs(line["amount_paise"]) // 200))
-            close = [
-                candidate
-                for candidate in candidates
-                if (candidate["net_paise"] < 0) == want_debit
-                and abs(candidate["amount_paise"] - abs(line["amount_paise"])) <= tolerance
-            ]
-            if close:
-                state = "ambiguous"
-                detail["rule"] = "amount within tolerance"
-                detail["tolerance_paise"] = tolerance
-                detail["candidates"] = close
-        if chosen:
-            used.add(chosen["movement_id"])
-            await _set_match(conn, line["id"], state, chosen["movement_id"], detail)
+        settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+        state = settled["state"]
+        await _set_match(conn, line["id"], state, settled["movement_id"], settled["detail"])
+        if state == "certain":
+            used.add(settled["movement_id"])
             counts["certain"] += 1
         elif state == "ambiguous":
-            await _set_match(conn, line["id"], state, None, detail)
             counts["ambiguous"] += 1
             ambiguous.append(
                 {
@@ -299,11 +317,12 @@ async def reconcile(
                     "date": line["date"].isoformat(),
                     "description": line["description_raw"],
                     "amount_paise": int(line["amount_paise"]),
-                    "candidates": detail["candidates"],
+                    "candidates": settled["detail"]["candidates"],
                 }
             )
+        elif state == "ignored":
+            counts["ignored"] += 1
         else:
-            await _set_match(conn, line["id"], "new", None, detail)
             counts["new"] += 1
 
     lines = await conn.fetch(
@@ -329,13 +348,113 @@ async def reconcile(
         "logged_not_on_statement": logged_not_on_statement,
         "period": [period[0].isoformat(), period[1].isoformat()] if period else None,
     }
+    # Merge: the review also carries what the user answered (a stated opening) and, after a
+    # commit, the account's before-state and the adjustment. Re-checking rows must not lose it.
     await conn.execute(
-        "UPDATE imports SET counts = $1, review = $2 WHERE id = $3",
+        """
+        UPDATE imports
+        SET counts = $1, review = coalesce(review, '{}'::jsonb) || $2::jsonb
+        WHERE id = $3
+        """,
         counts,
         review,
         import_id,
     )
     return review
+
+
+async def release_suppressed_duplicates(conn: Connection, *, account_id: str | None) -> list[str]:
+    """Re-match rows another import's duplicate rule hid, now that the import is gone.
+
+    A line is `ignored` as a duplicate only against another import of the same account that is
+    committed or in review. When that import is rejected or undone, the rows it suppressed
+    belong to their own import again. Only the suppressed rows are re-settled, so a decision
+    the user already made on another line stays as it is.
+    """
+    if account_id is None:
+        return []
+    account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
+    if account is None:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT i.id
+        FROM imports i
+        JOIN statement_lines sl ON sl.import_id = i.id
+        WHERE i.account_id = $1
+          AND i.status IN ('parsing', 'needs_password', 'needs_input', 'paused', 'review',
+                           'failed')
+          AND sl.match_state = 'ignored'
+          AND sl.match_detail ->> 'reason' = $2
+        """,
+        account_id,
+        DUPLICATE_REASON,
+    )
+    if not rows:
+        return []
+    from fin_agent.ledger.movements import _effectively_reversed_ids
+
+    hidden = set(await _effectively_reversed_ids(conn))
+    released: list[str] = []
+    for row in rows:
+        import_id = str(row["id"])
+        lines = await conn.fetch(
+            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
+            import_id,
+        )
+        used = {str(line["movement_id"]) for line in lines if line.get("movement_id")}
+        changed = False
+        for line in lines:
+            if line["match_state"] != "ignored":
+                continue
+            detail = line.get("match_detail") or {}
+            if detail.get("resolved_by") or detail.get("reason") != DUPLICATE_REASON:
+                continue
+            settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+            if settled["state"] == "ignored":
+                continue
+            changed = True
+            if settled["movement_id"]:
+                used.add(settled["movement_id"])
+            await _set_match(
+                conn,
+                line["id"],
+                settled["state"],
+                settled["movement_id"],
+                settled["detail"],
+            )
+        if changed:
+            await _refresh_counts(conn, import_id)
+            released.append(import_id)
+    return released
+
+
+async def _refresh_counts(conn: Connection, import_id: str) -> None:
+    """Recount an import's lines after a release, keeping its other review facts."""
+    current = await conn.fetchrow("SELECT counts FROM imports WHERE id = $1", import_id)
+    counts = {
+        key: 0 for key in ("new", "certain", "ambiguous", "ignored", "logged_not_on_statement")
+    }
+    counts.update(dict(current["counts"] or {}))
+    rows = await conn.fetch(
+        """
+        SELECT match_state, count(*)::int AS n
+        FROM statement_lines WHERE import_id = $1 GROUP BY match_state
+        """,
+        import_id,
+    )
+    for row in rows:
+        counts[row["match_state"]] = int(row["n"])
+    await conn.execute(
+        """
+        UPDATE imports
+        SET counts = $1,
+            review = coalesce(review, '{}'::jsonb) || jsonb_build_object('counts', $1::jsonb)
+        WHERE id = $2
+        """,
+        counts,
+        import_id,
+    )
 
 
 async def _set_match(
@@ -548,4 +667,12 @@ async def _classify_credit(
     )
 
 
-__all__ = ["content_hash", "credit_decision_required", "insert_lines", "reconcile", "resolve_line"]
+__all__ = [
+    "DUPLICATE_REASON",
+    "content_hash",
+    "credit_decision_required",
+    "insert_lines",
+    "reconcile",
+    "release_suppressed_duplicates",
+    "resolve_line",
+]

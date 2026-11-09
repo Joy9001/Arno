@@ -112,9 +112,14 @@ A Python script whose last expression is one of:
 
 - Amounts are integer **paise** (`money("1,234.50")` gives `123450`). Never a float.
 - Dates are ISO strings (`to_iso` / `date_any`). Day first, because this is India.
-- `debit` and `credit` are both non-negative. A row has one of them, never both.
+- `debit` and `credit` are both non-negative. A row has one of them, never both: `debit` is
+  money leaving the account (a card purchase is a debit), `credit` is money arriving (a
+  repayment or refund).
+- `opening`, `closing`, and a row's `balance` are in **ledger sign**. A bank account's printed
+  balance already is; a credit card prints the amount owed as positive, so return it negated
+  (₹4,450 owed is `-445000`, and a card in credit is positive). Never negate `debit` or `credit`.
 - A row may carry `balance` when the statement prints a running balance.
-- `opening` is the value the statement actually prints. If it prints none, leave it `None`.
+- `opening` is a value the statement actually prints. If it prints none, leave it `None`.
   Never default it to zero or to `ledger_opening()`; a fallback is not a printed fact.
 - `headers` is the column-header row exactly as printed. It is the layout fingerprint.
 - `counterparty` is the payee, merchant, or person the narration names, cleaned of reference
@@ -208,8 +213,8 @@ where each row has `date`, `description`, `debit_paise`, `credit_paise`, `balanc
 
 ## The checks (all must pass)
 
-1. `opening + credits - debits == closing`. The `opening` must be printed by the statement, or
-   come from the host's anchored ledger balance/user answer.
+1. `opening + credits - debits == closing`, all in ledger sign. The `opening` must be printed by
+   the statement, or come from the host's anchored ledger balance/user answer.
 2. Every printed running balance follows from the row before it.
 3. Every date falls inside the statement period, which the host took from the header or the
    ledger. Do not make the period up from the rows.
@@ -229,7 +234,9 @@ A failure writes nothing. Read the check's `reason` and repair the script.
   `Balance`, with a Dr/Cr suffix or a signed amount. Opening and closing are usually in a
   summary block.
 - **Slice credit card export**: `Date`, `Transaction Details`, `Amount`, no running balance. A
-  card statement often has no opening; leave `opening` null when none is printed.
+  purchase is a `debit`, a payment or refund a `credit`. The printed closing is the amount owed,
+  so return it negated. A card statement often has no opening; leave `opening` null when none is
+  printed. The review screen asks the user for the amount owed when the ledger has no opening.
 - **CSV/TSV/XLSX exports**: use header names to find columns, not fixed indexes. A new
   `Value Date` column must not be glued into the narration; include it in `headers` and leave it
   out of `description`.

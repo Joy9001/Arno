@@ -579,6 +579,102 @@ function TransferRows({
   );
 }
 
+function OpeningBalance({
+  detail,
+  onSaved,
+}: {
+  detail: ImportRecord;
+  onSaved: (next: ImportRecord) => void;
+}) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const card = detail.account?.kind === "card";
+
+  async function save() {
+    const parsed = openingToPaise(value);
+    if ("error" in parsed) {
+      setError(parsed.error);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/opening`, {
+        method: "POST",
+        body: JSON.stringify({ opening_paise: parsed.paise }),
+      });
+      setValue("");
+      onSaved(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="subcard">
+      <div className="section-head">
+        <h3>{card ? "Opening amount owed" : "Opening balance"}</h3>
+        <span className="fine">one answer</span>
+      </div>
+      <p className="muted">
+        {card
+          ? "This statement prints no opening and the ledger has none. Enter the amount the card " +
+            "owed at the start of the period as a positive number, or with a minus sign if the " +
+            "card was in credit."
+          : "This statement prints no opening and the ledger has none. Enter the account's " +
+            "balance at the start of the period."}
+      </p>
+      {detail.check && detail.check !== "VERIFIED" && detail.reason && (
+        <p className="notice">{detail.reason}</p>
+      )}
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="row-actions">
+        <label>
+          {card ? "Amount owed (₹)" : "Opening balance (₹)"}
+          <input
+            inputMode="decimal"
+            autoComplete="off"
+            placeholder={card ? "4450.00" : "25000.00"}
+            value={value}
+            disabled={busy}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        </label>
+        <button type="button" disabled={busy || !value.trim()} onClick={() => void save()}>
+          {busy ? (
+            <>
+              <Busy />
+              Saving…
+            </>
+          ) : (
+            "Save opening"
+          )}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/** The route takes integer paise; rupees are converted here exactly once. */
+function openingToPaise(raw: string): { paise: number } | { error: string } {
+  const value = raw.replaceAll(",", "").trim();
+  const parts = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(value);
+  if (!parts) {
+    return { error: "Enter rupees with up to two decimals, for example 4,450 or 4450.50." };
+  }
+  const whole = Number(parts[2]);
+  const paise = whole * 100 + Number((parts[3] ?? "").padEnd(2, "0"));
+  if (!Number.isSafeInteger(paise)) return { error: "That amount is too large." };
+  return { paise: parts[1] ? -paise : paise };
+}
+
 function LoggedElsewhere({
   rows,
 }: {
@@ -1115,6 +1211,11 @@ export function ImportsPanel({
       }`,
     );
   }
+  if (selected?.opening_required) {
+    blockers.push(
+      selected.account?.kind === "card" ? "the opening amount owed" : "the opening balance",
+    );
+  }
 
   return (
     <section className="panel act-imports">
@@ -1452,6 +1553,10 @@ export function ImportsPanel({
                     </button>
                   </div>
                 </div>
+              )}
+
+              {selected.opening_required && (
+                <OpeningBalance detail={selected} onSaved={applySelected} />
               )}
 
               {selected.counts && (
