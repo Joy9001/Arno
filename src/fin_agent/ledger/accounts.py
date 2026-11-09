@@ -38,6 +38,15 @@ async def _base_currency(conn: Connection) -> str:
     return str(row["base_currency"]) if row else "INR"
 
 
+def _validate_balance_date(value: date | None) -> None:
+    """A balance is a fact about a moment that has happened; a future one is a guess."""
+    if value is not None and value > today():
+        raise InvalidLedgerError(
+            f"A balance cannot be dated in the future ({value.isoformat()}); "
+            f"use {today().isoformat()} or earlier"
+        )
+
+
 def _validate_account_fields(
     *,
     kind: str,
@@ -157,6 +166,7 @@ async def _create_account_in_group(
 ) -> dict[str, Any]:
     if kind in SYSTEM_KINDS:
         raise InvalidLedgerError("System accounts are created by the bootstrap")
+    _validate_balance_date(opening_balance_as_of)
     if liquid is None:
         liquid = kind in LIQUID_KINDS
     _validate_account_fields(
@@ -387,6 +397,7 @@ async def set_statement_balance(
     account = await require_active_account(conn, account_id)
     if account["kind"] in SYSTEM_KINDS:
         raise InvalidLedgerError("The system accounts have no statement balance")
+    _validate_balance_date(as_of)
     await ensure_system_accounts(conn)
     as_of = as_of or today()
     current = await ledger_balance(conn, account["ledger_account_id"])

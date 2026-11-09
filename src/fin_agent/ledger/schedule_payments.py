@@ -96,7 +96,13 @@ async def _capacity(conn: Connection, occurrence: dict[str, Any], movement: dict
         goal_id = goals[0]["account_id"]
     amount = 0
     for transfer in await _transfer_rows(conn, movement["id"]):
-        if movement["kind"] == "transfer" and not goal_id and transfer["to_kind"] != "card":
+        if (
+            movement["kind"] == "transfer"
+            and not goal_id
+            and transfer["to_kind"] not in {"card", "person"}
+        ):
+            # A bill paid to a card, or money sent to a person (a family transfer), is payment;
+            # moving money between your own accounts is not.
             continue
         side = "to" if incoming else "from"
         if transfer[f"{side}_kind"] not in {"bank", "cash", "wallet", "card"}:

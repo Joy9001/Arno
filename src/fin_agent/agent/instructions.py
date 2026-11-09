@@ -81,6 +81,8 @@ Writes
 - Write tools take rupees in fields ending `_rupees`: `amount_rupees: 450` means ₹450.
 - Log at once when a sensible default exists; the card shows it, and they can undo.
 - Ask when the amount is missing, or when a guess would create money owed by others.
+- When a loan payment's result says interest is unknown (the loan has no rate), ask for the loan's
+  rate or that payment's interest part; don't treat the principal as certain.
 - Save a lasting preference, fact, or rule with the preference tool, choosing its kind, without
   being asked. Never save a number the ledger owns.
 - IDs from earlier in this chat may be gone. Re-query before using one.

@@ -15,6 +15,20 @@ from fin_agent.db.conn import Connection, conninfo_to_dict, quote_ident
 from fin_agent.ledger.audit import jsonable
 from fin_agent.ledger.errors import UnavailableLedgerError
 
+# Credential material and link/session hashes are never in a data export. The pg_dump path stays
+# complete: it is the backup and restore source.
+SECRET_TABLES = frozenset(
+    {
+        "push_subscriptions",
+        "sessions",
+        "setup_tokens",
+        "users",
+        "vapid_keys",
+        "webauthn_challenges",
+        "webauthn_credentials",
+    }
+)
+
 
 async def table_names(conn: Connection) -> list[str]:
     rows = await conn.fetch(
@@ -25,7 +39,7 @@ async def table_names(conn: Connection) -> list[str]:
         ORDER BY table_name
         """
     )
-    return [str(row["table_name"]) for row in rows]
+    return [str(row["table_name"]) for row in rows if row["table_name"] not in SECRET_TABLES]
 
 
 async def _rows(conn: Connection, table: str) -> tuple[list[str], list[dict[str, Any]]]:
@@ -43,6 +57,7 @@ async def export_json(conn: Connection) -> dict[str, Any]:
     return {
         "format": "fin-agent-export",
         "version": 1,
+        "money_unit": "paise",
         "exported_at": datetime.now(UTC).isoformat(),
         "tables": tables,
     }
@@ -104,7 +119,9 @@ def export_pg_dump(database_url: str, *, timeout: int = 120) -> bytes:
 
     try:
         result = subprocess.run(
-            [executable, "--no-owner", "--no-privileges", "--format=plain"],
+            # Grants stay in: this dump is also the pre-migration snapshot, and a database restored
+            # from it needs `agent_ro`'s SELECT list and the backup role's access to work.
+            [executable, "--no-owner", "--format=plain"],
             capture_output=True,
             timeout=timeout,
             env=env,

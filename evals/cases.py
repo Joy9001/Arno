@@ -432,6 +432,23 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             {"check": "undo"},
         ),
         _case(
+            # The loan has no rate, so the result says the interest is unknown; the agent must ask
+            # for it rather than treat the whole EMI as principal by fact.
+            "wr_loan_unknown_rate",
+            "writes",
+            [
+                "I have a car loan with ₹3,00,000 left and a ₹10,500 EMI on the 5th. "
+                "I don't know its interest rate.",
+                "I paid this month's car EMI, ₹10,500.",
+            ],
+            {
+                "check": "movement",
+                "kind": "loan",
+                "amount_paise": 1_050_000,
+                "asks_about": ["interest", "rate"],
+            },
+        ),
+        _case(
             "wr_swiggy_voice",
             "writes",
             ["Voice note: I spent four hundred and fifty rupees on Swiggy yesterday."],

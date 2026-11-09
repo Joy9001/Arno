@@ -24,7 +24,6 @@ from fin_agent.ledger import schedule_payments
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger import settings as settings_mod
 from fin_agent.ledger.audit import undo_group, undo_latest, write_group
-from fin_agent.ledger.common import ledger_balance
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.errors import InvalidLedgerError
 from fin_agent.tools.mark import mark
@@ -133,7 +132,8 @@ async def resolve_payee(
     name = name.strip()
     if upi_id:
         row = await conn.fetchrow(
-            "SELECT * FROM payees WHERE active AND upi_id = $1 ORDER BY display_name LIMIT 1",
+            "SELECT * FROM payees WHERE active AND lower(upi_id) = lower($1) "
+            "ORDER BY display_name LIMIT 1",
             upi_id,
         )
     else:
@@ -528,14 +528,16 @@ async def record_movement(
         loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
         if loan is None or loan["kind"] != "loan":
             raise ToolInputError("a loan payment names a loan account")
-        outstanding = max(-await ledger_balance(conn, loan["ledger_account_id"]), 0)
-        principal = amount
-        interest = 0
-        if loan["rate_bps"]:
-            monthly = Decimal(loan["rate_bps"]) / Decimal(10000) / Decimal(12)
-            interest = int((Decimal(outstanding) * monthly).quantize(Decimal("1")))
-            interest = min(interest, amount - 1) if amount > 1 else 0
-            principal = amount - interest
+        principal, interest = await movements_mod.loan_payment_parts(conn, loan, amount)
+        # A loan with no rate has unknown interest: record it as principal, but say so instead of
+        # implying the payment was all principal by fact.
+        warning = None
+        if not loan["rate_bps"]:
+            warning = (
+                f"Interest is unknown: {loan['name']} has no rate on file, so all "
+                f"{money(amount)['text']} was recorded as principal and the outstanding balance "
+                f"may be overstated. Ask for the loan's rate or this payment's interest part."
+            )
         account_id = (
             await resolve_account_id(conn, movement.get("account"))
             if movement.get("account")
@@ -555,21 +557,27 @@ async def record_movement(
             actor="agent",
             message_id=message_id,
         )
-        return {
+        summary = result["description"]
+        payload = {
             "status": "recorded",
             "movement_id": result["id"],
             "undo_id": result["undo_id"],
             "date": result["date"],
-            "summary": result["description"],
+            "summary": summary,
             "transfers": result["transfers"],
+            "principal_paise": principal,
+            "interest_paise": interest,
             "card": _card(
                 "movement",
                 title="Loan payment logged",
-                summary=result["description"],
+                summary=f"{summary} · {warning}" if warning else summary,
                 amount=money(amount),
                 undo_id=result["undo_id"],
             ),
         }
+        if warning:
+            payload["note"] = warning
+        return payload
 
     if kind == "refund":
         amount = _rupees(movement.get("amount_rupees"))
@@ -667,6 +675,24 @@ async def correct_movement(
             mapped["account_id"] = await resolve_account_id(conn, value)
         elif key == "amount_rupees":
             mapped["amount_paise"] = _rupees(value)
+        elif key == "my_share_rupees":
+            mapped["my_share_paise"] = _balance_rupees(value, "my_share_rupees")
+        elif key == "shares":
+            mapped["shares"] = [
+                {
+                    # A person already on the split; never a new payee from a correction.
+                    "payee_id": (
+                        await _find_one(
+                            conn,
+                            "payees",
+                            str(_required(share, "name", "a person's name")),
+                            None,
+                        )
+                    )["id"],
+                    "amount_paise": _rupees(share.get("amount_rupees"), "a person's share"),
+                }
+                for share in value
+            ]
         elif key == "expected_date":
             mapped["expected_date"] = _date(value)
         elif key == "date":

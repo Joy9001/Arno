@@ -82,7 +82,7 @@ async def create_payee(
         if row is None:
             raise NotFoundLedgerError(f"No category {default_category_id}")
     if upi_id is not None:
-        row = await conn.fetchrow("SELECT 1 FROM payees WHERE upi_id = $1", upi_id)
+        row = await conn.fetchrow("SELECT 1 FROM payees WHERE lower(upi_id) = lower($1)", upi_id)
         if row is not None:
             raise InvalidLedgerError(f"UPI id {upi_id} is already on another payee")
 
@@ -133,7 +133,7 @@ async def update_payee(
             raise NotFoundLedgerError(f"No category {default_category_id}")
     if upi_id is not None:
         row = await conn.fetchrow(
-            "SELECT 1 FROM payees WHERE upi_id = $1 AND id <> $2", upi_id, payee_id
+            "SELECT 1 FROM payees WHERE lower(upi_id) = lower($1) AND id <> $2", upi_id, payee_id
         )
         if row is not None:
             raise InvalidLedgerError(f"UPI id {upi_id} is already on another payee")

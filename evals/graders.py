@@ -581,6 +581,15 @@ async def grade_writes(
                     reason=f"expected date {want.isoformat()}",
                 )
             )
+        asks_about = [str(term).lower() for term in expected.get("asks_about", [])]
+        if asks_about:
+            results.append(
+                CheckResult(
+                    name="asks_about",
+                    passed=_has_any(output.reply, asks_about),
+                    reason=f"expected a question about one of {asks_about}",
+                )
+            )
     elif check == "income":
         amount = int(expected["amount_paise"])
         results.append(

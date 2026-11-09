@@ -97,6 +97,11 @@ Movement = Annotated[
 ]
 
 
+class ShareChange(WriteModel):
+    name: str = Field(description="A person already on the split, by name.")
+    amount_rupees: Decimal
+
+
 class MovementChanges(WriteModel):
     """Changes for `correct_movement`. Omit a field to leave it alone."""
 
@@ -106,6 +111,17 @@ class MovementChanges(WriteModel):
     expected_date: Date | None = Field(default=None, description="New expected date.")
     date: Date | None = Field(default=None, description="New movement date.")
     amount_rupees: Decimal | None = Field(default=None, description="New amount in rupees.")
+    my_share_rupees: Decimal | None = Field(
+        default=None,
+        description="A split's new share of mine. Name each person's share too.",
+    )
+    shares: list[ShareChange] | None = Field(
+        default=None,
+        description=(
+            "A split's new share for each person on it. Leave out only when the split was equal "
+            "and the new total is split equally."
+        ),
+    )
     account: str | None = Field(default=None, description="New account name.")
     delete: bool = Field(default=False, description="Delete by appending a reversal.")
 
@@ -263,6 +279,7 @@ __all__ = [
     "SettingsSetup",
     "Settlement",
     "SetupData",
+    "ShareChange",
     "Split",
     "SplitPerson",
     "Transfer",

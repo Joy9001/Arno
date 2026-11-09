@@ -8,6 +8,7 @@ an amount or account fix, a corrected movement in the same write group.
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from fin_agent.db.conn import Connection
@@ -20,6 +21,7 @@ from fin_agent.ledger.categories import (
 from fin_agent.ledger.common import (
     SYSTEM_KINDS,
     get_account_row,
+    ledger_balance,
     resolve_account,
     system_account,
     today,
@@ -29,7 +31,8 @@ from fin_agent.ledger.payees import ensure_person_account, get_payee
 from fin_agent.ledger.postings import MovementRecord, TransferSpec, create_movement_in_group
 
 CORRECTABLE_SCOPES = ("this", "future", "all")
-_LEDGER_CHANGE_KINDS = ("expense", "income", "transfer", "refund", "settlement")
+_LEDGER_CHANGE_KINDS = ("expense", "income", "transfer", "refund", "settlement", "split", "loan")
+_LEDGER_CHANGE_KEYS = ("amount_paise", "account_id", "my_share_paise", "shares")
 
 
 async def _movement_row(conn: Connection, movement_id: str) -> dict[str, Any]:
@@ -722,6 +725,25 @@ async def record_loan_payment(
     return await _finish_movement(conn, group, record)
 
 
+async def loan_payment_parts(
+    conn: Connection, loan: dict[str, Any], amount_paise: int
+) -> tuple[int, int]:
+    """Principal and interest of one loan payment, the single rule every path shares.
+
+    A loan is a liability, so its ledger balance is negative: the outstanding principal is the
+    negated balance. The monthly rate is the annual rate over twelve. A loan with no rate has
+    unknown interest, so the payment is all principal; the caller says so instead of implying
+    zero interest.
+    """
+    outstanding = max(-await ledger_balance(conn, loan["ledger_account_id"]), 0)
+    if not loan["rate_bps"]:
+        return amount_paise, 0
+    monthly = Decimal(loan["rate_bps"]) / Decimal(10000) / Decimal(12)
+    interest = int((Decimal(outstanding) * monthly).quantize(Decimal("1")))
+    interest = min(interest, amount_paise - 1) if amount_paise > 1 else 0
+    return amount_paise - interest, interest
+
+
 async def record_goal_contribution(
     conn: Connection,
     *,
@@ -809,6 +831,30 @@ async def _update_labels(
         "SELECT * FROM transfer_labels WHERE movement_id = $1 ORDER BY transfer_id",
         movement_id,
     )
+    if "payee_id" in updates and labels:
+        # A split labels each person's share with that person; the vendor is the label on my own
+        # share. Renaming the vendor must not rename who owes what.
+        person_transfers = {
+            row["transfer_id"]
+            for row in await conn.fetch(
+                """
+                SELECT tl.transfer_id
+                FROM transfer_labels tl
+                JOIN pgledger_transfers t ON t.id = tl.transfer_id
+                JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
+                JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+                WHERE tl.movement_id = $1 AND 'person' IN (fa.kind, ta.kind)
+                """,
+                movement_id,
+            )
+        }
+        vendor_labels = [label for label in labels if label["transfer_id"] not in person_transfers]
+        if not vendor_labels:
+            raise InvalidLedgerError(
+                "That movement's payee is a person, so a new payee would change who owes what; "
+                "delete it and record it again instead"
+            )
+        labels = vendor_labels
     if not labels:
         transfer = await conn.fetchrow(
             """
@@ -855,13 +901,74 @@ async def _update_labels(
     return changed
 
 
-def _corrected_transfer_specs(
+def _corrected_split_shares(
+    *,
+    total_paise: int,
+    people: list[dict[str, Any]],
+    original_mine: int,
+    my_share_paise: int | None,
+    shares: list[dict[str, Any]] | None,
+) -> tuple[int, dict[str, int]]:
+    """The shares of a corrected split: explicit ones, or an equal re-split of an equal split.
+
+    The equal rule is deterministic: every person pays the floor of the division and my share
+    takes the remainder, so ₹100 three ways is 3334 + 3333 + 3333 and no paise is lost or
+    invented. A split that was not equal cannot be re-split without naming each person's share.
+    """
+    original = {str(row["payee_id"]): int(row["amount_paise"]) for row in people}
+    if shares is not None:
+        named: dict[str, int] = {}
+        for share in shares:
+            payee_id = str(share["payee_id"])
+            if payee_id in named:
+                raise InvalidLedgerError("A corrected split names each person's share once")
+            named[payee_id] = int(share["amount_paise"])
+        if set(named) != set(original):
+            raise InvalidLedgerError(
+                "A corrected split names each person's share, and only the people already on it; "
+                "delete it and record it again to change who was in it"
+            )
+        mine = total_paise - sum(named.values())
+        if my_share_paise is not None and my_share_paise != mine:
+            raise InvalidLedgerError("The split parts do not add up to the total")
+        if mine < 0:
+            raise InvalidLedgerError("The split parts do not add up to the total")
+        return mine, named
+    if my_share_paise is not None:
+        raise InvalidLedgerError(
+            "A new total for a split needs each person's share too, because theirs may change"
+        )
+    base, remainder = divmod(original_mine + sum(original.values()), len(original) + 1)
+    if original_mine != base + remainder or any(value != base for value in original.values()):
+        raise InvalidLedgerError(
+            "That split was not equal, so a new total needs each person's share"
+        )
+    base, remainder = divmod(total_paise, len(original) + 1)
+    if base <= 0:
+        raise InvalidLedgerError("That total is too small to split between these people")
+    return base + remainder, {payee_id: base for payee_id in original}
+
+
+async def _loan_interest_category(
+    conn: Connection, interest_row: dict[str, Any] | None
+) -> str | None:
+    """The category a loan's interest lands in, as `record_loan_payment` picks it."""
+    if interest_row is not None and interest_row["category_id"]:
+        return interest_row["category_id"]
+    row = await conn.fetchrow("SELECT id FROM categories WHERE name = 'Loan Interest' AND active")
+    return row["id"] if row else None
+
+
+async def _corrected_transfer_specs(
+    conn: Connection,
     movement: dict[str, Any],
     transfers: list[dict[str, Any]],
     *,
     amount_paise: int | None,
     account_id: str | None,
     labels: dict[str, Any],
+    my_share_paise: int | None = None,
+    shares: list[dict[str, Any]] | None = None,
 ) -> list[TransferSpec]:
     kind = movement["kind"]
     if kind not in _LEDGER_CHANGE_KINDS:
@@ -933,6 +1040,88 @@ def _corrected_transfer_specs(
                 amount_paise or int(row["amount_paise"]),
             )
         ]
+    if kind == "split":
+        people = [row for row in transfers if row["to_kind"] == "person"]
+        if not people:
+            raise InvalidLedgerError("That split has no person's share to correct")
+        mine_row = next((row for row in transfers if row["to_kind"] == "spending"), None)
+        original_mine = int(mine_row["amount_paise"]) if mine_row else 0
+        old_total = original_mine + sum(int(row["amount_paise"]) for row in people)
+        total = amount_paise if amount_paise is not None else old_total
+        mine, person_shares = _corrected_split_shares(
+            total_paise=total,
+            people=people,
+            original_mine=original_mine,
+            my_share_paise=my_share_paise,
+            shares=shares,
+        )
+        specs: list[TransferSpec] = []
+        if mine:
+            from_id = account_id or (
+                mine_row["from_account_id"] if mine_row else people[0]["from_account_id"]
+            )
+            to_id = mine_row["to_account_id"] if mine_row else None
+            if to_id is None:
+                spending = await system_account(conn, "spending")
+                to_id = spending["id"]
+            specs.append(make(from_id, to_id, mine))
+        for row in people:
+            amount = person_shares[str(row["payee_id"])]
+            if amount <= 0:
+                raise InvalidLedgerError("A split share must be positive")
+            specs.append(
+                TransferSpec(
+                    from_account_id=account_id or row["from_account_id"],
+                    to_account_id=row["to_account_id"],
+                    amount_paise=amount,
+                    payee_id=str(row["payee_id"]),
+                    expected_date=row["expected_date"],
+                    note=row["note"],
+                )
+            )
+        return specs
+    if kind == "loan":
+        principal_row = next((row for row in transfers if row["to_kind"] == "loan"), None)
+        if principal_row is None:
+            raise InvalidLedgerError("That loan payment has no principal transfer")
+        interest_row = next((row for row in transfers if row["to_kind"] == "spending"), None)
+        total = (
+            amount_paise
+            if amount_paise is not None
+            else sum(int(row["amount_paise"]) for row in transfers)
+        )
+        loan = await resolve_account(conn, principal_row["to_account_id"])
+        principal, interest = await loan_payment_parts(conn, loan, total)
+        paid_from = account_id or principal_row["from_account_id"]
+        specs = [
+            TransferSpec(
+                from_account_id=paid_from,
+                to_account_id=principal_row["to_account_id"],
+                amount_paise=principal,
+                note=labels.get("note"),
+            )
+        ]
+        if interest:
+            # The interest is consumption, so it takes the category the original carried (or the
+            # default loan-interest one) rather than leaving it uncategorized.
+            to_id = (
+                interest_row["to_account_id"]
+                if interest_row
+                else (await system_account(conn, "spending"))["id"]
+            )
+            category_id = labels.get("category_id") or await _loan_interest_category(
+                conn, interest_row
+            )
+            specs.append(
+                TransferSpec(
+                    from_account_id=paid_from,
+                    to_account_id=to_id,
+                    amount_paise=interest,
+                    category_id=category_id,
+                    note=labels.get("note"),
+                )
+            )
+        return specs
     raise InvalidLedgerError(f"Amount and account corrections are not supported for {kind}")
 
 
@@ -951,6 +1140,8 @@ async def correct_movement(
         changes = {**changes, "date": _movement_date(changes["date"])}
     if changes.get("amount_paise") is not None and changes["amount_paise"] <= 0:
         raise InvalidLedgerError("A corrected amount must be positive")
+    if changes.get("my_share_paise") is not None and changes["my_share_paise"] < 0:
+        raise InvalidLedgerError("Your share cannot be negative")
     movement = await _movement_row(conn, movement_id)
     if movement["kind"] == "reversal":
         raise InvalidLedgerError("A reversal is not edited")
@@ -988,7 +1179,7 @@ async def correct_movement(
         raise InvalidLedgerError("A future or all correction needs both a payee and a category")
 
     label_only = not any(
-        changes.get(key) is not None for key in ("amount_paise", "account_id")
+        changes.get(key) is not None for key in _LEDGER_CHANGE_KEYS
     ) and not changes.get("delete")
     rows_changed = 0
     label_changes = {
@@ -1020,12 +1211,15 @@ async def correct_movement(
             if changes.get("delete"):
                 result_movement_id = reversal.id
             else:
-                corrected = _corrected_transfer_specs(
+                corrected = await _corrected_transfer_specs(
+                    conn,
                     movement,
                     transfers,
                     amount_paise=changes.get("amount_paise"),
                     account_id=changes.get("account_id"),
                     labels=merged_labels,
+                    my_share_paise=changes.get("my_share_paise"),
+                    shares=changes.get("shares"),
                 )
                 record = await create_movement_in_group(
                     conn,
