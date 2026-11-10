@@ -14,7 +14,7 @@ from fin_agent.db.conn import Connection
 from fin_agent.india.recurrence import expand_rule, first_occurrence, parse_rule
 from fin_agent.india.workdays import HOLIDAY_ADJUSTMENTS, calendar_for
 from fin_agent.ledger.audit import write_group
-from fin_agent.ledger.common import get_account_row, ledger_balance, today
+from fin_agent.ledger.common import get_account_row, has_known_balance, ledger_balance, today
 from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 from fin_agent.ledger.schedule_payments import payment_evidence, payment_status
 
@@ -99,6 +99,11 @@ async def schedule_payload(conn: Connection, row: dict[str, Any]) -> dict[str, A
         else None
     )
     upcoming = await expand_schedule(conn, row, today(), today() + timedelta(days=366))
+    open_occurrences = [
+        event
+        for event in upcoming
+        if event["remaining_paise"] is None or event["remaining_paise"] > 0
+    ]
     return {
         "id": row["id"],
         "kind": row["kind"],
@@ -116,7 +121,7 @@ async def schedule_payload(conn: Connection, row: dict[str, Any]) -> dict[str, A
         "ends": row["ends"].isoformat() if row["ends"] else None,
         "active": row["active"],
         "outside_text": row["outside_text"],
-        "next_date": upcoming[0]["date"] if upcoming else None,
+        "next_date": open_occurrences[0]["date"] if open_occurrences else None,
     }
 
 
@@ -422,6 +427,9 @@ async def upcoming(
         outstanding = max(-await ledger_balance(conn, card["ledger_account_id"]), 0)
         if outstanding <= 0:
             continue
+        # A ledger balance is not a statement: without one, the outstanding is unknown and the
+        # bill amount must stay unknown rather than becoming a certain figure.
+        known = has_known_balance(card)
         for due in _card_due_dates(card, start, end):
             events.append(
                 {
@@ -430,11 +438,17 @@ async def upcoming(
                     "name": f"{card['name']} bill due",
                     "kind": "card_due",
                     "subtype": None,
-                    "amount_paise": outstanding,
+                    "amount_paise": outstanding if known else None,
                     "confirmed": True,
                     "payment_status": "untracked",
                     "paid_paise": None,
-                    "remaining_paise": outstanding,
+                    "remaining_paise": outstanding if known else None,
+                    "note": (
+                        None
+                        if known
+                        else f"{card['name']} has no statement balance, so the amount due is "
+                        "unknown."
+                    ),
                     "payments": [],
                     "account_id": card["id"],
                     "account_name": card["name"],

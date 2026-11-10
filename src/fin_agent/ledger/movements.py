@@ -100,27 +100,27 @@ async def _reversal_state(
 ) -> dict[str, dict[str, Any]]:
     """Whether each movement is effectively reversed, following undo-of-undo chains.
 
-    A movement is reversed when its reversal is active. Reversing that reversal makes the original
-    active again, so the answer is the parity of the longest chain of reversal children.
+    A reversal flips the movement it reverses. Reversing that reversal flips it back, so each
+    movement's effective sign is one minus the signs of its reversal children. A movement is
+    cancelled when the signs cancel exactly, which also covers the two-children case: an active
+    reversal beside one that a later undo already restored leaves the original cancelled.
     """
     if not movement_ids:
         return {}
     rows = await conn.fetch(
         """
         WITH RECURSIVE descendants AS (
-            SELECT m.id AS root, m.id AS node, 0 AS depth
+            SELECT m.id AS root, m.id AS node, m.reverses_id AS parent_id, 0 AS depth
             FROM movements m
             WHERE m.id = ANY($1::text[])
               AND ($2::date IS NULL OR m.date <= $2)
             UNION ALL
-            SELECT d.root, child.id, d.depth + 1
+            SELECT d.root, child.id, child.reverses_id, d.depth + 1
             FROM descendants d
             JOIN movements child ON child.reverses_id = d.node
             WHERE $2::date IS NULL OR child.date <= $2
         )
-        SELECT d.root, d.node, d.depth,
-               (SELECT count(*) FROM movements x WHERE x.reverses_id = d.node
-                AND ($2::date IS NULL OR x.date <= $2)) AS child_count
+        SELECT d.root, d.node, d.parent_id, d.depth
         FROM descendants d
         """,
         movement_ids,
@@ -133,13 +133,34 @@ async def _reversal_state(
     result: dict[str, dict[str, Any]] = {}
     for root in movement_ids:
         nodes = by_root.get(root, [])
-        leaves = [row for row in nodes if int(row["child_count"]) == 0]
-        depth = max((int(row["depth"]) for row in leaves), default=0)
-        direct = next((str(row["node"]) for row in nodes if int(row["depth"]) == 1), None)
+        if not nodes:
+            result[root] = {"reversed": False, "reversed_by": None, "depth": 0}
+            continue
+        children: dict[str, list[str]] = {}
+        depths: dict[str, int] = {}
+        for row in nodes:
+            node_id = str(row["node"])
+            depths[node_id] = int(row["depth"])
+            children.setdefault(node_id, [])
+            if row["parent_id"] is not None:
+                children.setdefault(str(row["parent_id"]), []).append(node_id)
+        # Deepest nodes first, so every child's sign is known before its parent's.
+        signs: dict[str, int] = {}
+        for node_id in sorted(depths, key=lambda node: depths[node], reverse=True):
+            signs[node_id] = 1 - sum(signs[child] for child in children.get(node_id, []))
+
+        cancelled = signs[root] <= 0
         result[root] = {
-            "reversed": depth % 2 == 1,
-            "reversed_by": direct if depth % 2 == 1 else None,
-            "depth": depth,
+            "reversed": cancelled,
+            "reversed_by": (
+                next(
+                    (child for child in children.get(root, []) if signs[child] > 0),
+                    None,
+                )
+                if cancelled
+                else None
+            ),
+            "depth": max(depths.values(), default=0),
         }
     return result
 
@@ -181,7 +202,17 @@ async def movement_payload(
     category = next(
         (row["category_name"] for row in transfers if row["category_name"] is not None), None
     )
-    payee = next((row["payee_name"] for row in transfers if row["payee_name"] is not None), None)
+    # The vendor is the label on the leg that touches Spending (my own share of a split). A
+    # person's leg names who owes me, so it must never read as "paid to Asha".
+    spending_leg = next(
+        (row for row in transfers if "spending" in (row["from_kind"], row["to_kind"])),
+        None,
+    )
+    payee = spending_leg["payee_name"] if spending_leg is not None else None
+    if payee is None and movement["kind"] != "split":
+        payee = next(
+            (row["payee_name"] for row in transfers if row["payee_name"] is not None), None
+        )
     return {
         "id": movement_id,
         "date": movement["date"].isoformat(),
@@ -390,6 +421,18 @@ async def record_transfer(
     await resolve_account(conn, from_account_id)
     await resolve_account(conn, to_account_id)
     category_id, payee_id = await _validated_label(conn, category_id, payee_id)
+    if category_id is None:
+        # Money moved into a goal's fenced account is saving, not a plain transfer; every path
+        # that records one must label it the same way.
+        goal = await conn.fetchrow(
+            "SELECT name FROM accounts WHERE id = $1 AND kind = 'goal'", to_account_id
+        )
+        if goal is not None:
+            row = await conn.fetchrow(
+                "SELECT id FROM categories WHERE name = 'Savings & Investments' AND active"
+            )
+            category_id = row["id"] if row else None
+            description = description or f"Contribution to {goal['name']}"
     async with write_group(conn, actor=actor, message_id=message_id) as group:
         transfer = TransferSpec(
             from_account_id=from_account_id,
@@ -726,22 +769,58 @@ async def record_loan_payment(
 
 
 async def loan_payment_parts(
-    conn: Connection, loan: dict[str, Any], amount_paise: int
+    conn: Connection, loan: dict[str, Any], amount_paise: int, *, on: date
 ) -> tuple[int, int]:
     """Principal and interest of one loan payment, the single rule every path shares.
 
     A loan is a liability, so its ledger balance is negative: the outstanding principal is the
-    negated balance. The monthly rate is the annual rate over twelve. A loan with no rate has
+    negated balance. The monthly rate is the annual rate over twelve, and it is booked once per
+    calendar month per loan: the first payment in a month carries the month's interest, and a
+    later payment in the same month is a prepayment, all principal. A loan with no rate has
     unknown interest, so the payment is all principal; the caller says so instead of implying
     zero interest.
     """
     outstanding = max(-await ledger_balance(conn, loan["ledger_account_id"]), 0)
     if not loan["rate_bps"]:
         return amount_paise, 0
+    if await _interest_booked(conn, loan, on):
+        return amount_paise, 0
     monthly = Decimal(loan["rate_bps"]) / Decimal(10000) / Decimal(12)
     interest = int((Decimal(outstanding) * monthly).quantize(Decimal("1")))
     interest = min(interest, amount_paise - 1) if amount_paise > 1 else 0
     return amount_paise - interest, interest
+
+
+async def _interest_booked(conn: Connection, loan: dict[str, Any], on: date) -> bool:
+    """Whether a live loan payment this calendar month already booked the month's interest.
+
+    A payment that booked interest has a leg into Spending (the interest is consumption); a
+    prepayment does not. A reversed payment booked nothing.
+    """
+    start = on.replace(day=1)
+    end = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
+    rows = await conn.fetch(
+        """
+        SELECT m.id
+        FROM movements m
+        WHERE m.kind = 'loan' AND m.date >= $2 AND m.date < $3
+          AND EXISTS (
+              SELECT 1 FROM pgledger_transfers tp
+              WHERE tp.metadata ->> 'movement_id' = m.id AND tp.to_account_id = $1
+          )
+          AND EXISTS (
+              SELECT 1 FROM pgledger_transfers ti
+              JOIN accounts ta ON ta.ledger_account_id = ti.to_account_id
+              WHERE ti.metadata ->> 'movement_id' = m.id AND ta.kind = 'spending'
+          )
+        """,
+        loan["ledger_account_id"],
+        start,
+        end,
+    )
+    ids = [str(row["id"]) for row in rows]
+    states = await _reversal_state(conn, ids)
+    return any(not states[movement_id]["reversed"] for movement_id in ids)
 
 
 async def record_goal_contribution(
@@ -760,16 +839,13 @@ async def record_goal_contribution(
     goal = await get_account_row(conn, goal_account_id)
     if goal["kind"] != "goal":
         raise InvalidLedgerError("A goal contribution goes into a goal account")
-    row = await conn.fetchrow(
-        "SELECT id FROM categories WHERE name = 'Savings & Investments' AND active"
-    )
+    # `record_transfer` labels a move into a goal account as saving by default.
     return await record_transfer(
         conn,
         from_account_id=account_id,
         to_account_id=goal_account_id,
         amount_paise=amount_paise,
-        description=description or f"Contribution to {goal['name']}",
-        category_id=row["id"] if row else None,
+        description=description,
         date=date,
         note=note,
         idempotency_key=idempotency_key,
@@ -788,9 +864,12 @@ async def reverse_movement(
     """Append the opposite transfer batch in one movement."""
     conn = group.conn
     movement = await _movement_row(conn, movement_id)
-    if movement["kind"] == "reversal":
-        # Reversing a reversal is how undo-of-undo works; it is allowed and nets back.
-        pass
+    # Undo-of-undo reverses a reversal, and that target is active. A movement that a live
+    # reversal already cancels has no money to reverse: reversing it again would mint money.
+    if (await _reversal_state(conn, [movement_id]))[movement_id]["reversed"]:
+        raise ConflictLedgerError(
+            "That entry was already corrected or removed; undo that change first."
+        )
     transfers = await _transfer_rows(conn, movement_id)
     if not transfers:
         raise InvalidLedgerError(f"Movement {movement_id} has no transfers")
@@ -967,6 +1046,7 @@ async def _corrected_transfer_specs(
     amount_paise: int | None,
     account_id: str | None,
     labels: dict[str, Any],
+    date: date,
     my_share_paise: int | None = None,
     shares: list[dict[str, Any]] | None = None,
 ) -> list[TransferSpec]:
@@ -1091,7 +1171,7 @@ async def _corrected_transfer_specs(
             else sum(int(row["amount_paise"]) for row in transfers)
         )
         loan = await resolve_account(conn, principal_row["to_account_id"])
-        principal, interest = await loan_payment_parts(conn, loan, total)
+        principal, interest = await loan_payment_parts(conn, loan, total, on=date)
         paid_from = account_id or principal_row["from_account_id"]
         specs = [
             TransferSpec(
@@ -1198,11 +1278,9 @@ async def correct_movement(
                     movement_id,
                 )
                 group.record_updated("movements", movement_id, before, after)
-            rows_changed = (
-                await _update_labels(conn, group, movement_id, label_changes)
-                if label_changes
-                else 0
-            )
+                rows_changed = 1
+            if label_changes:
+                rows_changed += await _update_labels(conn, group, movement_id, label_changes)
             result_movement_id = movement_id
             reversal_id = None
         else:
@@ -1218,6 +1296,7 @@ async def correct_movement(
                     amount_paise=changes.get("amount_paise"),
                     account_id=changes.get("account_id"),
                     labels=merged_labels,
+                    date=changes.get("date") or movement["date"],
                     my_share_paise=changes.get("my_share_paise"),
                     shares=changes.get("shares"),
                 )

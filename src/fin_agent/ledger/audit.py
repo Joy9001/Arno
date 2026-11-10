@@ -356,9 +356,16 @@ async def _restore_movement(
     movement_id: str,
     before: dict[str, Any] | None,
 ) -> None:
-    from fin_agent.ledger.movements import reverse_movement
+    from fin_agent.ledger.movements import _reversal_state, reverse_movement
 
     if before is None:
+        # The group created this movement. A later correction or delete already reversed it, and
+        # a second reversal would move the money a third time; the user must undo that first.
+        state = (await _reversal_state(conn, [movement_id]))[movement_id]
+        if state["reversed"]:
+            raise ConflictLedgerError(
+                "That entry was already corrected or removed; undo that change first."
+            )
         await reverse_movement(group, movement_id, note="Undo")
         return
     values = await conn.fetchrow(

@@ -142,6 +142,8 @@ async def link_payment(
             or (await _reversal_state(conn, [movement_id]))[movement_id]["reversed"]
         ):
             raise InvalidLedgerError("A reversed movement cannot cover a schedule occurrence")
+        if due_date > movement["date"] + timedelta(days=31):
+            raise InvalidLedgerError(await _far_match_message(conn, schedule, movement, due_date))
         occurrence = await _occurrence(conn, group, schedule, due_date)
         previous = await conn.fetchrow(
             "SELECT * FROM schedule_payments WHERE occurrence_id = $1 AND movement_id = $2",
@@ -179,6 +181,35 @@ async def link_payment(
         "amount_paise": amount,
         "undo_id": group.group_id,
     }
+
+
+async def _far_match_message(
+    conn: Connection,
+    schedule: dict[str, Any],
+    movement: dict[str, Any],
+    due_date: date,
+) -> str:
+    """Why a payment cannot cover an occurrence more than a month ahead, and which one can."""
+    from fin_agent.ledger.schedules import expand_schedule
+
+    events = await expand_schedule(
+        conn, schedule, movement["date"], movement["date"] + timedelta(days=366)
+    )
+    nearest = next(
+        (
+            event["date"]
+            for event in events
+            if event["remaining_paise"] is None or event["remaining_paise"] > 0
+        ),
+        None,
+    )
+    message = (
+        f"That payment is dated {movement['date']}, more than 31 days before the occurrence due "
+        f"{due_date}. A payment covers the occurrence it pays, not one over a month later."
+    )
+    if nearest:
+        return f"{message} Nearest open occurrence: {nearest}."
+    return f"{message} It has no open occurrence within the next year."
 
 
 async def validate_restored_payment(conn: Connection, payment: dict[str, Any]) -> None:

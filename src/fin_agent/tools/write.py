@@ -14,6 +14,7 @@ from typing import Any
 from fin_agent import scheduled_questions as questions_mod
 from fin_agent.db.conn import Connection, quote_ident
 from fin_agent.engine.money import money
+from fin_agent.engine.projection import CardAccount, card_due_date, statement_close
 from fin_agent.india.formatting import format_paise
 from fin_agent.ledger import accounts as accounts_mod
 from fin_agent.ledger import categories as categories_mod
@@ -96,13 +97,27 @@ async def resolve_account_id(conn: Connection, name: str | None) -> str:
     if row is None:
         row = await conn.fetchrow("SELECT id, name FROM accounts WHERE id = $1 AND active", name)
     if row is None:
-        rows = await conn.fetch(
-            "SELECT name FROM accounts WHERE active AND kind NOT IN "
-            "('spending','income','equity','person','goal') ORDER BY name"
+        archived = await conn.fetchrow(
+            "SELECT name FROM accounts WHERE lower(name) = lower($1) OR id = $2 LIMIT 1",
+            name,
+            name,
         )
-        names = ", ".join(row["name"] for row in rows)
-        raise ToolInputError(f"No account named {name!r}. Accounts: {names}")
+        if archived is not None:
+            raise ToolInputError(
+                f"{archived['name']} is archived — reactivate it or pick another account. "
+                f"Spendable accounts: {await _spendable_names(conn)}"
+            )
+        raise ToolInputError(f"No account named {name!r}. Accounts: {await _spendable_names(conn)}")
     return str(row["id"])
+
+
+async def _spendable_names(conn: Connection) -> str:
+    """The active accounts money can actually move through, for a refusal to name."""
+    rows = await conn.fetch(
+        "SELECT name FROM accounts WHERE active AND kind IN ('bank','cash','wallet','card') "
+        "ORDER BY name"
+    )
+    return ", ".join(row["name"] for row in rows)
 
 
 async def _resolve_category_id(conn: Connection, name: str | None) -> str | None:
@@ -156,6 +171,14 @@ async def resolve_payee(
         outside_text=outside_text,
         actor="agent",
     )
+
+
+async def _is_category_name(conn: Connection, name: str) -> bool:
+    """A category name is not a merchant: "Groceries" came from a description, not a shop."""
+    row = await conn.fetchrow(
+        "SELECT 1 FROM categories WHERE active AND lower(name) = lower($1) LIMIT 1", name
+    )
+    return row is not None
 
 
 async def _usual_account(conn: Connection, payee_id: str) -> str | None:
@@ -276,6 +299,24 @@ async def _audited_undo_id(conn: Connection, undo_id: str | None) -> str | None:
     return undo_id if row else None
 
 
+def _card_bill(card: dict[str, Any], spent_on: date) -> dict[str, str] | None:
+    """The statement a card purchase lands on, from the engine's own card cycle."""
+    if card["statement_day"] is None or card["due_day"] is None:
+        return None
+    engine_card = CardAccount(
+        id=str(card["id"]),
+        name=str(card["name"]),
+        statement_day=int(card["statement_day"]),
+        due_day=int(card["due_day"]),
+        outstanding_paise=0,
+        credit_limit_paise=int(card["credit_limit_paise"] or 0),
+    )
+    return {
+        "statement_close": statement_close(engine_card, spent_on).isoformat(),
+        "due_date": card_due_date(engine_card, spent_on).isoformat(),
+    }
+
+
 def _movement_summary(result: dict[str, Any], amount_paise: int) -> str:
     transfers = result.get("transfers") or []
     if not transfers:
@@ -330,7 +371,8 @@ async def record_movement(
         return flagged and not any(name.lower() in text.lower() for text in user_texts)
 
     payee = None
-    if payee_name:
+    merchant = kind != "settlement"
+    if payee_name and not (merchant and await _is_category_name(conn, str(payee_name))):
         payee = await resolve_payee(
             conn,
             str(payee_name),
@@ -373,21 +415,33 @@ async def record_movement(
             actor="agent",
             message_id=message_id,
         )
+        summary = _movement_summary(result, amount)
+        account_row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
+        bill = (
+            _card_bill(dict(account_row), date.fromisoformat(result["date"]))
+            if account_row is not None and account_row["kind"] == "card"
+            else None
+        )
+        if bill is not None:
+            # The agent must quote the engine's cycle, not its own idea of the bill date.
+            summary = f"{summary} · bill due {bill['due_date']}"
         return {
             "status": "recorded",
             "movement_id": result["id"],
             "undo_id": result["undo_id"],
             "date": result["date"],
-            "summary": _movement_summary(result, amount),
+            "summary": summary,
             "transfers": result["transfers"],
             "account_source": "stated" if movement.get("account") else "usual",
             "category_source": result.get("category_source", "none"),
+            "card_bill": bill,
             "card": _card(
                 "movement",
                 title="Logged",
-                summary=_movement_summary(result, amount),
+                summary=summary,
                 amount=money(amount),
                 undo_id=result["undo_id"],
+                card_bill=bill,
                 movement=result,
             ),
         }
@@ -528,7 +582,9 @@ async def record_movement(
         loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
         if loan is None or loan["kind"] != "loan":
             raise ToolInputError("a loan payment names a loan account")
-        principal, interest = await movements_mod.loan_payment_parts(conn, loan, amount)
+        principal, interest = await movements_mod.loan_payment_parts(
+            conn, loan, amount, on=when or ledger_today()
+        )
         # A loan with no rate has unknown interest: record it as principal, but say so instead of
         # implying the payment was all principal by fact.
         warning = None
@@ -1467,7 +1523,12 @@ async def undo(
             )
     return {
         **result,
-        "card": _card("undo", title="Undone", summary=result.get("summary")),
+        "card": _card(
+            "undo",
+            title="Undone",
+            summary=result.get("summary"),
+            undo_undo_id=result.get("undo_undo_id"),
+        ),
     }
 
 

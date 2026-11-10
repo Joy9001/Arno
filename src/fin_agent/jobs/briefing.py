@@ -82,9 +82,12 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
         event
         for event in upcoming_rows
         if event["kind"] in {"obligation", "instalment", "card_due"}
-        and event["amount_paise"] is not None
     ]
-    bills_total = sum(int(event["amount_paise"]) for event in bills)
+    # A bill whose amount nobody stated stays listed and stays out of the total.
+    bills_total = sum(
+        int(event["amount_paise"]) for event in bills if event["amount_paise"] is not None
+    )
+    bills_unknown = sum(1 for event in bills if event["amount_paise"] is None)
 
     projection = await projection_tools.project(conn, horizon_days=90, as_of=day)
     floor_paise = int(projection["floor_paise"])
@@ -134,6 +137,7 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
         },
         "bills": {
             "count": len(bills),
+            "unknown_count": bills_unknown,
             "total_paise": bills_total,
             "total": money(bills_total),
             "items": [
@@ -141,7 +145,7 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
                     "date": event["date"],
                     "name": event["name"],
                     "amount_paise": event["amount_paise"],
-                    "amount": money(int(event["amount_paise"])),
+                    "amount": money(event["amount_paise"]),
                     "source_id": event["schedule_id"] or event["account_id"],
                 }
                 for event in bills[:8]
@@ -196,6 +200,8 @@ def render_template(numbers: dict[str, Any]) -> str:
         if bills["count"]
         else "no scheduled bills"
     )
+    if bills["count"] and bills["unknown_count"]:
+        bill_text += f", {bills['unknown_count']} with an unknown amount"
     floor = numbers["floor"]
     if not floor["set"]:
         floor_text = (

@@ -125,6 +125,9 @@ async def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
         credit_limit_paise=10_000_000,
         statement_day=5,
         due_day=25,
+        # A stated anchor (zero here) is what makes the outstanding known; a card's ledger
+        # balance alone is not a statement, so its bill amount would be unknown (wave 3, e1 F1).
+        opening_balance_paise=0,
     )
     food = await _category(ledger, "Food & Dining")
     await record_expense(
