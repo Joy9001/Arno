@@ -88,7 +88,10 @@ pgledger doesn't. The following table lists its fields:
 
 One `spending`, one `income`, and one `equity` account exist. `equity` holds opening balances and
 adjustments: when a statement's closing balance disagrees with the ledger, the difference is a
-visible adjustment, and it never counts as spending.
+visible adjustment, and it never counts as spending. A commit also books the statement's printed
+opening at the statement's first day, so every date inside the period reads its real balance, and
+it supersedes the older balance adjustments dated inside the period that the statement now explains
+([`import.md`](import.md), `fin-agent repair-openings` for a ledger written before this rule).
 
 **`movements`:** one real-world money movement, written as one `pgledger_create_transfers` call.
 Its transfers carry `{movement_id}` in their metadata. The following table lists its fields:
@@ -237,12 +240,12 @@ The following tables hold memory, conversations, and provenance:
 
 ---
 
-## Tool surface: 14 tools
+## Tool surface: 18 tools
 
-_"Answers any question" is a property of the tool surface._ Few wide tools over complete data. Eight
-read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools: `run_code`
-and the write tools. See [Code Mode](#code-mode). Each tool's description, input, output, and
-logic are in [`tools.md`](tools.md).
+_"Answers any question" is a property of the tool surface._ Few wide tools over complete data.
+Twelve read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools:
+`run_code` and the six write tools. See [Code Mode](#code-mode). Each tool's description, input,
+output, and logic are in [`tools.md`](tools.md).
 
 ![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
 
@@ -251,18 +254,22 @@ its own card ([note](diagrams/sd-tool-surface.md)).*
 
 ### Read
 
-The agent has eight read tools:
+The agent has twelve read tools:
 
 | Tool | Returns |
 |---|---|
-| `get_financial_context()` | Deliberately comprehensive, and it loads itself as each thread's pinned snapshot ([step 6](system-design.md#what-goes-in-each-request)). Today's date, settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences with their kind, what setup is missing, staleness warnings |
+| `get_financial_context()` | Deliberately comprehensive, and it loads itself as each thread's pinned snapshot ([step 6](system-design.md#what-goes-in-each-request)). Today's date, settings, accounts with balances and ages, data coverage for each account, next 30 days of scheduled events, goals and progress, who owes what, active preferences with their kind, scheduled questions, open imports, what setup is missing, staleness warnings |
 | `query_movements(filters)` | Movements with their transfers and labels, filterable by account, category, payee, date, amount, and kind |
 | `summarize_spending(group_by, period, filters)` | Aggregates from `v_spending`, summed in the database |
+| `recap(period)` | The stories of a day, week, or month, read from the same engine as the Recaps page ([`recaps.md`](recaps.md)) |
 | `project(horizon, hypothetical)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
 | `run_query(sql)` | Rows, queried as the read-only `agent_ro` role, including conversation search on `messages.search`. The agent shows the SQL it ran |
-| `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment compared. The same function splits an EMI when one is logged |
+| `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment compared. A logged EMI splits by the ledger's own rule, not this schedule: `loan_payment_parts` books one month's interest at the loan's rate |
 | `compound(monthly, annual_rate, months, start)` | Growth of a monthly investment at an assumed rate, which the reply must state |
+| `rupees(paise)` | The rupee form of a paise figure, from the one formatter; no card |
 | `show_chart(type, title, series)` | Nothing the model needs: a line, bar, stacked bar, or donut chart, from a typed spec that Fin-Agent emits as a card |
+| `show_table(title, columns, rows)` | Nothing the model needs: a typed table it computed, emitted as a result card with its source lineage |
+| `present(display)` | Nothing the model needs: composes the turn's results into one answer card with the views the results offer |
 
 ### Write
 
@@ -309,7 +316,7 @@ The following table sets how it is configured:
 
 | Concern | Decision |
 |---|---|
-| Which tools move behind `run_code` | The eight read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
+| Which tools move behind `run_code` | The twelve read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
 | Writes | Always direct tool calls, one row at a time, each with its write-show-undo card. A script never writes |
 | Money in the sandbox | Integer paise, which stay exact. Code Mode turns a `Decimal` into a string at the boundary, and Monty's `round(x, 2)` differs from CPython's (2.68 against 2.67 for 2.675), so scripts don't use either for money. Rate arithmetic (interest, growth) is floating point, so results are rounded to the rupee for display |
 | Types crossing the boundary | Only JSON-native ones. Code Mode turns tuples, sets, dates, and `Decimal` values into lists and strings, and raw Monty doesn't, so anything else would make a script see different values on replay |

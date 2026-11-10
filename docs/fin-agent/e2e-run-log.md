@@ -517,3 +517,88 @@ the first chunk timed out and its lines lost suggestions. The import card said "
 stages. Parsers are saved to `statement_layouts` only on commit, so every upload before the first
 approval re-runs the 4-minute parse. The owner judged the import design unfit and is redesigning
 it in a separate session; testing resumes after that.
+
+## Release-hardening journeys and regressions (9-10 November 2026)
+
+Nine execution blocks on the new driver, not the terminal chat: six journey agents over the catalog,
+then three regression agents over every FAIL, PARTIAL, or newly reachable case. Each block had its
+own scratch database, its own port, and a live API process; no block wrote to the owner instance.
+
+| Field | Value |
+|---|---|
+| Driver | `tests/e2e/driver.py` against `uv run fin-agent serve`, jobs on ([README](../../tests/e2e/README.md)) |
+| Databases and ports | one `fin_agent_<agent>_test` per agent, ports 8101-8106, 8131-8133 |
+| Model | `deepseek-v4.1-flash`, a real request on every turn; every reply reported `fallback: false` |
+| Seeds | `--seed demo` (synthetic persona) except J01/J02 and the empty-install re-runs, which used `--empty` |
+| Ledger date | 2026-11-10, `Asia/Kolkata` |
+| Schemas | 23 at the start, 24 once another agent's migration landed mid-run |
+| Oracle | `driver state` (read straight from SQL), read-only SQL, and tool-call output, not the model's prose |
+| Invariants | `driver invariants` before and after every write; no violation after a fix |
+
+The table below lists each block's scope and its case tally.
+
+| Block | Scope | Turns | Pass | Partial | Fail | Blocked or not run |
+|---|---|---|---|---|---|---|
+| e1 | J01, J02, J03, J22 | 49 | 26 | 9 | 2 | |
+| e2 | J04-J08 | 50 | 35 | 4 | 2 | |
+| e3 | J09-J14 | 57 | 40 | 3 | 2 | |
+| e4 | J15, J23, J24, J30 | 28 | 20 | 3 | 1 | 5 not run (no driver surface) |
+| e5 | J16-J21 | 15 valid | 21 | 2 | 2 | 5 blocked, 12 not run |
+| e6 | J25, J28, J34, J36 | 41 | 15 | 6 | 0 | 20 not run |
+| r1 | e1 + e2 cases that failed, were partial, or became reachable | 37 | 30 | 4 | 2 | 1 not verified, 1 not run |
+| r2 | e3 money cases + previously passed re-checks | 27 | 20 | 4 | 0 | 5 not run |
+| r3 | imports, secrets, approvals, and the remaining partials | 35 | 22 | 3 | 1 | |
+
+The case counts differ in kind: e5 and e6 count catalog cases, r1 counts 38 result rows, and r2 and
+r3 count the cases they re-ran. No block treated a plausible reply as a pass.
+
+### What the journeys found, and what closed
+
+Fifteen P0s came out of the audit and the journeys together. The ones only a real model could
+expose were the money-critical and behavior ones:
+
+- Undoing a movement's create group after a correction reversed the money a second time, and the
+  invariants caught it on the first run (`0dc146a`). Undo now refuses an already-reversed movement.
+- "Transfer 1000 from SBI to Cash now" was logged as a completed transfer; an instruction to move
+  money is now a request (`20b4f8b`).
+- A "reduce the EMI" prepayment re-stretched the loan to its original tenure and reported negative
+  interest saved (`03e8d65`).
+- A certain card bill was invented for a card whose outstanding was never stated (`0dc146a`), and
+  available credit ignored a balance held in credit (`1e342c8`, with the cleanup in `20b4f8b`).
+- An import commit booked a movement logged after the review a second time, and a closing
+  adjustment hid it (wave 4). The commit now re-matches at commit time and refuses a non-zero
+  adjustment while a candidate match exists.
+- A second statement for a known institution returned 500 at commit (`ae1ddad`), and an attached
+  statement could be orphaned with no import and no card (`8132141`).
+
+The regression rounds also closed the P1s the first pass left: balance age, goal and person accounts
+that were permanently unknown, a finite scheduled question that restarted forever, two confirm cards
+that could not be answered, a password typed in Hinglish word order, and an import undo that returned
+409 once the categorizer had run.
+
+### What stayed open
+
+- The model can still answer about an earlier statement instead of handing a carried attachment to
+  the parser, even with the file named in the instructions and the note. The next fix is a product
+  one: a one-tap "read the statement" action on the note card.
+- Two confirm cards must be answered together; a partial answer is refused with 409 and both cards
+  stay pending. The browser already behaves this way; a script or a stale tab sees the refusal.
+- Consecutive text parts are a paragraph apart in the saved transcript and on reload; a live stream
+  that the adapter folds into one UI text part still reads joined until reload.
+- A statement covering an already-covered period commits with a named adjustment rather than a
+  refusal, and a merged statement line still keeps the ledger's date where the statement date
+  differs; both are now visible, neither is silent.
+- The annual card fee was Uncategorized until a seed rule was added; the rule is new, so old rows
+  keep their category until recategorized.
+
+### Rehearsals on production-shaped data
+
+Not journeys, and not ticks in the catalog: a throwaway copy of the live ledger restored from
+`pg_dump`, migrations `0022`-`0024` applied, invariants green before and after, then the openings
+repair (`--dry-run`, apply, and a second dry run that found nothing); a fresh install from the
+documented steps in a second Compose project on this host; and a restore into a brand-new cluster.
+All three simulated gates ran; none is claimed as a real second installation or a fresh machine.
+
+A backtest on the copy refused to publish: with no income schedule in the ledger, no month is a
+usable measurement. Milestone 29 waits on the owner, as does milestone 30, whose dataset is not on
+this machine.

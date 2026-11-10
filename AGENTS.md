@@ -71,11 +71,18 @@ full set.
 - `web/` change: `pnpm --dir web lint && pnpm --dir web typecheck`; before finishing, `pnpm --dir web
   build`. A change to answer or result cards in `web/src/chat/` also needs
   `pnpm --dir web test:answers` (it reads fixtures from `tests/fixtures/presentation_contract.py`).
+- `ledger/`, `tools/`, `importers/`, or `engine/` change: after `uv run fin-agent demo seed`, run
+  `uv run python -m tests.invariants` on a scratch `_test` database and keep the invariant tests
+  green.
+- Real journeys: [`tests/e2e/`](tests/e2e/README.md) drives a live API process with the real model
+  and the real HTTP the web app sends. Use it to check a change by hand.
 - Dependency change: `uv lock --check`, `uv run python scripts/license_audit.py`, and
   `THIRD_PARTY_NOTICES.md` if a direct dependency is added. Only permissive licences ship; no GPL,
   AGPL, SSPL, or Elastic code in the image. `pydantic-ai-harness` is 0.x: keep it pinned.
 - Release: the git tag must equal the `pyproject.toml` version, and `compose.yaml`'s default image
   tags (`api` and `backup`) must carry the same version (`tests/test_release.py` fails otherwise).
+- Sandbox helper docstrings: keep them in the existing simple form. `run_code` parses each one into
+  a stub, so a docstring that reads like a call example can break positional calls.
 
 ## Agent behavior changes
 

@@ -31,6 +31,7 @@ plan wins. The project has the following docs:
 | [`completion-checklist.md`](fin-agent/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 | [`e2e-user-journeys.md`](fin-agent/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
 | [`e2e-run-log.md`](fin-agent/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
+| [`release-hardening.md`](fin-agent/release-hardening.md) | The November 2026 hardening pass: method, findings with commit SHAs, decisions, and what remains simulated, blocked, or impossible here |
 
 **Rule for keeping these readable:** a decision and its one-line rationale go in the `plan.md`
 file. Anything that needs a table, a schema, or three paragraphs of justification goes in a

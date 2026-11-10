@@ -16,7 +16,7 @@ native systemd install, arm64 images, and public-internet hosting are deliberate
 |---|---|
 | An x86-64 Linux host, Docker Desktop, or a VPS with Docker Compose | The shipped images are amd64 |
 | About 2 GB of RAM free, plus Phoenix (4 GB with `--profile local-llm`) | Postgres, the API, Phoenix, and the optional services |
-| Tailscale on the host, and the Tailscale app on every device you will use | The only network path to the app |
+| Tailscale on the host, and the Tailscale app on every device you will use | The only network path to the app from another device. A host-only setup needs none (§2.2) |
 | Host disk encryption **on** | It is what protects the database at rest |
 | A password manager, and somewhere off this machine for the restic password | Losing the restic password makes every backup unreadable |
 
@@ -24,7 +24,7 @@ native systemd install, arm64 images, and public-internet hosting are deliberate
 
 Fin-Agent does not encrypt the database from inside. The database files, the Docker volumes, and
 the pre-migration dumps rely on the host's disk encryption. Turn it on before the first real
-transaction:
+transaction. Run these from an **elevated** prompt on Windows (`manage-bde` denies a normal one):
 
 - **Windows:** BitLocker on the system and data volumes.
   `manage-bde -status` shows the state; `manage-bde -on C: -RecoveryPassword` enables it.
@@ -51,6 +51,10 @@ The release images are `ghcr.io/joy9001/fin-agent:<version>` and
 `ghcr.io/joy9001/fin-agent-backup:<version>`. `compose.yaml` pins `FIN_AGENT_VERSION` to the
 version in `pyproject.toml`. You can also build locally with `docker compose up -d --build`.
 
+On Windows, keep the `*.sh text eol=lf` rule in `.gitattributes` and do not check out with CRLF.
+The backup image's entrypoint is a shell script, and a CRLF checkout makes it crash-loop
+(`exec …/fin-agent-backup: no such file or directory`), which leaves the instance with no backups.
+
 ### 2.2 Create `.env`
 
 ```bash
@@ -69,9 +73,14 @@ FIN_AGENT_RP_ID=<machine>.<tailnet>.ts.net
 FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net
 ```
 
-Generate values with `openssl rand -base64 32` (or `python -c "import secrets;
-print(secrets.token_urlsafe(32))"`). `RESTIC_PASSWORD` is the one secret that must live somewhere
-other than this machine.
+Generate the three database passwords with `openssl rand -hex 32` (hex, not base64: these land
+inside the `DATABASE_URL` in `compose.yaml`, where `/` and `+` break the URI). Any generator is
+fine for `RESTIC_PASSWORD` and the Phoenix values.
+`RESTIC_PASSWORD` is the one secret that must live somewhere other than this machine.
+
+Without Tailscale, use `FIN_AGENT_RP_ID=localhost` and
+`FIN_AGENT_RP_ORIGIN=http://localhost:8000` and open the app on the host itself. Passkeys work on
+`localhost`, but a phone cannot reach it.
 
 The normal start also runs Phoenix. Set these on the host, with long random values; never paste
 them into chat:
@@ -85,8 +94,10 @@ PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<long random; Phoenix admin login>
 
 `PHOENIX_ADMIN_SECRET` must be at least 32 characters, contain a digit and a lowercase letter, and
 differ from `PHOENIX_SECRET`. It also serves as the default local bearer credential for trace
-export, so the normal start needs no Phoenix API key. An empty Phoenix value keeps Phoenix down;
-the app and its database are unaffected. For existing volumes and password changes, follow the
+export, so the normal start needs no Phoenix API key. A missing Phoenix value keeps Phoenix in a
+restart loop, because its entrypoint exits and Compose restarts it; stop it with
+`docker compose stop phoenix`, and the app and its database are unaffected. For existing volumes
+and password changes, follow the
 [Phoenix database setup instructions](observability.md#phoenix-database-setup-and-password-changes).
 
 Find the tailnet name with `tailscale status --json` and read `Self.DNSName`, or open the
@@ -100,13 +111,16 @@ docker compose logs -f api
 ```
 
 The first start applies migrations, then prints a first-run enrollment link and a terminal QR
-code. Open it on a phone on the tailnet, or paste the token printed under the link, and create the
-passkey. A restart keeps a valid link; `docker compose exec api fin-agent setup` rotates it.
+code. Finish §2.4 first: the enrollment link is served over the origin you set in §2.2, so
+`tailscale serve` must already be running. Then open it on a phone on the tailnet, or paste the
+token printed under the link, and create the passkey. A restart keeps a valid link;
+`docker compose exec api fin-agent setup` rotates it while setup is still open, and afterwards it
+says setup is complete.
 
 Check the API:
 
 ```bash
-curl -s http://127.0.0.1:8000/api/health
+curl -s http://127.0.0.1:${FIN_AGENT_API_PORT:-8000}/api/health
 ```
 
 It reports the database and schema version. The API publishes only on `127.0.0.1`, so nothing is
@@ -117,7 +131,7 @@ reachable from the LAN or the public internet.
 On the host:
 
 ```bash
-tailscale serve --bg 8000
+tailscale serve --bg ${FIN_AGENT_API_PORT:-8000}
 tailscale serve status
 ```
 
@@ -131,8 +145,12 @@ straight from GPay or PhonePe into Fin-Agent.
 
 ### 2.5 Ports on a shared host
 
-If `5433` or `8000` is already taken, set `FIN_AGENT_DB_PORT` and `FIN_AGENT_API_PORT` in `.env`.
-`tailscale serve --bg ${FIN_AGENT_API_PORT}` then points at the right port.
+If `5433`, `8000`, or `6006` is already taken, set `FIN_AGENT_DB_PORT`, `FIN_AGENT_API_PORT`, or
+`PHOENIX_UI_PORT` in `.env`. `tailscale serve --bg ${FIN_AGENT_API_PORT}` then points at the right
+port. Running a second stack on one host also needs `COMPOSE_PROJECT_NAME` (or `-p <name>` on every
+command): `compose.yaml` pins `name: fin-agent`, so a second stack collides on container names even
+with different ports. The optional Ollama and speech-to-text ports are fixed at `11434` and
+`8001`, so only one stack on a host can start each profile.
 
 ---
 
@@ -339,7 +357,7 @@ hours:
 ```bash
 # `up -d` recreates the container; `docker restart` keeps the old environment.
 docker compose up -d backup && docker compose run --rm -e BACKUP_ONCE=1 backup
-docker compose run --rm --no-deps backup restic snapshots
+docker compose run --rm --no-deps --entrypoint restic backup snapshots
 ```
 
 To carry old snapshots across, `restic copy --from-repo <old repository>` exists.
@@ -347,7 +365,7 @@ To carry old snapshots across, `restic copy --from-repo <old repository>` exists
 Test the repository from the host:
 
 ```bash
-docker compose run --rm --no-deps backup restic snapshots
+docker compose run --rm --no-deps --entrypoint restic backup snapshots
 ```
 
 ### 6.2 Restore drill on a fresh machine
@@ -370,10 +388,11 @@ docker compose up -d
 The command creates `fin_agent` if it is absent, refuses to touch a database that already has
 tables, restores the newest snapshot, recomputes every table's row count and hash, and checks that
 every transfer balances and every account balance equals its entries. It prints one `ok` line per
-check and exits non-zero on any mismatch. It also recreates the `agent_ro` and `backup` login roles
-and applies the dump's table grants, so `run_query` and the backup sidecar work on the restored
-database. Restore from a backup made by the current image: an older dump still restores and the app
-works, but `run_query` stays unprivileged until a new backup replaces it.
+check and exits non-zero on any mismatch. It also recreates the `agent_ro` and `backup` login roles,
+restores the dump's own table grants, and re-grants the backup role from the image, so `run_query`
+and the backup sidecar work on the restored database. Restore from a backup the current image made.
+An older dump also restores and the app works, but a dump written without its table grants carries
+none for `agent_ro`, so `run_query` stays unprivileged until a new backup replaces it.
 
 If the database already has tables and you really mean to replace it, add `--force`. That drops
 and recreates the target database; it is the destructive path, so it is not the default.
@@ -415,6 +434,20 @@ docker compose up -d
 The API dumps before any pending migration and runs each migration in a transaction. If an update
 fails, restore the pre-migration dump or the latest restic snapshot. Logs rotate at 10 MB, three
 files per service.
+
+**Upgrading from an older ledger.** If it imported statements before this release, run the opening
+repair once, after the new version has migrated:
+
+```bash
+docker compose exec api fin-agent repair-openings --dry-run   # prints what would change; writes nothing
+docker compose exec api fin-agent repair-openings --yes       # applies it
+```
+
+It books each import's printed opening at the statement's first day and supersedes the older
+balance adjustments the statement now explains, so every date the statement covered reads its real
+balance. It is idempotent, and undoing an import reverses its repair too. A restore needs the same
+care: restore from a backup the current image made, because a dump written without its table grants
+leaves `run_query` unprivileged (§6.2).
 
 ### 6.5 Postgres major upgrade
 
@@ -481,6 +514,8 @@ Compose sets `PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces` and
 restart. Set `PHOENIX_API_KEY` only to use a real Phoenix API key; it wins over the fallback. A
 host CLI or eval that should export needs `PHOENIX_COLLECTOR_ENDPOINT=http://127.0.0.1:6006/v1/traces`
 and a bearer credential in `PHOENIX_API_KEY`; a container command already has the Compose values.
+Tracing is opt-in: with `PHOENIX_COLLECTOR_ENDPOINT` unset, nothing is registered or instrumented,
+so a host CLI or eval run without it exports nothing.
 
 The app starts and answers when Phoenix is down. Export is fail-open. The standard
 `OTEL_SDK_DISABLED=true` kill switch disables export and agent instrumentation; there is no other

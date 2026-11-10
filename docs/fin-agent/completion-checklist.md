@@ -13,6 +13,9 @@ in CI and the versioned images are published. Two kinds of gap remain:
 The observability reconciliation on November 5, 2026 updates section D and the plan's T/A tracker.
 It records what is verified and what remains; it does not change the overall verdict.
 
+The release-hardening pass on November 10, 2026 adds section E. It changes no earlier status without
+saying so, and it never ticks a simulated run.
+
 Work the groups in order, because each depends on the one before it.
 
 ## A. Code and docs: closable now
@@ -275,3 +278,88 @@ bridge, dashboard, or alert pipeline. The operator path is
       second restart. An explicit `PHOENIX_API_KEY` overrides the fallback.
 - [x] **Retention.** Phoenix's supported default is 0 days (infinite); the repository sets no
       custom retention.
+
+## E. Release-hardening pass, November 10, 2026
+
+A four-wave audit over the money paths, the agent loop, imports, and the platform, then six
+real-model journeys and three regression rounds. The record, with findings, commit SHAs, decisions,
+and the method to re-run it, is [`release-hardening.md`](release-hardening.md). This section adds
+what the pass proved and what it could not; the groups above keep their original detail.
+
+### Closed here, for real
+
+- [x] **Every area audit's fixes.** Ledger and write paths, reads, engine, agent loop, imports,
+      watch jobs, and platform, in four waves on `main`, each with a regression test that failed
+      before the fix. CI green before every wave; the suite grew from 661 to more than 1,100 tests.
+- [x] **A financial invariant checker.** `tests/invariants.py`, one checker over a whole database,
+      green on the demo persona and after every journey write. A
+      `uv run python -m tests.invariants` run on a scratch `_test` database now belongs in the
+      definition of done for ledger, tool, import, and engine changes (`AGENTS.md`).
+- [x] **Real journeys without a browser.** `tests/e2e/` starts a real API process, enrolls a
+      software passkey, and speaks the web app's own HTTP: uploads, confirm cards, approvals,
+      imports, commits, undo. Six journeys and three regression rounds ran on it with the real chat
+      model. Results: [`e2e-run-log.md`](e2e-run-log.md).
+- [x] **Migration rehearsal on production-shaped data.** Migrations `0022`, `0023`, and `0024`
+      applied to a throwaway copy of the live ledger, with the invariants green before and after and
+      the copy dropped.
+- [x] **The openings repair, rehearsed.** `fin-agent repair-openings --dry-run` then the apply on a
+      second copy: the named import's opening moved to its statement's first day, the closing
+      difference was zero, the current balance was unchanged, and a second dry run found nothing.
+- [x] **Secret redaction and export hygiene.** A password, OTP, PIN, or card number typed in chat is
+      redacted in English, Hinglish, and Devanagari before the model, storage, titles, or traces see
+      it, and the JSON and CSV exports exclude credential and session tables.
+
+### Simulated, and still unchecked
+
+- [ ] **Milestone 40, install from the docs alone.** Simulated on November 10: same owner, same
+      Windows host, `127.0.0.1`, a software passkey, no tailnet and no phone. A second person and a
+      real browser remain the gate.
+- [ ] **Milestone 37, restore on a different machine.** Simulated: a second Compose project with new
+      volumes, restored from the off-site backup. On Drive it also needed the OAuth client, so the
+      drill tested the recovery kit, not the restic password alone.
+- [ ] **The restart mid-parse.** Simulatable, not run this pass: the driver and the `jobs` table now
+      make it reproducible with `driver up --keep` after a kill.
+
+### Blocked on the owner
+
+- [ ] **Milestone 29, the backtest.** A run against the copy refused to publish: with no income
+      schedule in the ledger, every month is unusable as a measurement. Add the salary schedule in
+      chat (or setup), then `uv run fin-agent backtest --publish`, and set the accuracy target in
+      `system-design.md` from the result.
+- [ ] **Milestone 30, the HackerRank score.** The dataset is not in the repository and was not
+      available on this machine. Put the 25 samples in a folder, then
+      `uv run fin-agent hackerrank --dataset <folder>`.
+- [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
+      months under `private/statements/union-bank/` and run `fin-agent import-spike`.
+- [ ] **Milestone 24 and the remaining Slice cycles.** Several repayments are missing from the
+      PDFs, so those cycles wait on corrected exports or manual rows. The backfill still has to be
+      committed through the review screen, not local code.
+- [ ] **The live instance's repair.** After upgrading, run `uv run fin-agent repair-openings
+      --dry-run`, then `uv run fin-agent repair-openings --yes`. It is idempotent, and it is what
+      makes every committed statement's opening sit at its first day on the real ledger.
+
+### Impossible here
+
+- [ ] **Milestone 41, four weeks of daily use.** Needs the owner's real use, with no spreadsheet or
+      mental-math fallback. The clock starts on the first real day.
+- [ ] **The freeze week.** Starts after the last item above; it cannot be simulated.
+- [ ] **A real phone: PWA install and web push.** Needs Android and a web-push endpoint. The audit
+      verified the server and the service worker, not the device.
+- [ ] **Owner voice notes.** Needs a microphone, an `STT_*` endpoint, and Hinglish audio; no audio
+      corpus was available, so the Hinglish cases still test the agent downstream of a transcript.
+- [ ] **Statement passwords.** Always the owner's: a statement password goes on the import card,
+      never in chat, a test, or a doc.
+- [ ] **Real receipts and UPI screenshots.** No `VISION_*` endpoint was configured; the extraction
+      path is covered by scripted fixtures only.
+
+### Found and not yet fixed
+
+- [ ] **Install documentation.** The fresh-install rehearsal found twelve gaps, the costly ones
+      being: passwords generated with `openssl rand -base64` break `DATABASE_URL` (use `-hex`); the
+      README omits the four `PHOENIX_*` values, so Phoenix restart-loops; `restic snapshots` needs
+      `--entrypoint restic`; `.env.example` pins an old `FIN_AGENT_VERSION`; and a second stack
+      needs `COMPOSE_PROJECT_NAME` and `PHOENIX_UI_PORT`. They are being fixed in the same release
+      step and are not yet re-checked by a second installer.
+- [ ] **`observability.md` and host tracing.** The settings table still gives a host default of
+      `http://127.0.0.1:6006/v1/traces`, while tracing is now opt-in and nothing is registered
+      without a collector endpoint. The code is right; the guide needs the same correction.

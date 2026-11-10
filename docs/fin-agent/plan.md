@@ -415,6 +415,16 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
     stored. Decided November 9, 2026 ([recaps](recaps.md)).
 24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
 
+**L3 status, November 10, 2026.** The pipeline's code is hardened: one transaction per commit and
+per undo, one card sign convention, a commit that re-matches movements logged after the review, and
+an undo that takes the categorization it caused with it. An import's printed opening now books at
+the statement's first day; `fin-agent repair-openings` applies that to imports committed before the
+change, so every date a statement covers reads as the printed running balance. Union Bank still has
+no statement, so its format and parser decision wait on one, and the remaining Slice cycles wait on
+corrected exports or manual rows. Milestone 24 keeps its open box: the backfill was committed with
+local code rather than the review screen, and those two import gaps remain. Detail:
+[release-hardening.md](release-hardening.md).
+
 ### L4: Evals (gate: engine work starts when this exists)
 
 25. At least 50 agent-eval tasks in `pydantic_evals`, shaped by real usage and rewritten on the demo
@@ -436,6 +446,15 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 30. **HackerRank "Buy or Wait":** the engine scored on the 25 labeled samples, score published
     (the data stays local).
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
+
+**L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
+they forced: a reduce-EMI prepayment no longer stretches the loan, a month-end rule lands on a short
+month's last day, an unknown card bill stays unknown, and loan interest is booked once a calendar
+month. A backtest was run against a copy of the live ledger. With no income schedule in that ledger
+every month is unusable as a measurement, so `fin-agent backtest --publish` refused to write and
+milestone 29 stays open until the owner adds a salary schedule. The HackerRank score (milestone 30)
+is blocked on its dataset, which is not in the repository. Detail:
+[release-hardening.md](release-hardening.md).
 
 ### L6: Watch
 
@@ -493,6 +512,16 @@ printed, the backup sidecar produced a restic snapshot with its manifest, and
 is not milestone 40: it was the same owner, the same Windows/Docker Desktop host, and no
 Tailscale, phone, or passkey. The Linux Compose grace period, `tailscale serve`, and a real
 second installer remain unexercised.
+
+**Release-hardening status, November 10, 2026.** A four-wave audit over the money paths, the agent
+loop, imports, and the platform fixed every P0 it found and left the invariant checker green through
+six real-model journeys and three regression rounds. Two human-shaped gates were rehearsed again and
+stay simulated, never ticked: a fresh install from the docs on this same host (milestone 40) and a
+restore into a brand-new cluster (milestone 37, with the restic password and the OAuth client). The
+audit also changed one live-data task: after upgrading, the owner runs `fin-agent repair-openings`
+once so every committed statement's opening sits at its first day. The whole record, with findings,
+commit SHAs, decisions, and the checklist items that remain, is
+[release-hardening.md](release-hardening.md).
 
 **Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
 unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
@@ -571,6 +600,37 @@ Answer each when its layer arrives, not before.
   maintain. The permissive-license audit in CI keeps the dependency side honest. Apache-2.0's
   patent grant was the only real argument for it, and nothing in the stack or the product turns on
   patents. Recorded November 3, 2026.
+- **Cross-layer, settled in the November 2026 release-hardening pass.** Each one ends an ambiguity
+  that two code paths, or a doc and the code, answered differently. The full record is
+  [release-hardening.md](release-hardening.md).
+  - **Card statement signs.** Statement figures are ledger-signed below the statement text: a parser
+    negates a card's printed balances, and a printed opening the user types is converted once by
+    account kind ([import.md](import.md#signs)).
+  - **A wait-only plan is not affordability.** A "wait until date X" tradeoff alone leaves the
+    verdict `no`; `yes-but` needs a same-date tradeoff ([design.md](design.md#affordability)).
+  - **Coverage needs every account.** Unfiltered coverage is complete only when every active account
+    that has ever committed a statement covers the period ([tools.md](tools.md)).
+  - **Month ends.** A monthly rule on the 29th, 30th, or 31st falls on the last day of a shorter
+    month ([design.md](design.md)).
+  - **Loan interest.** Interest is charged once per calendar month per loan; a later payment in that
+    month is all principal ([tools.md](tools.md)).
+  - **Split remainder.** An equal split's paise remainder goes to my share ([tools.md](tools.md)).
+  - **Confirm cards.** A turn's confirm cards are answered together; a partial answer writes nothing
+    and keeps every card pending (rule 2 in §4, [design.md](design.md#untrusted-text-and-write-tiers)).
+  - **Exports.** JSON and CSV exports exclude credential and session tables; `pg_dump` stays
+    complete because it is the backup and restore source ([platform.md](platform.md#security)).
+  - **Tracing is opt-in.** No Phoenix collector endpoint means nothing is registered
+    ([observability.md](observability.md)).
+  - **Openings.** A statement's opening books at the statement's first day, and
+    `fin-agent repair-openings` applies that to imports already committed ([import.md](import.md)).
+  - **Secret redaction.** Redaction is keyword-anchored and shape-aware: an OTP, PIN, CVV,
+    password, passcode, or API key next to its keyword is redacted in English, Hinglish, and
+    Devanagari, and in either word order; plain words, amounts, dates, and UPI ids stay
+    ([harness.md](harness.md#day-one)).
+  - **Approval sentences.** When the model writes none, the host writes one plain sentence per
+    confirm card from the tool and its arguments ([design.md](design.md#untrusted-text-and-write-tiers)).
+  - **Backtest publishing.** A month without a usable starting balance is not a measurement, and
+    `fin-agent backtest --publish` refuses to write one (`engine/backtest.py`).
 
 ---
 

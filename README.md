@@ -229,8 +229,13 @@ FileVault) is an install requirement: it is what protects the database at rest.
 ```bash
 git clone https://github.com/Joy9001/Fin-Agent.git && cd Fin-Agent
 cp .env.example .env
-# Set POSTGRES_PASSWORD, AGENT_RO_PASSWORD, BACKUP_PASSWORD, RESTIC_PASSWORD,
-# and the chat model (CHAT_MODEL, CHAT_API_KEY). Local Ollama works too.
+# Generate every secret with `openssl rand -hex 32` (hex, not base64: the database passwords
+# land inside DATABASE_URL, where `/` or `+` breaks the URI).
+# Set POSTGRES_PASSWORD, AGENT_RO_PASSWORD, BACKUP_PASSWORD, RESTIC_PASSWORD, and the chat model
+# (CHAT_MODEL, CHAT_API_KEY). Local Ollama works too.
+# Also set all four Phoenix values: PHOENIX_PASSWORD, PHOENIX_SECRET, PHOENIX_ADMIN_SECRET
+# (32+ chars, a digit and a lowercase letter), and PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD.
+# Phoenix refuses to start without them, so it restart-loops while the app keeps working.
 docker compose up -d --build        # or pull the release image: docker compose pull && docker compose up -d
 docker compose logs api             # prints a one-time enrollment link and a QR code
 ```
@@ -238,6 +243,11 @@ docker compose logs api             # prints a one-time enrollment link and a QR
 Open <http://localhost:8000>, follow the enrollment link, and create your passkey. That's it: start
 by telling the agent your balances, salary day, and card dues, and it can answer from the first
 conversation.
+
+Something already owns `8000`, `5433`, or `6006`? Set `FIN_AGENT_API_PORT`, `FIN_AGENT_DB_PORT`, or
+`PHOENIX_UI_PORT`. Running a second stack on one host also needs `COMPOSE_PROJECT_NAME` (or
+`-p <name>` on every command), because `compose.yaml` pins `name: fin-agent` and the container
+names would collide. The optional Ollama and speech-to-text ports (`11434` and `8001`) are fixed.
 
 **Want to look around first?** Seed the synthetic demo persona into an empty instance:
 
@@ -270,8 +280,9 @@ docker compose --profile local-stt up -d    # voice notes transcribed locally
 ```
 
 Phoenix runs in the normal start and receives the agent's model and tool traces locally. Turn it
-off with `OTEL_SDK_DISABLED=true`; the app keeps serving if Phoenix is down. See
-[observability](docs/fin-agent/observability.md).
+off with `OTEL_SDK_DISABLED=true`; the app keeps serving if Phoenix is down. Tracing is off unless
+`PHOENIX_COLLECTOR_ENDPOINT` is set, so a host CLI or eval exports only when it points at a
+collector. See [observability](docs/fin-agent/observability.md).
 
 </details>
 
@@ -283,7 +294,9 @@ exactly what each provider receives, backups, restore, upgrades, and troubleshoo
 A `backup` sidecar runs `pg_dump` once a day, records a row count and hash for every table, and
 ships an encrypted copy with [restic](https://restic.net) to `RESTIC_REPOSITORY` (a local volume by
 default; S3, B2, R2, or rclone to go off-site). `fin-agent restore` rebuilds a fresh machine from
-the newest snapshot and verifies that every transfer balances.
+the newest snapshot and verifies that every transfer balances. Restore from a backup the current
+image made; an older dump still restores, but a dump written without its table grants leaves
+`run_query` unprivileged until a new backup replaces it.
 
 > [!WARNING]
 > Keep `RESTIC_PASSWORD` somewhere other than this machine. Without it, the backups can't be
@@ -310,9 +323,19 @@ fin-agent demo template        # clone the demo as an eval template
 fin-agent eval --model X       # run the agent evals and publish the scorecard (spends money)
 fin-agent eval --model X --dry-run   # list the cases for free
 fin-agent backtest             # measure the projection against history; publishes here
+fin-agent repair-openings      # place each import's opening at its statement's first day
 fin-agent hackerrank           # score the local HackerRank sample set
 fin-agent restore              # restore the newest restic snapshot and verify every table
 ```
+
+`repair-openings` is for a ledger written before this release: after you upgrade an instance that
+imported statements before it, run it once. An import's printed opening used to stay inside the
+balance adjustment dated the day the balance was stated, so every date the statement covered read
+short by it. `fin-agent repair-openings --dry-run` prints one line per
+import—account, period, the opening it would book at the first day, the closing difference, and
+how many earlier balance adjustments it would supersede—and writes nothing. Run it again without
+`--dry-run` to apply, with `--yes` to skip the question. It is idempotent, and undoing the import
+later reverses its repair too.
 
 </details>
 

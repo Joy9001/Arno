@@ -52,7 +52,7 @@ The API exposes the following surfaces:
 | Capture | `POST /api/transcribe` saves the audio and returns a transcript or a retry card; `POST /api/chat/{thread}/photo` saves the image, runs the isolated `VISION_*` call, logs one movement at once, and returns the image-plus-fields undo card. Retries use the saved attachment ID |
 | Conversations | List, read, rename, and full-text search of threads, and flag a reply. A chat request with no thread ID creates one. Reading a thread also returns a running turn's message and merges saved cards back in ([step 10](system-design.md#the-chat-contract)) |
 | Inbox and push | List and mark read, open a notification in a new chat, subscribe or unsubscribe; the scheduler's job status, a pure-read activity poll, retry of a failed job, and the user's scheduled questions |
-| Export | Full CSV and JSON export, plus a `pg_dump` |
+| Export | Full CSV and JSON export, plus a `pg_dump`. The JSON and CSV exports leave out the credential tables (`users`, `sessions`, `webauthn_credentials`, `webauthn_challenges`, `setup_tokens`, `vapid_keys`, and `push_subscriptions`); `pg_dump` stays complete because it is the backup and restore source |
 | Auth | See [Auth](#auth) |
 
 The endpoint map and conventions are in [system design, step 10](system-design.md#api).
@@ -261,7 +261,10 @@ A deployment works as follows:
 - Updating is `docker compose pull`, then `up -d`. `compose.yaml` pins
   `ghcr.io/joy9001/fin-agent:$FIN_AGENT_VERSION` (and the matching backup image), and the release
   workflow pushes the version tag. The API runs `pg_dump` before any migration and writes it to the
-  `pre-migration-data` volume, and migrations run in a transaction. A Postgres major upgrade is a
+  `pre-migration-data` volume, and migrations run in a transaction. After upgrading an instance that
+  imported statements before this release, run `fin-agent repair-openings --dry-run` and then
+  `fin-agent repair-openings --yes` once: it books each import's printed opening at the statement's
+  first day, and it is idempotent. A Postgres major upgrade is a
   documented dump and restore.
 - API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB (`max-size: 10m`,
   `max-file: 3`) on every Compose service.
@@ -279,7 +282,8 @@ A deployment works as follows:
   Grafana, custom metric, or log shipper. Standard Python/Uvicorn logs stay on Docker stdout.
   Phoenix uses its own database on the same Postgres server, requires authentication, and publishes
   only on loopback. Its retention stays at the Phoenix default (0, infinite) unless the operator sets a
-  policy. The app has no telemetry health dependency and keeps serving when Phoenix is down. The
+  policy. The app has no telemetry health dependency and keeps serving when Phoenix is down. Tracing
+  is opt-in: with `PHOENIX_COLLECTOR_ENDPOINT` unset, nothing is registered or instrumented. The
   standard `OTEL_SDK_DISABLED` kill switch and operator journey are in
   [`observability.md`](observability.md).
 - The API opens one database connection per use rather than a pool, so a Postgres restart leaves
@@ -307,7 +311,9 @@ A deployment works as follows:
   database that has no tables, recomputes every table's hash, and checks that every transfer
   balances and every account balance equals its entries. The dump carries the migrations' table
   grants and the restore recreates the two login roles, so `run_query` and the backup sidecar work
-  on the restored database. It refuses to overwrite a populated database without `--force`.
+  on the restored database. Restore from a backup the current image made: an older dump still
+  restores, but a dump written without its table grants leaves `run_query` unprivileged until a new
+  backup replaces it. It refuses to overwrite a populated database without `--force`.
   `tests/test_l8_ship.py` runs the round trip through a real restic repository.
   [Install and restore steps](self-hosting.md#62-restore-drill-on-a-fresh-machine).
 

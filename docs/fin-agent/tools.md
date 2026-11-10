@@ -48,9 +48,11 @@ writes Python that calls the read tools inside Monty. See [Code Mode](design.md#
 **Description:** "The user's whole picture: today's date, settings, every account with its balance
 and the age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months,
 a card's next_statement_close and the next_bill_due for spend made today, each schedule's next four
-dates (next_dates), the next 30 days of events (a null amount carries a note saying why), goals, who
-owes what, remembered preferences, scheduled_questions, what setup is missing, and data warnings.
-The sandbox has no clock, so get today's date here."
+runs (next_dates, each with date and weekday), the next 30 days of events (each with date and
+weekday; a null amount carries a note saying why), goals, who owes what, remembered preferences,
+scheduled_questions, open imports (status, account, period, line counts; read them before saying
+anything about an import), what setup is missing, and data warnings. The sandbox has no clock, so
+get today's date here."
 
 **Input:** none
 
@@ -59,26 +61,39 @@ The sandbox has no clock, so get today's date here."
 ```python
 {
   "today": "2026-10-31",
-  "settings": {"currency": "INR", "floor": Money, "default_horizon_days": 90},
-  "accounts": [{"name", "kind", "liquid", "active", "known": bool, "balance": Money,
-                "as_of", "age_days", "credit_limit", "available_credit", "outstanding",
-                "rate_bps", "tenure_months",
-                "next_statement_close", "next_bill_due",      # cards only
+  "settings": {"currency": "INR", "floor": Money, "default_horizon_days": 90,
+               "time_zone": "Asia/Kolkata"},
+  "accounts": [{"id", "name", "kind", "liquid", "active", "known": bool, "balance": Money,
+                "as_of", "age_days", "credit_limit", "statement_day", "due_day",
+                "available_credit", "outstanding", "rate_bps", "tenure_months",
+                "next_statement_close", "next_bill_due",      # cards with both days set
                 "covered": {"from", "to", "gaps": [...]}}],
   "liquid_total": Money,  # null when any active liquid account is not known
-  "upcoming": [{"date", "name", "kind", "amount": Money, "note"}],
-  "schedules": [{"name", "rule", "next_date", "next_dates": [...4 dates within 400 days]}],
-  "goals": [{"name", "target": Money, "saved": Money, "deadline", "priority"}],
-  "owed": [{"person", "amount": Money, "expected_date"}],  # positive: they owe you
-  "preferences": [{"id", "text", "kind"}],                 # active ones only
+  "upcoming": [{"date", "weekday", "name", "kind", "subtype", "amount": Money, "note",
+                "schedule_id", "payment_status", "paid": Money, "remaining": Money,
+                "payment_movements": [{"movement_id", "amount": Money, "active"}],
+                "confirmed", "source_id"}],
+  "schedules": [{"id", "name", "kind", "subtype", "amount": Money, "rule", "next_date",
+                 "next_dates": [{"date", "weekday"}, ...],  # up to 4, within 400 days; a paid
+                                                           # run is skipped
+                 "confirmed", "active"}],
+  "goals": [{"id", "name", "target": Money, "saved": Money, "remaining": Money, "deadline",
+             "priority", "status"}],
+  "owed": [{"person", "payee_id", "amount": Money, "direction", "expected_date"}],
+  "preferences": [{"id", "text", "kind"}],                 # active and not deleted
   "scheduled_questions": [{"id", "prompt", "rule", "next_run"}],  # next_run in IST
+  "imports": [{"id", "status", "account", "period": {"start", "end"} | None, "lines",
+               "counts", "check"}],                        # open imports only
   "setup_gaps": ["no income schedule"],
-  "warnings": ["SBI balance is 23 days old"]
+  "warnings": ["SBI balance is 23 days old"],
+  "source_ids": {"accounts", "schedules", "goals", "payees"},
+  "outside_text": bool
 }
 ```
 
-UI: source IDs for citations. The turn also gets separate `ui_results` descriptors for accounts,
-upcoming payments, goals, and owed, without a wall of context cards.
+`owed.amount` is always positive, and `direction` says who owes whom. UI: source IDs for citations.
+The turn also gets separate `ui_results` descriptors for accounts, upcoming payments, goals, and
+owed, without a wall of context cards.
 
 An `upcoming` entry whose `amount` is null says why in `note`: a card with no statement balance
 has a bill of unknown amount, and that is the one sentence the model quotes for it.
@@ -88,9 +103,9 @@ statement anchors it. Those sources all persist `statement_balance_paise` with a
 `statement_balance_as_of`, including an explicit zero. A ledger movement changes a known balance;
 it never establishes one. An account whose first entry is an expense or income therefore keeps
 `known: false`, `balance: null`, and `as_of: null`, while its real net change remains visible in
-the account payload and Ledger. A `goal` account is the exception: it opens at zero and its ledger
-balance is the whole truth, so it is always known. `liquid_total` is null when any active liquid
-account is unknown; it is not a complete current cash claim.
+the account payload and Ledger. A `goal` or `person` account is the exception: it opens at zero and
+its ledger balance is the whole truth, so it is always known. `liquid_total` is null when any
+active liquid account is unknown; it is not a complete current cash claim.
 
 **Logic**
 
@@ -102,15 +117,18 @@ for each account: known = statement_balance_paise and statement_balance_as_of ar
                   as_of, age_days = balance_anchor(): the later of the last movement and the
                                     stated balance
                   coverage from imports
-                  a card also gets next_statement_close = engine.statement_close(card, today)
-                  and next_bill_due = engine.card_due_date(card, today)
+                  a card with a statement day and a due day also gets
+                  next_statement_close = engine.statement_close(card, today)
+                  next_bill_due = engine.card_due_date(card, today)
 upcoming   = expand schedule rules over 30 days, adjust for holidays, add card due dates;
-             an unknown card bill has amount = null and the note that says why
+             each event carries its weekday, and an unknown card bill has amount = null and the
+             note that says why
 schedules  = each active schedule's rule and next_dates = expand 400 days, skip a paid run,
-             first four
+             first four, each {"date", "weekday"}
 goals      = goals plus the balance of each goal account
 owed       = v_owed
 questions  = active scheduled questions, next_run in IST
+imports    = imports not committed or rejected, and not undone, with their line count
 setup_gaps = no income schedule? no floor? an account with no stated balance?
 warnings   = stale balances + coverage gaps
 mark() only the names whose row still has outside_text = true
@@ -135,7 +153,8 @@ query_movements(filters: MovementFilters | None = None, limit: int = 50, cursor:
 class MovementFilters:
     period: str | None          # "this_month", "last_month", "this_week", "last_week",
                                 # "this_year", "last_30_days", "2026-09", "2026-11-10",
-                                # "2026-09-01..2026-09-15"
+                                # "2026-09-01..2026-09-15"; weeks start Monday, and an
+                                # open period ends today
     account: str | None
     category: str | None
     payee: str | None
@@ -194,7 +213,9 @@ coverage. The Recaps page reads the same engine, `tools/recaps.py`; the stories 
 card bills, investments, and money others owe never count as spending. To compare periods, call it
 twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09",
 a day "2026-11-10", or a range "2026-09-01..2026-09-15" (weeks start Monday). count is the number
-of entries, with a corrected entry and its reversal left out."
+of entries, with a corrected entry and its reversal left out. It returns one object, never a list:
+read total as result["total"], and groups as a list of dicts each with key, amount (paise), and
+count, so result["groups"][0]["key"]."
 
 **Input**
 
@@ -202,7 +223,7 @@ of entries, with a corrected entry and its reversal left out."
 summarize_spending(group_by: Literal["category", "payee", "account", "month", "week", "none"],
                    period: str, filters: SpendFilters | None = None)
                    # period: "this_month", "last_month", "this_week", "last_week", "2026-09",
-                   # "2026-11-10", or "2026-09-01..2026-09-15"
+                   # "2026-11-10", or "2026-09-01..2026-09-15"; an open period ends today
 
 class SpendFilters:                 # what the sum honors; any other key is an error
     account: str | None
@@ -214,8 +235,12 @@ class SpendFilters:                 # what the sum honors; any other key is an e
 **Output**
 
 ```python
-{"period": {"from", "to"}, "groups": [{"key", "amount": Money, "count": int}],
- "total": Money | None, "coverage": {"complete": bool, "gaps": [...]}}
+{"period": {"from", "to"},
+ "groups": [{"key", "amount": Money, "count": int}],   # a list; empty when nothing is in it
+ "total": Money | None,                                # null only when nothing is logged and no
+                                                       # statement covers the period
+ "coverage": {"complete": bool, "gaps": [...]},
+ "outside_text": bool}
 ```
 
 UI: breakdown card and source row IDs.
@@ -236,8 +261,12 @@ return groups, total, cov                          # complete = false when part 
 ### `project`
 
 **Description:** "Forecast the user's cash against their floor (the minimum balance they want to
-keep). With a hypothetical purchase, also returns the yes, yes-but, or no verdict and the tradeoffs.
-Never give your own verdict. State the data_quality notes in your answer."
+keep). Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
+data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict and
+the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid account
+has a known balance), the curve starts from an unknown balance: say what is missing instead of
+quoting its probabilities or balances. State the data_quality notes in your answer. horizon_days is
+a minimum; the engine always looks at least 90 days and as far as a goal deadline."
 
 **Input**
 
@@ -340,8 +369,9 @@ An EMI is the fixed monthly loan payment. Amortization is how each EMI splits in
 principal.
 
 **Description:** "Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a
-loan's name or its terms. Add prepay to compare a lump-sum prepayment. Use this instead of writing
-the formula."
+loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to
+compare a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
+instead of writing the formula. It returns the schedule, not a card: show it with present."
 
 **Input**
 
@@ -394,7 +424,7 @@ loan's own rate.
 ### `compound`
 
 **Description:** "Growth of a monthly investment at an assumed annual rate. The rate is an
-assumption, not a prediction or advice: state it in your answer."
+assumption, not a prediction or advice: state it in your answer. Show it with present."
 
 **Input:** `compound(monthly_paise: int, annual_rate: float, months: int, start_paise: int = 0)`
 
@@ -500,7 +530,8 @@ register a Table/Summary result; unknown is not zero
 **Description:** "Compose the answer from this turn's ui_results. display is a bounded tree:
 {'_type': 'Stack' | 'Comparison' | 'Summary' | 'Table' | 'Chart' | 'Receipt', 'children': [...],
 'result_id': 'res_1'}. Containers have children; leaves have a result_id and no other props. Use
-only a view the result offers. Comparison aligns sections and never computes a difference."
+only a view the result offers. Comparison aligns sections and never computes a difference.
+Example: {'_type': 'Stack', 'children': [{'_type': 'Table', 'result_id': 'res_1'}]}."
 
 **Input**
 
@@ -592,7 +623,10 @@ EMI (total paid), refund, or settlement (direction says who paid whom). Say what
 works out the transfers. Ask first if the amount is missing or a split isn't clear. `date` is ISO,
 omit for today, never a future date. `account` is optional; code uses the payee's usual account, or
 the busiest/default one. Pass `category` only if the user named one; otherwise pass
-`category_guess`. Amounts are rupees in `amount_rupees`, never paise."
+`category_guess`. Amounts are rupees in `amount_rupees`, never paise. Pass `payee` only when they
+name a merchant or a person, never a placeholder like "Unknown shop".
+Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
+"category": "Food & Dining"}."
 
 **Input**
 
@@ -617,15 +651,16 @@ Settlement:  amount_rupees, person, direction=Literal["they_paid", "i_paid"], ac
 ```python
 {"status": "recorded", "movement_id", "undo_id", "date",
  "summary": "₹450 to Swiggy from SBI savings, Food",
- "transfers": [...], "account_source": "stated" | "usual",
+ "transfers": [...]}                                      # every kind
+# an expense also carries:
+{"account_source": "stated" | "usual",
  "category_source": "stated" | "rule" | "guess" | "none",
- "card_bill": {"statement_close", "due_date"} | None}   # a card purchase: the bill it lands on
+ "card_bill": {"statement_close", "due_date"} | None}     # a card purchase: the bill it lands on
+# a loan payment also carries:
+{"principal_paise", "interest_paise", "note"}             # "note" only when the interest is
+                                                          # unknown, because the loan has no rate
 # or
 {"status": "possible_duplicate", "existing": {"movement_id", "date", "summary"}}
-
-# a loan payment also carries:
-{"principal_paise", "interest_paise", "note": str | None}
-# note says the interest is unknown when the loan has no rate on file
 ```
 
 UI: undo card, with the screenshot beside the fields if it came from a photo.
@@ -640,7 +675,8 @@ if a split's parts don't add up to the total: ModelRetry(...)
 
 account  = stated, else this payee's usual account, else the only liquid account,
            else ModelRetry("which account?")
-payee    = find or create; a merchant whose name equals an active category is not stored
+payee    = find or create; a name that names nobody ("Unknown shop", "N/A", a category name)
+           is not stored
            outside_text = came from a photo, or (flagged and name not in your message)
 category = stated, else your rule, else llm rule, else guess (saved as an llm rule), else none
 
@@ -671,9 +707,10 @@ queue the risk check
 **Tier:** always instant, with an undo card, including `scope="all"`
 ([decided in step 1](system-design.md#retroactive-payee-corrections)).
 
-**Description:** "Fix a logged movement: category, payee, note, expected date, date, amount, account,
-or delete it. For a category or payee, scope sets how far it goes: this row, this row and future
-ones, or all rows past and future ('ramesh@okaxis is my landlord')."
+**Description:** "Fix a logged movement: category, payee, note, expected date, date, amount,
+account, or delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
+category or payee, scope sets how far it goes: this row, this row and future ones, or all rows past
+and future ('ramesh@okaxis is my landlord')."
 
 **Input**
 
@@ -737,6 +774,8 @@ if amount changed on a movement a committed statement verified:
 `*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits; the
 floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated balance; a
 baseline is typical daily spend.
+A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in credit is
+-500 for that card, passed once and not retried with the other sign.
 For action "add" on a card, a positive credit limit, a statement day, and a due day are required.
 If the user does not know one, leave the card pending instead of guessing. A bank needs only a
 name, and its balance and last4 are optional. An update changes only the fields you pass.

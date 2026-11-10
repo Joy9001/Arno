@@ -368,14 +368,14 @@ description, input, output, and logic are in [`tools.md`](tools.md).
 
 ![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
 
-*Figure: the model sees seven tools. A script reaches the eight read tools through `run_code`, and
+*Figure: the model sees seven tools. A script reaches the twelve read tools through `run_code`, and
 every write is a direct call with its own card ([note](diagrams/sd-tool-surface.md)).*
 
 ### Decisions on the surface
 
 - **One word: movement.** `query_movements`, `record_movement`, and `correct_movement` replace the
   `transaction` names, matching the ledger.
-- **Every tool is a normal PydanticAI tool.** Code Mode changes how the model calls the eight read
+- **Every tool is a normal PydanticAI tool.** Code Mode changes how the model calls the twelve read
   tools, not what they are. Writes stay direct calls, because an approval-gated tool can't pause
   inside a script, and a script could otherwise write many rows with no card for each.
 - **Two tested money functions.** `amortize` and `compound` cover loans and compounding, so standard
@@ -444,6 +444,11 @@ A parser that passed overwrote the one that worked, and the statement file was d
   and statement type, with each header set a variant. A failing version is repaired from the latest,
   not rewritten. An unlocked copy of each statement is kept, so a new version must reproduce every
   committed statement's saved rows before it passes.
+- **The commit books the opening.** A statement's printed opening becomes a visible adjustment at
+  the statement's first day, and the older balance adjustments inside the period that the statement
+  now explains are reversed, so every date it covers reads its real balance. The same repair reaches
+  a ledger written before this rule through `fin-agent repair-openings`, which is idempotent and is
+  reversed by undoing the import ([`import.md`](import.md)).
 - **A vision model reads pages with no text.** OCR waits for the L3 spike
   ([parked](parked.md#ocr-for-scanned-statements)).
 
@@ -766,6 +771,15 @@ afterwards.
   stored arguments. Endpoint auth is what's left ([`platform.md`](platform.md#auth)).
 - **Typing past a card closes it.** The built-in `interrupted` close stays, and the old card can't
   fire.
+- **Every card in a turn is answered together.** If a run asked for two confirmations, an answer
+  that carries only one is refused with a 409 naming the cards still waiting, and nothing is
+  applied. Pydantic AI can't resume a run with a result missing, and a card left behind is a change
+  the user asked for and never got.
+- **The host writes a sentence for a wordless card.** When the response that carries the cards has
+  no text, the server writes one plain sentence per card from the tool name and its arguments
+  (`preference` and `update_setup` get tailored wording, with a plain fallback for anything else),
+  streams it, and saves it into the same message, so a reload reads the same words. A sentence the
+  model wrote is never replaced.
 - **The flag is the boundary, and markers are only a hint.** Nothing depends on markers surviving.
   `mark()` also caps outside text at 200 characters and strips invisible characters, which makes
   "short statement fields" true by construction.
@@ -773,15 +787,18 @@ afterwards.
   two-statement string turned the timeout off in the tests. So [the recipe](tools.md#run_query) adds
   layers around the grants: one statement through the extended protocol, `SET LOCAL` in a transaction
   that's always rolled back, a client-side deadline, `REVOKE TEMP`, and no network extensions.
-- **Redact what's typed in chat.** Card numbers, PAN, spaced Aadhaar, and API keys go by their shape.
-  An OTP, PIN, password, or CVV has none, so the word that names it is the anchor: a value within a
-  few words of "OTP", "PIN", "MPIN", "UPI PIN", "CVV", "password", "passcode", or "passwd" — English
-  or Hinglish, as in "mera pin 4321 hai" or "OTP is 4 8 2 9 1 3" — becomes a placeholder naming its
-  kind, such as `[redacted:otp]`. The words alone ("I forgot my password") stay, and so do amounts,
-  dates, UPI IDs, 12-digit UTRs (UPI reference numbers), and an Indian postal "PIN code". Unspaced
-  Aadhaar isn't matched, because it would collide with UTRs, and a bank account number or a password
-  typed without its name still can't be detected. Your browser shows what you typed until you
-  reload, while the server stores the redacted text.
+- **Redact what's typed in chat.** Card numbers, PAN, spaced Aadhaar, and API keys go by their
+  shape. An OTP, PIN, password, or CVV has none, so the word that names it is the anchor: a value
+  within a few words of "OTP", "PIN", "MPIN", "UPI PIN", "CVV", "password", "passcode", or
+  "passwd" — English, Hinglish, or Devanagari, as in "mera pin 4321 hai",
+  "password mera Kaveri#2026 hai", or "पासवर्ड … है" — becomes a placeholder naming its kind, such
+  as `[redacted:otp]`. One detector list (`agent/redaction.py`) serves both the input guardrail and
+  the text the server stores, so a value can't be sent out clean and stored redacted, or the
+  reverse. The words alone ("I forgot my password") stay, and so do amounts, dates, UPI IDs,
+  12-digit UTRs (UPI reference numbers), and an Indian postal "PIN code". Unspaced Aadhaar isn't
+  matched, because it would collide with UTRs, and a bank account number or a password typed without
+  its name still can't be detected. Your browser shows what you typed until you reload, while the
+  server stores the redacted text.
 - **Photos and voice.** The photo endpoint runs a tool-less vision call into typed, capped fields. The
   server adds them to the thread as a marked entry and sets the flag, and the client can't touch either
   ([`import.md`](import.md#photos-and-voice)). A voice transcript is your own words, so it takes the
@@ -1219,6 +1236,9 @@ How it fits in:
 
 - **Fail-open.** Phoenix starts by default, but the app works the same with it down. Export is
   outside the request path.
+- **Opt-in.** Tracing needs `PHOENIX_COLLECTOR_ENDPOINT`; with it unset, nothing is registered and
+  nothing is instrumented, so a host CLI or eval exports nothing. `OTEL_SDK_DISABLED=true` is the
+  standard kill switch when it is set.
 - **Native spans only.** Pydantic AI emits the agent run, model requests, and tool calls. Fin-Agent
   adds no parent span, business metric, or custom end-to-end trace.
 - **Storage.** Traces get their own database on our Postgres and stay out of backups. Retention uses
