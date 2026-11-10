@@ -46,10 +46,12 @@ dev = [
     "cryptography>=44.0.0",
     "httpx>=0.28.0",
     "pip-audit>=2.9.0",
+    "pyrefly==1.4.1",
     "pytest>=8.4.0",
     "pytest-asyncio>=1.0.0",
     "pytest-xdist>=3.8.0",
     "ruff>=0.14.0",
+    "types-python-dateutil>=2.9.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -70,3 +72,79 @@ testpaths = ["tests"]
 # `-n 0` still runs serially. The `cluster` group (cluster-wide DDL, fixed database names)
 # always runs on one worker.
 addopts = "-n 8 --dist loadgroup"
+
+[tool.pyrefly]
+# Type-checking policy: docs/fin-agent/typing.md. CI fails on any error or warning.
+project-includes = ["src", "tests", "evals", "scripts"]
+search-path = ["src", "."]
+python-version = "3.14"
+# The app ships in a Linux image; check that platform on every dev machine too.
+python-platform = "linux"
+preset = "strict"
+min-severity = "warn"
+# Only `# pyrefly: ignore[<code>]` suppresses, never a blanket `# type: ignore`.
+enabled-ignores = ["pyrefly"]
+
+[tool.pyrefly.errors]
+deprecated = "error"
+untyped-import = "error"
+# Off for now: `int()`/`str()` at trust boundaries (sandbox calls, JSON, rows) normalize values
+# whose annotations are still `Any`-adjacent. Re-enable when row and tool payloads are typed.
+unnecessary-type-conversion = false
+
+# Sub-configs: the first match wins for each key, so specific paths come first.
+
+# The pure money core: no database rows, so no `Any`, and no truthiness on amounts or dates
+# (`if amount:` treats a real ₹0 like a missing value).
+[[tool.pyrefly.sub-config]]
+matches = "src/fin_agent/engine/projection.py"
+
+[tool.pyrefly.sub-config.errors]
+explicit-any = true
+implicit-bool = true
+no-any-return = true
+unannotated-return = true
+unknown-return-type = true
+implicitly-defined-attribute = true
+implicit-reexport = true
+
+[[tool.pyrefly.sub-config]]
+matches = "src/fin_agent/engine/money.py"
+
+[tool.pyrefly.sub-config.errors]
+explicit-any = true
+implicit-bool = true
+no-any-return = true
+unannotated-return = true
+unknown-return-type = true
+implicitly-defined-attribute = true
+implicit-reexport = true
+
+[[tool.pyrefly.sub-config]]
+matches = "src/fin_agent/india/**"
+
+[tool.pyrefly.sub-config.errors]
+explicit-any = true
+implicit-bool = true
+no-any-return = true
+unannotated-return = true
+unknown-return-type = true
+implicitly-defined-attribute = true
+implicit-reexport = true
+
+[[tool.pyrefly.sub-config]]
+matches = "src/**"
+
+[tool.pyrefly.sub-config.errors]
+no-any-return = true
+unannotated-return = true
+unknown-return-type = true
+implicitly-defined-attribute = true
+implicit-reexport = true
+
+[[tool.pyrefly.sub-config]]
+matches = "tests/**"
+
+[tool.pyrefly.sub-config.errors]
+# Pytest fixtures arrive as unannotated parameters; annotating each one adds no safety.
+implicit-any = false

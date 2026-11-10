@@ -25,6 +25,7 @@ plan wins. The project has the following docs:
 | [`import.md`](fin-agent/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
 | [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
 | [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`typing.md`](fin-agent/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
 | [`observability.md`](fin-agent/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
 | [`recaps.md`](fin-agent/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
 | [`web-interface-design.md`](fin-agent/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |

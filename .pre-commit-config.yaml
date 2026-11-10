@@ -17,6 +17,14 @@ repos:
         entry: uv run ruff format --force-exclude
         language: system
         types: [python]
+      - id: pyrefly
+        name: pyrefly type check
+        # Whole project: a signature change breaks callers in files the commit didn't touch.
+        entry: uv run pyrefly check
+        language: system
+        # Its config lives in pyproject.toml, and the lockfile pins the checker and the stubs.
+        files: (\.pyi?|pyproject\.toml|uv\.lock)$
+        pass_filenames: false
       - id: uv-lock
         name: uv lock is in sync
         entry: uv lock --check

@@ -242,6 +242,7 @@ The following table records the choice for each layer:
 | Database | PostgreSQL 18, pinned | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
 | Data access | Plain SQL through asyncpg, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL. One Postgres driver across the app, the tools, and the harness's spend store |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
+| Type checking | Pyrefly, `strict` preset, any warning fails | Chosen Nov 10, 2026, over basedpyright: it understands Pydantic models without a plugin and sets strictness for each path. The pure money core is strictest. Policy and the tightening plan: [`typing.md`](typing.md) |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
 | Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP. The agent container retains its separate filesystem boundary |
@@ -338,8 +339,8 @@ losing. Settings sections land with the layer that needs them. Milestones are bi
 5. Auth: first-run setup through an enrollment link and terminal QR code, passkey login, sessions,
    adding a device from Settings, passkey reset from the host CLI
    ([platform](platform.md#enrollment-links)).
-6. CI: ruff, pytest against a Postgres service container with model requests blocked, web lint and
-   build.
+6. CI: ruff, Pyrefly, pytest against a Postgres service container with model requests blocked, web
+   lint and build.
 
 ### L1: Ledger
 

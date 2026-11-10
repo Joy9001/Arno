@@ -65,9 +65,11 @@ Scale the check to the change; CI (`.github/workflows/ci.yml`) and `.pre-commit-
 full set.
 
 - Iterating: `uv run pytest tests/test_<area>.py -q -n 0`.
-- Any Python change: `uv run ruff check . && uv run ruff format --check .` (line length 100), then
-  the affected test files. Run the whole `uv run pytest -q` when you touch `ledger/`, `db/`,
-  `tools/`, `agent/`, or `api/`, since they are shared.
+- Any Python change: `uv run ruff check . && uv run ruff format --check .` (line length 100) and
+  `uv run pyrefly check` (zero errors and zero warnings; how to fix one without hiding it is in
+  [`typing.md`](docs/fin-agent/typing.md)), then the affected test files. Run the whole
+  `uv run pytest -q` when you touch `ledger/`, `db/`, `tools/`, `agent/`, or `api/`, since they are
+  shared.
 - `web/` change: `pnpm --dir web lint && pnpm --dir web typecheck`; before finishing, `pnpm --dir web
   build`. A change to answer or result cards in `web/src/chat/` also needs
   `pnpm --dir web test:answers` (it reads fixtures from `tests/fixtures/presentation_contract.py`).

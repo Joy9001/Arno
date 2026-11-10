@@ -389,6 +389,7 @@ pnpm --dir web install && pnpm --dir web dev             # Vite proxies /api to 
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
+uv run pyrefly check                                     # types: docs/fin-agent/typing.md
 uv run python scripts/license_audit.py
 DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
 AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q

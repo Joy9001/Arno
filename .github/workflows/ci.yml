@@ -75,6 +75,10 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      - name: Type check
+        # Policy in docs/fin-agent/typing.md; any error or warning fails.
+        run: uv run pyrefly check --output-format=github
+
       - name: Dependency vulnerability audit
         # Audit the lockfile, not the installed project: fin-agent itself is not on PyPI.
         run: |
