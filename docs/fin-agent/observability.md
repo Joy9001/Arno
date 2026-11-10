@@ -60,7 +60,9 @@ those native attributes to OpenInference on ingestion.
 `fin_agent.observability` passes `PHOENIX_COLLECTOR_ENDPOINT` through to `register()` so a URL
 with `/v1/traces` selects OTLP/HTTP. Compose points the API at
 `http://phoenix:6006/v1/traces`. A host CLI or eval must use
-`http://127.0.0.1:6006/v1/traces` if it should export; otherwise it uses the Phoenix SDK default.
+`http://127.0.0.1:6006/v1/traces` if it should export. With no endpoint set, tracing is off:
+nothing is registered or instrumented, so a host command never waits on an exporter that has
+nowhere to send.
 
 ## Settings
 

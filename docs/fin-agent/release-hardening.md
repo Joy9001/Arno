@@ -126,9 +126,7 @@ repair's write groups join the import.
 ## Findings
 
 The tables below list P0 and P1 findings for each area, waves 1-4; each area's P2s are grouped in a
-sentence after its table. Waves 1-3 are commits on `main`. Wave 4 and the openings repair were in
-the working tree when this record was written, so their Commit cell names the wave instead of a
-SHA.
+sentence after its table. Every row's Commit cell names its commit on `main`.
 
 ### The ledger and every write path
 
@@ -240,10 +238,10 @@ The table below lists the agent loop's P0 and P1 findings, in commit order.
 | P1 | "Salary aa gayi" booked the schedule's amount with no figure from the user | "Ask when the amount is missing" had no clause for a schedule | A schedule's amount is never the received amount; ask | `test_audit_agent3.py` | `20b4f8b` |
 | P1 | A short account name matching several accounts was silently guessed, and an answer drifted to another account | Nothing said a short form that matches several accounts is a question | Ask, never guess; answer about exactly the named account | `test_audit_agent3.py` | `20b4f8b` |
 | P1 | Differences and subtotals were computed in the model's head | The rule named subtraction but not a "net after a refund" shape | Every difference, sum, average, or percentage comes from `run_code` | `test_audit_agent3.py` | `20b4f8b` |
-| P1 | A confirm card arrived with no text | The prompt line asking for a sentence was ignored | The host writes one plain sentence per card from the tool and its arguments; a model-written sentence is kept | `test_audit_agent3.py`, `test_audit_agent4.py` | `20b4f8b`, wave 4 |
-| P1 | A password in Hindi or Hinglish word order was stored and sent to the model ("mera password Abc@1234 hai") | The alphanumeric branch required a separator before the value, not after | Redact a password-shaped token after the keyword or before `hai`; plain words and amounts stay | `test_audit_agent4.py` | wave 4 |
-| P1 | A turn that offered two confirm cards could not be answered: a partial answer failed the run and lost the second card | pydantic-ai requires a result for every deferred call, and the server forwarded a partial answer | The server refuses a partial answer with 409 before anything runs and re-offers both; the web already sends both; a duplicate submission writes once | `test_audit_agent4.py` | wave 4 |
-| P1 | The note's own retry phrase still produced no statement handover | The instruction block said only "this turn has one statement file" | Name the file, say a carried file is this turn's file, and say a statement has no text to search; the note names it too | `test_audit_agent4.py` | wave 4 |
+| P1 | A confirm card arrived with no text | The prompt line asking for a sentence was ignored | The host writes one plain sentence per card from the tool and its arguments; a model-written sentence is kept | `test_audit_agent3.py`, `test_audit_agent4.py` | `20b4f8b`, `b0a7566` |
+| P1 | A password in Hindi or Hinglish word order was stored and sent to the model ("mera password Abc@1234 hai") | The alphanumeric branch required a separator before the value, not after | Redact a password-shaped token after the keyword or before `hai`; plain words and amounts stay | `test_audit_agent4.py` | `b0a7566` |
+| P1 | A turn that offered two confirm cards could not be answered: a partial answer failed the run and lost the second card | pydantic-ai requires a result for every deferred call, and the server forwarded a partial answer | The server refuses a partial answer with 409 before anything runs and re-offers both; the web already sends both; a duplicate submission writes once | `test_audit_agent4.py` | `b0a7566` |
+| P1 | The note's own retry phrase still produced no statement handover | The instruction block said only "this turn has one statement file" | Name the file, say a carried file is this turn's file, and say a statement has no text to search; the note names it too | `test_audit_agent4.py` | `b0a7566` |
 
 The P2s here are a duplicate approval POST that produced a failed turn, a fractional chart value
 truncated, a post-write cleanup failure reported as a failed write, a CLI turn after compaction that
@@ -286,9 +284,11 @@ The table below lists the import P0 and P1 findings, in commit order.
 | P1 | An uploaded statement was occasionally orphaned with no import and no card | Nothing but a model tool call turned an upload into an import | The host guarantees a handover for an attached statement, and the note is unconditional | `test_audit_imports4.py` | `8132141` |
 | P1 | The parser could not read its own import's status | The status read was not exposed to the subagent | Expose it as host text | `test_audit_imports4.py` | `8132141` |
 | P1 | Undoing a committed import returned 409 once the categorizer had run | The categorizer's later write groups were not attributable to the import | Migration `0024`, and undo reverts those groups first | `test_audit_undoimport.py` | `c0a1081` |
-| P0 | A movement logged after the review was booked a second time by the commit, and an adjustment hid it | The commit merged only lines the review had already matched | Re-match at commit, and refuse a non-zero adjustment while a candidate match exists | `test_audit_imports5.py` | wave 4 |
-| P1 | A non-zero closing adjustment was booked silently | Any difference was treated as a fix to make | Show the adjustment on the review and require confirmation | `test_audit_imports5.py` | wave 4 |
-| P1 | A statement whose period had not ended was accepted | No check compared the period to today | Reject a period that ends after the ledger date | `test_audit_imports5.py` | wave 4 |
+| P0 | A movement logged after the review was booked a second time by the commit, and an adjustment hid it | The commit merged only lines the review had already matched | Re-match at commit, and refuse a non-zero adjustment while a candidate match exists | `test_audit_imports5.py` | `3c672f2` |
+| P1 | After a balance was stated and a backfill imported under it, every historical balance the statement covered read short by its opening (a savings account showed negative balances; found by running the backtest on a copy of real data) | The statement's opening stayed inside the adjustment dated the day the balance was stated | Commit books the evidenced opening on the statement's first day, supersedes the adjustments its rows explain, and re-anchors a later stated balance; `fin-agent repair-openings` fixes ledgers written before | `test_audit_anchor.py` | `7f69946` |
+| P1 | The backtest saw no account on a backfilled ledger and would have published a meaningless 0% calibration | "Known then" used the account row's creation date, not its history, and nothing checked whether a month had a usable starting point | An account counts once it has an entry by the as-of date; months without an account or a confirmed income schedule mark the run NOT A MEASUREMENT and `--publish` refuses | `test_audit_anchor.py` | `7f69946` |
+| P1 | A non-zero closing adjustment was booked silently | Any difference was treated as a fix to make | Show the adjustment on the review and require confirmation | `test_audit_imports5.py` | `3c672f2` |
+| P1 | A statement whose period had not ended was accepted | No check compared the period to today | Reject a period that ends after the ledger date | `test_audit_imports5.py` | `3c672f2` |
 
 The P2s here are an ignored ISO period header, an LLM answer overwriting a user rule's category, a
 gate that compared rows in id order, an import stuck in `parsing` after a crash, a multi-file
@@ -325,7 +325,7 @@ The table below lists the platform P0 and P1 findings, in commit order.
 | P0 | A fresh-machine restore could not boot, and lost every role grant | The dump omitted grants and the restore created no roles | Dump and restore grants, and create the login roles before the restore | `test_audit_platform.py` | `5b5d076` |
 | P1 | The backup sidecar's dump dropped every table grant | The dumper discarded the record of the grants without writing another | Keep the grants in the dump | `test_audit_platform2.py` | `b2aa300` |
 | P1 | `_restore_dump` threw the grants away a second time | The restore re-created objects without their privileges | Replay the grants first | `test_audit_platform2.py` | `b2aa300` |
-| P1 | The backup sidecar could not start from a Windows checkout | `backup.sh` was checked out with CRLF | `.gitattributes` pins `*.sh` to LF | wave 4 | wave 4 |
+| P1 | The backup sidecar could not start from a Windows checkout | `backup.sh` was checked out with CRLF | `.gitattributes` pins `*.sh` to LF | none (config) | `7179c5e` |
 | P0 | Two writers sharing one task directory could lose a saved task | The atomic save used one predictable `.tmp` name | A unique temp name per save, plus an owner per directory | `test_audit_taskrace.py` | `8936545` |
 
 The P2s here are a non-atomic enrollment-link consumption, two simultaneous passkey deletions
