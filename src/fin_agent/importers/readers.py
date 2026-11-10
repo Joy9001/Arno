@@ -312,22 +312,27 @@ class Doc:
         return row
 
     def _text_rows(self, lines: list[str]) -> list[list[str]]:
-        """Pick the delimiter whose per-line count is most consistent; tolerate preambles."""
+        """Pick the delimiter that structures the file's own rows; tolerate preambles.
+
+        Width comes first, then how many lines carry that same count. A stray `;` or `,` inside
+        one narration, or inside a preamble line such as `Opening Balance: 3,500.00`, is one
+        narrow line; a real delimiter repeats a wider field count across the row lines. Counting
+        only how many lines carry a delimiter let a single `;` in a narration beat a six-column
+        CSV and split every cell on the next import of the same layout.
+        """
         if self.kind != "text":
             return [[line] for line in lines]
         sample = [line for line in lines if line.strip()][:60]
         best: str | None = None
-        best_score = (0.0, 0)
+        best_score = (0, 0)
         for delimiter in ("\t", ";", "|", ","):
             counts = [line.count(delimiter) for line in sample if line.count(delimiter)]
             if not counts:
                 continue
-            modal = max(set(counts), key=counts.count)
-            frequency = counts.count(modal) / len(counts)
-            # One stray `;` in a narration is frequent but shallow; the real delimiter repeats
-            # the same count on most rows, so the score compares both.
-            if modal >= 1 and frequency >= 0.5 and (frequency, modal) > best_score:
-                best, best_score = delimiter, (frequency, modal)
+            modal = max(sorted(set(counts)), key=lambda count: (counts.count(count), count))
+            score = (modal, len(counts))
+            if score > best_score:
+                best, best_score = delimiter, score
         if best:
             self.delimiter = best
             csv.field_size_limit(4 * 1024 * 1024)

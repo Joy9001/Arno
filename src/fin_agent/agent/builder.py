@@ -83,10 +83,14 @@ async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
         text += f"""
 
 Uploaded statement files
-- This turn has {count} statement {noun}. Hand the upload to the `parser` subagent in the
-  background with `delegate_task("parser", "Import the statement files from this turn.",
-  background=True)` and end your turn. Never put an attachment ID in the task text: the parser
-  already has this turn's files. One upload is one task, and each file becomes an import card.
+- This turn has {count} statement {noun}. Your first action is `delegate_task("parser", "Import the
+  statement files from this turn.", background=True)`, before any other tool call and before any
+  prose, then end your turn. Never put an attachment ID in the task text: the parser already has
+  this turn's files. One upload is one task, and each file becomes an import card.
+- Never say a file did not arrive or that this turn has no attachment while this block names one:
+  the upload is on this turn's message, and the import card shows its state. A statement you do
+  not hand over is a file the user believes you are reading. If you already answered without
+  handing it over, hand it to the parser now.
 - The parser reports a status, counts, and anything blocking. It never writes to the ledger, and
   you cannot commit an import. If it asks a question, answer from the ledger when you can and ask
   the user only when you cannot. If a parser task was interrupted by a restart, resume it with

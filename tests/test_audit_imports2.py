@@ -240,20 +240,18 @@ async def test_the_amount_owed_answer_unblocks_a_first_card_statement(ledger):
     detail = await import_payload(ledger, import_id)
     assert detail["status"] == "needs_input"
     assert detail["opening_required"] is True
+    assert len(detail["lines"]) == 1  # the parsed rows wait for the answer
 
-    # The review screen asks the amount owed; the route converts it to ledger sign once.
+    # The review screen asks the amount owed; the route converts it to ledger sign once and the
+    # stored rows are re-checked, so the answer alone completes the import.
     saved = await set_manual_opening(ledger, import_id=import_id, opening_paise=100000)
     assert saved["review"]["manual_opening_paise"] == -100000
-    assert saved["opening_required"] is True
-
-    second = await submit_parser_code(ledger, import_ids=[import_id], code=CARD_PARSER)
-    assert second["status"] == "parser_submitted", second
-    detail = await import_payload(ledger, import_id)
-    assert detail["check"] == "VERIFIED"
-    assert detail["opening_source"] == "manual"
-    assert detail["opening_paise"] == -100000
-    assert detail["opening_evidenced"] is True
-    assert detail["opening_required"] is False
+    assert saved["status"] == "review"
+    assert saved["check"] == "VERIFIED"
+    assert saved["opening_source"] == "manual"
+    assert saved["opening_paise"] == -100000
+    assert saved["opening_evidenced"] is True
+    assert saved["opening_required"] is False
 
     await commit_import(ledger, import_id)
     account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])

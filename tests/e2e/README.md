@@ -26,14 +26,23 @@ first instead of seeding.
 
 The session, base URL, current thread, and the last turn's confirm cards live under `$E2E_STATE`
 (default `<tempdir>/fin-agent-e2e-<database>`), as `state.json` plus `server.log`. So separate
-shell invocations continue the same conversation. A second `up` on the same database keeps the
-ledger and reuses the session; it only re-enrolls if the session is gone.
+shell invocations continue the same conversation.
+
+**`--seed demo` re-seeds and truncates the ledger**, so it is for a first start only. To restart a
+server on the same database — a new port, or a different `CHAT_BASE_URL` read from the shell — run
+`up --keep`: it stops the server the state file records, leaves every row alone, and reuses the
+session. Without `--seed` or `--keep`, `up` only migrates and keeps the ledger too; `--keep` also
+stops the previous process so the port is free.
+
+```bash
+uv run python -m tests.e2e.driver up --port 8125 --keep
+```
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `up --port N [--seed demo] [--empty]` | migrate, start the server, enroll a passkey |
+| `up --port N [--seed demo] [--empty] [--keep]` | migrate, start the server, enroll a passkey |
 | `down` | stop the server it started |
 | `chat "text" [--file PATH]... [--thread ID] [--new] [--json]` | one user turn, as the composer sends it |
 | `approve TOOL_CALL_ID yes\|no [--thread ID]` | answer a confirm card |

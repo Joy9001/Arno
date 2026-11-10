@@ -8,6 +8,7 @@ commit.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -35,10 +36,15 @@ async def _account_for_row(conn: Connection, import_row: dict[str, Any]) -> dict
 
 
 async def _real_accounts(conn: Connection) -> list[dict[str, Any]]:
+    """Every account a statement can be filed against.
+
+    Cash is a first-class account kind, so a statement the user keeps for it can be filed.
+    Loan and asset accounts stay out: their statements are not a list of movements.
+    """
     return await conn.fetch(
         """
         SELECT * FROM accounts
-        WHERE active AND kind IN ('bank', 'card', 'wallet')
+        WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
         ORDER BY kind, name
         """
     )
@@ -62,14 +68,34 @@ async def _infer_account(conn: Connection, doc: Doc) -> dict[str, Any] | None:
     except Exception:  # noqa: BLE001 - inference is best effort
         return None
     lowered = text.lower()
+    # Score the clues instead of taking the first hit. A statement's own bank is usually in its
+    # header block, while a row can name another account ("TRANSFER TO SAVINGS 4821" is the other
+    # account's last four, and a wallet's "CASHBACK" contains an account named "Cash"). Filing a
+    # statement against the wrong account moves money in the wrong place, so the header weighs
+    # most and every clue adds up.
+    head = "\n".join(lowered.splitlines()[:4])
+
+    def named(needle: str, haystack: str) -> bool:
+        """A whole-word match: "SBI" must not match "subsidy"."""
+        pattern = r"(?<![a-z0-9])" + re.escape(needle) + r"(?![a-z0-9])"
+        return re.search(pattern, haystack) is not None
+
+    best: dict[str, Any] | None = None
+    best_score = 0
     for account in accounts:
-        if account["last4"] and account["last4"] in text:
-            return account
-    for account in accounts:
-        for needle in (account["institution"], account["name"]):
-            if needle and str(needle).lower() in lowered:
-                return account
-    return None
+        institution = str(account["institution"] or "").lower()
+        name = str(account["name"] or "").lower()
+        last4 = str(account["last4"] or "")
+        score = 0
+        if institution:
+            score += 8 if named(institution, head) else (4 if named(institution, lowered) else 0)
+        if last4:
+            score += 3 if last4 in text[:400] else (2 if last4 in text else 0)
+        if name:
+            score += 2 if named(name, head) else (1 if named(name, lowered) else 0)
+        if score > best_score:
+            best, best_score = account, score
+    return best
 
 
 async def _resolve_parsed_account(
@@ -107,6 +133,19 @@ async def create_import(
     attachment = await conn.fetchrow("SELECT * FROM attachments WHERE id = $1", attachment_id)
     if attachment is None:
         raise ValueError("No such attachment")
+    own = await conn.fetchrow(
+        """
+        SELECT * FROM imports
+        WHERE attachment_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        attachment_id,
+    )
+    if own is not None:
+        # One attachment is one import, whatever its status. A parser that asks for this turn's
+        # state again must not turn a file the user rejected into a second import.
+        return dict(own)
     existing = await conn.fetchrow(
         """
         SELECT i.*
@@ -152,7 +191,14 @@ async def retry_with_password(conn: Connection, *, import_id: str, password: str
 
 async def set_progress(conn: Connection, import_id: str, progress: str | None) -> None:
     """Write the card's live line. Only host-made text belongs here, never a model's."""
-    await conn.execute("UPDATE imports SET progress = $1 WHERE id = $2", progress, import_id)
+    await conn.execute(
+        """
+        UPDATE imports SET progress = $1
+        WHERE id = $2 AND status NOT IN ('rejected', 'committed')
+        """,
+        progress,
+        import_id,
+    )
 
 
 async def _set_status(
@@ -169,8 +215,11 @@ async def _set_status(
         assignments.append(f"{key} = ${len(params) + 1}")
         params.append(value)
     params.append(import_id)
+    # A rejected import is the user's decision. A parser that is still running must not move it
+    # back to parsing or review with a late write.
     await conn.execute(
-        f"UPDATE imports SET {', '.join(assignments)} WHERE id = ${len(params)}",  # noqa: S608 - fixed keys
+        f"UPDATE imports SET {', '.join(assignments)} "  # noqa: S608 - fixed keys
+        f"WHERE id = ${len(params)} AND status NOT IN ('rejected', 'committed')",
         *params,
     )
 
@@ -186,19 +235,25 @@ async def _finalize(
     helper_version: str | None,
     fingerprint: str | None,
     period: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Write the reviewed rows and move the import to `review`."""
+    status: str = "review",
+    reason: str | None = None,
+) -> bool:
+    """Write the reviewed rows and move the import to `status`.
+
+    Returns False when the import was rejected (or committed) while the parser was still
+    working: the user's decision stands and the rows are not written.
+    """
     async with conn.transaction():
-        await conn.execute("DELETE FROM statement_lines WHERE import_id = $1", import_id)
-        await conn.execute(
+        finalized = await conn.fetchval(
             """
             UPDATE imports
             SET account_id = $1, period_start = $2, period_end = $3,
                 opening_balance_paise = $4, closing_balance_paise = $5,
                 check_result = $6, parser = $7, helper_version = $8,
-                fingerprint = $9, institution = $10, status = 'review', reason = NULL,
+                fingerprint = $9, institution = $10, status = $12, reason = $13,
                 progress = NULL
-            WHERE id = $11
+            WHERE id = $11 AND status NOT IN ('rejected', 'committed')
+            RETURNING id
             """,
             account["id"],
             date.fromisoformat(period["start"]) if period else None,
@@ -211,7 +266,12 @@ async def _finalize(
             fingerprint,
             account["institution"] or account["name"] or parsed_account.get("institution"),
             import_id,
+            status,
+            reason,
         )
+        if finalized is None:
+            return False
+        await conn.execute("DELETE FROM statement_lines WHERE import_id = $1", import_id)
         await insert_lines(
             conn,
             import_id=import_id,
@@ -221,13 +281,13 @@ async def _finalize(
         period_dates = None
         if period:
             period_dates = (date.fromisoformat(period["start"]), date.fromisoformat(period["end"]))
-        review = await reconcile(
+        await reconcile(
             conn,
             import_id=import_id,
             account=account,
             period=period_dates,
         )
-    return review
+    return True
 
 
 async def _store_unlocked(attachment_id: str, data: bytes, docs: list[Doc]) -> None:

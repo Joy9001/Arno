@@ -16,6 +16,7 @@ from typing import Any
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.errors import LedgerError
+from fin_agent.ledger.movements import record_expense
 from fin_agent.ledger.payees import create_payee
 from fin_agent.ledger.schedules import create_schedule
 from fin_agent.tools import write as write_tools
@@ -737,16 +738,31 @@ async def test_each_invariant_is_caught(ledger):
             f"case-{uuid.uuid4().hex}",
             bank["id"],
         )
-        await ledger.execute(
+        line = await ledger.fetchrow(
             """
             INSERT INTO statement_lines
-                (import_id, date, description_raw, amount_paise, content_hash, movement_id)
-            VALUES ($1, $2, 'Case line', 10_000, $3, $4)
+                (import_id, date, description_raw, amount_paise, content_hash)
+            VALUES ($1, $2, 'Case line', 10_000, $3)
+            RETURNING *
             """,
             import_row["id"],
             ledger_today(),
             uuid.uuid4().hex,
-            expense_id,
+        )
+        # A line pointing at a movement it matched is fine (that is how a certain match shows in
+        # review); a movement the import wrote for its own line before commit is the violation.
+        written = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=10_000,
+            description="Written for a review line",
+            date=ledger_today(),
+            idempotency_key=f"stmt:{line['id']}",
+        )
+        await ledger.execute(
+            "UPDATE statement_lines SET movement_id = $1 WHERE id = $2",
+            written["id"],
+            line["id"],
         )
 
     async def unverified_import():

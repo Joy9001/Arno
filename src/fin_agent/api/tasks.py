@@ -36,7 +36,7 @@ from fin_agent.importers.layouts import rollback_layout
 
 router = APIRouter(prefix="/api", tags=["tasks"], dependencies=[Depends(current_session)])
 
-ACCOUNT_KINDS = ("bank", "card", "wallet")
+ACCOUNT_KINDS = ("bank", "card", "wallet", "cash")
 
 # A tool result can be a whole page of statement rows; the transcript is a receipt, not a dump.
 RESULT_LIMIT = 1200
@@ -324,7 +324,7 @@ async def task_answer(
     )
     if account is None:
         raise HTTPException(
-            status_code=422, detail="Choose an active bank, card, or wallet account."
+            status_code=422, detail="Choose an active bank, card, wallet, or cash account."
         )
     answer = (
         f"The statement is for the account {account['name']} "

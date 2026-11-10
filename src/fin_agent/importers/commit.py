@@ -685,8 +685,7 @@ async def reject_import(conn: Connection, import_id: str, reason: str | None = N
             """
             UPDATE imports
             SET status = 'rejected', rejected_at = now(), reason = $1
-            WHERE id = $2 AND status IN ('review', 'needs_input', 'needs_password', 'failed',
-                                         'not_a_statement')
+            WHERE id = $2 AND status NOT IN ('committed', 'rejected')
             RETURNING account_id
             """,
             reason,

@@ -84,11 +84,14 @@ async def save_version(
             fingerprint,
         )
     else:
+        # `ARRAY[$1]`, not `variants || $1::text[]`: the parameter is one fingerprint string, so
+        # asyncpg encodes it as text. Declaring the parameter text[] makes Postgres read the
+        # string as an array literal and fail on the first new variant of a known bank.
         await conn.execute(
             """
             UPDATE statement_layouts
-            SET variants = variants || $1::text[], updated_at = now()
-            WHERE id = $2 AND $1::text IS NOT NULL AND NOT ($1 = ANY(variants))
+            SET variants = variants || ARRAY[$1::text], updated_at = now()
+            WHERE id = $2 AND $1::text IS NOT NULL AND NOT ($1::text = ANY(variants))
             """,
             fingerprint,
             layout["id"],

@@ -270,7 +270,7 @@ async def test_answer_uses_the_account_row_and_only_active_bank_card_wallet(ledg
                 "Which account is this statement for?",
             )
 
-            for account in (inactive, cash):
+            for account in (inactive,):
                 with pytest.raises(HTTPException) as caught:
                     await task_answer(
                         task_id,
@@ -297,11 +297,32 @@ async def test_answer_uses_the_account_row_and_only_active_bank_card_wallet(ledg
             )
             assert response["question"] is None
             answer = await question
+
+            # Cash is a first-class account, so a cash statement's question can be answered.
+            cash_question = asyncio.create_task(
+                owner.ask(
+                    task_id,
+                    question_id="q2",
+                    question="Which account is this statement for?",
+                )
+            )
+            for _ in range(200):
+                if owner.pending_question(task_id) is not None:
+                    break
+                await asyncio.sleep(0.01)
+            await task_answer(
+                task_id,
+                AnswerIn(question_id="q2", account_id=cash["id"]),
+                _request(owner),
+                ledger,
+            )
+            cash_answer = await cash_question
         finally:
             if not question.done():
                 question.cancel()
 
     assert answer == "The statement is for the account SBI savings (SBI), id " + bank["id"] + "."
+    assert cash_answer == "The statement is for the account Cash (cash), id " + cash["id"] + "."
     assert card["id"] != bank["id"]
 
 

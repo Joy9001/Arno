@@ -873,12 +873,27 @@ async def _check_schedules(conn: Connection) -> None:
 
 
 async def _check_imports(conn: Connection) -> None:
+    # A review import may point at a movement it matched: logging a payment in chat and then
+    # finding it on the statement merges into the existing record, which is the point. What a
+    # non-committed import must never do is create one: a line that this import booked carries
+    # its own `stmt:<line>` idempotency key and its capture.
     rows = await conn.fetch(
         """
         SELECT sl.id, sl.import_id, i.status
         FROM statement_lines sl
         JOIN imports i ON i.id = sl.import_id
         WHERE i.status <> 'committed' AND sl.movement_id IS NOT NULL
+          AND (
+              EXISTS (
+                  SELECT 1 FROM movements m
+                  WHERE m.id = sl.movement_id AND m.idempotency_key = 'stmt:' || sl.id
+              )
+              OR EXISTS (
+                  SELECT 1 FROM captures c
+                  WHERE c.movement_id = sl.movement_id
+                    AND c.kind = 'statement_line' AND c.ref = sl.id
+              )
+          )
         """
     )
     for row in rows:

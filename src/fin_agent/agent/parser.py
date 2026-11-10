@@ -30,7 +30,7 @@ from fin_agent.agent.capabilities import (
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.models import parse_model
 from fin_agent.db.conn import Connection, connect
-from fin_agent.importers.checks import INPUT_REASONS, account_check
+from fin_agent.importers.checks import INPUT_REASONS, OPENING_MISSING, account_check
 from fin_agent.importers.checks import check_statement as run_checks
 from fin_agent.importers.gate import run_gate
 from fin_agent.importers.helpers import HELPER_VERSION
@@ -677,7 +677,7 @@ async def ledger_opening(
             found = await conn.fetchrow(
                 """
                 SELECT * FROM accounts
-                WHERE active AND kind IN ('bank', 'card', 'wallet')
+                WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
                   AND lower(name) = lower($1)
                 """,
                 account,
@@ -846,13 +846,31 @@ async def submit_parser_code(
         )
         if check["status"] != "VERIFIED":
             reason = check.get("reason") or "the checks did not pass"
-            await _set_status(
-                conn,
-                import_id,
-                "needs_input" if reason in INPUT_REASONS else "parsing",
-                reason=reason,
-                check_result=check,
-            )
+            if reason == OPENING_MISSING:
+                # The rows are sound; only the opening is unknown. Keep them, so the review
+                # card's opening answer completes the check instead of asking the parser again.
+                await _finalize(
+                    conn,
+                    import_id=import_id,
+                    account=resolved,
+                    parsed_account=parsed,
+                    check=check,
+                    script=code,
+                    helper_version=HELPER_VERSION,
+                    fingerprint=info["fingerprint"]
+                    or (normalize_headers(parsed["headers"]) if parsed.get("headers") else None),
+                    period=period,
+                    status="needs_input",
+                    reason=reason,
+                )
+            else:
+                await _set_status(
+                    conn,
+                    import_id,
+                    "needs_input" if reason in INPUT_REASONS else "parsing",
+                    reason=reason,
+                    check_result=check,
+                )
             return {
                 "status": "failed",
                 "reason": check.get("reason") or "the checks did not pass",
@@ -882,7 +900,7 @@ async def submit_parser_code(
         )
 
     for item in prepared:
-        await _finalize(
+        written = await _finalize(
             conn,
             import_id=item["import_id"],
             account=item["account"],
@@ -893,6 +911,16 @@ async def submit_parser_code(
             fingerprint=item["fingerprint"],
             period=item["period"],
         )
+        if not written:
+            # The user rejected this import while the parser was still reading it.
+            return _report(
+                "failed",
+                reason=f"Import {item['import_id']} was rejected while it was being read.",
+                imports=[
+                    {"import_id": entry["import_id"], "status": "rejected", "reason": None}
+                    for entry in prepared
+                ],
+            )
 
     return {
         "status": "parser_submitted",
@@ -923,7 +951,7 @@ async def suggest_transfers(
             """
             SELECT id, name, kind, institution, last4
             FROM accounts
-            WHERE active AND kind IN ('bank', 'card', 'wallet')
+            WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
               AND ($1::text IS NULL OR id <> $1)
             ORDER BY kind, name
             """,

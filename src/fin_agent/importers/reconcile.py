@@ -572,20 +572,31 @@ async def resolve_line(
     elif resolution == "confirm_transfer":
         if not (line["match_detail"] or {}).get("suggested_transfer_account_id"):
             raise ValueError("That line is not a suggested transfer")
-        await _set_match(conn, line_id, "new", None, {"transfer_confirmed": True})
+        # A line the statement matched already has its record. Confirming the own-account move
+        # keeps that record; dropping the match here would book a second transfer at commit and
+        # the closing adjustment would hide the duplicate.
+        await _set_match(
+            conn,
+            line_id,
+            line["match_state"] if line.get("movement_id") else "new",
+            line["movement_id"],
+            {"transfer_confirmed": True},
+        )
     elif resolution == "reject_transfer":
+        # Rejecting the suggestion keeps whatever the statement already matched: only the
+        # suggestion goes, so the line still merges into its one record at commit.
         await conn.execute(
             """
             UPDATE statement_lines
-            SET match_state = 'new',
+            SET match_state = CASE WHEN movement_id IS NULL THEN 'new' ELSE match_state END,
                 match_detail = (coalesce(match_detail, '{}'::jsonb)
-                                - 'suggested_transfer_account_id'),
+                                - 'suggested_transfer_account_id') || $2::jsonb,
                 updated_at = now()
             WHERE id = $1
             """,
             line_id,
+            {"transfer_rejected": True},
         )
-        await _set_match(conn, line_id, "new", None, {"transfer_rejected": True})
     elif resolution == "classify_credit":
         await _classify_credit(
             conn,

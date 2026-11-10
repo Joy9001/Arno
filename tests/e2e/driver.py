@@ -884,6 +884,13 @@ def _render_import(payload: dict[str, Any]) -> str:
 
 
 def cmd_up(args: argparse.Namespace) -> int:
+    if args.keep and (args.seed or args.empty):
+        raise SystemExit("--keep keeps the ledger as it is; drop --seed and --empty")
+    if args.keep:
+        # A restart (a new port, a different CHAT_BASE_URL) keeps the ledger and the session.
+        previous = load_state()
+        if previous.get("pid"):
+            stop_server(int(previous["pid"]))
     os.environ.update(server_env(args.port))
     directory = state_dir()
     directory.mkdir(parents=True, exist_ok=True)
@@ -1168,6 +1175,11 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--port", type=int, required=True)
     up.add_argument("--seed", choices=["demo"], help="seed the synthetic persona (resets the db)")
     up.add_argument("--empty", action="store_true", help="drop the schema first: no ledger at all")
+    up.add_argument(
+        "--keep",
+        action="store_true",
+        help="restart the server on this database and keep the ledger as it is",
+    )
     up.add_argument("--timeout", type=float, default=120.0, help="seconds to wait for /api/health")
 
     command("down", "stop the server this driver started")

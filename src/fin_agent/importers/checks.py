@@ -125,9 +125,8 @@ def check_statement(
                 result["reason"] = f"row {index}: bad date {row.get('date')!r}"
                 return result
         effective_opening, opening_source = _opening_value(opening, ledger_opening, manual_opening)
-        if effective_opening is None:
-            result["reason"] = OPENING_MISSING
-            return result
+        # The closing is known from the printed figure or the last running balance even when the
+        # opening is not, so a statement parked for its opening still carries what to check.
         effective_closing = closing
         if not _is_int(effective_closing):
             last = rows[-1].get("balance") if rows else None
@@ -137,9 +136,12 @@ def check_statement(
             else:
                 result["reason"] = CLOSING_MISSING
                 return result
+        result["closing_paise"] = effective_closing
+        if effective_opening is None:
+            result["reason"] = OPENING_MISSING
+            return result
         result["opening_source"] = opening_source
         result["opening_paise"] = effective_opening
-        result["closing_paise"] = effective_closing
         credits = sum(row["credit"] for row in rows)
         debits = sum(row["debit"] for row in rows)
         computed = int(effective_opening) + credits - debits
