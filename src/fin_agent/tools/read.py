@@ -14,6 +14,8 @@ from typing import Any
 
 from fin_agent.db.conn import Connection, connect
 from fin_agent.engine.money import money
+from fin_agent.engine.projection import CardAccount, card_due_date, statement_close
+from fin_agent.jobs.schedules import INDIA
 from fin_agent.ledger import accounts as accounts_mod
 from fin_agent.ledger import categories as categories_mod
 from fin_agent.ledger import goals as goals_mod
@@ -21,8 +23,9 @@ from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger import payees as payees_mod
 from fin_agent.ledger import schedules as schedules_mod
 from fin_agent.ledger import settings as settings_mod
-from fin_agent.ledger.common import has_known_balance
+from fin_agent.ledger.common import balance_anchor, has_known_balance
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.scheduled_questions import list_questions as list_scheduled_questions
 from fin_agent.tools.mark import CLOSE, OPEN, mark
 from fin_agent.tools.periods import resolve_period
 
@@ -148,7 +151,8 @@ async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
 
 
 async def get_financial_context(conn: Connection) -> dict[str, Any]:
-    """One comprehensive snapshot: settings, balances, the next 30 days, goals, owed, setup gaps."""
+    """One comprehensive snapshot: settings, balances and their ages, the next 30 days, schedules
+    with their next dates, goals, owed, preferences, scheduled questions, and setup gaps."""
     day = ledger_today()
     settings = await settings_mod.read_settings(conn)
     account_rows = await accounts_mod.list_accounts(conn)
@@ -157,20 +161,18 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     warnings: list[str] = []
     for row in account_rows:
         known = has_known_balance(row)
-        anchors = [
-            anchor
-            for anchor in (row["balance_as_of"], row["statement_balance_as_of"])
-            if anchor is not None
-        ]
         # The balance is verified as of the later of its last movement and its stated balance:
         # a stated balance that matches the ledger adds no movement, and reporting the older
-        # date would make a fresh check look stale.
-        as_of = max(anchors) if known and anchors else None
+        # date would make a fresh check look stale. One definition, in `ledger.common`.
+        as_of = balance_anchor(row, row["balance_as_of"])
         balance = money(row["balance_paise"]) if known else None
         coverage_row = await _account_coverage(
             conn, row["id"], day - timedelta(days=366), day, today=day
         )
-        age = row["statement_age_days"]
+        # The age is days since that same anchor, computed once in `account_payload`, so the age
+        # and the as_of date always agree; statement freshness is the coverage gap below, which
+        # says what it actually means.
+        age = row["balance_age_days"] if known else None
         if age is not None and age > 30:
             warnings.append(f"{row['name']} balance is {age} days old")
         if coverage_row["gaps"]:
@@ -183,28 +185,42 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         outstanding_paise = row.get("card_outstanding_paise")
         if outstanding_paise is None:
             outstanding_paise = row.get("loan_outstanding_paise")
-        accounts.append(
-            {
-                "id": row["id"],
-                "name": row["name"],
-                "kind": row["kind"],
-                "liquid": row["liquid"],
-                "known": known,
-                "balance": balance,
-                "as_of": as_of or None,
-                "statement_age_days": age,
-                "credit_limit": money(row["credit_limit_paise"]),
-                "statement_day": row["statement_day"],
-                "due_day": row["due_day"],
-                "available_credit": money(row.get("available_credit_paise")),
-                "outstanding": money(outstanding_paise),
-                "covered": {
-                    "from": coverage_row["from"],
-                    "to": coverage_row["to"],
-                    "gaps": coverage_row["gaps"],
-                },
-            }
-        )
+        account = {
+            "id": row["id"],
+            "name": row["name"],
+            "kind": row["kind"],
+            "liquid": row["liquid"],
+            "active": row["active"],
+            "known": known,
+            "balance": balance,
+            "as_of": as_of or None,
+            "age_days": age,
+            "credit_limit": money(row["credit_limit_paise"]),
+            "statement_day": row["statement_day"],
+            "due_day": row["due_day"],
+            "available_credit": money(row.get("available_credit_paise")),
+            "outstanding": money(outstanding_paise),
+            "rate_bps": row["rate_bps"],
+            "tenure_months": row["tenure_months"],
+            "covered": {
+                "from": coverage_row["from"],
+                "to": coverage_row["to"],
+                "gaps": coverage_row["gaps"],
+            },
+        }
+        if row["kind"] == "card" and row["statement_day"] and row["due_day"]:
+            # The engine's cycle rule, so a stated bill date cannot drift from the projection.
+            terms = CardAccount(
+                id=row["id"],
+                name=row["name"],
+                statement_day=row["statement_day"],
+                due_day=row["due_day"],
+                outstanding_paise=outstanding_paise or 0,
+                credit_limit_paise=row["credit_limit_paise"] or 0,
+            )
+            account["next_statement_close"] = statement_close(terms, day).isoformat()
+            account["next_bill_due"] = card_due_date(terms, day).isoformat()
+        accounts.append(account)
 
     liquid_rows = [row for row in account_rows if row["liquid"]]
     liquid_known = [row for row in liquid_rows if has_known_balance(row)]
@@ -229,6 +245,8 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
                 "kind": event["kind"],
                 "subtype": event["subtype"],
                 "amount": money(event["amount_paise"]),
+                # Why an amount is null: an unknown card bill says so in words the model quotes.
+                "note": event.get("note"),
                 "schedule_id": schedule_id,
                 "payment_status": event["payment_status"],
                 "paid": money(event["paid_paise"]),
@@ -262,22 +280,30 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     ]
 
     schedules: list[dict[str, Any]] = []
-    for row in await schedules_mod.list_schedules(conn):
-        name = row["name"]
-        if row["outside_text"]:
+    for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY kind, name"):
+        payload = await schedules_mod.schedule_payload(conn, row)
+        name = payload["name"]
+        if payload["outside_text"]:
             name = mark(name) or name
             outside = True
+        # A schedule's future runs are the ledger's own expansion, not the 30-day event list:
+        # `schedule_occurrences` only holds runs a payment was matched to.
+        expanded = await schedules_mod.expand_schedule(conn, row, day, day + timedelta(days=400))
         schedules.append(
             {
-                "id": row["id"],
+                "id": payload["id"],
                 "name": name,
-                "kind": row["kind"],
-                "subtype": row["subtype"],
-                "amount": money(row["amount_paise"]),
-                "rule": row["rule"],
-                "next_date": row["next_date"],
-                "confirmed": row["confirmed"],
-                "active": row["active"],
+                "kind": payload["kind"],
+                "subtype": payload["subtype"],
+                "amount": money(payload["amount_paise"]),
+                "rule": payload["rule"],
+                "next_date": payload["next_date"],
+                # A run that is already fully paid is not still coming.
+                "next_dates": [
+                    event["date"] for event in expanded if event["remaining_paise"] != 0
+                ][:4],
+                "confirmed": payload["confirmed"],
+                "active": payload["active"],
             }
         )
 
@@ -319,6 +345,22 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
             ORDER BY created_at
             """
         )
+    ]
+
+    # A question the user can archive from chat: without this list, finding its id needs a raw
+    # query, which flags the thread and puts a confirm card in front of a one-field change.
+    scheduled_questions = [
+        {
+            "id": row["id"],
+            "prompt": row["prompt"],
+            "rule": row["rule"],
+            "next_run": (
+                datetime.fromisoformat(row["next_run_at"]).astimezone(INDIA).isoformat()
+                if row["next_run_at"]
+                else None
+            ),
+        }
+        for row in await list_scheduled_questions(conn)
     ]
 
     income_count = (
@@ -364,6 +406,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         "goals": goals,
         "owed": owed,
         "preferences": preferences,
+        "scheduled_questions": scheduled_questions,
         "setup_gaps": setup_gaps,
         "warnings": warnings,
         "source_ids": {
@@ -464,7 +507,7 @@ async def query_movements(
     _check_filters(
         filters,
         MOVEMENT_FILTERS,
-        'A date range goes in period as "YYYY-MM-DD..YYYY-MM-DD".',
+        'A single day or a range goes in period as "YYYY-MM-DD" or "YYYY-MM-DD..YYYY-MM-DD".',
     )
     day = ledger_today()
     start = end = None

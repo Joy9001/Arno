@@ -8,6 +8,7 @@ from datetime import date, timedelta
 
 _RANGE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$")
 _MONTH = re.compile(r"^(\d{4})-(\d{2})$")
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def resolve_period(period: str | None, today: date) -> tuple[date, date]:
@@ -36,6 +37,11 @@ def resolve_period(period: str | None, today: date) -> tuple[date, date]:
         return today - timedelta(days=29), today
     if period == "this_year":
         return date(today.year, 1, 1), today
+    if _DAY.match(period):
+        start = end = date.fromisoformat(period)
+        if start > today:
+            raise ValueError(f"The period {period!r} has not started yet")
+        return start, end
     match = _MONTH.match(period)
     if match:
         year, month = int(match.group(1)), int(match.group(2))
@@ -48,7 +54,7 @@ def resolve_period(period: str | None, today: date) -> tuple[date, date]:
         if match is None:
             raise ValueError(
                 f"Unknown period {period!r}; use this_month, last_month, this_week, last_week, "
-                'this_year, today, last_7_days, last_30_days, "YYYY-MM", or '
+                'this_year, today, last_7_days, last_30_days, "YYYY-MM", "YYYY-MM-DD", or '
                 '"YYYY-MM-DD..YYYY-MM-DD"'
             )
         start = date.fromisoformat(match.group(1))

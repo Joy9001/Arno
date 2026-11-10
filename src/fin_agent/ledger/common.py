@@ -94,16 +94,38 @@ def has_known_balance(account: dict[str, Any]) -> bool:
     an explicit zero. A ledger movement changes a known balance but never establishes one, so an
     account whose first entry is spend or income remains unknown.
     """
+    if account["kind"] == "goal":
+        # A fenced goal bucket has no outside statement: it opens at zero and only the ledger
+        # moves it, so its ledger balance is the whole truth.
+        return True
     return (
         account["statement_balance_paise"] is not None
         and account["statement_balance_as_of"] is not None
     )
 
 
+def balance_anchor(account: dict[str, Any], last_movement: date | None) -> date | None:
+    """The date a known balance is exact as of: the later of its last movement and its stated one.
+
+    Rows carry two separate pieces of evidence: ``statement_balance_as_of`` (an opening balance, a
+    user-stated balance, or a committed statement) and the last movement's date. A fresh movement
+    makes a stale statement anchor irrelevant, so the age of the balance is measured from whichever
+    is later. ``None`` when the balance is not known at all, and a `goal` account with no movement
+    yet is exact at zero as of ``None``.
+    """
+    if not has_known_balance(account):
+        return None
+    evidence = [
+        day for day in (last_movement, account["statement_balance_as_of"]) if day is not None
+    ]
+    return max(evidence) if evidence else None
+
+
 async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
     balance = await ledger_balance(conn, row["ledger_account_id"])
     as_of = await balance_as_of(conn, row["ledger_account_id"])
     statement_as_of = row["statement_balance_as_of"]
+    anchor = balance_anchor(row, as_of)
     payload: dict[str, Any] = {
         "id": row["id"],
         "kind": row["kind"],
@@ -116,6 +138,7 @@ async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, An
         "balance_as_of": as_of.isoformat() if as_of else None,
         "statement_balance_paise": row["statement_balance_paise"],
         "statement_balance_as_of": statement_as_of.isoformat() if statement_as_of else None,
+        "balance_age_days": (today() - anchor).days if anchor else None,
         "statement_age_days": (
             (today() - statement_as_of).days if statement_as_of is not None else None
         ),
@@ -130,11 +153,13 @@ async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, An
     if row["kind"] == "card":
         # A ledger movement alone does not establish a card's outstanding debt, so an unknown
         # card must not look like a zero balance with the whole limit still available.
-        owed = max(-balance, 0) if has_known_balance(row) else None
+        known = has_known_balance(row)
         limit = row["credit_limit_paise"]
-        payload["card_outstanding_paise"] = owed
+        payload["card_outstanding_paise"] = max(-balance, 0) if known else None
+        # A credit balance (an overpayment) is usable, so the available credit is the limit plus
+        # the balance, which is negative when money is owed.
         payload["available_credit_paise"] = (
-            max(limit - owed, 0) if owed is not None and limit is not None else None
+            max(limit + balance, 0) if known and limit is not None else None
         )
     if row["kind"] == "loan":
         payload["loan_outstanding_paise"] = max(-balance, 0)
