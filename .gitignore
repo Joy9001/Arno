@@ -47,11 +47,14 @@ docs/research/agent-toolkit-2026/data/
 private/
 statements/
 
-# Claude Code local settings (machine-specific, not shared)
-.claude/settings.local.json
-
-# Codex local config
-.codex/config.toml
+# AI agent skills and tooling, kept local
+.agents/
+.claude/
+.codex/
+.gemini/
+.opencode/
+.taste-skill/
+skills-lock.json
 
 # OS
 .DS_Store
