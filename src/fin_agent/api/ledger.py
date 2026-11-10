@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fin_agent.api import import_history, provenance, runtime_info
 from fin_agent.api.deps import Database, FreshSession, current_session
+from fin_agent.engine.projection import Projection
 from fin_agent.ledger import (
     accounts,
     categories,
@@ -580,7 +581,8 @@ async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
     return await goals.archive_goal(conn, goal_id)
 
 
-@router.get("/projection")
+# The payload is typed for the checker, not re-validated: the engine owns its shape.
+@router.get("/projection", response_model=None)
 async def get_projection(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
@@ -589,7 +591,7 @@ async def get_projection(
     method: Literal["account", "card", "emi"] | None = None,
     emi_months: int | None = Query(default=None, ge=2, le=48),
     account: str | None = None,
-) -> dict[str, Any]:
+) -> Projection:
     """The read-only projection panel and the inline projection card share this payload."""
     hypothetical = None
     if amount_paise is not None:

@@ -406,17 +406,17 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     ]
 
     income_count = (
-        await conn.fetchrow(
+        await conn.fetchrow_required(
             "SELECT count(*) AS n FROM schedules WHERE active AND kind LIKE 'income%'"
         )
     )["n"]
     obligation_count = (
-        await conn.fetchrow(
+        await conn.fetchrow_required(
             "SELECT count(*) AS n FROM schedules "
             "WHERE active AND kind IN ('obligation', 'instalment')"
         )
     )["n"]
-    baseline_count = (await conn.fetchrow("SELECT count(*) AS n FROM baselines"))["n"]
+    baseline_count = (await conn.fetchrow_required("SELECT count(*) AS n FROM baselines"))["n"]
     setup_gaps: list[str] = []
     if not account_rows:
         setup_gaps.append("no accounts added")
@@ -628,7 +628,7 @@ async def query_movements(
     # The cursor narrows the page, never the total: every page reports the whole match count.
     total = int(
         (
-            await conn.fetchrow(
+            await conn.fetchrow_required(
                 f"SELECT count(*) AS n FROM movements m {where}",  # noqa: S608
                 *params,
             )

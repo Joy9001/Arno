@@ -17,7 +17,7 @@ import zipfile
 import zlib
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict, override
 
 MAX_ZIP_TOTAL = 200 * 1024 * 1024
 MAX_ZIP_MEMBERS = 50
@@ -86,7 +86,7 @@ def sniff(data: bytes) -> str:
                     return "ods"
         return "zip"
     if head[:4] == b"\xd0\xcf\x11\xe0":
-        import olefile
+        import olefile  # pyrefly: ignore[untyped-import]  # olefile ships no type information
 
         try:
             ole = olefile.OleFileIO(io.BytesIO(data))
@@ -145,13 +145,22 @@ def _clean_cell(value: Any) -> Any:
     return value
 
 
+class _TableFrame(TypedDict):
+    """One open `<table>` while parsing: its rows so far, the open row, and the open cell."""
+
+    rows: list[list[str]]
+    row: list[str] | None
+    cell: list[str] | None
+
+
 class _HTMLTables(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.tables: list[list[list[str]]] = []
-        self.stack: list[dict[str, Any]] = []
+        self.stack: list[_TableFrame] = []
         self.skip = 0
 
+    @override
     def handle_starttag(self, tag: str, attrs: Any) -> None:
         del attrs
         if tag in ("script", "style"):
@@ -163,21 +172,26 @@ class _HTMLTables(HTMLParser):
         elif tag in ("td", "th") and self.stack and self.stack[-1]["row"] is not None:
             self.stack[-1]["cell"] = []
 
+    @override
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style"):
             self.skip = max(0, self.skip - 1)
-        elif tag in ("td", "th") and self.stack and self.stack[-1]["cell"] is not None:
-            table = self.stack[-1]
-            table["row"].append(" ".join("".join(table["cell"]).split()))
+            return
+        if not self.stack:
+            return
+        table = self.stack[-1]
+        if tag in ("td", "th") and table["cell"] is not None:
+            if table["row"] is not None:
+                table["row"].append(" ".join("".join(table["cell"]).split()))
             table["cell"] = None
-        elif tag == "tr" and self.stack and self.stack[-1]["row"] is not None:
-            table = self.stack[-1]
+        elif tag == "tr" and table["row"] is not None:
             if any(cell for cell in table["row"]):
                 table["rows"].append(table["row"])
             table["row"] = None
-        elif tag == "table" and self.stack:
+        elif tag == "table":
             self.tables.append(self.stack.pop()["rows"])
 
+    @override
     def handle_data(self, data: str) -> None:
         if self.skip:
             return
@@ -203,6 +217,8 @@ class Doc:
         self._sheets: list[tuple[str, list[list[Any]]]] | None = None
         self._lines: list[str] | None = None
         self._words_cache: dict[int, list[dict[str, Any]]] = {}
+        self.members: list[tuple[str, bytes]] = []
+        self._last_reading_rotation = 0
         self.delimiter: str | None = None
         self.encoding: str | None = None
         self._open()
@@ -247,7 +263,7 @@ class Doc:
                 try:
                     rows = workbook.get_sheet_by_name(name).to_python(skip_empty_area=False)
                 except OSError:  # chart sheets and other non-cell sheets
-                    rows = []
+                    rows: list[list[Any]] = []
                 self._sheets.append(
                     (name, [[_clean_cell(cell) for cell in self._trim(row)] for row in rows])
                 )
@@ -458,7 +474,7 @@ class Doc:
     @staticmethod
     def _xf(
         rotation: int, left: float, bottom: float, right: float, top: float, w: float, h: float
-    ):
+    ) -> tuple[float, float, float, float]:
         if rotation == 0:
             return left, right, h - top, h - bottom
         if rotation == 90:

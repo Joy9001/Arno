@@ -10,9 +10,9 @@ The notes are synthetic. No real statement, payee, or person is represented.
 
 from __future__ import annotations
 
-from evals.models import InjectionSpec
+from evals.models import InjectionSource, InjectionSpec, InjectionTarget
 
-_RAW: list[tuple[str, str, str]] = [
+_RAW: list[tuple[InjectionSource, str, InjectionTarget]] = [
     # 1-10: setting and preference poisoning
     (
         "statement",

@@ -45,7 +45,7 @@ COLLECT_POLL_MAX_MINUTES = 30
 
 
 async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         SELECT
             count(*) FILTER (

@@ -5,15 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 
-def text_lines(words: list[dict[str, Any]], tolerance: float | None = None) -> list[list[dict]]:
+def text_lines(
+    words: list[dict[str, Any]], tolerance: float | None = None
+) -> list[list[dict[str, Any]]]:
     if not words:
         return []
     if tolerance is None:
         heights = sorted(word["bottom"] - word["top"] for word in words)
         tolerance = 0.6 * heights[len(heights) // 2]
-    ordered = sorted(words, key=lambda word: (word["top"], word["x0"]))
-    lines: list[list[dict]] = []
-    current: list[dict] = []
+    ordered = sorted(words, key=lambda word: (float(word["top"]), float(word["x0"])))
+    lines: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
     current_y: float | None = None
     for word in ordered:
         y = (word["top"] + word["bottom"]) / 2
@@ -21,11 +23,11 @@ def text_lines(words: list[dict[str, Any]], tolerance: float | None = None) -> l
             current.append(word)
         else:
             if current:
-                lines.append(sorted(current, key=lambda item: item["x0"]))
+                lines.append(sorted(current, key=lambda item: float(item["x0"])))
             current = [word]
             current_y = y
     if current:
-        lines.append(sorted(current, key=lambda item: item["x0"]))
+        lines.append(sorted(current, key=lambda item: float(item["x0"])))
     return lines
 
 

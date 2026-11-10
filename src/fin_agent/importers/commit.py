@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 from fin_agent.db.conn import Connection
 from fin_agent.importers.checks import opening_is_evidenced
@@ -59,7 +59,7 @@ async def _movement_date(conn: Connection, movement_id: str) -> date:
     row = await conn.fetchrow("SELECT date FROM movements WHERE id = $1", movement_id)
     if row is None:
         raise InvalidLedgerError("The matched movement disappeared")
-    return row["date"]
+    return cast(date, row["date"])  # movements.date is a date column
 
 
 async def _copy_captures(
@@ -73,7 +73,7 @@ async def _copy_captures(
         return None
     async with write_group(conn, actor="user") as group:
         for row in rows:
-            created = await conn.fetchrow(
+            created = await conn.fetchrow_required(
                 """
                 INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
                 VALUES ($1, $2, $3, $4, $5) RETURNING *
@@ -95,7 +95,7 @@ async def _capture_statement_line(
     line: dict[str, Any],
 ) -> str:
     async with write_group(conn, actor="user") as group:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
             VALUES ($1, 'statement_line', $2, $3, 1.0)

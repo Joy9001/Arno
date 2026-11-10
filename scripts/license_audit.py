@@ -131,7 +131,7 @@ def _license_text(dist: metadata.Distribution) -> str:
         name = entry.name.upper()
         if "LICENSE" in name or "COPYING" in name or name == "NOTICE":
             try:
-                path = Path(dist.locate_file(entry))
+                path = Path(str(dist.locate_file(entry)))
                 if path.is_file() and path.stat().st_size < 200_000:
                     chunks.append(path.read_text(encoding="utf-8", errors="replace"))
             except OSError:
@@ -238,7 +238,7 @@ def main() -> int:
     parser.add_argument("--web-only", action="store_true")
     args = parser.parse_args()
 
-    python = python_packages()
+    python: dict[str, dict[str, str]] = python_packages()
     web = None if args.python_only else web_packages()
     if args.web_only:
         python = {}

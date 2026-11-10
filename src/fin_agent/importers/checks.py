@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Any
+from typing import Any, TypeGuard
 
 from fin_agent.importers.layout import normalize_headers
 from fin_agent.ledger.common import today
@@ -29,7 +29,7 @@ def _period_end(period: Any) -> date | None:
         return None
 
 
-def _is_int(value: Any) -> bool:
+def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 

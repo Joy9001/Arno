@@ -70,7 +70,7 @@ async def insert_lines(
         row_id = await new_id(conn, "stl")
         # Ids from one instant do not sort in insertion order, so the parser's own row order is
         # stored beside the line. The gate's replay and the transfer suggestions read it.
-        detail = {"identifier_hashes": sorted(hashes), "row": index}
+        detail: dict[str, Any] = {"identifier_hashes": sorted(hashes), "row": index}
         counterparty = str(row.get("counterparty") or "").strip()[:120]
         if counterparty:
             detail["counterparty"] = counterparty
@@ -485,7 +485,7 @@ async def release_suppressed_duplicates(conn: Connection, *, account_id: str | N
 
 async def _refresh_counts(conn: Connection, import_id: str) -> None:
     """Recount an import's lines after a release, keeping its other review facts."""
-    current = await conn.fetchrow("SELECT counts FROM imports WHERE id = $1", import_id)
+    current = await conn.fetchrow_required("SELECT counts FROM imports WHERE id = $1", import_id)
     counts = {
         key: 0 for key in ("new", "certain", "ambiguous", "ignored", "logged_not_on_statement")
     }
@@ -665,7 +665,10 @@ async def resolve_line(
             "resolution is ignore, new, merge, confirm_transfer, reject_transfer, "
             "or classify_credit"
         )
-    return await conn.fetchrow("SELECT * FROM statement_lines WHERE id = $1", line_id)
+    updated = await conn.fetchrow("SELECT * FROM statement_lines WHERE id = $1", line_id)
+    if updated is None:
+        raise ValueError("No such statement line")
+    return updated
 
 
 async def _classify_credit(

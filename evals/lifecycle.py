@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, override
 
 from pydantic_evals.evaluators.context import EvaluatorContext
 from pydantic_evals.lifecycle import CaseLifecycle
@@ -129,6 +129,7 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         self.dsn = ""
         self._token: Any = None
 
+    @override
     async def setup(self) -> None:
         suffix = uuid.uuid4().hex[:10]
         self.database = f"{self.trial_prefix}_{suffix}"
@@ -142,6 +143,7 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
             async with connect() as conn:
                 await _seed_injection(conn, meta.injection, today=date.today())
 
+    @override
     async def prepare_context(
         self, ctx: EvaluatorContext[EvalInput, EvalOutput, EvalMeta]
     ) -> EvaluatorContext[EvalInput, EvalOutput, EvalMeta]:
@@ -149,6 +151,7 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         ctx.attributes["trial_database"] = self.database
         return ctx
 
+    @override
     async def teardown(self, result: Any) -> None:
         if self._token is not None:
             reset_database_url(self._token)

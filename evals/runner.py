@@ -39,7 +39,7 @@ from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 
-from evals.cases import build_cases, summarize
+from evals.cases import build_cases, case_meta, summarize
 from evals.graders import Judge, grade_case
 from evals.judge import LLMJudge
 from evals.lifecycle import DEFAULT_TEMPLATE, build_eval_template, lifecycle_factory
@@ -353,12 +353,13 @@ class OutcomeEvaluator(Evaluator[EvalInput, EvalOutput, EvalMeta]):
         self, ctx: EvaluatorContext[EvalInput, EvalOutput, EvalMeta]
     ) -> dict[str, EvaluationReason]:
         db_url = str(ctx.attributes.get("trial_db_url") or current_database_url())
-        checks = await grade_case(
-            db_url=db_url, output=ctx.output, meta=ctx.metadata, judge=self.judge
-        )
+        meta = ctx.metadata
+        if meta is None:
+            raise ValueError("eval case has no metadata")
+        checks = await grade_case(db_url=db_url, output=ctx.output, meta=meta, judge=self.judge)
         results: dict[str, EvaluationReason] = {}
         for check in checks:
-            if ctx.metadata.category == "injection" and check.name == "fooled":
+            if meta.category == "injection" and check.name == "fooled":
                 # The gate is the pass/fail. Fooled is a rate on the scorecard.
                 results["score_fooled"] = EvaluationReason(
                     0.0 if check.passed else 1.0, check.reason
@@ -380,16 +381,16 @@ def build_dataset(
 ) -> tuple[Dataset[EvalInput, EvalOutput, EvalMeta], dict[str, EvalMeta]]:
     cases = build_cases()
     if categories:
-        cases = [case for case in cases if case.metadata.category in categories]
+        cases = [case for case in cases if case_meta(case).category in categories]
     if tags:
-        cases = [case for case in cases if tags & set(case.metadata.tags)]
+        cases = [case for case in cases if tags & set(case_meta(case).tags)]
     if case_ids:
         cases = [case for case in cases if case.inputs.case_id in case_ids]
     if per_category is not None:
-        kept: list[Case[EvalInput, None, EvalMeta]] = []
+        kept: list[Case[EvalInput, EvalOutput, EvalMeta]] = []
         counts: dict[str, int] = {}
         for case in cases:
-            category = case.metadata.category
+            category = case_meta(case).category
             if counts.get(category, 0) >= per_category:
                 continue
             counts[category] = counts.get(category, 0) + 1
@@ -397,7 +398,7 @@ def build_dataset(
         cases = kept
     if limit is not None:
         cases = cases[:limit]
-    meta_by_id = {case.inputs.case_id: case.metadata for case in cases}
+    meta_by_id = {case.inputs.case_id: case_meta(case) for case in cases}
     dataset = Dataset(
         name=f"fin-agent-{_slug(model_name)}",
         cases=cases,
@@ -1030,7 +1031,8 @@ async def _run_eval(
                 await drop_database(admin_dsn, run_template)
             except Exception:  # noqa: BLE001 - cleanup must not hide the run result
                 pass
-        pydantic_models.ALLOW_MODEL_REQUESTS = False
+        # The library's flag is a plain writable global, but pyrefly infers Literal[True] from it.
+        pydantic_models.ALLOW_MODEL_REQUESTS = False  # pyrefly: ignore[bad-assignment]
 
 
 def dry_run(
@@ -1043,16 +1045,16 @@ def dry_run(
 ) -> dict[str, int]:
     cases = build_cases()
     if categories:
-        cases = [case for case in cases if case.metadata.category in categories]
+        cases = [case for case in cases if case_meta(case).category in categories]
     if tags:
-        cases = [case for case in cases if tags & set(case.metadata.tags)]
+        cases = [case for case in cases if tags & set(case_meta(case).tags)]
     if case_ids:
         cases = [case for case in cases if case.inputs.case_id in case_ids]
     if per_category is not None:
         kept = []
         counts: dict[str, int] = {}
         for case in cases:
-            category = case.metadata.category
+            category = case_meta(case).category
             if counts.get(category, 0) >= per_category:
                 continue
             counts[category] = counts.get(category, 0) + 1

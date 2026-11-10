@@ -136,7 +136,7 @@ async def _spendable_names(conn: Connection) -> str:
         "SELECT name FROM accounts WHERE active AND kind IN ('bank','cash','wallet','card') "
         "ORDER BY name"
     )
-    return ", ".join(row["name"] for row in rows)
+    return ", ".join(str(row["name"]) for row in rows)
 
 
 async def _resolve_category_id(conn: Connection, name: str | None) -> str | None:
@@ -412,7 +412,7 @@ async def record_movement(
             upi_id=movement.get("upi_id"),
             outside_text=named_outside(str(payee_name)),
         )
-    payee_id = payee["id"] if payee else None
+    payee_id: str | None = payee["id"] if payee is not None else None
 
     if kind == "expense":
         amount = _rupees(movement.get("amount_rupees"))
@@ -707,7 +707,7 @@ async def record_movement(
 
     if kind == "settlement":
         amount = _rupees(movement.get("amount_rupees"))
-        if payee is None:
+        if payee_id is None:
             raise ToolInputError("a settlement names a person")
         account_id = (
             await resolve_account_id(conn, movement.get("account"))
@@ -1291,7 +1291,7 @@ async def update_setup_item(
             before = await conn.fetchrow(
                 "SELECT * FROM baselines WHERE category_id = $1", category_id
             )
-            after = await conn.fetchrow(
+            after = await conn.fetchrow_required(
                 """
                 INSERT INTO baselines (category_id, amount_per_day_paise, source, window_days)
                 VALUES ($1, $2, 'estimated', 30)
@@ -1401,7 +1401,7 @@ async def preference(
         if existing:
             if kind is not None and existing["kind"] != kind:
                 async with write_group(conn, actor="agent", message_id=message_id) as group:
-                    after = await conn.fetchrow(
+                    after = await conn.fetchrow_required(
                         "UPDATE preferences SET kind = $1, updated_at = now() "
                         "WHERE id = $2 RETURNING *",
                         kind,
@@ -1430,7 +1430,7 @@ async def preference(
                 "card": _card("preference", title="Remembered", text=existing["body"]),
             }
         async with write_group(conn, actor="agent", message_id=message_id) as group:
-            row = await conn.fetchrow(
+            row = await conn.fetchrow_required(
                 """
                 INSERT INTO preferences (body, created_by, source_message_id, kind)
                 VALUES ($1, 'agent', $2, $3) RETURNING *
@@ -1477,7 +1477,7 @@ async def preference(
             listed = "; ".join(f"{r['id']}: {r['body']}" for r in active) or "none"
             raise ToolInputError(f"No preference matched. Active preferences: {listed}")
         async with write_group(conn, actor="agent", message_id=message_id) as group:
-            after = await conn.fetchrow(
+            after = await conn.fetchrow_required(
                 "UPDATE preferences SET active = false, updated_at = now() "
                 "WHERE id = $1 RETURNING *",
                 row["id"],
@@ -1506,7 +1506,7 @@ async def preference(
         if row is None:
             raise ToolInputError("No memory matched that ID")
         async with write_group(conn, actor="agent", message_id=message_id) as group:
-            after = await conn.fetchrow(
+            after = await conn.fetchrow_required(
                 "UPDATE preferences SET kind = $1, updated_at = now() WHERE id = $2 RETURNING *",
                 kind,
                 preference_id,

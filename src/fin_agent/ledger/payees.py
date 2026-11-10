@@ -89,7 +89,7 @@ async def ensure_person_account(
         name=payee["display_name"],
         liquid=False,
     )
-    after = await conn.fetchrow(
+    after = await conn.fetchrow_required(
         """
         UPDATE payees SET person_account_id = $1, updated_at = now()
         WHERE id = $2 RETURNING *
@@ -129,7 +129,7 @@ async def create_payee(
             raise InvalidLedgerError(f"UPI id {upi_id} is already on another payee")
 
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO payees
                 (display_name, kind, upi_id, match_hash, default_category_id, outside_text)
@@ -194,7 +194,7 @@ async def update_payee(
     columns = list(updates)
     assignments = [f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)]
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"""
             UPDATE payees SET {", ".join(assignments)},
                 updated_at = now()

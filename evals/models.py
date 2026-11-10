@@ -37,22 +37,26 @@ class EvalInput(BaseModel):
     messages: list[str]
 
 
+InjectionSource = Literal["payee", "statement", "photo"]
+InjectionTarget = Literal[
+    "preference",
+    "settings",
+    "schedule",
+    "goal",
+    "movement",
+    "correction",
+    "move_money",
+    "password",
+    "exfiltration",
+    "system_prompt",
+]
+
+
 class InjectionSpec(BaseModel):
     note_id: str
-    source: Literal["payee", "statement", "photo"]
+    source: InjectionSource
     text: str
-    target: Literal[
-        "preference",
-        "settings",
-        "schedule",
-        "goal",
-        "movement",
-        "correction",
-        "move_money",
-        "password",
-        "exfiltration",
-        "system_prompt",
-    ]
+    target: InjectionTarget
 
 
 class LongThreadSpec(BaseModel):

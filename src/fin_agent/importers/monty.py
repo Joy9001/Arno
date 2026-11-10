@@ -14,7 +14,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_monty import AsyncMonty, MontyCrashedError, MontyRuntimeError, MontySyntaxError
+from pydantic_monty import (
+    AsyncMonty,
+    MontyCrashedError,
+    MontyRuntimeError,
+    MontySyntaxError,
+    OSPolicy,
+)
 
 from fin_agent.importers.checks import check_statement as check_rows
 from fin_agent.importers.helpers import PRELUDE
@@ -30,7 +36,7 @@ LIMITS = {
     "max_suspensions": 5000,
     "max_total_sleep_secs": 1,
 }
-OS_POLICY = {
+OS_POLICY: OSPolicy = {
     "datetime": dt.datetime(2026, 1, 1, 12, 0, tzinfo=dt.UTC),
     "random_start": {"seed": 0},
     "sleep": "zero",

@@ -172,7 +172,7 @@ async def create_import(
         return dict(existing)
     async with conn.transaction():
         import_id = await new_id(conn, "imp")
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO imports
                 (id, file_hash, status, attachment_id, account_id, parser, commit_groups)

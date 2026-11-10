@@ -72,7 +72,7 @@ async def save_version(
         kind,
     )
     if layout is None:
-        layout = await conn.fetchrow(
+        layout = await conn.fetchrow_required(
             """
             INSERT INTO statement_layouts (id, institution, kind, variants)
             VALUES ($1, $2, $3, array_remove(ARRAY[$4::text], NULL))
@@ -109,11 +109,12 @@ async def save_version(
     ):
         version = active
     else:
-        number = await conn.fetchval(
-            "SELECT coalesce(max(version), 0) + 1 FROM parser_versions WHERE layout_id = $1",
+        next_version = await conn.fetchrow_required(
+            "SELECT coalesce(max(version), 0) + 1 AS version "
+            "FROM parser_versions WHERE layout_id = $1",
             layout["id"],
         )
-        version = await conn.fetchrow(
+        version = await conn.fetchrow_required(
             """
             INSERT INTO parser_versions
                 (id, layout_id, version, parser, helper_version, source_import_id)
@@ -122,7 +123,7 @@ async def save_version(
             """,
             await new_id(conn, "pv"),
             layout["id"],
-            int(number),
+            int(next_version["version"]),
             parser,
             HELPER_VERSION,
             source_import_id,
@@ -149,7 +150,7 @@ async def rollback_layout(conn: Connection, *, layout_id: str, version: int) -> 
         target["id"],
         layout_id,
     )
-    return await conn.fetchrow("SELECT * FROM statement_layouts WHERE id = $1", layout_id)
+    return await conn.fetchrow_required("SELECT * FROM statement_layouts WHERE id = $1", layout_id)
 
 
 __all__ = ["layout_for", "rollback_layout", "save_version"]

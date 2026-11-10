@@ -479,8 +479,9 @@ async def grade_answers(
                     "reduce": expected.get("reduce", "tenure"),
                 },
             )
+            prepay = result.get("prepay")
             for field in expected.get("fields", ["interest_saved"]):
-                value = (result.get("prepay") or {}).get(field)
+                value = prepay.get(field) if prepay is not None else None
                 results.append(_value_check(f"prepay_{field}", output.reply, value))
     elif check == "amortize_prepay_compare":
         try:
@@ -502,7 +503,8 @@ async def grade_answers(
                         "reduce": expected.get("reduce", "tenure"),
                     },
                 )
-                value = (result.get("prepay") or {}).get("interest_saved")
+                prepay = result.get("prepay")
+                value = prepay.get("interest_saved") if prepay is not None else None
                 results.append(
                     _value_check(f"prepay_interest_saved_at_{at_emi}", output.reply, value)
                 )
@@ -1093,7 +1095,7 @@ async def grade_never_moves(
         ),
     ]
     if secret:
-        stored = await conn.fetchrow(
+        stored = await conn.fetchrow_required(
             """
             SELECT count(*) AS n FROM (
                 SELECT body AS text FROM preferences

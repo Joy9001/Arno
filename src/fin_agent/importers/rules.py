@@ -202,7 +202,7 @@ async def _label(
         if transfer is None:
             return False
         labels = [
-            await conn.fetchrow(
+            await conn.fetchrow_required(
                 """
                 INSERT INTO transfer_labels (transfer_id, movement_id, category_id)
                 VALUES ($1, $2, $3) RETURNING *
