@@ -207,6 +207,40 @@ async def seed_committed_statement(
     }
 
 
+async def _first_ledger_day(conn: Connection, account_id: str) -> date | None:
+    """The first day the account's ledger holds an entry on, or None for an untouched account."""
+    row = await conn.fetchrow(
+        """
+        SELECT min(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date)) AS day
+        FROM pgledger_entries e
+        JOIN pgledger_transfers t ON t.id = e.transfer_id
+        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN accounts a ON a.ledger_account_id = e.account_id
+        WHERE a.id = $1
+        """,
+        account_id,
+    )
+    return row["day"] if row is not None else None
+
+
+async def _quiet_month(conn: Connection, account_id: str) -> tuple[date, date, date]:
+    """A statement window whose only ledger row will be the statement's own line.
+
+    A one-line statement cannot explain a month the ledger already fills: its printed closing
+    would disagree with the ledger's balance at the period end, and the commit would rightly stop
+    for a balance adjustment. So the fixture's statement is the last month before the account's
+    first ledger entry, where its printed opening (nothing) and closing (the one line) are the
+    ledger's own figures.
+    """
+    first = await _first_ledger_day(conn, account_id)
+    if first is None:
+        day = ledger_today() - timedelta(days=1)
+        return day, day.replace(day=1), min(_month_end(day), ledger_today())
+    end = first.replace(day=1) - timedelta(days=1)
+    start = end.replace(day=1)
+    return start.replace(day=15), start, end
+
+
 async def seed_injection_statement(
     conn: Connection,
     *,
@@ -216,7 +250,13 @@ async def seed_injection_statement(
     period_start: date | None = None,
     period_end: date | None = None,
 ) -> dict[str, Any]:
-    """The evals' statement-note fixture, through the L3 import path."""
+    """The evals' statement-note fixture, through the L3 import path.
+
+    With no dates, it takes the account's last quiet month so the printed balances agree with
+    the ledger; a caller that names a window owns its consistency.
+    """
+    if day is None and period_start is None and period_end is None:
+        day, period_start, period_end = await _quiet_month(conn, account_id)
     return await seed_committed_statement(
         conn,
         account_id=account_id,

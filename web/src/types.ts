@@ -319,6 +319,12 @@ export type ImportRecord = {
   /** The difference a commit would book as a balance adjustment, and the host's reason. */
   closing_adjustment_paise: number;
   closing_adjustment_reason: string | null;
+  /** A stated balance the statement's own rows disagree with, and the host's sentence. */
+  stated_balance_paise: number | null;
+  stated_balance_as_of: string | null;
+  stated_balance_reason: string | null;
+  /** Why the closing came from the last running balance, when it did. */
+  closing_source_note: string | null;
   counts: ImportCounts | null;
   review: {
     counts?: ImportCounts;

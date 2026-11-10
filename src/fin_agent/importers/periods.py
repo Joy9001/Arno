@@ -13,6 +13,7 @@ from typing import Any
 from fin_agent.db.conn import Connection
 from fin_agent.importers.layout_detect import line_text, text_lines
 from fin_agent.importers.readers import Doc
+from fin_agent.ledger.movements import _effectively_reversed_ids
 
 _MONTHS = {
     "jan": 1,
@@ -181,10 +182,18 @@ async def ledger_last_date(conn: Connection, account_id: str) -> dt.date | None:
 async def ledger_opening(
     conn: Connection, account_id: str, period_start: dt.date | None
 ) -> dict[str, Any] | None:
-    """The account's ledger balance before the statement, or None on a first import."""
+    """The account's ledger balance before the statement, or None on a first import.
+
+    A movement a reversal still cancels is not evidence of a balance: after an undone import, its
+    rows and their reversals are both in the ledger. Counting them as an opening made every later
+    statement fail its printed-opening check, because the net of a cancelled pair is meaningless.
+    So the balance is the ledger's own net (the pairs cancel), and the evidence test counts only
+    movements that stand.
+    """
     account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
     if account is None:
         return None
+    cancelled = await _effectively_reversed_ids(conn)
     params: list[Any] = [account["ledger_account_id"]]
     cutoff = ""
     if period_start is not None:
@@ -192,17 +201,22 @@ async def ledger_opening(
             AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) < $2
         """
         params.append(period_start)
+    standing = (
+        f"m.id IS NULL OR (m.reverses_id IS NULL AND NOT (m.id = ANY(${len(params) + 1}::text[])))"
+    )
+    params.append(cancelled)
     row = await conn.fetchrow(
         f"""
         SELECT coalesce(sum(e.amount), 0)::bigint AS balance,
-               count(e.*)::bigint AS entries,
-               max(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date)) AS as_of
+               count(*) FILTER (WHERE {standing})::bigint AS entries,
+               max(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date))
+                   FILTER (WHERE {standing}) AS as_of
         FROM pgledger_entries e
         JOIN pgledger_transfers t ON t.id = e.transfer_id
         LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
         WHERE e.account_id = $1
         {cutoff}
-        """,  # noqa: S608 - cutoff is a constant fragment
+        """,  # noqa: S608 - cutoff and standing are constants of this module
         *params,
     )
     if row is None or int(row["entries"]) == 0:

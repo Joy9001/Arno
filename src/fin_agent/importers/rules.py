@@ -15,6 +15,7 @@ from typing import Any
 from fin_agent.db.conn import Connection
 from fin_agent.importers.seed_rules import PAYMENT_APPS
 from fin_agent.ledger.audit import WriteGroup, write_group
+from fin_agent.ledger.payees import is_placeholder_name
 
 SOURCE_RANK = {"user": 3, "llm": 2, "seed": 1}
 RAILS = ("upi/dr", "upi/cr", "upi", "neft", "imps", "rtgs", "pos", "nach", "wdl tfr", "atm wdl")
@@ -37,7 +38,11 @@ def normalize_pattern(text: str) -> str:
 def payee_key(narration: Any, counterparty: Any = None) -> str:
     """The payee a rule matches: the parsed counterparty when there is one, else the narration
     with payment-rail tokens, UPI handles, and long reference numbers removed."""
-    text = str(counterparty or "").strip() or str(narration or "")
+    text = str(counterparty or "").strip()
+    if not text or is_placeholder_name(text):
+        # No counterparty, or a rail token ("DR", "UPI") that names nobody: the narration still
+        # names the merchant.
+        text = str(narration or "")
     if "@" in text and " " not in text:
         # A UPI handle is the only name this line has; keep its local part.
         text = text.split("@", 1)[0]
@@ -45,7 +50,10 @@ def payee_key(narration: Any, counterparty: Any = None) -> str:
     text = _RAIL_RE.sub(" ", text)
     text = _LONG_NUMBER_RE.sub(" ", text)
     text = _NOISE_RE.sub(" ", text.lower())
-    return _SPACE_RE.sub(" ", text).strip()[:200]
+    key = _SPACE_RE.sub(" ", text).strip()[:200]
+    # A key that names only a rail token or a placeholder is no payee: no rule is ever learned
+    # for it, and no match is attempted against it.
+    return "" if is_placeholder_name(key) else key
 
 
 def is_payment_app(key: str) -> bool:

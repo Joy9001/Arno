@@ -20,6 +20,7 @@ from fin_agent.importers.checks import check_statement as check_rows
 from fin_agent.importers.helpers import PRELUDE
 from fin_agent.importers.readers import Doc, DocError
 from fin_agent.importers.vision import transcribe_page as vision_transcribe
+from fin_agent.ledger.payees import is_placeholder_name
 
 logger = logging.getLogger("fin_agent.importers.monty")
 
@@ -226,7 +227,7 @@ def normalize_accounts(output: Any) -> tuple[list[dict[str, Any]], str | None]:
                     "credit": row.get("credit") if isinstance(row.get("credit"), int) else 0,
                     "balance": row.get("balance") if isinstance(row.get("balance"), int) else None,
                     "upi_ref": _upi_ref(row.get("upi_ref")),
-                    "counterparty": str(row.get("counterparty") or "").strip()[:120] or None,
+                    "counterparty": _counterparty(row.get("counterparty")),
                 }
             )
         accounts.append(
@@ -249,6 +250,14 @@ def _upi_ref(value: Any) -> str | None:
     if not text:
         return None
     return text[:40]
+
+
+def _counterparty(value: Any) -> str | None:
+    """The row's counterparty, or None when it names only a payment rail or a placeholder."""
+    text = str(value or "").strip()[:120]
+    if not text or is_placeholder_name(text):
+        return None
+    return text
 
 
 __all__ = [

@@ -314,6 +314,73 @@ def statement_opening(check: dict[str, Any]) -> int | None:
     return value
 
 
+def statement_balance_on(
+    lines: list[dict[str, Any]], check: dict[str, Any], day: date
+) -> int | None:
+    """The statement's own balance on `day`: its opening plus every row dated on or before it."""
+    opening = statement_opening(check)
+    if opening is None:
+        return None
+    running = opening
+    for line in sorted(lines, key=lambda line: line["date"]):
+        if line["date"] > day:
+            break
+        running += int(line["amount_paise"])
+    return running
+
+
+async def stated_balance_conflict(
+    conn: Connection,
+    *,
+    account: dict[str, Any],
+    check: dict[str, Any],
+    lines: list[dict[str, Any]],
+    period_start: date | None,
+    period_end: date | None,
+) -> tuple[int, int] | None:
+    """The user's stated balance and the statement's own, when the two disagree on a day it covers.
+
+    A stated balance is a fact about its day. Inside the statement's period the bank's own rows
+    are the evidence for that day, so the statement wins — but the user is told and confirms. A
+    figure that is only the last committed statement's own closing is not the user's claim: the
+    closing adjustment already states it, so it is not a second confirmation.
+    """
+    day = account.get("statement_balance_as_of")
+    stated = account.get("statement_balance_paise")
+    if day is None or not isinstance(stated, int) or isinstance(stated, bool):
+        return None
+    if isinstance(day, str):
+        day = date.fromisoformat(day)
+    if period_start is None or period_end is None or not period_start <= day <= period_end:
+        return None
+    from_statement = await conn.fetchrow(
+        """
+        SELECT 1 FROM imports
+        WHERE account_id = $1 AND status = 'committed' AND undone_at IS NULL
+          AND period_end = $2 AND closing_balance_paise = $3
+        LIMIT 1
+        """,
+        account["id"],
+        day,
+        stated,
+    )
+    if from_statement is not None:
+        return None
+    shown = statement_balance_on(lines, check, day)
+    if shown is None or shown == stated:
+        return None
+    return stated, shown
+
+
+def stated_balance_reason(stated: int, day: date, statement: int) -> str:
+    """Why a commit replaces a stated balance, in one host-written sentence."""
+    return (
+        f"You stated {format_paise(stated)} on {day.isoformat()}; the statement shows "
+        f"{format_paise(statement)} on that day. Committing replaces your figure with the "
+        "statement's; confirm that first."
+    )
+
+
 async def _superseded_anchors(
     conn: Connection, ledger_account_id: str, start: date, end: date
 ) -> list[dict[str, Any]]:
@@ -580,6 +647,22 @@ async def _commit(
     period_start = row["period_start"] or min((line["date"] for line in lines), default=None)
     period_end = row["period_end"] or line_date_or_none(lines)
     opening = statement_opening(check)
+    conflict = await stated_balance_conflict(
+        conn,
+        account=account,
+        check=check,
+        lines=lines,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    # The statement is bank evidence for every day it covers, so a stated balance on one of those
+    # days is replaced. Never silently: the review says both figures, and this gate needs its yes.
+    if conflict is not None and not adjustment_confirmed:
+        stated, shown = conflict
+        raise ConflictLedgerError(
+            stated_balance_reason(stated, account["statement_balance_as_of"], shown),
+            details={"stated_balance_paise": stated, "statement_balance_paise": shown},
+        )
     committed_lines = 0
     for line in lines:
         if line["match_state"] == "ignored":
@@ -788,6 +871,15 @@ def closing_adjustment_reason(difference: int, day: date) -> str:
     )
 
 
+def closing_source_reason(closing: int) -> str:
+    """Why the review's closing came from the rows instead of a printed figure."""
+    return (
+        "No printed closing balance was read on this statement, so the closing shown here "
+        f"({format_paise(closing)}) is its last row's running balance. Check it against the "
+        "statement's own closing line before committing."
+    )
+
+
 async def review_closing_adjustment(
     conn: Connection,
     *,
@@ -978,8 +1070,11 @@ async def reject_import(conn: Connection, import_id: str, reason: str | None = N
 
 __all__ = [
     "closing_adjustment_reason",
+    "closing_source_reason",
     "commit_import",
     "reject_import",
     "review_closing_adjustment",
+    "stated_balance_conflict",
+    "stated_balance_reason",
     "undo_import",
 ]

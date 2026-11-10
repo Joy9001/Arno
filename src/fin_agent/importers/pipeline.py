@@ -18,7 +18,13 @@ from fin_agent.importers.checks import (
     opening_is_evidenced,
     stated_opening_to_ledger,
 )
-from fin_agent.importers.commit import closing_adjustment_reason, review_closing_adjustment
+from fin_agent.importers.commit import (
+    closing_adjustment_reason,
+    closing_source_reason,
+    review_closing_adjustment,
+    stated_balance_conflict,
+    stated_balance_reason,
+)
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.readers import Doc
@@ -501,6 +507,8 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         categorize = await categorize_state(conn, import_id)
     closing_adjustment = 0
     closing_adjustment_note = None
+    stated_balance = None
+    closing_source_note = None
     if (
         row["status"] in ("review", "needs_input")
         and account_row is not None
@@ -518,6 +526,21 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
             closing_adjustment_note = closing_adjustment_reason(
                 closing_adjustment, row["period_end"]
             )
+        # A stated balance the statement's own rows disagree with is a confirmation, not a
+        # silent replacement: the payload says both figures before anything is committed.
+        stated_balance = await stated_balance_conflict(
+            conn,
+            account=account_row,
+            check=check,
+            lines=lines,
+            period_start=row["period_start"],
+            period_end=row["period_end"],
+        )
+        if check.get("closing_source") == "last running balance" and isinstance(
+            row["closing_balance_paise"], int
+        ):
+            closing_source_note = closing_source_reason(int(row["closing_balance_paise"]))
+    stated_day = account_row["statement_balance_as_of"] if account_row else None
     return {
         "import_id": row["id"],
         "status": row["status"],
@@ -535,6 +558,16 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         "check_detail": check or None,
         "closing_adjustment_paise": closing_adjustment,
         "closing_adjustment_reason": closing_adjustment_note,
+        "stated_balance_paise": stated_balance[0] if stated_balance else None,
+        "stated_balance_as_of": (
+            stated_day.isoformat() if stated_balance and stated_day is not None else None
+        ),
+        "stated_balance_reason": (
+            stated_balance_reason(stated_balance[0], stated_day, stated_balance[1])
+            if stated_balance and stated_day is not None
+            else None
+        ),
+        "closing_source_note": closing_source_note,
         "opening_source": check.get("opening_source"),
         "opening_evidenced": opening_evidenced,
         "opening_required": opening_required,

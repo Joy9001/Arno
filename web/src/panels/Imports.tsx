@@ -1079,6 +1079,10 @@ export function ImportsPanel({
     selectedLines.filter((line) => line.match_state === "ambiguous").length;
   const decisions = ambiguousCount + pendingTransferCount + pendingCreditCount;
   const closingAdjustment = selected?.closing_adjustment_paise ?? 0;
+  // A stated balance the statement disagrees with is the same confirmation as a closing
+  // adjustment: the statement wins, but only the user's yes may replace their own figure.
+  const statedBalanceReason = selected?.stated_balance_reason ?? null;
+  const needsConfirmation = closingAdjustment !== 0 || statedBalanceReason !== null;
   const categorizePolling = Boolean(
     selected?.categorize &&
       ["queued", "running", "retrying"].includes(selected.categorize.state),
@@ -1628,26 +1632,37 @@ export function ImportsPanel({
                 <LineTable key={selected.import_id} detail={selected} />
               )}
 
+              {selected.closing_source_note && (
+                <p className="fine act-decision-note">{selected.closing_source_note}</p>
+              )}
+
               {selected.review?.logged_not_on_statement &&
                 selected.review.logged_not_on_statement.length > 0 && (
                   <LoggedElsewhere rows={selected.review.logged_not_on_statement} />
                 )}
 
-              {selected.status === "review" && closingAdjustment !== 0 && (
+              {selected.status === "review" && needsConfirmation && (
                 <section className="subcard">
                   <div className="section-head">
-                    <h3>Closing balance adjustment</h3>
-                    <span className="fine">{formatPaise(closingAdjustment)}</span>
+                    <h3>Differences you are confirming</h3>
+                    <span className="fine">
+                      {closingAdjustment !== 0
+                        ? formatPaise(closingAdjustment)
+                        : formatPaise(selected.stated_balance_paise ?? 0)}
+                    </span>
                   </div>
-                  <p className="muted">
-                    {selected.closing_adjustment_reason ??
-                      `Committing this statement books the ${formatPaise(
-                        closingAdjustment,
-                      )} difference from your ledger as a visible balance adjustment.`}
-                  </p>
+                  {closingAdjustment !== 0 && (
+                    <p className="muted">
+                      {selected.closing_adjustment_reason ??
+                        `Committing this statement books the ${formatPaise(
+                          closingAdjustment,
+                        )} difference from your ledger as a visible balance adjustment.`}
+                    </p>
+                  )}
+                  {statedBalanceReason && <p className="muted">{statedBalanceReason}</p>}
                   <p className="fine">
-                    A balance adjustment is not spending. Commit asks you to confirm this amount
-                    first.
+                    {closingAdjustment !== 0 ? "A balance adjustment is not spending. " : ""}
+                    Commit asks you to confirm this first.
                   </p>
                 </section>
               )}
@@ -1660,9 +1675,7 @@ export function ImportsPanel({
                         type="button"
                         disabled={busy !== null || blockers.length > 0}
                         onClick={() =>
-                          closingAdjustment === 0
-                            ? void act("commit")
-                            : setAdjustmentOpen(true)
+                          needsConfirmation ? setAdjustmentOpen(true) : void act("commit")
                         }
                       >
                         {busy === "commit" ? (
@@ -1702,17 +1715,25 @@ export function ImportsPanel({
                       <Dialog.Overlay className="dialog-overlay" />
                       <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
                         <Dialog.Title>
-                          Book a {formatPaise(closingAdjustment)} balance adjustment?
+                          {closingAdjustment !== 0
+                            ? `Book a ${formatPaise(closingAdjustment)} balance adjustment?`
+                            : "Replace your stated balance?"}
                         </Dialog.Title>
                         <p className="muted">
-                          {selected.closing_adjustment_reason ??
-                            `The statement's closing balance differs from your ledger by ${formatPaise(
-                              closingAdjustment,
-                            )}.`}
+                          {closingAdjustment !== 0
+                            ? (selected.closing_adjustment_reason ??
+                              `The statement's closing balance differs from your ledger by ${formatPaise(
+                                closingAdjustment,
+                              )}.`)
+                            : statedBalanceReason}
                         </p>
+                        {closingAdjustment !== 0 && statedBalanceReason && (
+                          <p className="muted">{statedBalanceReason}</p>
+                        )}
                         <p className="fine">
-                          Committing books that difference as a visible balance adjustment, never
-                          as spending.
+                          {closingAdjustment !== 0
+                            ? "Committing books that difference as a visible balance adjustment, never as spending."
+                            : "Committing replaces your stated figure with the statement's. The change stays visible in the ledger history."}
                         </p>
                         <div className="row-actions">
                           <button
@@ -1728,8 +1749,10 @@ export function ImportsPanel({
                                 <Busy />
                                 Committing…
                               </>
-                            ) : (
+                            ) : closingAdjustment !== 0 ? (
                               "Book adjustment and commit"
+                            ) : (
+                              "Replace and commit"
                             )}
                           </button>
                           <Dialog.Close asChild>

@@ -822,6 +822,14 @@ def _render_import(payload: dict[str, Any]) -> str:
             else ""
         )
     )
+    if payload.get("stated_balance_reason"):
+        lines.append(
+            f"stated balance: {_rupees(payload.get('stated_balance_paise'))}"
+            f" as of {payload.get('stated_balance_as_of')}"
+        )
+        lines.append(f"stated balance conflict: {payload['stated_balance_reason']}")
+    if payload.get("closing_source_note"):
+        lines.append(f"closing source: {payload['closing_source_note']}")
     if payload.get("reason"):
         lines.append(f"reason: {payload['reason']}")
     if payload.get("categorize"):
@@ -862,8 +870,9 @@ def _render_import(payload: dict[str, Any]) -> str:
     if payload["status"] in ("needs_input", "failed") and not blockers:
         blockers.append(f"status {payload['status']}: see the reason above")
     if not blockers and payload["status"] == "review":
+        confirm = adjustment or payload.get("stated_balance_reason")
         blockers.append(
-            f"ready: driver commit {import_id}" + (" --confirm-adjustment" if adjustment else "")
+            f"ready: driver commit {import_id}" + (" --confirm-adjustment" if confirm else "")
         )
     lines += ["", "next:" if blockers else "nothing to do"]
     lines += [f"  {blocker}" for blocker in blockers]

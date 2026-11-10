@@ -37,6 +37,19 @@ PLACEHOLDER_PAYEES = frozenset(
         "na",
         "someone",
         "somebody",
+        # Payment-rail tokens are how a narration posts the money, never who it names. A parser
+        # that extracted "DR" from "UPI/DR/<ref>/<merchant>" once turned every bank debit into one
+        # fictional merchant.
+        "dr",
+        "cr",
+        "upi",
+        "neft",
+        "imps",
+        "rtgs",
+        "ach",
+        "nach",
+        "pos",
+        "atm",
     }
 )
 

@@ -95,9 +95,12 @@ Each stage works as follows:
    statement now answers row by row, so it is reversed, and a stated balance dated after the
    statement keeps its figure. If the closing disagrees with the ledger, the difference is a
    visible adjustment, stated on the review screen (amount and reason) and booked only when you
-   confirm it there. Before any of that, rows still unmatched are reconciled once more against the
-   ledger as it stands, so a movement logged by chat while the import waited in review merges
-   instead of being booked twice. Then recompute baselines, and save the parser as a new version.
+   confirm it there. A balance you stated for a day the statement covers is the bank's own record
+   for that day: when the two disagree, the review states both figures and the day, and committing
+   replaces your figure only after the same confirmation. Before any of that, rows still unmatched
+   are reconciled once more against the ledger as it stands, so a movement logged by chat while
+   the import waited in review merges instead of being booked twice. Then recompute baselines, and
+   save the parser as a new version.
 10. **Categorize, after commit.** The commit queues the categorizer agent, which labels the new
     rows in the background (described later).
 
@@ -303,7 +306,11 @@ overpaid card is entered. The closing adjustment then measures only what the led
 is zero on a statement whose rows balance against an opening the ledger already holds. When it is
 not zero, the review screen states the amount and why, and the commit books it only after you
 confirm that adjustment; a second statement over an already-covered period therefore shows its
-difference instead of leaving it as unexplained money.
+difference instead of leaving it as unexplained money. A balance you stated for a day inside the
+statement's period is a different question: the statement's own rows are the bank's evidence for
+that day, so when the two disagree the review names both figures and the day, and commit replaces
+your figure only after the same confirmation. When the statement prints no closing figure the
+parser can read, the review's closing is its last row's running balance, and the review says so.
 
 ---
 
