@@ -15,6 +15,7 @@ from fin_agent.agent.builder import build_agent
 from fin_agent.agent.capabilities import MODEL_SETTINGS, drain_events
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import build_snapshot_history
+from fin_agent.agent.number_check import UNTRACED_NOTE, check_messages
 from fin_agent.agent.spend import make_spend_store
 from fin_agent.config import get_settings
 from fin_agent.db.conn import Connection, connect
@@ -79,7 +80,13 @@ async def _answer(
         # Named on the answer and marked on the inbox item, so it never reads as an answer.
         return ceiling_answer(question), True
     answer = str(result.output or "").strip()
-    return answer or "The question ran, but the model returned no answer.", False
+    answer = answer or "The question ran, but the model returned no answer."
+    # A scheduled answer is plain text in the inbox, so it carries the same note a chat turn
+    # shows beside a figure no tool or script printed (architecture rule 1).
+    flags = check_messages(answer, result.all_messages(), kinds=("money", "percent"))
+    if flags:
+        answer = f"{answer}\n\n{UNTRACED_NOTE.format(amounts=', '.join(flags))}"
+    return answer, False
 
 
 async def answer_question(

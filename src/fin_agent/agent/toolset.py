@@ -1,4 +1,4 @@
-"""The agent's tools: eight read tools behind `run_code`, six write calls in front of it.
+"""The agent's tools: the read tools behind `run_code`, and six write calls in front of it.
 
 Descriptions are the model-facing contract. Read tools return `ToolReturn` with a data card; a
 card from a tool called inside a script is picked up from the `run_code` return after the run
@@ -30,6 +30,7 @@ from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
 from fin_agent.db.conn import Connection, connect, quote_ident
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
+from fin_agent.engine.money import money
 from fin_agent.ledger.accounts import LoanTermsError, loan_terms
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.tools import projection as projection_tools
@@ -56,8 +57,9 @@ class MovementFilters(SpendFilters):
     period: str | None = Field(
         default=None,
         description=(
-            'this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09", or '
-            'a range "2026-09-01..2026-09-15". Weeks start Monday; an open period ends today.'
+            "this_week, last_week, this_month, last_month, last_30_days, this_year, "
+            '"2026-09", a single day "2026-11-10", or a range "2026-09-01..2026-09-15". '
+            "Weeks start Monday; an open period ends today."
         ),
     )
     kind: str | None = Field(default=None, description="expense, income, transfer, split, ...")
@@ -109,6 +111,12 @@ def _cards_data(cards: list[dict[str, Any]]) -> list[DataChunk] | None:
     return [DataChunk(type="data-card", data=card) for card in cards] or None
 
 
+def rupees(paise: int) -> str:
+    """Format integer paise as rupees, the way the app writes money: 12345678 is "₹1,23,456.78".
+    Print this beside a figure you will quote instead of dividing by 100 by hand."""
+    return money(int(paise))["text"]
+
+
 async def _read_call(
     fn: Callable[[Connection], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -143,9 +151,12 @@ async def _finish_read(
 
 
 async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
-    """The user's whole picture: today's date, settings, accounts with balances and ages, the
-    schedules behind the next 30 days, goals, who owes what, remembered preferences, what setup
-    is missing, and data warnings. The sandbox has no clock, so get today's date here."""
+    """The user's whole picture: today's date, settings, every account with its balance and the
+    age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months, a
+    card's next_statement_close and the next_bill_due for spend made today, each schedule's
+    next four dates (next_dates), the next 30 days of events (a null amount carries a note saying
+    why), goals, who owes what, remembered preferences, scheduled_questions, what setup is
+    missing, and data warnings. The sandbox has no clock, so get today's date here."""
     payload = await _read_call(read_tools.get_financial_context)
     return await _finish_read(ctx, payload, kind="context")
 
@@ -157,8 +168,10 @@ async def query_movements(
     cursor: str | None = None,
 ) -> ToolReturn:
     """List individual movements with their transfers, category, payee, and evidence. Use it to
-    find a row or see what's behind a number. For totals, use summarize_spending. A corrected
-    entry and its reversal are hidden and not counted."""
+    find a row or see what's behind a number. For totals, use summarize_spending. period takes
+    this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09", a single day
+    "2026-11-10", or a range "2026-09-01..2026-09-15". A corrected entry and its reversal are
+    hidden and not counted."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:
         payload = await _read_call(
@@ -186,8 +199,8 @@ async def summarize_spending(
     """Totals of money spent, net of refunds, grouped however you need. Loan principal, card
     bills, investments, and money others owe never count as spending. To compare periods, call it
     twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year,
-    "2026-09", or a range "2026-09-01..2026-09-15" (weeks start Monday). count is the
-    number of entries, with a corrected entry and its reversal left out."""
+    "2026-09", a day "2026-11-10", or a range "2026-09-01..2026-09-15" (weeks start Monday). count
+    is the number of entries, with a corrected entry and its reversal left out."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:
         payload = await _read_call(
@@ -368,9 +381,12 @@ async def show_chart(
         name = str(item.get("name") or "")
         points = item.get("points") or []
         if not name:
-            raise ModelRetry("every series needs a name")
+            raise ModelRetry('every series needs a name, for example {"name": "Rent"}')
         if not isinstance(points, list) or not points:
-            raise ModelRetry(f"series {name!r} has no points")
+            raise ModelRetry(
+                f"series {name!r} has no points. One valid series is "
+                '{"name": "Rent", "points": [{"x": "2026-09", "y": 2800000}]}.'
+            )
         if len(points) > 400:
             raise ModelRetry(f"series {name!r} has more than 400 points")
         cleaned: list[dict[str, Any]] = []
@@ -440,7 +456,8 @@ async def present(ctx: RunContext[AgentDeps], display: dict[str, Any]) -> ToolRe
     {"_type": "Stack" | "Comparison" | "Summary" | "Table" | "Chart" | "Receipt",
      "children": [...], "result_id": "res_1"}. Containers have children; leaves have a result_id
     and no other props. Use only a view the result offers. Comparison aligns sections and never
-    computes a difference."""
+    computes a difference.
+    Example: {"_type": "Stack", "children": [{"_type": "Table", "result_id": "res_1"}]}."""
     try:
         card, return_value = build_answer(ctx.deps.presentation, display)
     except PresentationError as exc:
@@ -459,6 +476,7 @@ def build_read_toolset() -> FunctionToolset[AgentDeps]:
             run_query,
             amortize,
             compound,
+            rupees,
             show_chart,
             show_table,
             present,
@@ -655,9 +673,10 @@ async def schedule_payment(
     """Match a recorded movement to one schedule occurrence, or remove that match. This never
     records new money. Use the schedule name or ID and its holiday-adjusted ISO due date. Find
     the actual movement with query_movements first; do not invent a payment from an elapsed date
-    or a confirmed schedule. A partial payment accepts amount_rupees; omit it to use the
-    movement's remaining eligible amount. Existing matches are idempotent. Matching and
-    unmatching each have undo; reversed movements never count as paid."""
+    or a confirmed schedule. A match must be due within 31 days after the movement's date; a far
+    one is refused with the nearest open occurrence. A partial payment accepts amount_rupees; omit
+    it to use the movement's remaining eligible amount. Existing matches are idempotent. Matching
+    and unmatching each have undo; reversed movements never count as paid."""
     payload = await _call_write(
         lambda conn: write_tools.schedule_payment(
             conn,

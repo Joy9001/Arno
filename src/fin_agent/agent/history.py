@@ -8,10 +8,12 @@ failure; `run_started_at` catches the one ending nobody can save (a crash).
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
 from fin_agent.agent.cards import cards_from_messages, run_timing
+from fin_agent.agent.presentation import keep_last_answer
 from fin_agent.agent.redaction import redact_text
 from fin_agent.db.conn import Connection
 from fin_agent.ledger.audit import new_id
@@ -292,6 +294,51 @@ def _body_text(message: dict[str, Any]) -> str:
     ).strip()
 
 
+def _retried_calls(messages: list[Any]) -> set[str]:
+    """The tool calls the model had to redo, so the attempt that made them was abandoned."""
+    from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart
+
+    retried: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if isinstance(part, ToolReturnPart) and part.outcome == "retried":
+                retried.add(str(part.tool_call_id))
+            elif isinstance(part, RetryPromptPart) and part.tool_call_id:
+                # A transcript saved before retries travelled as tool returns.
+                retried.add(str(part.tool_call_id))
+    return retried
+
+
+def without_retried_text(messages: list[Any]) -> list[Any]:
+    """The transcript's words are the answer, not the attempt it abandoned.
+
+    A response whose tool call came back as a retry was a draft: its text said what the model was
+    about to do with data it never got. Only the response that answers survives, so a retried
+    answer cannot read as two versions of one reply.
+    """
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+
+    retried = _retried_calls(messages)
+    if not retried:
+        return messages
+    kept: list[Any] = []
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            kept.append(message)
+            continue
+        if not any(
+            isinstance(part, ToolCallPart) and str(part.tool_call_id) in retried
+            for part in message.parts
+        ):
+            kept.append(message)
+            continue
+        parts = [part for part in message.parts if not isinstance(part, TextPart)]
+        kept.append(replace(message, parts=parts) if parts else message)
+    return kept
+
+
 async def save_records(
     conn: Connection,
     *,
@@ -319,7 +366,7 @@ async def save_records(
     from fin_agent.agent.cards import attach_to_last_assistant, ui_messages, with_data
 
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
-    ui = ui_messages(turn_messages)
+    ui = ui_messages(without_retried_text(turn_messages))
     run_started_at = await conn.fetchval(
         "SELECT run_started_at FROM conversations WHERE id = $1", thread_id
     )
@@ -356,7 +403,7 @@ async def save_records(
                 apply_user(message)
                 break
 
-    extra = cards_from_messages(turn_messages)
+    extra = keep_last_answer(cards_from_messages(turn_messages))
     ui = attach_to_last_assistant(ui, extra)
     last_assistant = next(
         (message for message in reversed(ui) if message.get("role") == "assistant"), None

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fin_agent.agent import history as history_mod
 from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.agent.presentation import keep_last_answer
 from fin_agent.agent.quote import QuoteError, quote_from_messages, resolve_quote, with_quote
 from fin_agent.agent.turns import TurnBusy, encode_saved_turn
 from fin_agent.api.capture import log_photo
@@ -566,7 +567,7 @@ def _merge_saved_state(
                     "pydantic_ai": {"outcome": "approved"},
                 }
 
-    cards = cards_for_transcript(model_messages)
+    cards = keep_last_answer(cards_for_transcript(model_messages))
     if cards:
         last_assistant = next(
             (message for message in reversed(messages) if message.get("role") == "assistant"),

@@ -19,6 +19,7 @@ from typing import Any
 from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import RunCancelled
 from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.tools import DeferredToolResults, ToolDenied
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 
@@ -28,10 +29,30 @@ from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import save_records
 from fin_agent.agent.models import opencode_conversation
 from fin_agent.agent.number_check import check_messages
+from fin_agent.agent.presentation import keep_last_answer
 from fin_agent.agent.wake import KeepRetryMark, WakePolicy
 from fin_agent.db.conn import connect
 
 logger = logging.getLogger("fin_agent.chat")
+
+DENIED_MESSAGE = (
+    "The user declined this change, so nothing was written. Stop here: don't offer it again "
+    "unless they ask for it."
+)
+
+
+def declined_results(results: DeferredToolResults | None) -> DeferredToolResults | None:
+    """Give a declined call the message the model should act on, not a bare one-liner."""
+    if results is None or not any(value is False for value in results.approvals.values()):
+        return results
+    return DeferredToolResults(
+        approvals={
+            tool_call_id: (ToolDenied(message=DENIED_MESSAGE) if value is False else value)
+            for tool_call_id, value in results.approvals.items()
+        },
+        calls=results.calls,
+        metadata=results.metadata,
+    )
 
 
 class TurnBusy(RuntimeError):
@@ -420,6 +441,7 @@ class TurnManager:
                         usage_limits=caps.turn_limits(),
                         deps=turn.deps,
                         capabilities=reports,
+                        deferred_tool_results=declined_results(adapter.deferred_tool_results),
                         on_complete=on_complete,
                         on_cancel=on_cancel,
                     )
@@ -507,7 +529,7 @@ class TurnManager:
         }
         async for chunk in adapter.encode_stream(stream):
             if chunk.startswith("data: ") and '"type":"finish"' in chunk:
-                for card in cards_from_messages(captured_ref[0]):
+                for card in keep_last_answer(cards_from_messages(captured_ref[0])):
                     data = card.data if isinstance(card.data, dict) else {}
                     if (
                         data.get("card") == "import"
@@ -575,9 +597,11 @@ class TurnManager:
 
 __all__ = [
     "ChatTurn",
+    "DENIED_MESSAGE",
     "Preparation",
     "PreparationBusy",
     "TurnBusy",
     "TurnManager",
+    "declined_results",
     "encode_saved_turn",
 ]

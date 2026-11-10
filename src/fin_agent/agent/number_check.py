@@ -35,6 +35,13 @@ SCALE = {
     "cr": 1e7,
 }
 NUM = r"\d{1,3}(?:,\d{2,3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+
+# The note a reader gets beside a figure no tool printed. Chat shows these words in the reply
+# footer; a scheduled answer, which is plain text in the inbox, carries the same sentence.
+UNTRACED_NOTE = (
+    "Not verified against a ledger row: {amounts}. Check them in the ledger before you rely on "
+    "them."
+)
 _SCALES = r"k|thousand|thousands|hazaar|hazar|hajaar|lakhs?|lacs?|crores?|cr"
 MONEY = re.compile(
     rf"(?:₹|\bRs\.?\s?|\bINR\s?)\s?({NUM})\s?({_SCALES}|l)?\b"
@@ -370,6 +377,7 @@ def check_messages(
 
 
 __all__ = [
+    "UNTRACED_NOTE",
     "check",
     "check_messages",
     "classify",

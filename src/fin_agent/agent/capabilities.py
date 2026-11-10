@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterable
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
@@ -53,6 +54,7 @@ logger = logging.getLogger("fin_agent.agent")
 
 DAILY_CEILING_USD = Decimal("20")
 SHARED_DAILY_BUDGET = "shared daily"
+RUN_CODE_TOOL = "run_code"
 
 WRITE_TOOLS = frozenset(
     {
@@ -154,6 +156,82 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
             "tool": call.tool_name,
             "message": "The tool failed. Tell the user plainly and say what is missing.",
         }
+
+
+# What a script can reach. Monty resolves only part of the standard library, so a name it
+# cannot import is answered with this list instead of the type checker's search paths.
+SANDBOX_MODULES = (
+    "json",
+    "datetime",
+    "math",
+    "re",
+    "itertools",
+    "functools",
+    "collections",
+    "decimal",
+    "random",
+    "time",
+    "hashlib",
+    "base64",
+    "bisect",
+    "copy",
+)
+# The read toolset's functions, which `run_code` takes over: a test keeps this list in step.
+SANDBOX_HELPERS = (
+    "amortize",
+    "compound",
+    "get_financial_context",
+    "present",
+    "project",
+    "query_movements",
+    "recap",
+    "rupees",
+    "run_query",
+    "show_chart",
+    "show_table",
+    "summarize_spending",
+)
+SANDBOX_ERRORS = ("Type error in code:", "Runtime error:")
+
+
+def sandbox_help() -> str:
+    """What a failed script could have used: its helpers, and the modules it may import."""
+    return (
+        "Inside run_code call only its helpers, never a write tool: "
+        + ", ".join(SANDBOX_HELPERS)
+        + ". The sandbox imports only "
+        + ", ".join(SANDBOX_MODULES)
+        + "; compute anything else from a tool return."
+    )
+
+
+class CodeModeHints(AbstractCapability[AgentDeps]):
+    """A failed `run_code` call names the helpers and modules it could have used."""
+
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[AgentDeps],
+        *,
+        call: Any,
+        tool_def: Any,
+        args: Any,
+        handler: Any,
+    ) -> Any:
+        from pydantic_ai.exceptions import ToolRetryError
+        from pydantic_ai.messages import ToolReturnPart
+
+        try:
+            return await handler(args)
+        except ToolRetryError as exc:
+            retry = exc.tool_retry
+            if call.tool_name != RUN_CODE_TOOL or not isinstance(retry, ToolReturnPart):
+                raise
+            message = str(retry.content)
+            if not message.startswith(SANDBOX_ERRORS):
+                raise
+            raise ToolRetryError(
+                replace(retry, content=f"{message.rstrip()}\n\n{sandbox_help()}")
+            ) from exc
 
 
 def _task_marker(part: Any) -> str | None:
@@ -335,6 +413,7 @@ def build_capabilities(
             target_tokens=target,
         ),
         ToolErrorsToModel(),
+        CodeModeHints(),
         TaskTextIsOutside(),
     ]
     if subagents is not None:
@@ -370,9 +449,13 @@ def turn_limits() -> Any:
 __all__ = [
     "DAILY_CEILING_USD",
     "MODEL_SETTINGS",
+    "SANDBOX_ERRORS",
+    "SANDBOX_HELPERS",
+    "SANDBOX_MODULES",
     "SHARED_DAILY_BUDGET",
     "STALL_SECONDS",
     "SUMMARY_PROMPT",
+    "CodeModeHints",
     "RootSpanIO",
     "TaskTextIsOutside",
     "ToolErrorsToModel",
@@ -381,6 +464,7 @@ __all__ = [
     "date_and_changes",
     "drain_events",
     "redaction_guardrail",
+    "sandbox_help",
     "shared_daily_budget",
     "spend_limits",
     "turn_limits",

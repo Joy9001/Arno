@@ -22,7 +22,7 @@ presentation-only `show_table` and `present` tools described below ([note](diagr
 |---|---|
 | Money out | `Money = {"paise": 300000, "text": "₹3,000"}`. Unknown is `null`, never `0` |
 | Money in | The field name carries the unit. Read tools take `*_paise`, because scripts compute in paise. Write tools take `*_rupees`, as you said it, and code converts, so the model never multiplies by 100 |
-| Names | Accounts, payees, and categories go in by name, and `resolve()` finds them. Movements go in by ID |
+| Names | Accounts, payees, and categories go in by name, and `resolve()` finds them. Movements go in by ID. A name that matches an archived account is refused with that account's name and the spendable ones, never as "no such account" |
 | Errors teach | An unknown or ambiguous name raises `ModelRetry`, listing the candidates. Inside a script it arrives as a catchable `Exception` with the same message; uncaught, the model gets the message and retries |
 | Unexpected errors | A tool that throws anything else becomes a failed result the model can read, through `on_tool_execute_error`, and the real error goes to the trace. Read tools have a 60-second timeout, as a starting value; write tools have none ([step 8](system-design.md#when-a-tool-fails)) |
 | Two payloads | Short content for the model; cards, curves, and source IDs for the UI, as `ToolReturn` metadata. Metadata from a tool called inside a script isn't streamed, so Fin-Agent emits those cards itself from the `run_code` return |
@@ -45,9 +45,12 @@ writes Python that calls the read tools inside Monty. See [Code Mode](design.md#
 
 ### `get_financial_context`
 
-**Description:** "The user's whole picture: today's date, settings, accounts with balances and
-ages, the next 30 days of scheduled events, goals, who owes what, remembered preferences, what setup
-is missing, and data warnings. The sandbox has no clock, so get today's date here."
+**Description:** "The user's whole picture: today's date, settings, every account with its balance
+and the age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months,
+a card's next_statement_close and the next_bill_due for spend made today, each schedule's next four
+dates (next_dates), the next 30 days of events (a null amount carries a note saying why), goals, who
+owes what, remembered preferences, scheduled_questions, what setup is missing, and data warnings.
+The sandbox has no clock, so get today's date here."
 
 **Input:** none
 
@@ -57,13 +60,18 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
 {
   "today": "2026-10-31",
   "settings": {"currency": "INR", "floor": Money, "default_horizon_days": 90},
-  "accounts": [{"name", "kind", "liquid", "known": bool, "balance": Money, "as_of",
-                "statement_age_days", "covered": {"from", "to"}, "gaps": [...]}],
+  "accounts": [{"name", "kind", "liquid", "active", "known": bool, "balance": Money,
+                "as_of", "age_days", "credit_limit", "available_credit", "outstanding",
+                "rate_bps", "tenure_months",
+                "next_statement_close", "next_bill_due",      # cards only
+                "covered": {"from", "to", "gaps": [...]}}],
   "liquid_total": Money,  # null when any active liquid account is not known
-  "upcoming": [{"date", "name", "kind", "amount": Money}],
+  "upcoming": [{"date", "name", "kind", "amount": Money, "note"}],
+  "schedules": [{"name", "rule", "next_date", "next_dates": [...4 dates within 400 days]}],
   "goals": [{"name", "target": Money, "saved": Money, "deadline", "priority"}],
   "owed": [{"person", "amount": Money, "expected_date"}],  # positive: they owe you
   "preferences": [{"id", "text", "kind"}],                 # active ones only
+  "scheduled_questions": [{"id", "prompt", "rule", "next_run"}],  # next_run in IST
   "setup_gaps": ["no income schedule"],
   "warnings": ["SBI balance is 23 days old"]
 }
@@ -72,25 +80,37 @@ is missing, and data warnings. The sandbox has no clock, so get today's date her
 UI: source IDs for citations. The turn also gets separate `ui_results` descriptors for accounts,
 upcoming payments, goals, and owed, without a wall of context cards.
 
+An `upcoming` entry whose `amount` is null says why in `note`: a card with no statement balance
+has a bill of unknown amount, and that is the one sentence the model quotes for it.
+
 A balance is known only when an explicit opening balance, a user-stated balance, or a committed
 statement anchors it. Those sources all persist `statement_balance_paise` with a valid
 `statement_balance_as_of`, including an explicit zero. A ledger movement changes a known balance;
 it never establishes one. An account whose first entry is an expense or income therefore keeps
 `known: false`, `balance: null`, and `as_of: null`, while its real net change remains visible in
-the account payload and Ledger. `liquid_total` is null when any active liquid account is unknown;
-it is not a complete current cash claim.
+the account payload and Ledger. A `goal` account is the exception: it opens at zero and its ledger
+balance is the whole truth, so it is always known. `liquid_total` is null when any active liquid
+account is unknown; it is not a complete current cash claim.
 
 **Logic**
 
 ```
 settings   = read settings
-accounts   = active accounts joined to v_balances as of today
+accounts   = every account joined to v_balances, with active, rate_bps, and tenure_months
 for each account: known = statement_balance_paise and statement_balance_as_of are present
                   balance = ledger balance only when known
-                  coverage from imports, statement age
-upcoming   = expand schedule rules over 30 days, adjust for holidays, add card due dates
+                  as_of, age_days = balance_anchor(): the later of the last movement and the
+                                    stated balance
+                  coverage from imports
+                  a card also gets next_statement_close = engine.statement_close(card, today)
+                  and next_bill_due = engine.card_due_date(card, today)
+upcoming   = expand schedule rules over 30 days, adjust for holidays, add card due dates;
+             an unknown card bill has amount = null and the note that says why
+schedules  = each active schedule's rule and next_dates = expand 400 days, skip a paid run,
+             first four
 goals      = goals plus the balance of each goal account
 owed       = v_owed
+questions  = active scheduled questions, next_run in IST
 setup_gaps = no income schedule? no floor? an account with no stated balance?
 warnings   = stale balances + coverage gaps
 mark() only the names whose row still has outside_text = true
@@ -102,7 +122,10 @@ The server also runs this function when a thread starts, and pins the result as 
 ### `query_movements`
 
 **Description:** "List individual movements with their transfers, category, payee, and evidence. Use
-it to find a row or see what's behind a number. For totals, use summarize_spending."
+it to find a row or see what's behind a number. For totals, use summarize_spending. period takes
+this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09", a single day
+"2026-11-10", or a range "2026-09-01..2026-09-15". A corrected entry and its reversal are hidden
+and not counted."
 
 **Input**
 
@@ -111,7 +134,8 @@ query_movements(filters: MovementFilters | None = None, limit: int = 50, cursor:
 
 class MovementFilters:
     period: str | None          # "this_month", "last_month", "this_week", "last_week",
-                                # "2026-09", "2026-09-01..2026-09-15"
+                                # "this_year", "last_30_days", "2026-09", "2026-11-10",
+                                # "2026-09-01..2026-09-15"
     account: str | None
     category: str | None
     payee: str | None
@@ -168,7 +192,9 @@ coverage. The Recaps page reads the same engine, `tools/recaps.py`; the stories 
 
 **Description:** "Totals of money spent, net of refunds, grouped however you need. Loan principal,
 card bills, investments, and money others owe never count as spending. To compare periods, call it
-twice."
+twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09",
+a day "2026-11-10", or a range "2026-09-01..2026-09-15" (weeks start Monday). count is the number
+of entries, with a corrected entry and its reversal left out."
 
 **Input**
 
@@ -176,7 +202,7 @@ twice."
 summarize_spending(group_by: Literal["category", "payee", "account", "month", "week", "none"],
                    period: str, filters: SpendFilters | None = None)
                    # period: "this_month", "last_month", "this_week", "last_week", "2026-09",
-                   # or "2026-09-01..2026-09-15"
+                   # "2026-11-10", or "2026-09-01..2026-09-15"
 
 class SpendFilters:                 # what the sum honors; any other key is an error
     account: str | None
@@ -241,10 +267,12 @@ class Hypothetical:
 
 The daily curve, the full source list, and the verdict card travel as UI metadata; the model sees
 the compact payload above. `optimistic` is the unconfirmed-income case and never feeds a verdict.
-`data_quality.balance_ages[].known` uses the same anchor rule as the account summary. An unknown
-liquid account keeps `known: false` and no balance date; the gap says the projection starts from
-its recorded net change, not a verified bank balance. That provisional input is never presented as
-known cash.
+`data_quality.balance_ages[]` uses the account summary's one anchor rule (`ledger.common`'s
+`balance_anchor`): `as_of` is the later of the last movement and the stated balance, and `age_days`
+is the age `get_financial_context` reports for the same account. An unknown liquid account keeps
+`known: false` and no balance date; the gap says the projection starts from its recorded net
+change, not a verified bank balance. That provisional input is never presented as known cash. A
+card in credit counts its balance as available credit, in the projection as in the account payload.
 
 UI: daily curve (median and P10-P90), source IDs, projection card.
 
@@ -263,11 +291,13 @@ if hypothetical:
     if threshold met, no goal slips, no obligation missed: verdict = yes
     else:
         tradeoffs = rerun for: wait until date X, card or EMI, delay a goal, cut a category
-        verdict   = yes-but if any works, otherwise no
+        verdict   = yes-but if a same-date tradeoff works, otherwise no
 ```
 
-"Wait until date X" is already a tradeoff, so a script doesn't need to sweep dates. The engine is
-detailed in [The projection engine](design.md#the-projection-engine).
+"Wait until date X" is already a tradeoff, so a script doesn't need to sweep dates. It is context,
+not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal to the asked date
+is not a tradeoff. The engine is detailed in
+[The projection engine](design.md#the-projection-engine).
 
 ### `run_query`
 
@@ -351,11 +381,15 @@ schedule = each month: interest = round(balance·r)
 if prepay:
     subtract amount before EMI at_emi
     reduce = tenure: same EMI, walk to zero
-    reduce = emi:    recompute EMI over the remaining months
+    reduce = emi:    recompute the EMI over the EMIs the loan actually has left, not the
+                     caller's tenure cap
     compare totals
 ```
 
-This runs on the host with `Decimal`. `record_movement` uses the same function to split an EMI.
+This runs on the host with `Decimal`. `record_movement` splits a loan payment with
+`ledger.movements.loan_payment_parts`, not with this schedule: one month's interest per loan, booked
+by the first payment in a calendar month (a later payment that month is all principal), at the
+loan's own rate.
 
 ### `compound`
 
@@ -381,6 +415,17 @@ each month: balance = (balance + monthly) · (1 + r)    # how Indian SIP calcula
 contributed = start + monthly · months
 growth = final − contributed
 ```
+
+### `rupees`
+
+**Description:** "Format integer paise as rupees, the way the app writes money: 12345678 is
+"₹1,23,456.78". Print this beside a figure you will quote instead of dividing by 100 by hand."
+
+**Input:** `rupees(paise: int)` → `str`.
+
+A script's only other reach into money formatting would be its own `/ 100`, which is how a paise
+figure once got quoted as ₹5,511. It reads nothing, writes nothing, and shows no card;
+`india/formatting.format_paise` is the one formatter the CLI, tests, and this helper share.
 
 ### `show_chart`
 
@@ -573,9 +618,14 @@ Settlement:  amount_rupees, person, direction=Literal["they_paid", "i_paid"], ac
 {"status": "recorded", "movement_id", "undo_id", "date",
  "summary": "₹450 to Swiggy from SBI savings, Food",
  "transfers": [...], "account_source": "stated" | "usual",
- "category_source": "stated" | "rule" | "guess" | "none"}
+ "category_source": "stated" | "rule" | "guess" | "none",
+ "card_bill": {"statement_close", "due_date"} | None}   # a card purchase: the bill it lands on
 # or
 {"status": "possible_duplicate", "existing": {"movement_id", "date", "summary"}}
+
+# a loan payment also carries:
+{"principal_paise", "interest_paise", "note": str | None}
+# note says the interest is unknown when the loan has no rate on file
 ```
 
 UI: undo card, with the screenshot beside the fields if it came from a photo.
@@ -590,7 +640,7 @@ if a split's parts don't add up to the total: ModelRetry(...)
 
 account  = stated, else this payee's usual account, else the only liquid account,
            else ModelRetry("which account?")
-payee    = find or create
+payee    = find or create; a merchant whose name equals an active category is not stored
            outside_text = came from a photo, or (flagged and name not in your message)
 category = stated, else your rule, else llm rule, else guess (saved as an llm rule), else none
 
@@ -602,13 +652,17 @@ transfers = by kind:
     income      Income → account
     transfer    from → to
     split       account → Spending (your share); account → each person
-    loan        account → Loan (principal); account → Spending (interest), split by amortize
+    loan        account → Loan (principal); account → Spending (interest), split by
+                ledger/movements.loan_payment_parts: one month's interest per loan, so the first
+                payment in a calendar month carries it and a later payment that month is all
+                principal; a loan with no rate is all principal, with note saying why
     refund      Spending → account, labeled
     settlement  they_paid: person → account; i_paid: account → person
 
 write_group:
     pgledger_create_transfers(transfers, key, event_at = noon India time)
     insert movement, labels, capture (upi_ref from the server's extraction, never typed by the model)
+    a card purchase also gets card_bill from engine.statement_close and engine.card_due_date
 queue the risk check
 ```
 
@@ -634,12 +688,15 @@ class Changes:
     expected_date: str | None
     date: str | None
     amount_rupees: Decimal | None
+    my_share_rupees: Decimal | None                  # a split's new share of mine
+    shares: list[{name, amount_rupees}] | None       # each person's new share
     account: str | None
     delete: bool = False
 ```
 
 **Output:** `{"status", "undo_id", "summary", "rule": "Swiggy → Groceries" | None, "rows_changed":
-int}`. UI: undo card naming the rule and the row count.
+int}`. UI: undo card naming the rule and the row count. A date update counts its row, so a
+date-only correction reports `rows_changed: 1` rather than 0.
 
 **Logic**
 
@@ -652,6 +709,14 @@ write_group:
     amount or account → new movement, reverses_id = m:
                         opposite transfers + corrected transfers, one batch
     delete → new movement, reverses_id = m: opposite transfers only
+    amount on a split  → new shares: explicit ones must add up to the total; with none, only an
+                         equal split is re-split equally (each person gets total // N, my share
+                         keeps the remainder), else ModelRetry asking for each person's share
+    amount on a loan   → principal/interest recomputed with the payment's own rule
+                         (ledger/movements.loan_payment_parts) at the corrected amount
+    payee on a split   → only the vendor label changes; person shares keep their person
+                         (a movement whose only labels are people's refuses with ModelRetry)
+    account on a split → every share moves to the new account
     if scope != "this":
         upsert rule (payee → category, source = user), replacing any llm rule
         set the payee's default category
@@ -715,9 +780,19 @@ queue the risk check if the money picture changed
 **Tier:** everyday, instant and undoable. Associates existing money with one occurrence; never
 creates a payment. The model first finds the actual movement with `query_movements`.
 
+**Description:** "Match a recorded movement to one schedule occurrence, or remove that match. This
+never records new money. Use the schedule name or ID and its holiday-adjusted ISO due date. Find
+the actual movement with query_movements first; do not invent a payment from an elapsed date or a
+confirmed schedule. A match must be due within 31 days after the movement's date; a far one is
+refused with the nearest open occurrence. A partial payment accepts amount_rupees; omit it to use
+the movement's remaining eligible amount. Existing matches are idempotent. Matching and unmatching
+each have undo; reversed movements never count as paid."
+
 **Input:** `schedule` (unique name or ID), `due_date` (holiday-adjusted ISO date), `movement_id`,
 `action` (`link` or `unlink`), and optional `amount_rupees` for a partial allocation. Omitting the
-amount assigns the movement's remaining eligible amount. Ambiguous schedule names are rejected.
+amount assigns the movement's remaining eligible amount. Ambiguous schedule names are rejected. A
+match must be due within 31 days after the movement's date; a far one is refused with the schedule's
+nearest open occurrence, so a payment covers the occurrence it pays, not one over a month later.
 
 **Output:** status, payment ID, undo ID, and occurrence evidence: expected, matched, remaining,
 status, and linked movements with reversal state. An inline result card provides undo. Reading

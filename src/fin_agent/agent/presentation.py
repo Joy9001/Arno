@@ -587,7 +587,11 @@ class ResultRegistry:
                     {"key": "name", "label": "Goal", "type": "text"},
                     {"key": "target", "label": "Target", "type": "money"},
                     {"key": "saved", "label": "Saved", "type": "money"},
-                    {"key": "remaining", "label": "Remaining", "type": "money"},
+                    {
+                        "key": "remaining_after_plan",
+                        "label": "Left after planned saving",
+                        "type": "money",
+                    },
                     {"key": "deadline", "label": "Deadline", "type": "date"},
                     {"key": "completes_on", "label": "Completes on", "type": "date"},
                 ],
@@ -596,7 +600,7 @@ class ResultRegistry:
                         _text_cell(goal.get("name")),
                         _money_cell(goal.get("target")),
                         _money_cell(goal.get("saved")),
-                        _money_cell(goal.get("remaining")),
+                        _money_cell(goal.get("remaining_after_plan")),
                         _text_cell(goal.get("deadline")),
                         _text_cell(goal.get("completes_on")),
                     ]
@@ -1122,7 +1126,8 @@ def build_answer(
     except ValidationError as exc:
         raise PresentationError(
             "The answer tree is not valid. Use _type with Stack, Comparison, Summary, Table, "
-            "Chart, or Receipt, and only children or result_id."
+            "Chart, or Receipt, and only children or result_id. One valid answer: "
+            '{"_type": "Stack", "children": [{"_type": "Table", "result_id": "res_1"}]}.'
         ) from exc
     _validate_node(node, registry, containers=0, count=[0])
     referenced: list[str] = []
@@ -1152,6 +1157,28 @@ def _node_types(node: AnswerNode) -> list[str]:
     return types
 
 
+def _composed_data(item: Any) -> dict[str, Any] | None:
+    data = item.get("data") if isinstance(item, dict) else getattr(item, "data", None)
+    return data if isinstance(data, dict) else None
+
+
+def keep_last_answer(items: list[Any]) -> list[Any]:
+    """One composed answer per reply: a later `present` replaces the earlier one.
+
+    Cards and stored parts share this shape, so both the streamed cards and the transcript pass
+    through here and a model that composes twice shows the answer it settled on.
+    """
+    answers = [
+        index
+        for index, item in enumerate(items)
+        if (_composed_data(item) or {}).get("card") == "answer"
+    ]
+    if len(answers) < 2:
+        return items
+    superseded = set(answers[:-1])
+    return [item for index, item in enumerate(items) if index not in superseded]
+
+
 __all__ = [
     "ANSWER_TYPES",
     "MAX_PRESENT_DEPTH",
@@ -1166,4 +1193,5 @@ __all__ = [
     "TableColumn",
     "TableInput",
     "build_answer",
+    "keep_last_answer",
 ]

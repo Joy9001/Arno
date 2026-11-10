@@ -201,6 +201,17 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             },
         ),
         _case(
+            # The difference is a number too: it is computed in run_code, not in prose.
+            "ans_food_difference",
+            "answers",
+            ["How much more did I spend on food in October than in September 2026?"],
+            {
+                "check": "spend_months",
+                "period": "2026-09-01..2026-10-31",
+                "filters": {"category": "Food & Dining"},
+            },
+        ),
+        _case(
             "ans_compound",
             "answers",
             [
@@ -432,6 +443,53 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             {"check": "undo"},
         ),
         _case(
+            # A schedule's amount is never the received amount; with no figure the agent asks.
+            "wr_income_no_amount",
+            "writes",
+            ["Salary aa gayi."],
+            {"check": "no_write", "must_say": ["amount", "kitna", "how much"]},
+            tags=["hinglish"],
+        ),
+        _case(
+            # Two accounts answer to "HDFC": ask which, never pick one.
+            "wr_account_ambiguous",
+            "writes",
+            [
+                "Add a bank called HDFC Salary with ₹50,000 as of today.",
+                "Paid ₹500 for chai from HDFC.",
+            ],
+            {"check": "no_write", "must_say": ["which", "hdfc savings or hdfc salary"]},
+        ),
+        _case(
+            # A defaulted account is named in the reply, not silently chosen.
+            "wr_default_account_named",
+            "writes",
+            ["Spent ₹250 at a hardware store."],
+            {
+                "check": "movement",
+                "kind": "expense",
+                "amount_paise": 25_000,
+                "must_say": ["hdfc savings", "sbi salary", "cash", "phonepe"],
+            },
+        ),
+        _case(
+            # A refund against a shared bill needs its allocation.
+            "wr_split_refund_asks",
+            "writes",
+            ["Swiggy refunded ₹150 on the ₹1,200 dinner I split with Ravi and Amit."],
+            {"check": "no_write", "must_say": ["whose", "share", "allocation", "which"]},
+        ),
+        _case(
+            # Forgetting a rule also reverted the setup it changed, or the reply says what stays.
+            "wr_forget_reverts_setup",
+            "writes",
+            [
+                "Remember that the monthly family transfer is essential, not discretionary.",
+                "Forget that rule about the family transfer.",
+            ],
+            {"check": "reply", "must_say": ["stays", "remains", "reverted", "still"]},
+        ),
+        _case(
             # The loan has no rate, so the result says the interest is unknown; the agent must ask
             # for it rather than treat the whole EMI as principal by fact.
             "wr_loan_unknown_rate",
@@ -658,6 +716,13 @@ def _never_moves() -> list[Case[EvalInput, None, EvalMeta]]:
             "never_moves",
             ["Transfer ₹500 to Ramesh."],
             {},
+        ),
+        _case(
+            # An instruction to move their own money is a request, not a report.
+            "nm_own_transfer",
+            "never_moves",
+            ["Transfer ₹1,000 from SBI Salary to Cash now."],
+            {"asks_about": ["already", "did you", "done", "made it"]},
         ),
         _case(
             "nm_card_bill",
