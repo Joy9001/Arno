@@ -15,12 +15,19 @@ from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import create_thread, ensure_history, record_user_message, save_records
 from fin_agent.agent.presentation import (
     PresentationError,
+    Registration,
     ResultRegistry,
     TableColumn,
     TableInput,
     build_answer,
 )
 from fin_agent.agent.turns import encode_saved_turn
+
+
+def _id(registration: Registration) -> str:
+    result_id = registration.primary_id
+    assert result_id is not None
+    return result_id
 
 
 def _spending(registry: ResultRegistry, *, gaps: list[str] | None = None):
@@ -64,7 +71,7 @@ def _movements(registry: ResultRegistry):
 def test_a_composed_stack_can_show_summary_table_and_chart_from_one_result():
     registry = ResultRegistry()
     result = _spending(registry)
-    result_id = result.primary_id
+    result_id = _id(result)
 
     card, return_value = build_answer(
         registry,
@@ -96,12 +103,12 @@ def test_only_referenced_snapshots_travel_and_returned_snapshots_are_copies():
     _movements(registry)
     card, _ = build_answer(
         registry,
-        {"_type": "Summary", "result_id": spending.primary_id},
+        {"_type": "Summary", "result_id": _id(spending)},
     )
 
     assert [result["kind"] for result in card["results"]] == ["spending"]
     card["results"][0]["title"] = "tampered"
-    assert registry.get(spending.primary_id).snapshot["title"] != "tampered"
+    assert registry.get(_id(spending)).snapshot["title"] != "tampered"
 
 
 def test_an_unknown_id_or_wrong_view_is_a_retry_with_the_supported_views():
@@ -127,7 +134,7 @@ def test_a_previous_turns_id_cannot_resolve_to_a_new_result():
 def test_the_tree_is_bounded_and_rejects_unknown_props_or_containers_with_ids():
     registry = ResultRegistry()
     spending = _spending(registry)
-    result_id = spending.primary_id
+    result_id = _id(spending)
 
     with pytest.raises(PresentationError, match="not valid"):
         build_answer(
@@ -202,7 +209,7 @@ def test_unknown_money_and_coverage_gaps_stay_unknown_not_zero():
         },
         context={"group_by": "category"},
     )
-    snapshot = registry.get(result.primary_id).snapshot
+    snapshot = registry.get(_id(result)).snapshot
 
     assert snapshot["summary"]["facts"][0]["value"] == {"type": "unknown"}
     assert "No statement covers 2026-07." in snapshot["notes"]
@@ -264,7 +271,7 @@ def test_show_table_is_bounded_and_rejects_non_integer_money():
 def test_computed_table_columns_have_stable_unique_keys_and_keep_source_evidence():
     registry = ResultRegistry()
     source = _spending(registry, gaps=["2026-09"])
-    source_id = source.primary_id
+    source_id = _id(source)
     table = registry.register_table(
         TableInput(
             title="Comparison",
@@ -327,7 +334,7 @@ def test_a_table_cannot_claim_complete_coverage_for_an_unverified_source():
             title="Mixed sources",
             columns=[TableColumn(label="Amount", type="money")],
             rows=[[57_000]],
-            source_result_ids=[complete.primary_id, unverified.result_id],
+            source_result_ids=[_id(complete), unverified.result_id],
         )
     )
     assert table.snapshot["coverage"] == {"complete": False, "gaps": []}
@@ -375,7 +382,7 @@ def test_source_preview_notes_do_not_describe_the_derived_tables_rows():
             title="Two-row comparison",
             columns=[TableColumn(label="Amount", type="money")],
             rows=[[100], [100]],
-            source_result_ids=[source.primary_id],
+            source_result_ids=[_id(source)],
         )
     )
     assert result.snapshot["table"]["shown_rows"] == 2

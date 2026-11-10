@@ -80,9 +80,14 @@ def test_the_sandbox_hint_lists_the_modules_it_really_has():
 
 
 async def test_the_helper_list_matches_the_read_toolset():
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.usage import RunUsage
+
     from fin_agent.agent.toolset import build_read_toolset
 
-    ctx = RunContext(deps=AgentDeps(conversation_id="cnv_helpers"), model=None, usage=None)
+    ctx = RunContext(
+        deps=AgentDeps(conversation_id="cnv_helpers"), model=TestModel(), usage=RunUsage()
+    )
     names = sorted(await build_read_toolset().get_tools(ctx))
     assert names == sorted(SANDBOX_HELPERS)
 

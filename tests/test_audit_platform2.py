@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -24,7 +24,7 @@ def _binary(env_name: str, name: str) -> str | None:
 
 
 @asynccontextmanager
-async def _fresh_database(name: str) -> AsyncIterator[str]:
+async def _fresh_database(name: str) -> AsyncGenerator[str]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     admin = make_conninfo(**{**info, "dbname": "postgres"})
     async with connect(admin) as conn:
@@ -44,7 +44,9 @@ def _dump(directory: Path, *, privileges: bool) -> None:
     info = conninfo_to_dict(source)
     if "password" in info:
         env["PGPASSWORD"] = str(info["password"])
-    command = [_binary("PG_DUMP", "pg_dump"), "--no-owner"]
+    pg_dump = _binary("PG_DUMP", "pg_dump")
+    assert pg_dump is not None  # the module's CLIENT_SKIP checks it
+    command = [pg_dump, "--no-owner"]
     if not privileges:
         command.append("--no-privileges")
     command += ["--format=custom", "-f", str(directory / "fin_agent.dump"), source]
@@ -137,7 +139,9 @@ async def test_an_older_dump_without_grants_still_restores(demo_ledger, tmp_path
         report = await restore_from_directory(tmp_path, target, force=True, require_manifest=False)
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
-            assert await restored.fetchval("SELECT count(*) FROM movements") > 0
+            movements = await restored.fetchval("SELECT count(*) FROM movements")
+            assert movements is not None
+            assert movements > 0
             assert not await restored.fetchval(
                 "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
             )

@@ -26,6 +26,7 @@ async def test_unread_badge_and_mark_read(authed_client, db):
     assert listed.status_code == 200
     payload = listed.json()
     assert payload["unread_count"] == 2
+    assert first is not None
     assert [item["id"] for item in payload["notifications"]].count(first["id"]) == 1
 
     read = authed_client.post(f"/api/notifications/{first['id']}/read")
@@ -52,6 +53,7 @@ async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(authed
         dedupe_key="pattern:new:netflix:30:2026-10-01",
     )
 
+    assert row is not None
     opened = authed_client.post(f"/api/notifications/{row['id']}/chat")
     assert opened.status_code == 200, opened.text
     body = opened.json()

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
 from fin_agent.agent import turns
 from fin_agent.agent.deps import AgentDeps
 
 
-class _FinishAdapter:
+class _FinishAdapter:  # a test double for VercelAIAdapter: only `encode_stream` is called
     def encode_stream(self, stream):
         async def chunks():
             yield 'data: {"type":"finish"}\n\n'
@@ -60,7 +62,12 @@ async def test_the_output_cap_note_is_saved_and_streamed_once(monkeypatch):
     assert saved["reply_fallback"] is False
     assert turn.note == note
 
-    chunks = [chunk async for chunk in manager._encoded(_FinishAdapter(), None, [[]], turn)]
+    chunks = [
+        chunk
+        async for chunk in manager._encoded(
+            cast(VercelAIAdapter, _FinishAdapter()), None, [[]], turn
+        )
+    ]
     endings = [chunk for chunk in chunks if '"type":"data-ending"' in chunk]
     assert len(endings) == 1
     assert note in endings[0]
@@ -81,5 +88,10 @@ async def test_a_complete_reply_without_a_note_does_not_emit_one(monkeypatch):
         ending="complete",
     )
 
-    chunks = [chunk async for chunk in manager._encoded(_FinishAdapter(), None, [[]], turn)]
+    chunks = [
+        chunk
+        async for chunk in manager._encoded(
+            cast(VercelAIAdapter, _FinishAdapter()), None, [[]], turn
+        )
+    ]
     assert not any('"type":"data-ending"' in chunk for chunk in chunks)

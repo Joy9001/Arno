@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 from fastapi.testclient import TestClient
+from starlette.applications import Starlette
 from typer.testing import CliRunner
 
 from fin_agent.api.app import create_app
@@ -27,7 +29,8 @@ def _token_from_link(link: str) -> str:
 
 async def _mark_fresh(client: TestClient) -> None:
     """Simulate the fresh passkey check these tests are not exercising."""
-    async with connect(client.app.state.settings.database_url) as conn:
+    app = cast(Starlette, client.app)
+    async with connect(app.state.settings.database_url) as conn:
         await conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
 
 

@@ -5,8 +5,10 @@ from __future__ import annotations
 import time
 from datetime import date, datetime
 from decimal import Decimal
+from typing import cast
 
 from fin_agent.jobs.runner import (
+    Handler,
     JobGaveUp,
     JobRunner,
     enqueue_job,
@@ -68,7 +70,7 @@ async def test_a_failing_job_retries_three_times_then_fails_and_notifies(db):
         attempts["n"] += 1
         raise RuntimeError("nope")
 
-    runner = JobRunner(registry={"bad": failing}, timeouts={"bad": 5})
+    runner = JobRunner(registry={"bad": cast(Handler, failing)}, timeouts={"bad": 5})
     enqueue = await db.fetchrow("INSERT INTO jobs (key, kind) VALUES ('bad:1', 'bad') RETURNING id")
 
     await runner.run_once()
@@ -97,7 +99,7 @@ async def test_a_done_job_keeps_what_its_handler_returned(db):
             "rate": Decimal("0.5"),
         }
 
-    runner = JobRunner(registry={"report": handler}, timeouts={"report": 5})
+    runner = JobRunner(registry={"report": cast(Handler, handler)}, timeouts={"report": 5})
     await db.execute("INSERT INTO jobs (key, kind) VALUES ('report:1', 'report')")
 
     await runner.run_once()
@@ -138,7 +140,7 @@ async def test_a_timeout_is_a_failure_with_a_marker(db):
         del payload
         time.sleep(0.3)
 
-    runner = JobRunner(registry={"slow": slow}, timeouts={"slow": 0.05})
+    runner = JobRunner(registry={"slow": cast(Handler, slow)}, timeouts={"slow": 0.05})
     await db.execute("INSERT INTO jobs (key, kind) VALUES ('slow:1', 'slow')")
 
     await runner.run_once()
@@ -155,7 +157,7 @@ async def test_a_job_with_no_timeout_runs_to_completion(db):
         del payload
         await asyncio.sleep(0.2)
 
-    runner = JobRunner(registry={"slow": slow}, timeouts={"slow": None})
+    runner = JobRunner(registry={"slow": cast(Handler, slow)}, timeouts={"slow": None})
     await db.execute("INSERT INTO jobs (key, kind) VALUES ('slow:none', 'slow')")
 
     await runner.run_once()
@@ -174,7 +176,7 @@ async def test_the_loop_claims_at_most_two_jobs_at_once(db):
         await asyncio.sleep(0.1)
 
     runner = JobRunner(
-        registry={"sleepy": handler},
+        registry={"sleepy": cast(Handler, handler)},
         concurrency=2,
         poll_seconds=10,
         timeouts={"sleepy": 5},

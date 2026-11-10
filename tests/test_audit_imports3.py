@@ -9,8 +9,10 @@ import argparse
 import hashlib
 from datetime import date
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
+from pydantic_ai import RunContext
 
 from fin_agent.agent.builder import _instructions  # noqa: PLC2701 - the note itself is the subject
 from fin_agent.agent.deps import AgentDeps
@@ -254,8 +256,10 @@ async def test_a_cash_statement_is_filed_against_the_cash_account(ledger):
     assert detail["status"] == "review"
 
     # The parser's own opening question resolves the same way, by name.
-    ctx = SimpleNamespace(deps=AgentDeps(conversation_id="conv_cash"))
+    # A RunContext double: `ledger_opening` reads only `ctx.deps`.
+    ctx = cast(RunContext[AgentDeps], SimpleNamespace(deps=AgentDeps(conversation_id="conv_cash")))
     opening = await ledger_opening(ctx, import_id, account="Cash")
+    assert opening is not None
     assert opening["paise"] == 350000
 
     await commit_import(ledger, import_id)
@@ -535,7 +539,11 @@ async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
     assert line["movement_id"] == logged["id"]
 
     # The parser suggests the other account; the user confirms it on the review screen.
-    suggested = await suggest_transfers(None, import_id, [{"row": 0, "account_id": other["id"]}])
+    suggested = await suggest_transfers(
+        cast(RunContext[AgentDeps], None),  # the tool deletes ctx
+        import_id,
+        [{"row": 0, "account_id": other["id"]}],
+    )
     assert suggested["status"] == "suggested"
     await resolve_line(
         ledger, import_id=import_id, line_id=line["id"], resolution="confirm_transfer"

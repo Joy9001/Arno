@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -26,7 +26,7 @@ def _backup_dsn() -> str | None:
 
 
 @asynccontextmanager
-async def _admin_conn() -> AsyncIterator[Connection]:
+async def _admin_conn() -> AsyncGenerator[Connection]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     info["dbname"] = "postgres"
     async with connect(make_conninfo(**info)) as conn:
@@ -64,7 +64,7 @@ async def _restore_database(dump: bytes, name: str) -> None:
 async def _counts(dsn: str) -> dict[str, int]:
     async with connect(dsn) as conn:
         return {
-            table: (await conn.fetchrow(f"SELECT count(*) AS n FROM {table}"))["n"]
+            table: (await conn.fetchrow_required(f"SELECT count(*) AS n FROM {table}"))["n"]
             for table in ("accounts", "movements", "categories", "schedules", "goals")
         }
 
@@ -75,8 +75,8 @@ async def test_backup_role_can_dump_and_only_insert_runs(ledger):
         pytest.skip("BACKUP_PASSWORD is not set")
 
     async with connect(dsn) as conn:
-        assert (await conn.fetchrow("SELECT current_user AS who"))["who"] == "backup"
-        assert (await conn.fetchrow("SELECT count(*) AS n FROM accounts"))["n"] >= 0
+        assert (await conn.fetchrow_required("SELECT current_user AS who"))["who"] == "backup"
+        assert (await conn.fetchrow_required("SELECT count(*) AS n FROM accounts"))["n"] >= 0
         await conn.execute(
             """
             INSERT INTO backup_runs (started_at, finished_at, status, dump_bytes, duration_ms)

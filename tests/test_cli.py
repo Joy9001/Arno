@@ -31,7 +31,9 @@ async def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
     assert await db.fetchval("SELECT count(*) FROM webauthn_credentials") == 0
     assert await db.fetchval("SELECT count(*) FROM sessions WHERE revoked_at IS NULL") == 0
 
-    token = TOKEN_RE.search(result.output).group(1)
+    match = TOKEN_RE.search(result.output)
+    assert match is not None
+    token = match.group(1)
     replacement = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, token, replacement).status_code == 200
 

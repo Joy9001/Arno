@@ -10,8 +10,10 @@ import hashlib
 import io
 from datetime import date
 from types import SimpleNamespace
+from typing import cast
 
 import pypdfium2 as pdfium
+from pydantic_ai import RunContext
 
 from fin_agent.agent import parser as parser_module
 from fin_agent.agent.deps import AgentDeps
@@ -101,7 +103,10 @@ async def test_a_pdf_past_the_page_cap_is_failed_and_never_read(ledger, monkeypa
     attachment_id = await _att(ledger, _blank_pdf(3), "long.pdf")
     deps = AgentDeps(conversation_id="conv_long", statement_attachments=(attachment_id,))
 
-    opened = await open_imports(SimpleNamespace(deps=deps))
+    opened = await open_imports(
+        # A RunContext double: `open_imports` reads only `ctx.deps`.
+        cast(RunContext[AgentDeps], SimpleNamespace(deps=deps))
+    )
 
     assert len(opened) == 1
     import_id = opened[0]["import_id"]

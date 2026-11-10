@@ -496,10 +496,14 @@ def test_each_new_rule_has_an_eval_case():
 
 async def test_the_tool_descriptions_name_their_shapes():
     from pydantic_ai import RunContext
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.usage import RunUsage
 
     from fin_agent.agent.toolset import build_write_toolset
 
-    ctx = RunContext(deps=AgentDeps(conversation_id="cnv_desc"), model=None, usage=None)
+    ctx = RunContext(
+        deps=AgentDeps(conversation_id="cnv_desc"), model=TestModel(), usage=RunUsage()
+    )
     reads = await build_read_toolset().get_tools(ctx)
     writes = await build_write_toolset().get_tools(ctx)
     assert "never a list" in str(reads["summarize_spending"].tool_def.description)

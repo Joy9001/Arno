@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness.compaction import compact_now
-from pydantic_ai_harness.spend import Spent
+from pydantic_ai_harness.spend import SpendEntry, Spent
 
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.deps import AgentDeps
@@ -76,7 +76,7 @@ def test_the_cli_production_path_uses_the_shared_daily_ledger(monkeypatch):
     agent = build_agent()
     with agent.override(model=TestModel(call_tools=[], custom_output_text="no")):
         with pytest.raises(Exception) as raised:
-            agent.run_sync("hi")
+            agent.run_sync("hi", deps=AgentDeps(conversation_id="cnv_ceiling"))
     assert type(raised.value).__name__ == "SpendLimitExceeded"
 
 
@@ -84,7 +84,7 @@ class RecordingStore:
     """Zeros for every read, and every accrual kept for inspection."""
 
     def __init__(self) -> None:
-        self.entries: list[object] = []
+        self.entries: list[SpendEntry] = []
 
     async def get_many(self, keys):
         return {key: Spent() for key in keys}

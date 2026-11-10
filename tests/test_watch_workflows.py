@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from typing import Any
 
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -139,7 +140,7 @@ async def test_reminders_are_created_once_inside_the_lead_window(db):
 
 
 async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
-    state = {
+    state: dict[str, Any] = {
         "floor_paise": 100000,
         "floor_probability": 0.55,
         "floor_threshold": 0.9,

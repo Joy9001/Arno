@@ -733,7 +733,8 @@ async def test_concurrent_retries_with_the_same_key_write_one_movement(ledger):
     results = await asyncio.gather(record(), record(), return_exceptions=True)
 
     assert not [result for result in results if isinstance(result, Exception)]
-    assert len({result["id"] for result in results}) == 1
+    rows = [result for result in results if isinstance(result, dict)]
+    assert len({row["id"] for row in rows}) == 1
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 1
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 10_000_000 - 45_000
 

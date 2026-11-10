@@ -44,6 +44,7 @@ def test_reducing_the_emi_keeps_the_emas_a_loan_actually_has_left():
 
     reduced = _demo_loan(prepay={"amount_paise": 50_000_000, "at_emi": 1, "reduce": "emi"})
     prepay = reduced["prepay"]
+    assert prepay is not None
     # ₹5,00,000 off ₹33,88,000 with 204 EMIs left: ₹26,809.08 a month, still paid off in 204.
     assert prepay["new_emi"]["paise"] == 2_680_908
     assert prepay["new_months"] == 204
@@ -57,6 +58,7 @@ def test_no_prepayment_option_ever_reports_a_negative_saving_or_a_longer_loan():
         prepay = _demo_loan(prepay={"amount_paise": 50_000_000, "at_emi": 1, "reduce": reduce})[
             "prepay"
         ]
+        assert prepay is not None
         assert prepay["interest_saved"]["paise"] > 0, reduce
         assert prepay["months_saved"] >= 0, reduce
         assert prepay["new_months"] <= base["months"], reduce
@@ -81,9 +83,11 @@ async def test_a_named_loan_prepayment_uses_its_real_remaining_emis(demo_ledger)
         start_date=DEMO_DAY,
         prepay={"amount_paise": 50_000_000, "at_emi": 1, "reduce": "emi"},
     )
-    assert reduced["prepay"]["new_emi"]["paise"] < base["emi"]["paise"]
-    assert reduced["prepay"]["new_months"] <= base["months"]
-    assert reduced["prepay"]["interest_saved"]["paise"] > 0
+    prepay = reduced["prepay"]
+    assert prepay is not None
+    assert prepay["new_emi"]["paise"] < base["emi"]["paise"]
+    assert prepay["new_months"] <= base["months"]
+    assert prepay["interest_saved"]["paise"] > 0
 
 
 # --- e4 F1: a finite scheduled question restarted forever -------------------------------------

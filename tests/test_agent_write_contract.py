@@ -376,6 +376,7 @@ async def test_schedule_payment_tool_matches_existing_money_and_returns_undo(led
     )
     result = await _run(script, "Match this recorded payment to rent.", deps)
     payload = _tool_return(result.all_messages(), "schedule_payment")
+    assert payload is not None
     assert payload["occurrence"]["remaining_paise"] == 40_000
     assert payload["undo_id"]
     assert await ledger.fetchval("SELECT count(*) FROM schedule_payments") == 1

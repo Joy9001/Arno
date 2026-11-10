@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -18,6 +18,7 @@ from fin_agent.api.imports import MAX_UPLOAD_BYTES
 from fin_agent.api.middleware import CONTENT_SECURITY_POLICY
 from fin_agent.backup_restore import build_manifest, restore_from_restic
 from fin_agent.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
+from fin_agent.db.migrate import Migration
 from fin_agent.db.pre_migration import dump_before_migrating
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
@@ -30,7 +31,7 @@ REQUIRED_POLICY = (
 
 
 @asynccontextmanager
-async def _admin_conn() -> AsyncIterator[Connection]:
+async def _admin_conn() -> AsyncGenerator[Connection]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     info["dbname"] = "postgres"
     async with connect(make_conninfo(**info)) as conn:
@@ -109,11 +110,16 @@ async def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, sett
     original_pending = pre_migration.pending
     original_dump = pre_migration.export_pg_dump
 
-    async def fake_pending(conn):
-        return [object()]
+    async def fake_pending(conn: Connection, directory: Path | None = None):
+        del conn, directory
+        return [Migration(version=1, name="0001_x.sql", path=Path("0001_x.sql"), sql="SELECT 1;")]
+
+    def fake_dump(database_url: str, *, timeout: int = 120) -> bytes:
+        del database_url, timeout
+        return b"-- pre-migration dump\n"
 
     pre_migration.pending = fake_pending
-    pre_migration.export_pg_dump = lambda url: b"-- pre-migration dump\n"
+    pre_migration.export_pg_dump = fake_dump
     try:
         path = await dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path))
     finally:
@@ -182,9 +188,11 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
     info = conninfo_to_dict(source)
     if "password" in info:
         env["PGPASSWORD"] = str(info["password"])
+    pg_dump = _binary("PG_DUMP", "pg_dump")
+    assert pg_dump is not None  # the module's CLIENT_SKIP checks it
     dumped = subprocess.run(
         [
-            _binary("PG_DUMP", "pg_dump"),
+            pg_dump,
             "--no-owner",
             "--format=custom",
             "-f",
@@ -229,18 +237,22 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
         )
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
-            assert (await restored.fetchrow("SELECT body FROM preferences"))["body"] == (
+            assert (await restored.fetchrow_required("SELECT body FROM preferences"))["body"] == (
                 "Prefers UPI"
             )
-            assert (await restored.fetchrow("SELECT body_text FROM messages"))["body_text"] == (
-                "Dinner at Swiggy"
-            )
-            assert (await restored.fetchrow("SELECT sha256 FROM attachments"))["sha256"] == (
-                "abc123"
-            )
-            assert (await restored.fetchrow("SELECT count(*) AS n FROM audit_log"))["n"] >= 1
-            assert (await restored.fetchrow("SELECT count(*) AS n FROM schedules"))["n"] > 0
-            assert (await restored.fetchrow("SELECT count(*) AS n FROM goals"))["n"] > 0
+            assert (await restored.fetchrow_required("SELECT body_text FROM messages"))[
+                "body_text"
+            ] == ("Dinner at Swiggy")
+            assert (await restored.fetchrow_required("SELECT sha256 FROM attachments"))[
+                "sha256"
+            ] == ("abc123")
+            assert (await restored.fetchrow_required("SELECT count(*) AS n FROM audit_log"))[
+                "n"
+            ] >= 1
+            assert (await restored.fetchrow_required("SELECT count(*) AS n FROM schedules"))[
+                "n"
+            ] > 0
+            assert (await restored.fetchrow_required("SELECT count(*) AS n FROM goals"))["n"] > 0
             # The dump carries the migrations' table grants, so a restored instance can answer and
             # back up again. `agent_ro` still cannot read the auth tables.
             assert await restored.fetchval(
@@ -353,7 +365,7 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
             raced = (
-                await restored.fetchrow(
+                await restored.fetchrow_required(
                     "SELECT count(*) AS n FROM preferences WHERE body = 'raced write'"
                 )
             )["n"]

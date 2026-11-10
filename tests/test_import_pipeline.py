@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date
+from typing import cast
 
 import pytest
 
@@ -919,7 +920,7 @@ async def test_an_unlocked_copy_is_stored_when_a_password_opened_the_file(ledger
         def readable_bytes(self) -> bytes:
             return b"unlocked-bytes"
 
-    await _store_unlocked(attachment_id, b"locked-bytes", [Opened()])
+    await _store_unlocked(attachment_id, b"locked-bytes", cast(list[Doc], [Opened()]))
 
     attachment = await ledger.fetchrow(
         "SELECT data, unlocked_at, sha256 FROM attachments WHERE id = $1", attachment_id

@@ -193,8 +193,8 @@ async def test_demo_template_can_be_cloned():
         info = conninfo_to_dict(settings.database_url)
         info["dbname"] = target
         async with connect(make_conninfo(**info)) as clone:
-            assert (await clone.fetchrow("SELECT count(*) AS n FROM movements"))["n"] > 0
-            assert (await clone.fetchrow("SELECT count(*) AS n FROM goals"))["n"] == 1
-            assert (await clone.fetchrow("SELECT count(*) AS n FROM imports"))["n"] > 0
+            assert (await clone.fetchrow_required("SELECT count(*) AS n FROM movements"))["n"] > 0
+            assert (await clone.fetchrow_required("SELECT count(*) AS n FROM goals"))["n"] == 1
+            assert (await clone.fetchrow_required("SELECT count(*) AS n FROM imports"))["n"] > 0
     finally:
         await drop_database(settings.database_url, target)

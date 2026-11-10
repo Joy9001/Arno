@@ -142,6 +142,7 @@ async def test_retry_resets_a_failed_job_and_clears_its_alert(authed_client, db)
         data={"job_id": job["id"]},
         dedupe_key=f"job_failed:{job['id']}",
     )
+    assert notice is not None
 
     retried = authed_client.post(f"/api/jobs/{job['id']}/retry")
 

@@ -13,8 +13,10 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import override
 
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = "fin-agent-smoke"
@@ -68,12 +70,13 @@ class _StubPhoenix(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def log_message(self, *args: object) -> None:
-        pass
+    @override
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 - the stdlib name
+        del format, args
 
 
-def _spans(requests: list[bytes]) -> list[object]:
-    spans = []
+def _spans(requests: list[bytes]) -> list[Span]:
+    spans: list[Span] = []
     for body in requests:
         payload = ExportTraceServiceRequest()
         payload.ParseFromString(body)

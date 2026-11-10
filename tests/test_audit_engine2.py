@@ -8,7 +8,9 @@ import pytest
 
 from fin_agent.engine.backtest import format_report
 from fin_agent.engine.projection import (
+    CurvePoint,
     LiquidAccount,
+    Projection,
     ProjectionInput,
     SpendCategory,
     project,
@@ -26,7 +28,7 @@ from fin_agent.scheduled_questions import create_question
 from fin_agent.tools.projection import load_inputs
 
 
-def _curve(result: dict) -> dict[str, dict]:
+def _curve(result: Projection) -> dict[str, CurvePoint]:
     return {point["date"]: point for point in result["curve"]}
 
 

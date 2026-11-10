@@ -161,6 +161,7 @@ async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total
 async def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db):
     unread = await create_notification(db, kind="reminder", title="Older unread reminder")
     read = await create_notification(db, kind="reminder", title="Newer read reminder")
+    assert unread is not None and read is not None
     await mark_read(db, read["id"])
 
     body = authed_client.get("/api/home?horizon_days=90").json()

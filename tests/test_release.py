@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -18,8 +19,9 @@ def _audit_module():
     spec = importlib.util.spec_from_file_location(
         "license_audit", ROOT / "scripts" / "license_audit.py"
     )
+    assert spec is not None
     module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
+    assert isinstance(spec.loader, importlib.machinery.SourceFileLoader)
     spec.loader.exec_module(module)
     return module
 

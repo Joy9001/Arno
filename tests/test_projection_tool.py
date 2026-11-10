@@ -172,8 +172,10 @@ async def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledge
     card = part.metadata[0].data
     assert card["card"] == "projection"
     assert card["source_ids"]["accounts"]
-    assert part.content["source_ids"]["accounts"]
-    assert "curve" not in part.content
+    content = part.content
+    assert isinstance(content, dict)
+    assert content["source_ids"]["accounts"]
+    assert "curve" not in content
 
 
 async def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):

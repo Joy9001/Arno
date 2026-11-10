@@ -340,7 +340,7 @@ def _check_movement_postings(movements: dict[str, Movement]) -> None:
                 "spending" not in kinds and "income" not in kinds,
                 "transfer_postings",
                 f"transfer {movement.id} touches Spending or Income; own-account transfers, card "
-                f"repayments and goal contributions are not consumption ({sorted(kinds)})",
+                f"repayments and goal contributions are not consumption ({sorted(kinds, key=str)})",
                 ids,
             )
         elif movement.kind == "split":
@@ -352,7 +352,7 @@ def _check_movement_postings(movements: dict[str, Movement]) -> None:
             _expect(
                 len(payer) == 1
                 and all(posting.to_kind in {"spending", "person"} for posting in postings)
-                and people
+                and len(people) > 0
                 and consumption == my_share,
                 "split_postings",
                 f"split {movement.id} must pay from one account, count only my share "
@@ -495,6 +495,7 @@ async def _check_reversals(conn: Connection, movements: dict[str, Movement]) -> 
             "WHERE movement_id = ANY($1::text[])",
             chain,
         )
+        assert net is not None  # coalesce(sum(...), 0) always returns one value
         _expect(
             int(net) == 0,
             "reversed_pair_not_net_zero",
@@ -780,6 +781,15 @@ async def _check_schedules(conn: Connection) -> None:
         movement = await conn.fetchrow(
             "SELECT * FROM movements WHERE id = $1", payment["movement_id"]
         )
+        if occurrence is None or movement is None:
+            _expect(
+                False,
+                "schedule_payment_missing_row",
+                f"schedule payment {payment['id']} points at an occurrence or movement that is "
+                "gone",
+                ids,
+            )
+            continue
         try:
             capacity = await _capacity(conn, occurrence, movement)
         except InvalidLedgerError as exc:
@@ -808,6 +818,14 @@ async def _check_schedules(conn: Connection) -> None:
     )
     for row in per_movement:
         movement = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", row["movement_id"])
+        if movement is None:
+            _expect(
+                False,
+                "schedule_payment_missing_row",
+                f"movement {row['movement_id']} has allocations but no movements row",
+                (str(row["movement_id"]),),
+            )
+            continue
         occurrences = await conn.fetch(
             """
             SELECT o.*, p.amount_paise AS allocated_paise

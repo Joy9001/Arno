@@ -6,10 +6,11 @@ import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
+from typing import cast
 
 import asyncpg
 import pytest
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai_harness.planning import PlanItem, PostgresPlanStore, TaskStatus
 from pydantic_ai_harness.subagents import DelegationTask, DelegationTasks
@@ -66,8 +67,9 @@ async def _import(conn, *, task_id: str, status: str = "parsing", progress=None,
     return import_id
 
 
-def _request(owner: DelegationTasks) -> SimpleNamespace:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tasks=owner)))
+def _request(owner: DelegationTasks) -> Request:
+    # A Request double: the handlers read only `app.state.tasks`.
+    return cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tasks=owner))))
 
 
 def _record(task_id: str, **fields) -> DelegationTask:

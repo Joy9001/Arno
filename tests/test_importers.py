@@ -210,6 +210,7 @@ async def test_synthetic_indian_parsers_verify(payload, parser, opening, closing
     from fin_agent.importers.periods import derive_period
 
     period = derive_period(doc)
+    assert period is not None
     assert period == {"start": "2026-04-01", "end": "2026-04-30", "source": "header"}
     result = await run_script(
         doc,

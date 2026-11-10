@@ -169,7 +169,7 @@ def test_rupees_become_integer_paise():
         _paise("1.005")
 
 
-def test_the_driver_commit_sends_the_adjustment_confirmation_only_when_asked():
+def test_the_driver_commit_sends_the_adjustment_confirmation_only_when_asked(monkeypatch):
     """The server refuses a non-zero closing adjustment unless the body confirms it."""
     calls: list[tuple[str, dict]] = []
 
@@ -179,7 +179,7 @@ def test_the_driver_commit_sends_the_adjustment_confirmation_only_when_asked():
 
     driver = Driver("http://testserver")
     try:
-        driver.post = post  # type: ignore[method-assign]
+        monkeypatch.setattr(driver, "post", post)
         assert driver.commit("imp_1") == {"status": "committed"}
         driver.commit("imp_1", confirm_adjustment=True)
     finally:

@@ -246,7 +246,8 @@ async def test_oversized_and_malformed_quotes_are_refused(authed_client, demo_le
         json=_body(
             "client_malformed",
             text="Explain this.",
-            quote={"text": 42, "messageId": "msg_any"},  # type: ignore[dict-item]
+            # Deliberately the wrong type: the endpoint must refuse it.
+            quote={"text": 42, "messageId": "msg_any"},  # pyrefly: ignore[bad-assignment]
         ),
     )
     assert malformed.status_code == 422

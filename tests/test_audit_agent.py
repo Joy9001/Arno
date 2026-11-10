@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
 
 from fin_agent.agent.number_check import check
 from fin_agent.db.conn import connect
@@ -222,13 +223,15 @@ async def test_a_failed_mark_cleanup_does_not_turn_a_saved_setup_into_a_failure(
 
     monkeypatch.setattr(toolset, "_clear_confirmed_marks", broken)
     deps = AgentDeps(conversation_id="thread-mark-cleanup", flagged=True)
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_call_approved=True)
+    ctx = RunContext(deps=deps, model=TestModel(), usage=RunUsage(), tool_call_approved=True)
 
     result = await toolset.update_setup(
         ctx, entity="account", action="add", data=AccountSetup(name="Mark bank")
     )
     # The write committed; telling the model it failed would invite a duplicate retry.
-    assert result.return_value["status"] == "saved"
+    payload = result.return_value
+    assert isinstance(payload, dict)
+    assert payload["status"] == "saved"
     assert await demo_ledger.fetchval("SELECT count(*) FROM accounts WHERE name = 'Mark bank'") == 1
 
 
@@ -340,7 +343,7 @@ async def test_the_staleness_reminder_counts_writes_since_the_snapshot(demo_ledg
     thread = await create_thread(demo_ledger, title="stale", thread_id="thread-stale")
     await ensure_history(demo_ledger, thread)
     deps = AgentDeps(conversation_id="thread-stale")
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 
     fresh = await date_and_changes(ctx)
     assert "Nothing has changed since your snapshot" in fresh
@@ -354,7 +357,12 @@ async def test_the_staleness_reminder_counts_writes_since_the_snapshot(demo_ledg
     assert "re-read before stating a balance" in stale
 
     plain = await date_and_changes(
-        RunContext(deps=SimpleNamespace(conversation_id=None), model=None, usage=RunUsage())
+        RunContext(
+            # A deps double: no thread behind this run, which a real AgentDeps never is.
+            deps=cast(AgentDeps, SimpleNamespace(conversation_id=None)),
+            model=TestModel(),
+            usage=RunUsage(),
+        )
     )
     assert plain.startswith("Today is ")
 
@@ -363,18 +371,27 @@ async def test_a_second_turn_on_one_thread_is_refused():
     from types import SimpleNamespace
 
     import pytest
+    from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
-    from fin_agent.agent.turns import TurnBusy, TurnManager
+    from fin_agent.agent.deps import AgentDeps
+    from fin_agent.agent.turns import ChatTurn, TurnBusy, TurnManager
 
     manager = TurnManager(SimpleNamespace())
-    manager.turns["thread-busy"] = SimpleNamespace(done=SimpleNamespace(is_set=lambda: False))
+    manager.turns["thread-busy"] = ChatTurn(
+        thread_id="thread-busy",
+        message_id="msg-busy",
+        run_id="run-busy",
+        history=[],
+        deps=AgentDeps(conversation_id="thread-busy"),
+    )
     with pytest.raises(TurnBusy):
         await manager.start(
-            adapter=None,
+            # Never read: the busy check raises before start touches either one.
+            adapter=cast(VercelAIAdapter[Any, Any], None),
             thread_id="thread-busy",
             message_id="msg-busy",
             history=[],
-            deps=None,
+            deps=AgentDeps(conversation_id="thread-busy"),
         )
 
 

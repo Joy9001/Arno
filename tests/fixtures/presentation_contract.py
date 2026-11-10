@@ -6,10 +6,24 @@ Run directly, without a database or model. Values are fixtures, never user finan
 from __future__ import annotations
 
 import json
+from typing import cast
 
-from fin_agent.agent.presentation import ResultRegistry, TableColumn, TableInput, build_answer
+from fin_agent.agent.presentation import (
+    Registration,
+    ResultRegistry,
+    TableColumn,
+    TableInput,
+    build_answer,
+)
 from fin_agent.engine.money import amortize, compound, money
+from fin_agent.engine.projection import SourceIds
 from fin_agent.tools.projection import card as projection_card
+
+
+def _id(registration: Registration) -> str:
+    result_id = registration.primary_id
+    assert result_id is not None
+    return result_id
 
 
 def fixtures() -> dict:
@@ -49,7 +63,7 @@ def fixtures() -> dict:
                 TableColumn(label="Amount", type="money"),
             ],
             rows=[[f"Option {index}", 45_000 if index else None] for index in range(12)],
-            source_result_ids=[spending.primary_id, movements.primary_id],
+            source_result_ids=[_id(spending), _id(movements)],
         )
     )
     context = registry.register_read(
@@ -78,6 +92,7 @@ def fixtures() -> dict:
             "horizon_days": 90,
             "end": "2027-02-04",
             "floor_paise": 0,
+            "floor_set": False,
             "floor_probability": 1.0,
             "floor_threshold": 0.95,
             "median_low": {"date": "2026-11-06", "paise": 300_000},
@@ -95,9 +110,11 @@ def fixtures() -> dict:
             "obligations_met": True,
             "data_quality": {"gaps": [], "setup_gaps": ["no floor set"]},
             "sources": [],
-            "source_ids": {},
+            # The card passes source ids straight through; this fixture deliberately has none.
+            "source_ids": cast(SourceIds, {}),
             "runs": 100,
             "seed": 42,
+            "optimistic": None,
         }
     )
     projection = registry.register_read("project", {}, context={"card": native})

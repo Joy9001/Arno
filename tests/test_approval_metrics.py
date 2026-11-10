@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ApprovalRequired
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.usage import RunUsage
 
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.toolset import _gate
 
 
-class _Ctx:
-    def __init__(self, deps: AgentDeps, *, approved: bool = False) -> None:
-        self.deps = deps
-        self.tool_name = "update_setup"
-        self.tool_call_approved = approved
+def _ctx(deps: AgentDeps, *, approved: bool = False) -> RunContext[AgentDeps]:
+    return RunContext(
+        deps=deps,
+        model=TestModel(),
+        usage=RunUsage(),
+        tool_name="update_setup",
+        tool_call_approved=approved,
+    )
 
 
 async def _flagged_thread(db, thread_id: str = "approval-thread") -> AgentDeps:
@@ -27,7 +33,7 @@ async def _flagged_thread(db, thread_id: str = "approval-thread") -> AgentDeps:
 async def test_an_offer_counts_once_and_an_approval_counts_once(db):
     deps = await _flagged_thread(db)
     with pytest.raises(ApprovalRequired):
-        await _gate(_Ctx(deps), "update setup")
+        await _gate(_ctx(deps), "update setup")
     assert deps.approvals_offered == 1
-    await _gate(_Ctx(deps, approved=True), "update setup")
+    await _gate(_ctx(deps, approved=True), "update setup")
     assert deps.approvals == 1

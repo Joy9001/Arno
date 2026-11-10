@@ -15,6 +15,7 @@ from pydantic_ai_harness.spend import SpendEntry
 
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS, turn_limits
+from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.models import WindowLimited
 from fin_agent.agent.spend import _SingleConnectionPool, make_spend_store
 from fin_agent.config import get_settings
@@ -96,7 +97,7 @@ async def test_the_backup_model_takes_over_without_sticking(demo_ledger):
         return ModelResponse(parts=[TextPart("from the backup")])
 
     agent = build_agent(model=FunctionModel(failing), backup=FunctionModel(backup))
-    result = await agent.run("hi")
+    result = await agent.run("hi", deps=AgentDeps(conversation_id="cnv_backup"))
     assert result.output == "from the backup"
 
 

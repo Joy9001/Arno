@@ -17,6 +17,13 @@ from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
+
+async def _active_layout(ledger, fingerprint: str) -> dict:
+    active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
+    assert active is not None
+    return active
+
+
 ROWS = [
     {
         "date": "2026-04-01",
@@ -268,13 +275,13 @@ async def test_two_commits_append_two_versions_and_move_the_pointer(ledger):
     first = await _review_with_parser(ledger, account, fingerprint, SBI_PARSER)
     await commit_import(ledger, first)
 
-    active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
+    active = await _active_layout(ledger, fingerprint)
     assert active["version"] == 1
 
     second = await _review_with_parser(ledger, account, fingerprint, SBI_PARSER + "\n# v2")
     await commit_import(ledger, second)
 
-    active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
+    active = await _active_layout(ledger, fingerprint)
     assert active["version"] == 2
     versions = await ledger.fetch("SELECT version FROM parser_versions ORDER BY version")
     assert [row["version"] for row in versions] == [1, 2]
@@ -300,13 +307,13 @@ async def test_a_commit_appends_a_version_and_rollback_moves_the_pointer(ledger)
         parser=SBI_PARSER + "\n# second",
     )
     assert second["version"] == 2
-    active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
+    active = await _active_layout(ledger, fingerprint)
     assert active["version"] == 2
     assert active["parser"].endswith("# second")
     assert fingerprint in active["variants"]
 
     await rollback_layout(ledger, layout_id=first["id"], version=1)
-    active = await layout_for(ledger, fingerprint, institution="SBI", kind="bank")
+    active = await _active_layout(ledger, fingerprint)
     assert active["version"] == 1
     assert active["parser"] == SBI_PARSER
 

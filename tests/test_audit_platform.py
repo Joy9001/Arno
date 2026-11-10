@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -342,7 +342,7 @@ async def test_a_changed_migration_is_refused(tmp_path):
 
 
 @asynccontextmanager
-async def _fresh_database(name: str) -> AsyncIterator[str]:
+async def _fresh_database(name: str) -> AsyncGenerator[str]:
     info = conninfo_to_dict(os.environ["DATABASE_URL"])
     admin = make_conninfo(**{**info, "dbname": "postgres"})
     async with connect(admin) as conn:
@@ -392,9 +392,11 @@ async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
     info = conninfo_to_dict(source)
     if "password" in info:
         env["PGPASSWORD"] = str(info["password"])
+    pg_dump = _binary("PG_DUMP", "pg_dump")
+    assert pg_dump is not None  # the skipif above guarantees it
     dumped = subprocess.run(
         [
-            _binary("PG_DUMP", "pg_dump"),
+            pg_dump,
             "--no-owner",
             "--no-privileges",
             "-Fc",

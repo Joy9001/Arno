@@ -10,7 +10,9 @@ import hashlib
 import io
 import os
 import zipfile
+from collections.abc import Callable
 from datetime import date
+from typing import cast
 
 import pytest
 
@@ -685,7 +687,7 @@ def test_money_parses_indian_grouping_and_negatives_without_floats():
 
     namespace: dict[str, object] = {}
     exec(compile(PRELUDE, "<helpers>", "exec"), namespace)  # noqa: S102 - our own constant
-    money = namespace["money"]
+    money = cast(Callable[[str], int | None], namespace["money"])
     assert money("1,23,456.78") == 12345678
     assert money("\u20b91,23,456.78") == 12345678
     assert money("(1,234.00)") == -123400
@@ -815,6 +817,7 @@ async def test_a_user_category_survives_a_later_rule_run(ledger):
 
 async def test_a_user_rule_beats_a_later_llm_answer_for_the_same_payee(ledger):
     from pydantic_ai import RunContext
+    from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
     from fin_agent.agent.categorizer import CategorizerDeps, save_categories
@@ -843,7 +846,7 @@ async def test_a_user_rule_beats_a_later_llm_answer_for_the_same_payee(ledger):
     )
     deps = CategorizerDeps(import_id=import_id, run_id="run")
     deps.answers["swiggy"] = ("Food & Dining", "model guess")
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    ctx = RunContext(deps=deps, model=TestModel(), usage=RunUsage())
 
     await save_categories(ctx, [])
 
@@ -966,6 +969,7 @@ async def test_a_restart_fails_an_import_that_never_got_a_task(ledger):
 
 async def test_a_zip_of_statements_is_refused_rather_than_half_imported(ledger):
     from pydantic_ai import RunContext
+    from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
     from fin_agent.agent.deps import AgentDeps
@@ -979,7 +983,7 @@ async def test_a_zip_of_statements_is_refused_rather_than_half_imported(ledger):
     await _account(ledger)
     ctx = RunContext(
         deps=AgentDeps(conversation_id="cnv_zip", statement_attachments=(attachment_id,)),
-        model=None,
+        model=TestModel(),
         usage=RunUsage(),
     )
 

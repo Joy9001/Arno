@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Any
+from typing import Any, override
 
 import pytest
 from pydantic_ai import RunContext
@@ -347,7 +347,7 @@ def _chunk_answer(messages: list[ModelMessage]) -> list[dict[str, Any]]:
     return json.loads(payload)
 
 
-def _output(parts: list[ToolCallPart]) -> ModelResponse:
+def _output(parts: list[TextPart | ToolCallPart]) -> ModelResponse:
     return ModelResponse(parts=parts)
 
 
@@ -434,6 +434,7 @@ async def test_a_chunk_run_streams_and_carries_the_stall_timeout():
 
     assert answers == [{"key": "alpha", "category": CATEGORY, "guess_reason": "name"}]
     settings = categorizer_mod._chunk_agent(model).model_settings
+    assert isinstance(settings, dict)
     assert settings["timeout"] == STALL_SECONDS
     assert "request_timeout" not in settings
     assert settings["thinking"] is False
@@ -580,10 +581,12 @@ class SlowBatchModel(FunctionModel):
         super().__init__(function)
         self.pending = True
 
+    @override
     async def batch_create(self, requests):  # noqa: ANN001 - the tested signature
         batch = await super().batch_create(requests)
         return replace(batch, status="in_progress")
 
+    @override
     async def batch_status(self, batch):  # noqa: ANN001 - the tested signature
         stored = await super().batch_status(batch)
         return replace(stored, status="in_progress") if self.pending else stored

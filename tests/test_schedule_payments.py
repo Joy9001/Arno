@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -73,7 +74,9 @@ async def test_partial_then_full_payment_does_not_move_money_twice(ledger):
 async def test_matching_is_idempotent_and_cannot_allocate_money_twice(ledger):
     bank, schedule, due = await _plan(ledger)
     movement, _ = await _pay(ledger, bank, schedule, due, 60_000)
-    args = dict(schedule_id=schedule["id"], due_date=due, movement_id=movement["id"])
+    args: dict[str, Any] = dict(
+        schedule_id=schedule["id"], due_date=due, movement_id=movement["id"]
+    )
     assert (await link_payment(ledger, **args))["status"] == "already_linked"
     with pytest.raises(ConflictLedgerError):
         await link_payment(ledger, **args, amount_paise=10_000)

@@ -120,9 +120,9 @@ async def test_pgledger_ids_are_prefixed_ulids(db):
 
 async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
     async with connect(_agent_ro_dsn()) as conn:
-        assert (await conn.fetchrow("SELECT current_user AS who"))["who"] == "agent_ro"
-        assert (await conn.fetchrow("SELECT count(*) AS n FROM accounts"))["n"] == 0
-        assert (await conn.fetchrow("SELECT count(*) AS n FROM v_balances"))["n"] == 0
+        assert (await conn.fetchrow_required("SELECT current_user AS who"))["who"] == "agent_ro"
+        assert (await conn.fetchrow_required("SELECT count(*) AS n FROM accounts"))["n"] == 0
+        assert (await conn.fetchrow_required("SELECT count(*) AS n FROM v_balances"))["n"] == 0
         assert await conn.fetchval("SELECT count(*) FROM schedule_occurrences") == 0
         assert await conn.fetchval("SELECT count(*) FROM schedule_payments") == 0
 
@@ -136,7 +136,7 @@ async def test_agent_ro_cannot_write_or_create_temp_tables():
             await conn.execute("INSERT INTO categories (name) VALUES ('x')")
 
         temp_allowed = (
-            await conn.fetchrow(
+            await conn.fetchrow_required(
                 "SELECT has_database_privilege(current_user, current_database(), 'TEMP') AS allowed"
             )
         )["allowed"]
@@ -147,7 +147,7 @@ async def test_agent_ro_cannot_write_or_create_temp_tables():
 
 async def test_agent_ro_has_read_only_and_two_second_defaults():
     async with connect(_agent_ro_dsn()) as conn:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             "SELECT current_setting('default_transaction_read_only') AS ro, "
             "current_setting('statement_timeout') AS timeout"
         )

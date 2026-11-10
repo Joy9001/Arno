@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pydantic_ai.exceptions import ModelAPIError
-from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.compaction import (
@@ -14,8 +14,8 @@ from pydantic_ai_harness.compaction import (
 )
 
 
-def _history(turns: int = 12):
-    messages = []
+def _history(turns: int = 12) -> list[ModelMessage]:
+    messages: list[ModelMessage] = []
     for index in range(turns):
         messages.append(ModelRequest(parts=[UserPromptPart(f"question {index} " + "x" * 200)]))
         messages.append(ModelResponse(parts=[TextPart(f"answer {index} " + "y" * 200)]))

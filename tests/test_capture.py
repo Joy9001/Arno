@@ -10,6 +10,7 @@ import json
 import threading
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import override
 
 import pytest
 from pydantic import ValidationError
@@ -40,8 +41,9 @@ class _SttHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def log_message(self, *_args) -> None:
-        return
+    @override
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        del format, args
 
 
 @pytest.fixture
@@ -368,11 +370,11 @@ def test_photo_extraction_is_five_capped_fields_and_has_no_line_items():
     with pytest.raises(ValidationError):
         PaymentPhoto(merchant="x" * 201)
     with pytest.raises(ValidationError):
-        PaymentPhoto(amount_paise=0)
+        PaymentPhoto(amount_paise=0)  # pyrefly: ignore[bad-argument-type] - asserts the gt=0 refusal
     with pytest.raises(ValidationError):
         PaymentPhoto(upi_ref="4145;1234")
     with pytest.raises(ValidationError):
-        PaymentPhoto(method="cheque")
+        PaymentPhoto(method="cheque")  # pyrefly: ignore[bad-argument-type] - asserts the enum refusal
 
 
 def test_capture_endpoints_and_attachments_require_a_session(client):

@@ -81,12 +81,17 @@ async def test_the_stream_endpoint_is_204_when_nothing_runs(authed_client):
 
 
 def test_a_stored_approval_merges_into_a_closed_card():
-    from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelRequest, ToolReturnPart
+    from pydantic_ai.messages import (
+        ModelMessage,
+        ModelMessagesTypeAdapter,
+        ModelRequest,
+        ToolReturnPart,
+    )
     from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
     from fin_agent.api.chat import _merge_saved_state
 
-    history = [
+    history: list[ModelMessage] = [
         ModelRequest(
             parts=[
                 ToolReturnPart(

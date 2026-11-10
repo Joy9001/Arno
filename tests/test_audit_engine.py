@@ -14,8 +14,10 @@ from fin_agent.engine.projection import (
     DEFAULT_SEED,
     CardAccount,
     CashEvent,
+    CurvePoint,
     GoalPlan,
     LiquidAccount,
+    Projection,
     ProjectionInput,
     card_due_date,
     project,
@@ -65,7 +67,7 @@ def _inputs(
     )
 
 
-def _curve(result: dict) -> dict[str, dict]:
+def _curve(result: Projection) -> dict[str, CurvePoint]:
     return {point["date"]: point for point in result["curve"]}
 
 

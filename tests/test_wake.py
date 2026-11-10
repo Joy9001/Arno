@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import time
 from types import SimpleNamespace
+from typing import Any, cast
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_harness.subagents import (
@@ -20,7 +21,7 @@ from pydantic_ai_harness.subagents import (
 from fin_agent.agent import history as history_mod
 from fin_agent.agent.builder import _instructions
 from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.turns import TurnManager
+from fin_agent.agent.turns import ChatTurn, TurnManager
 from fin_agent.agent.wake import (
     RETRY_MARK,
     KeepRetryMark,
@@ -34,9 +35,12 @@ from fin_agent.api.wake import wake
 THREAD = "conv_wake"
 TASK = "9" * 32
 
+# The event hooks below ignore the run context entirely.
+_CTX = cast(RunContext[Any], None)
+
 
 def _report(task_id: str = TASK, **fields) -> DelegationTask:
-    values = {
+    values: dict[str, Any] = {
         "agent_name": "parser",
         "prompt": "Import the statement files from this turn.",
         "conversation_id": THREAD,
@@ -57,18 +61,18 @@ def _assigned(prompt: str = "Import the statement again.") -> TaskAssignedEvent:
 async def test_the_policy_allows_one_marked_retry_and_no_resume():
     policy = WakePolicy(may_retry=True)
     first, second = _assigned(), _assigned()
-    await policy.one_retry(None, first)
-    await policy.one_retry(None, second)
+    await policy.one_retry(_CTX, first)
+    await policy.one_retry(_CTX, second)
     assert not first.vetoed and first.prompt.startswith(RETRY_MARK)
     assert second.vetoed
 
     resume = TaskFollowUpEvent(task_id=TASK, agent_name="parser", prompt="Continue.")
-    await policy.no_resume(None, resume)
+    await policy.no_resume(_CTX, resume)
     assert resume.vetoed
 
     no_retry = WakePolicy(may_retry=False)
     event = _assigned()
-    await no_retry.one_retry(None, event)
+    await no_retry.one_retry(_CTX, event)
     assert event.vetoed
 
 
@@ -79,8 +83,8 @@ async def test_a_continued_retry_keeps_its_mark():
     keep = KeepRetryMark(owner)
     retried = TaskFollowUpEvent(task_id=TASK, agent_name="parser", prompt="Continue reading.")
     first = TaskFollowUpEvent(task_id="8" * 32, agent_name="parser", prompt="Continue reading.")
-    await keep.keep(None, retried)
-    await keep.keep(None, first)
+    await keep.keep(_CTX, retried)
+    await keep.keep(_CTX, first)
     assert retried.prompt == RETRY_MARK + "Continue reading."
     assert first.prompt == "Continue reading."
 
@@ -110,7 +114,9 @@ async def test_a_waiting_report_starts_a_turn_that_reads_it_first(ledger):
         return ModelResponse(parts=[TextPart("Your statement import failed; nothing changed.")])
 
     async def stream(messages, info):
-        yield reply(messages, info).parts[0].content
+        part = reply(messages, info).parts[0]
+        assert isinstance(part, TextPart)
+        yield part.content
 
     agent = Agent(FunctionModel(reply, stream_function=stream), deps_type=AgentDeps)
     owner = DelegationTasks()
@@ -133,7 +139,9 @@ async def test_a_waiting_report_starts_a_turn_that_reads_it_first(ledger):
         assert turn.deps.flagged
         assert _follow_up(owner.records[TASK], turns) == "replying"
         await turn.done.wait()
-        await turn.task
+        task = turn.task
+        assert task is not None
+        await task
         await asyncio.sleep(0)
         # A finished turn checks once more for a report that arrived while it ran.
         assert rewoken == [THREAD]
@@ -163,7 +171,13 @@ async def test_a_thread_with_a_running_turn_is_not_woken(ledger):
     owner.records[TASK] = _report()
     turns = TurnManager(SimpleNamespace(), tasks=owner)
     # The user's own turn is running: it reads the report, or wakes the thread when it ends.
-    turns.turns[THREAD] = SimpleNamespace(done=SimpleNamespace(is_set=lambda: False), wake=None)
+    turns.turns[THREAD] = ChatTurn(
+        thread_id=THREAD,
+        message_id="msg_running",
+        run_id="run_running",
+        history=[],
+        deps=AgentDeps(conversation_id=THREAD),
+    )
     app = SimpleNamespace(state=SimpleNamespace(tasks=owner, turns=turns, agent=None))
     assert not await wake(app, THREAD)
     assert _follow_up(owner.records[TASK], turns) == "waiting"

@@ -47,6 +47,7 @@ def test_identifiers_keep_only_last4_upi_ids_and_keyed_hashes():
         "UPI/DR/123456789012/ramesh@okaxis/AC 50100123456789/other 912345678901",
         own_last4={"6789"},
     )
+    assert safe is not None
     assert "ramesh@okaxis" in safe
     assert "XXXX6789" in safe
     assert "912345678901" not in safe

@@ -202,7 +202,10 @@ def test_the_model_sees_a_named_pin_redacted_like_storage_does():
 
     agent = build_agent()
     with agent.override(model=FunctionModel(script)):
-        result = agent.run_sync("mera pin 4321 hai, otp is 482913")
+        result = agent.run_sync(
+            "mera pin 4321 hai, otp is 482913",
+            deps=AgentDeps(conversation_id="cnv_pin"),
+        )
     stored = str(result.all_messages())
     assert not any("4321" in text or "482913" in text for text in seen)
     assert "4321" not in stored and "482913" not in stored

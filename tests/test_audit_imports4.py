@@ -8,7 +8,10 @@ import asyncio
 import hashlib
 import json
 from types import SimpleNamespace
+from typing import cast
 
+from fastapi import Request
+from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai_harness.subagents import DelegationTasks, SubAgents
@@ -18,6 +21,7 @@ from fin_agent.agent.parser import ParseReport, build_parser_agent, import_state
 from fin_agent.agent.turns import UNREAD_STATEMENT_NOTE_PREFIX
 from fin_agent.api.tasks import AnswerIn, task_answer
 from fin_agent.importers.pipeline import _resolve_parsed_account, create_import, import_payload
+from fin_agent.importers.readers import Doc
 from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id, undo_group
 from fin_agent.ledger.common import today
@@ -245,8 +249,9 @@ async def _attachment(conn, payload: bytes = sbi_csv()) -> str:
     return attachment_id
 
 
-def _request(owner: DelegationTasks) -> SimpleNamespace:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tasks=owner)))
+def _request(owner: DelegationTasks) -> Request:
+    # A Request double: the handler reads only `app.state.tasks`.
+    return cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(tasks=owner))))
 
 
 async def test_answering_with_another_account_files_the_import_against_it(ledger):
@@ -312,8 +317,9 @@ async def test_a_parsed_name_cannot_overrule_the_chosen_account(ledger):
         ledger,
         parsed_account={"name": "SBI savings", "institution": "SBI"},
         current=hdfc,
-        doc=None,
+        doc=cast(Doc, None),  # never read: `current` short-circuits the call
     )
+    assert resolved is not None
     assert resolved["id"] == hdfc["id"]
 
 
@@ -342,7 +348,7 @@ async def test_import_state_reports_status_counts_and_earlier_imports(ledger):
         await new_id(ledger, "stl"),
     )
 
-    state = await import_state(None, current["id"])
+    state = await import_state(cast(RunContext[AgentDeps], None), current["id"])  # deletes ctx
 
     assert state["status"] == "parsing"
     assert state["lines"] == 2

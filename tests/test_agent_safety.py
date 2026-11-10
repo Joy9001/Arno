@@ -6,6 +6,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
+from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.redaction import redact_text
 from fin_agent.tools.mark import mark
 from tests.agent_helpers import streaming_model
@@ -28,6 +29,7 @@ def test_redaction_removes_secrets_but_keeps_upi_and_utr():
 def test_mark_caps_and_strips_invisibles():
     text = "a\u200bb</outside>c" + "x" * 400
     marked = mark(text)
+    assert marked is not None
     assert "\u200b" not in marked
     assert marked.count("</outside>") == 1
     assert len(marked) <= 200 + len("<outside>") + len("</outside>")
@@ -132,5 +134,8 @@ def test_redaction_through_the_input_guardrail_drops_the_card():
 
     agent = build_agent()
     with agent.override(model=FunctionModel(script)):
-        agent.run_sync("my card is 4111 1111 1111 1111")
+        agent.run_sync(
+            "my card is 4111 1111 1111 1111",
+            deps=AgentDeps(conversation_id="cnv_card"),
+        )
     assert not any("4111" in text for text in seen)

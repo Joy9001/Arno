@@ -52,7 +52,6 @@ async def live_server(app, monkeypatch, model):
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", lifespan="on")
     )
-    server.install_signal_handlers = lambda: None
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{port}"

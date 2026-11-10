@@ -316,10 +316,9 @@ async def test_briefing_makes_one_model_call_and_falls_back_with_the_same_number
     assert again is None
     assert calls["n"] == 1
 
-    async def timeout(messages, info):
+    def timeout(messages, info) -> ModelResponse:
         del messages, info
         raise TimeoutError("model timed out")
-        yield ""  # pragma: no cover
 
     fallback = await send_weekly_briefing(
         db,

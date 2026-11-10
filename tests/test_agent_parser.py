@@ -7,9 +7,11 @@ import json
 import os
 from datetime import date
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 
 import asyncpg
+from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -35,6 +37,11 @@ from fin_agent.ledger.accounts import create_account
 from fin_agent.ledger.audit import new_id
 from tests.agent_helpers import streaming_model
 from tests.import_fixtures import SBI_PARSER, UNION_PARSER, sbi_csv, union_tsv
+
+
+def _ctx(deps: AgentDeps) -> RunContext[AgentDeps]:
+    """A RunContext double: these calls read only `ctx.deps`."""
+    return cast(RunContext[AgentDeps], SimpleNamespace(deps=deps))
 
 
 async def _att(conn, payload: bytes, name: str = "statement.csv") -> str:
@@ -548,12 +555,10 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
 
 
 async def test_open_imports_uses_the_turn_attachments_with_no_argument(ledger):
-    from types import SimpleNamespace
-
     attachment_id = await _att(ledger, sbi_csv())
     deps = AgentDeps(conversation_id="conv_open", statement_attachments=(attachment_id,))
 
-    opened = await open_imports(SimpleNamespace(deps=deps))
+    opened = await open_imports(_ctx(deps))
 
     assert len(opened) == 1
     import_id = opened[0]["import_id"]
@@ -561,7 +566,7 @@ async def test_open_imports_uses_the_turn_attachments_with_no_argument(ledger):
     assert opened[0]["locked"] is False
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == "parsing"
 
-    empty = await open_imports(SimpleNamespace(deps=AgentDeps(conversation_id="conv_open")))
+    empty = await open_imports(_ctx(AgentDeps(conversation_id="conv_open")))
     assert [item["import_id"] for item in empty] == [None]
     assert "no statement attachments" in empty[0]["reason"]
 
@@ -894,8 +899,6 @@ async def test_a_parser_question_flags_the_conversation(ledger):
 
 
 async def test_a_wrong_password_asks_again_and_is_not_handed_back(ledger, monkeypatch):
-    from types import SimpleNamespace
-
     import fin_agent.agent.parser as parser_module
 
     secret = "right-secret"
@@ -927,7 +930,7 @@ async def test_a_wrong_password_asks_again_and_is_not_handed_back(ledger, monkey
     typist = asyncio.create_task(type_passwords())
     try:
         result = await parser_module.wait_for_password(
-            SimpleNamespace(deps=AgentDeps(conversation_id="conv_pw")), import_id
+            _ctx(AgentDeps(conversation_id="conv_pw")), import_id
         )
         await typist
     finally:

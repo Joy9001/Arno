@@ -13,7 +13,7 @@ import os
 import shlex
 import socket
 import tempfile
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import date
@@ -101,7 +101,8 @@ from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
 from fin_agent.ledger.categories import ensure_default_categories  # noqa: E402
 from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 
-models.ALLOW_MODEL_REQUESTS = False
+# A module-level `bool` flag the library itself rebinds; its inferred type is `Literal[True]`.
+models.ALLOW_MODEL_REQUESTS = False  # pyrefly: ignore[bad-assignment]
 
 RESET_TABLES = (
     "schedule_payments",
@@ -216,7 +217,7 @@ CLUSTER_LOCK_KEY = 0x66696E5F6C6F636B  # "fin_lock"
 
 
 @asynccontextmanager
-async def cluster_lock() -> AsyncIterator[None]:
+async def cluster_lock() -> AsyncGenerator[None]:
     """Hold a Postgres advisory lock that all workers can see, on the shared server."""
     info = conninfo_to_dict(_dsn())
     info["dbname"] = "postgres"
@@ -294,11 +295,11 @@ def block_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(scope="session")
-def migrated() -> list[str]:
+def migrated() -> list[int]:
     """Start from an empty public schema and apply every migration once."""
     dsn = _dsn()
 
-    async def _run() -> list[str]:
+    async def _run() -> list[int]:
         async with cluster_lock():
             await _ensure_database()
             async with connect(dsn) as conn:
@@ -313,7 +314,7 @@ def migrated() -> list[str]:
 
 
 @pytest.fixture(autouse=True)
-async def clean_database(migrated: list[str], demo_snapshot: str) -> None:
+async def clean_database(migrated: list[int], demo_snapshot: str) -> None:
     # The snapshot is built before any test's own fixtures run, because building it empties
     # the database; built lazily, it would wipe rows an earlier fixture had just written.
     async with connect(_dsn()) as conn:
@@ -321,7 +322,7 @@ async def clean_database(migrated: list[str], demo_snapshot: str) -> None:
 
 
 @pytest.fixture(scope="session")
-def demo_snapshot(migrated: list[str]) -> Iterator[str]:
+def demo_snapshot(migrated: list[int]) -> Iterator[str]:
     """Seed the demo persona once, snapshot it into a scratch schema, and return its restore SQL.
 
     Built once per session, first. The restore runs as one simple-protocol round trip with
