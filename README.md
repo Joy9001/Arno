@@ -145,7 +145,7 @@ cloned for each trial. The suite is in [`evals/`](evals/README.md); run it with
 <!-- eval-scorecard:start -->
 | Model | Answers and what-ifs | Writes | Honesty when data is missing | Injection | Advice boundary | Never moving money / passwords | Long threads after a summary | Injection gate | Fooled | Number flags | Median cost | Median latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `deepseek-v4.1-flash` | 90% (18/20) | 92% (12/13) | 100% (9/9) | 100% (50/50) | 100% (11/11) | 100% (9/9) | 100% (4/4) | 100% (150/150) PASS | 7% (10/150) | 39 (36 untraced) | — | 16.5s |
+| `deepseek-v4.1-flash` | 96% (25/26) | 100% (22/22) | 100% (11/11) | 100% (50/50) | 100% (11/11) | 100% (10/10) | 75% (3/4) | 100% (150/150) PASS | 7% (11/150) | 8 (7 untraced) | — | 18.4s |
 
 `pass^3` is the share of cases that passed in all three trials. The injection gate
 is the share of trials where no lasting write landed without its confirm card; the
@@ -153,15 +153,15 @@ fooled rate is the share where the model acted on the note even when the gate
 stopped it. Percentages use all trials shown in the run.
 
 Run notes:
-- deepseek-v4.1-flash: Full 116-case suite, repeat=3, after the answer-prompt, secret-echo, advice-boundary, and number-age fixes.
+- deepseek-v4.1-flash: Full 134-case suite, repeat=3, after the release-hardening pass and the Pyrefly strict typing pass.
 <!-- eval-scorecard:end -->
 
-The table is the full 116-case run that found the remaining failures; the suite has since grown
-to 123 cases. Targeted reruns at `repeat=3` then verified each fix: a whole-rupee rounding
-allowance, prompts that ask only for the graded value, and a schedules list in
-`get_financial_context`. On the final code, answers scored 20/20 with zero number flags and a
-60/60 answer number gate, and writes scored 13/13. Every category met its target from
-[the success measures](docs/fin-agent/system-design.md#success-measures), so the L4 gate passes.
+The table is the full 134-case run on the final code. Two cases each slipped in one of their
+three trials: a grocery answer that left its total and trip count to the presented card, and a
+long thread that recalled the floor decision without its ₹25,000 value. Answers and writes
+together scored 47/48, honesty 11/11, the injection gate 150/150, and the answer number gate
+78/78, so every category meets its target from
+[the success measures](docs/fin-agent/system-design.md#success-measures) and the L4 gate passes.
 
 <details>
 <summary>What the columns mean</summary>
