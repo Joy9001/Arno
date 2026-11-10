@@ -322,6 +322,8 @@ async def expand_schedule(
         events.append(
             {
                 "date": day.isoformat(),
+                # The weekday is computed here so the agent quotes it instead of inferring it.
+                "weekday": _calendar.day_name[day.weekday()],
                 "schedule_id": row["id"],
                 "occurrence_id": saved["id"] if saved else None,
                 "name": saved["name"] if saved else row["name"],
@@ -434,6 +436,7 @@ async def upcoming(
             events.append(
                 {
                     "date": due.isoformat(),
+                    "weekday": _calendar.day_name[due.weekday()],
                     "schedule_id": None,
                     "name": f"{card['name']} bill due",
                     "kind": "card_due",

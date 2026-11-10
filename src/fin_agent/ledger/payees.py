@@ -16,6 +16,35 @@ from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 
 PAYEE_KINDS = ("person", "merchant", "organization")
 
+# A name that says who was paid says nothing when it is one of these. The agent invents them
+# ("Unknown shop") when the user names no shop, and every such row piles unnamed spending into one
+# fictional merchant. Whole-name matches only, so "Blue Tokai", "The Store" and "Corner Shop" stay
+# real payees.
+PLACEHOLDER_PAYEES = frozenset(
+    {
+        "unknown",
+        "unknown shop",
+        "unknown merchant",
+        "unknown store",
+        "unknown payee",
+        "shop",
+        "store",
+        "merchant",
+        "vendor",
+        "misc",
+        "miscellaneous",
+        "n/a",
+        "na",
+        "someone",
+        "somebody",
+    }
+)
+
+
+def is_placeholder_name(name: str) -> bool:
+    """Whether a payee name names nobody, so no payee should be created from it."""
+    return " ".join(name.lower().split()).strip(" .,:;-") in PLACEHOLDER_PAYEES
+
 
 async def get_payee(conn: Connection, payee_id: str) -> dict[str, Any]:
     row = await conn.fetchrow("SELECT * FROM payees WHERE id = $1", payee_id)

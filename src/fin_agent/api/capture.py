@@ -38,6 +38,7 @@ from fin_agent.engine.money import money
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.audit import new_id
 from fin_agent.ledger.common import today as ledger_today
+from fin_agent.ledger.payees import is_placeholder_name
 from fin_agent.tools import write as write_tools
 from fin_agent.tools.mark import mark
 
@@ -300,7 +301,7 @@ async def log_photo(
 
     merchant = (extracted.merchant or "").strip()
     amount_paise = extracted.amount_paise
-    if not merchant or not amount_paise:
+    if not merchant or is_placeholder_name(merchant) or not amount_paise:
         return await _failure(
             conn,
             thread=thread,

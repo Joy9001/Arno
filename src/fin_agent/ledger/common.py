@@ -94,9 +94,9 @@ def has_known_balance(account: dict[str, Any]) -> bool:
     an explicit zero. A ledger movement changes a known balance but never establishes one, so an
     account whose first entry is spend or income remains unknown.
     """
-    if account["kind"] == "goal":
-        # A fenced goal bucket has no outside statement: it opens at zero and only the ledger
-        # moves it, so its ledger balance is the whole truth.
+    if account["kind"] in {"goal", "person"}:
+        # A fenced goal bucket and a person's account have no outside statement: both open at zero
+        # and only the ledger moves them, so their ledger balance is the whole truth.
         return True
     return (
         account["statement_balance_paise"] is not None

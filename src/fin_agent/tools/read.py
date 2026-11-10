@@ -152,7 +152,8 @@ async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
 
 async def get_financial_context(conn: Connection) -> dict[str, Any]:
     """One comprehensive snapshot: settings, balances and their ages, the next 30 days, schedules
-    with their next dates, goals, owed, preferences, scheduled questions, and setup gaps."""
+    with their next dates, goals, owed, preferences, scheduled questions, open imports, and setup
+    gaps."""
     day = ledger_today()
     settings = await settings_mod.read_settings(conn)
     account_rows = await accounts_mod.list_accounts(conn)
@@ -175,7 +176,9 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         age = row["balance_age_days"] if known else None
         if age is not None and age > 30:
             warnings.append(f"{row['name']} balance is {age} days old")
-        if coverage_row["gaps"]:
+        # Only an account a bank or card issuer prints statements for can lack one; a person, a
+        # goal, cash, or a loan is tracked from the ledger alone.
+        if coverage_row["gaps"] and row["kind"] in {"bank", "card", "wallet"}:
             warnings.append(
                 f"{row['name']} has no statement covering {len(coverage_row['gaps'])} month(s)"
             )
@@ -241,6 +244,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         upcoming.append(
             {
                 "date": event["date"],
+                "weekday": event["weekday"],
                 "name": name,
                 "kind": event["kind"],
                 "subtype": event["subtype"],
@@ -287,8 +291,14 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
             name = mark(name) or name
             outside = True
         # A schedule's future runs are the ledger's own expansion, not the 30-day event list:
-        # `schedule_occurrences` only holds runs a payment was matched to.
+        # `schedule_occurrences` only holds runs a payment was matched to. Each date carries its
+        # weekday, computed in code, so the agent never works one out itself.
         expanded = await schedules_mod.expand_schedule(conn, row, day, day + timedelta(days=400))
+        run_dates = [
+            {"date": event["date"], "weekday": event["weekday"]}
+            for event in expanded
+            if event["remaining_paise"] != 0
+        ][:4]
         schedules.append(
             {
                 "id": payload["id"],
@@ -299,9 +309,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
                 "rule": payload["rule"],
                 "next_date": payload["next_date"],
                 # A run that is already fully paid is not still coming.
-                "next_dates": [
-                    event["date"] for event in expanded if event["remaining_paise"] != 0
-                ][:4],
+                "next_dates": run_dates,
                 "confirmed": payload["confirmed"],
                 "active": payload["active"],
             }
@@ -363,6 +371,40 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         for row in await list_scheduled_questions(conn)
     ]
 
+    # An import is a fact the agent must read, not recall: the card, its state, the account and
+    # period it covers, and how many lines it holds. Nothing here is a parser's own words, so this
+    # block can be quoted as the host's account of the import.
+    open_imports = [
+        {
+            "id": row["id"],
+            "status": row["status"],
+            "account": row["account_name"],
+            "period": (
+                {
+                    "start": row["period_start"].isoformat() if row["period_start"] else None,
+                    "end": row["period_end"].isoformat() if row["period_end"] else None,
+                }
+                if row["period_start"] or row["period_end"]
+                else None
+            ),
+            "lines": int(row["line_count"]),
+            "counts": row["counts"] or {},
+            "check": (row["check_result"] or {}).get("status"),
+        }
+        for row in await conn.fetch(
+            """
+            SELECT i.id, i.status, i.period_start, i.period_end, i.counts, i.check_result,
+                   acc.name AS account_name,
+                   (SELECT count(*) FROM statement_lines sl WHERE sl.import_id = i.id)
+                       AS line_count
+            FROM imports i
+            LEFT JOIN accounts acc ON acc.id = i.account_id
+            WHERE i.status NOT IN ('committed', 'rejected') AND i.undone_at IS NULL
+            ORDER BY i.created_at DESC, i.id DESC
+            """
+        )
+    ]
+
     income_count = (
         await conn.fetchrow(
             "SELECT count(*) AS n FROM schedules WHERE active AND kind LIKE 'income%'"
@@ -407,6 +449,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         "owed": owed,
         "preferences": preferences,
         "scheduled_questions": scheduled_questions,
+        "imports": open_imports,
         "setup_gaps": setup_gaps,
         "warnings": warnings,
         "source_ids": {

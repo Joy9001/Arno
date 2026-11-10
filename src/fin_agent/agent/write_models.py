@@ -143,7 +143,11 @@ class AccountSetup(WriteModel):
     institution: str | None = None
     last4: str | None = Field(default=None, description="Optional; last four digits only.")
     opening_balance_rupees: Decimal | None = Field(
-        default=None, description="Only a balance the user states, on add; omit it if unknown."
+        default=None,
+        description=(
+            "Only a balance the user states, on add; omit it if unknown. For a card, what they "
+            "owe (negative when the card is in credit); for a loan, the amount still owed."
+        ),
     )
     as_of: Date | None = None
     liquid: bool | None = None
@@ -165,7 +169,10 @@ class AccountSetup(WriteModel):
 class BalanceSetup(WriteModel):
     account: str
     balance_rupees: Decimal = Field(
-        description="The stated balance in rupees. For a card or loan, the amount owed."
+        description=(
+            "The stated balance in rupees. For a card, what they owe: positive when they owe, "
+            "negative when the card is in credit. For a loan, the amount still owed (positive)."
+        )
     )
     as_of: Date | None = None
 

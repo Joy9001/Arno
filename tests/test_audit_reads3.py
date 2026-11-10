@@ -161,7 +161,7 @@ async def test_a_schedule_in_the_context_lists_dates_past_thirty_days(ledger):
     )
     context = await read_tools.get_financial_context(ledger)
     row = next(item for item in context["schedules"] if item["id"] == schedule["id"])
-    dates = row["next_dates"]
+    dates = [entry["date"] for entry in row["next_dates"]]
     assert len(dates) == 4
     assert all(day.endswith("-05") for day in dates)
     assert dates[0] > today.isoformat()

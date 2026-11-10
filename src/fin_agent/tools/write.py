@@ -67,6 +67,25 @@ def _balance_rupees(value: Any, field: str = "balance_rupees") -> int:
     return _decimal_paise(value, field)
 
 
+def _stated_balance_paise(value: Any, kind: str, field: str = "balance_rupees") -> int:
+    """A stated balance as the ledger stores it.
+
+    A card's or loan's ledger balance is a liability, so the number the user says is what they owe
+    and the ledger holds it negative. A negative number from the user therefore means the account
+    is in credit (an overpayment), never "negative debt". A loan is never in credit, so that sign
+    is refused rather than silently reversed.
+    """
+    paise = _balance_rupees(value, field)
+    if kind not in {"card", "loan"}:
+        return paise
+    if paise < 0 and kind == "loan":
+        raise ToolInputError(
+            "A loan's balance is what you still owe, so it cannot be a credit. State the amount "
+            "owed as a positive number, or 0 if it is paid off."
+        )
+    return -paise
+
+
 def _percent_to_bps(value: Any) -> int:
     """An annual percent as integer basis points, rounded half up like every other amount."""
     return int((Decimal(str(value)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
@@ -179,6 +198,11 @@ async def _is_category_name(conn: Connection, name: str) -> bool:
         "SELECT 1 FROM categories WHERE active AND lower(name) = lower($1) LIMIT 1", name
     )
     return row is not None
+
+
+async def _is_placeholder_payee(conn: Connection, name: str) -> bool:
+    """A name that names nobody: a category name, or a generic word like "Unknown shop"."""
+    return payees_mod.is_placeholder_name(name) or await _is_category_name(conn, name)
 
 
 async def _usual_account(conn: Connection, payee_id: str) -> str | None:
@@ -371,8 +395,10 @@ async def record_movement(
         return flagged and not any(name.lower() in text.lower() for text in user_texts)
 
     payee = None
-    merchant = kind != "settlement"
-    if payee_name and not (merchant and await _is_category_name(conn, str(payee_name))):
+    # A generic name names no merchant and no person: no payee is created from it, so unnamed
+    # spending never piles up under one invented shop. A settlement then names nobody, and the
+    # tool asks who, which is the honest answer.
+    if payee_name and not await _is_placeholder_payee(conn, str(payee_name)):
         payee = await resolve_payee(
             conn,
             str(payee_name),
@@ -527,6 +553,9 @@ async def record_movement(
                 name, amount, expected = str(person), 0, None
             if not name or not amount:
                 raise ToolInputError("a split names each person and their share")
+            # Money owed by "someone" can never be collected or settled: ask who it is.
+            if await _is_placeholder_payee(conn, str(name)):
+                raise ToolInputError(f"{name!r} isn't a person; ask who owes this share")
             other = await resolve_payee(
                 conn,
                 str(name),
@@ -754,7 +783,13 @@ async def correct_movement(
         elif key == "date":
             mapped["date"] = _date(value)
         elif key == "payee":
-            mapped["payee_id"] = (await resolve_payee(conn, str(value)))["id"]
+            name = str(value)
+            if await _is_placeholder_payee(conn, name):
+                raise ToolInputError(
+                    f"{name!r} is not a payee name; a generic word names nobody. Use the real "
+                    "merchant or person, or change something else."
+                )
+            mapped["payee_id"] = (await resolve_payee(conn, name))["id"]
         else:
             mapped[key] = value
     result = await movements_mod.correct_movement(
@@ -832,10 +867,12 @@ async def update_setup_item(
             name = _required(data, "name", "an account name")
             kind = data.get("kind") or "bank"
             opening = data.get("opening_balance_rupees")
-            opening_paise = _balance_rupees(opening) if opening is not None else None
             # A card or a loan is a liability: the balance the user states is what is owed.
-            if opening_paise is not None and kind in {"card", "loan"} and opening_paise > 0:
-                opening_paise = -opening_paise
+            opening_paise = (
+                _stated_balance_paise(opening, kind, "opening_balance_rupees")
+                if opening is not None
+                else None
+            )
             result = await accounts_mod.create_account(
                 conn,
                 kind=kind,
@@ -915,12 +952,11 @@ async def update_setup_item(
     if entity == "balance":
         account_id = await resolve_account_id(conn, data.get("account"))
         account = await accounts_mod.get_account(conn, account_id)
-        # A card or a loan is a liability: "the balance is 5,000" means 5,000 owed. The ledger
-        # stores that as -500000, the sign `card_outstanding_paise` and the UI already use.
-        paise = _balance_rupees(data.get("balance_rupees"))
+        # A card or a loan is a liability: "the balance is 5,000" means 5,000 owed, which the
+        # ledger stores as -500000; "minus 500" means 500 in credit, the sign
+        # `card_outstanding_paise` and the UI already use.
+        paise = _stated_balance_paise(data.get("balance_rupees"), account["kind"])
         owing = account["kind"] in {"card", "loan"}
-        if owing and paise > 0:
-            paise = -paise
         result = await accounts_mod.set_statement_balance(
             conn,
             account_id,
@@ -934,7 +970,7 @@ async def update_setup_item(
         if owing and paise < 0:
             summary = f"Set {result['account']['name']} balance to {money(-paise)['text']} due"
         elif owing and paise > 0:
-            summary = f"Set {result['account']['name']} balance to {shown} credit"
+            summary = f"Set {result['account']['name']} balance to {shown} in credit"
         return {
             "status": "saved",
             "undo_id": result["undo_id"],
