@@ -8,7 +8,9 @@ trace counts it. The check is deliberately permissive about labels: a real numbe
 an eval's job, not this check's.
 
 Dates, times, list markers, labels such as "Top 3" or "Form 16", and ages such as "3 mahine
-purana" are not quantities, so they are never checked. An untraced number that is the sum or
+purana" are not quantities, so they are never checked. A list of days that names its month once
+("8 and 18 September") is a date too, but only for the days that appear in a date the model was
+given: a day with no source is still a number. An untraced number that is the sum or
 difference of two traced numbers in the same reply is classified as derived: prose arithmetic,
 which the rules still forbid, kept apart from a number that has no source at all.
 """
@@ -56,6 +58,28 @@ MONTHS = (
     "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|"
     "june|july|august|september|october|november|december"
 )
+# A month's number, for matching a listed day against the dates the model was given.
+_MONTH_NO = {
+    name: number
+    for number, names in enumerate(
+        (
+            "jan january",
+            "feb february",
+            "mar march",
+            "apr april",
+            "may",
+            "jun june",
+            "jul july",
+            "aug august",
+            "sep sept september",
+            "oct october",
+            "nov november",
+            "dec december",
+        ),
+        start=1,
+    )
+    for name in names.split()
+}
 _YEAR = r"(?:19|20)\d{2}"
 # A day can't start mid-number ("1483.33\noct" is not the 33rd of October), and a date never
 # crosses a line break: printed script output puts a value and the next label on new lines.
@@ -101,6 +125,14 @@ SHORT_RANGE = re.compile(
     r"\b\d{4}-\d{2}-\d{2}\s*(?:se|to|tak|through|thru|[-–—])\s*\d{1,2}\b",
     re.I,
 )
+# A day list that names its month once ("8 and 18 September", "September 8 and 18") is a set of
+# dates: only the day beside the month reads as one on its own, so the list is taken whole. Each
+# day still has to appear in a date the model was given; one that doesn't stays a number.
+_DAY_ITEM = r"\d{1,2}(?:st|nd|rd|th)?(?!\d)"
+_LIST_SEP = r",|and|&|aur|to|through|thru|se|tak|[-–—]"
+_DAY_LIST = rf"(?<![₹\w.,])\b{_DAY_ITEM}(?:\s*(?:{_LIST_SEP})\s*{_DAY_ITEM})+"
+DAYS_BEFORE_MONTH = re.compile(rf"(?P<days>{_DAY_LIST})[ \t]+(?P<month>{MONTHS})\b", re.I)
+DAYS_AFTER_MONTH = re.compile(rf"\b(?P<month>{MONTHS})[ \t]+(?P<days>{_DAY_LIST})(?![.,]\d)", re.I)
 # An age written as a duration ("(1 din)", "3 mahine purana", "550 days old") is a date, not a
 # quantity. The unit must carry an age word, so "8 months, under 1 year" is still a count.
 AGE = re.compile(
@@ -127,12 +159,61 @@ def _unit(text: str, scale: float = 1.0) -> float:
     return scale * 10.0 ** (-decimals)
 
 
-def extract(text: str) -> list[tuple[str, float, float, str]]:
-    """Return `(kind, value, unit, shown)` for each number, leaving out dates, times, and lists."""
+def _one_date(shown: str) -> tuple[int, int] | None:
+    """The `(month, day)` a matched date names, or `None` for a month, a year, or "8/9".
+
+    A slash date is day-first to some writers and month-first to others, so it names no one day.
+    """
+    iso = re.match(r"\d{4}-(\d{2})-(\d{2})", shown)
+    if iso is not None:
+        return (int(iso.group(1)), int(iso.group(2)))
+    month = re.search(MONTHS, shown, re.I)
+    day = re.search(r"(?<![\d.])\b(\d{1,2})(?:st|nd|rd|th)?(?!\d)", shown)
+    if month is None or day is None:
+        return None
+    return (_MONTH_NO[month.group().lower()], int(day.group(1)))
+
+
+def _dates_in(text: str) -> set[tuple[int, int]]:
+    """Every `(month, day)` the text names, so a reply's day list can be matched against it."""
+    pairs: set[tuple[int, int]] = set()
+    for pattern in (DAYS_BEFORE_MONTH, DAYS_AFTER_MONTH):
+        for match in pattern.finditer(text):
+            month = _MONTH_NO[match.group("month").lower()]
+            pairs.update((month, int(day)) for day in re.findall(r"\d{1,2}", match.group("days")))
+    for match in DATE.finditer(text):
+        pair = _one_date(match.group())
+        if pair is not None:
+            pairs.add(pair)
+    return pairs
+
+
+def extract(
+    text: str, dates: set[tuple[int, int]] | None = None
+) -> list[tuple[str, float, float, str]]:
+    """Return `(kind, value, unit, shown)` for each number, leaving out dates, times, and lists.
+
+    `dates` holds the `(month, day)` pairs the model was given. A day in a list under one month
+    name is a date only when it appears there; without `dates`, the whole list is a date.
+    """
     # Models often use a narrow no-break space before a percent sign.
     text = text.replace("\u202f", " ").replace("\u00a0", " ").replace("\u2009", " ")
     blanked = DAY_RANGE.sub(lambda m: " " * len(m.group()), text)
     blanked = SHORT_RANGE.sub(lambda m: " " * len(m.group()), blanked)
+
+    def day_list(match: re.Match[str]) -> str:
+        month = _MONTH_NO[match.group("month").lower()]
+        # The whole list is taken as dates, so only a day with no source is put back: the month
+        # name cannot then pair up with it as a date of its own.
+        keep: list[str] = [" "] * len(match.group())
+        for day in re.finditer(r"\d{1,2}", match.group("days")):
+            if dates is not None and (month, int(day.group())) not in dates:
+                first = match.start("days") - match.start() + day.start()
+                keep[first : first + len(day.group())] = day.group()
+        return "".join(keep)
+
+    blanked = DAYS_BEFORE_MONTH.sub(day_list, blanked)
+    blanked = DAYS_AFTER_MONTH.sub(day_list, blanked)
     blanked = DATE.sub(lambda m: " " * len(m.group()), blanked)
     blanked = YEAR.sub(lambda m: " " * len(m.group()), blanked)
     blanked = TIME.sub(lambda m: " " * len(m.group()), blanked)
@@ -178,11 +259,18 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     return found
 
 
-def sources(returns: Any, user_texts: tuple[str, ...] = (), scripted: Any = ()) -> set[float]:
+def sources(
+    returns: Any,
+    user_texts: tuple[str, ...] = (),
+    scripted: Any = (),
+    *,
+    dates: set[tuple[int, int]] | None = None,
+) -> set[float]:
     """Every value the model was given: tool returns, tool arguments, and the user's messages.
 
     `scripted` holds `run_code` returns. Scripts compute in integer paise and the reply speaks
     rupees, so each number a script printed or returned also counts at a hundredth of itself.
+    When `dates` is given, every `(month, day)` the model was given is added to it.
     """
     values: set[float] = set()
 
@@ -203,6 +291,8 @@ def sources(returns: Any, user_texts: tuple[str, ...] = (), scripted: Any = ()) 
                 values.add(value)
                 if here:
                     values.add(value / 100)
+            if dates is not None:
+                dates.update(_dates_in(obj))
         elif isinstance(obj, dict):
             is_table = isinstance(obj.get("columns"), list) and isinstance(obj.get("rows"), list)
             if is_table:
@@ -254,8 +344,9 @@ def classify(
     Derived means the sum or difference of two traced numbers of the same kind in this reply,
     such as "₹40,000 (₹30,000 + ₹10,000)": correct arithmetic, done in prose instead of a script.
     """
-    known = sources(returns, user_texts, scripted)
-    numbers = [item for item in extract(reply) if item[0] in kinds]
+    dates: set[tuple[int, int]] = set()
+    known = sources(returns, user_texts, scripted, dates=dates)
+    numbers = [item for item in extract(reply, dates) if item[0] in kinds]
     # ponytail: sums and differences of two reply numbers only; products and ratios stay
     # untraced. With many small counts in one reply a coincidental match is possible, so the
     # label is for reporting and never clears a flag.
