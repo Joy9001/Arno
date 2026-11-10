@@ -602,3 +602,8 @@ All three simulated gates ran; none is claimed as a real second installation or 
 A backtest on the copy refused to publish: with no income schedule in the ledger, no month is a
 usable measurement. Milestone 29 waits on the owner, as does milestone 30, whose dataset is not on
 this machine.
+
+The eval runs that followed are not E2E sessions, so they are not logged here: two were discarded
+for fixture and grader faults, and the published 134-case run is the third. Their record is in
+[`release-hardening.md`](release-hardening.md#evals-graders-and-the-harness), with the findings and
+the grader fixes.

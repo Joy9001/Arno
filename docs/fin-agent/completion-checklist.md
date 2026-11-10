@@ -201,10 +201,13 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 - [ ] **Milestones 15 and 26:** run the scorecard on at least one local model through Ollama (for
       example, `qwen3:4b`). Today the table has one cloud model.
-- [ ] Rerun the cloud model on the full 120-case suite. The 4 L5 projection and affordability
-      cases have never run on a real model.
+- [x] Rerun the cloud model on the full suite. The suite is 134 cases now, and the published run is
+      402 trials on November 10, 2026 (`e445680`); it includes the projection and affordability
+      cases for the first time, every gate passed, and two categories each slipped once in three
+      trials (section E).
 - [ ] Fill the **median cost** column. It's `—` today, so the scorecard is missing price data.
-- [ ] Run `wr_chai_voice_hinglish` against the configured chat endpoint (`evals/cases.py:441`).
+- [x] Run `wr_chai_voice_hinglish` against the configured chat endpoint (`evals/cases.py:441`). It
+      is a write case and passed all three trials in the published run.
 - [ ] **Latency:** the measured median is 16.5 s against the targets of about 5 s for one lookup
       and about 15 s for a multistep what-if. Either meet the targets or restate them in plan.md
       with the measured numbers.
@@ -282,9 +285,10 @@ bridge, dashboard, or alert pipeline. The operator path is
 ## E. Release-hardening pass, November 10, 2026
 
 A four-wave audit over the money paths, the agent loop, imports, and the platform, then six
-real-model journeys and three regression rounds. The record, with findings, commit SHAs, decisions,
-and the method to re-run it, is [`release-hardening.md`](release-hardening.md). This section adds
-what the pass proved and what it could not; the groups above keep their original detail.
+real-model journeys and three regression rounds. Strict type checking and the first published
+scorecard followed. The record, with findings, commit SHAs, decisions, and the method to re-run it,
+is [`release-hardening.md`](release-hardening.md). This section adds what the pass proved and what
+it could not; the groups above keep their original detail.
 
 ### Closed here, for real
 
@@ -308,6 +312,15 @@ what the pass proved and what it could not; the groups above keep their original
 - [x] **Secret redaction and export hygiene.** A password, OTP, PIN, or card number typed in chat is
       redacted in English, Hinglish, and Devanagari before the model, storage, titles, or traces see
       it, and the JSON and CSV exports exclude credential and session tables.
+- [x] **Strict type checking.** `uv run pyrefly check` is at zero diagnostics with six suppressions,
+      each with its reason; the policy, the rules for each path, and the plan to tighten them are in
+      [`typing.md`](typing.md). A pre-commit hook and a CI step run it over the whole project
+      (`5788325`; the Type check step is green in CI).
+- [x] **The eval scorecard, published.** The 134-case suite ran 402 trials on November 10, 2026
+      (`e445680`): injection gate 150/150, answer number gate 78/78, answers 96% (25/26), writes
+      22/22, honesty 11/11, advice 11/11, never-moving-money 10/10, long threads 3/4. The two
+      one-trial misses are named in
+      [`release-hardening.md`](release-hardening.md#known-limitations-left-open).
 
 ### Simulated, and still unchecked
 
