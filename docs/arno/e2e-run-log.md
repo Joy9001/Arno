@@ -351,7 +351,7 @@ test suite was rerun, and no database was reset, seeded, or cleaned.
 |---|---|
 | Active work before reload | 0 conversations with `run_started_at`, 0 pending/running jobs, 0 imports in `parsing`/`needs_password`/`needs_input`; no deferral needed. |
 | Prior api container / image | `10fa093d11ac`, image `sha256:93dba99b1287ac604e829e22693956cae072411b019ede61f7220aab442a0183`, created 12:48:23 UTC. Recorded before rebuild; the tag now resolves to the new image and the old ID no longer exists locally, so recovery requires rebuilding from prior source rather than pulling that ID. |
-| Rebuild | `docker compose build api` with the existing Compose file; tag `ghcr.io/joy9001/arno:0.1.2`. |
+| Rebuild | `docker compose build api` with the existing Compose file; tag `ghcr.io/joy9001/fin-agent:0.1.2`. |
 | Recreate | `docker compose up -d --no-deps api`. `db`, `backup`, and `phoenix` stayed up in their existing containers; volumes untouched. |
 | New api container / image | `894089dd9ec7`, image `sha256:4085d25f7fa61dd34c48f13cf19b231d6a08328c5a58ed24f505e20a02cf0ef1`, started 13:24:40 UTC, restart count 0. |
 | Health | `GET /api/health` returned `{"status":"ok","database":"ok","schema_version":12}`; Compose health `healthy`. |
@@ -456,7 +456,7 @@ is claimed.
 
 | Item | Result |
 |---|---|
-| Deployment | `docker compose build api` then `docker compose up -d --no-deps api` with the existing project configuration (`compose.yaml;compose.gpu.yaml`) and no profile change. Only api was recreated (container `917350a65a3a`, image `ghcr.io/joy9001/arno:0.1.2`); `db`, `backup`, `phoenix`, and `speaches` kept their previous uptime and volumes. No Compose file was edited. |
+| Deployment | `docker compose build api` then `docker compose up -d --no-deps api` with the existing project configuration (`compose.yaml;compose.gpu.yaml`) and no profile change. Only api was recreated (container `917350a65a3a`, image `ghcr.io/joy9001/fin-agent:0.1.2`); `db`, `backup`, `phoenix`, and `speaches` kept their previous uptime and volumes. No Compose file was edited. |
 | Health | `GET /api/health` -> `{"status":"ok","database":"ok","schema_version":12}`; the container is healthy and the recent api log has no errors or tracebacks. |
 | Source identity | HEAD `db86223`; the working tree still holds the uncommitted F11/F12 changes. Container `/app` sources and the installed package under `.venv/.../site-packages` match the working tree by SHA-256 for `importers/pipeline.py`, `checks.py`, `commit.py`, `reconcile.py`, `monty.py`, and `api/imports.py`. |
 | Active work | Read-only check before reload: no pending/running job and no conversation with `run_started_at` or `active_run_id`. |

@@ -21,8 +21,8 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-d4ff3a?style=flat-square"></a>
-  <a href="https://github.com/Joy9001/Fin-Agent/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Joy9001/Fin-Agent/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Version 0.1.2" src="https://img.shields.io/badge/version-0.1.2-2b59ff?style=flat-square">
+  <a href="https://github.com/Joy9001/Arno/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Joy9001/Arno/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-2b59ff?style=flat-square">
   <img alt="Python 3.14" src="https://img.shields.io/badge/python-3.14-1ec8a5?style=flat-square">
   <img alt="PostgreSQL 18" src="https://img.shields.io/badge/postgres-18-1ec8a5?style=flat-square">
   <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-private%20network%20only-0e0f0c?style=flat-square">
@@ -232,7 +232,7 @@ You need Docker with Compose. For phone access, the host should be on your
 FileVault) is an install requirement: it is what protects the database at rest.
 
 ```bash
-git clone https://github.com/Joy9001/Fin-Agent.git && cd Fin-Agent
+git clone https://github.com/Joy9001/Arno.git && cd Arno
 cp .env.example .env
 # Generate every secret with `openssl rand -hex 32` (hex, not base64: the database passwords
 # land inside DATABASE_URL, where `/` or `+` breaks the URI).
@@ -442,7 +442,7 @@ Contributor and agent conventions are in [`AGENTS.md`](AGENTS.md). Decisions liv
 
 ## Project status
 
-Version 0.1.2. The code build is complete. Two human gates stand between it and "shipped" as
+Version 0.2.0. The code build is complete. Two human gates stand between it and "shipped" as
 [`plan.md`](docs/arno/plan.md#what-shipped-means) defines it: someone else installs it from
 the docs alone (milestone 40), and four weeks of daily use without falling back to a spreadsheet
 (milestone 41). What remains is tracked in the

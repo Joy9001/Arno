@@ -43,8 +43,8 @@ data leaves the box, and no application setting replaces disk encryption.
 ### 2.1 Get the files
 
 ```bash
-git clone https://github.com/Joy9001/Fin-Agent.git
-cd Fin-Agent
+git clone https://github.com/Joy9001/Arno.git
+cd Arno
 ```
 
 The release images are `ghcr.io/joy9001/arno:<version>` and
