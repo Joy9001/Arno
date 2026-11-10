@@ -347,9 +347,10 @@ it could not; the groups above keep their original detail.
 - [ ] **Milestone 24 and the remaining Slice cycles.** Several repayments are missing from the
       PDFs, so those cycles wait on corrected exports or manual rows. The backfill still has to be
       committed through the review screen, not local code.
-- [ ] **The live instance's repair.** After upgrading, run `uv run arno repair-openings
-      --dry-run`, then `uv run arno repair-openings --yes`. It is idempotent, and it is what
-      makes every committed statement's opening sit at its first day on the real ledger.
+- [x] **The live instance's repair.** Done on November 11, 2026, right after the live instance
+      moved to Arno 0.2.0: the dry run, then `arno repair-openings --yes`, then a second dry run
+      that reports nothing. SBI's ₹16,548.42 opening now sits at November 3, 2025, its current
+      balance is unchanged, and a live copy passed 6,729 invariant checks.
 
 ### Impossible here
 

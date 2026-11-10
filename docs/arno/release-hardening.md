@@ -454,7 +454,7 @@ except where a row says otherwise. The "why" column is the reason a future chang
 | The host writes one plain approval sentence per confirm card when the model writes none | A card with no words made the user read JSON to know what they were approving | [`design.md`](design.md#untrusted-text-and-write-tiers), `agent/turns.py` |
 | A backtest month without a usable starting balance is not a measurement, and `--publish` refuses it | An error that measures missing setup would read as a claim about the engine | `engine/backtest.py` (the report says so in words) |
 | Python type checking uses Pyrefly, pinned, under the `strict` preset, in the hook and in CI | It reads the Pydantic models without a plugin, its per-path strictness keeps the money core strictest, and one checker means one answer | `plan.md` §3, [`typing.md`](typing.md) |
-| The release is postponed until the project is renamed to Arno, with no version bump and no tag | The rename is in progress: the name is settled, and the version, the image tags, and the git tag wait for it | `plan.md` (rename note, November 10, 2026), [`self-hosting.md` §6.6](self-hosting.md#66-upgrading-from-fin-agent) |
+| The release waited for the rename to Arno, then shipped as 0.2.0 | 0.2.0 rather than 1.0.0, because `plan.md` defines shipped as four weeks of real use and a freeze week, which have not happened | `plan.md` (rename note, November 10, 2026), [`self-hosting.md` §6.6](self-hosting.md#66-upgrading-from-fin-agent) |
 
 ## Done for real, simulated, or impossible here
 
@@ -467,12 +467,12 @@ each kind of item has.
 | Strict type checking in the hook and in CI | Done for real | Zero diagnostics with six suppressions, each with its reason; CI green on `5788325` |
 | The 134-case eval scorecard | Done for real | The November 10, 2026 run, 402 trials, in the README block `arno eval` writes (`e445680`); every gate passed |
 | The next type-tightening steps in `typing.md` | Not started | Each step is a `pyproject.toml` change plus its fixes; the first one is available now |
-| The renamed release's version, image tags, and git tag | Blocked on the rename | The name is Arno and the rename is in progress; `tests/test_release.py` makes the version, the image tags, and the tag agree once they are set |
+| The renamed release's version, image tags, and git tag | Done for real | `v0.2.0` on November 11, 2026: the release workflow published `ghcr.io/joy9001/arno:0.2.0`, `arno-backup:0.2.0`, and the GitHub Release; the repository is now `Joy9001/Arno` |
 | Invariant checker on the demo persona and every journey write | Done for real | `OK` counts rose through each run and never reported a violation after a fix |
 | Six journeys and three regression rounds with the real model | Done for real, on scratch databases | Section "The end-to-end driver" above and [`e2e-run-log.md`](e2e-run-log.md) |
 | Migrations `0022`-`0024` applied to a copy of the live ledger | Done for real, on a throwaway copy | Invariants before and after, then the copy dropped |
 | Openings repair on a copy of the live ledger | Done for real, on a throwaway copy | Dry run, apply, second dry run reporting nothing |
-| The live instance's repair | Owner action at upgrade | Run `arno repair-openings` once after upgrading; it is idempotent |
+| The live instance's move to Arno and its repair | Done for real | Followed [`self-hosting.md` §6.6](self-hosting.md#66-upgrading-from-fin-agent) on November 11, 2026: a `pg_dump` first, the five volumes copied byte-identical, the database and settings renamed, 0.2.0 started healthy with every balance unchanged; then `repair-openings` booked SBI's ₹16,548.42 opening at November 3, 2025 (a second dry run reports nothing), a live copy passed 6,729 invariant checks, and the first Arno backup wrote restic snapshot `3f070fcd`. The old `fin-agent_*` volumes stay until the owner retires them |
 | Fresh install from the docs alone (milestone 40) | Simulated | Same owner, same Windows host, `127.0.0.1`, software passkey, no tailnet and no phone |
 | Restore into a fresh cluster (milestone 37) | Simulated | A second Compose project with new volumes; restic password plus the OAuth client |
 | Backtest (milestone 29) | Blocked on the owner | The live ledger has no income schedule, so the backtest correctly refuses to publish; add one, then `arno backtest --publish` |
