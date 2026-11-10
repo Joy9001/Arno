@@ -1,1 +1,2 @@
-deploy/phoenix-db.sh text eol=lf
+# Shell scripts run inside Linux images; a CRLF checkout on Windows breaks their shebang.
+*.sh text eol=lf
