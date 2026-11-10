@@ -120,6 +120,37 @@ async def test_expense_uses_amount_rupees_and_payee(demo_ledger):
     assert row["category"] == "Food & Dining"
 
 
+async def test_expense_without_a_payee_is_a_row_with_no_payee(demo_ledger):
+    """The schema must allow what the prompt asks for: no shop named, no payee invented."""
+    deps = await _deps(demo_ledger, "cnv_wr_no_payee", "msg_wr_no_payee")
+    script = _expense_script(
+        {
+            "movement": {
+                "kind": "expense",
+                "amount_rupees": 250,
+                "description": "Hardware store",
+                "category_guess": "Shopping",
+            }
+        }
+    )
+    result = await _run(script, "Spent ₹250 at a hardware store.", deps)
+    assert result.output == "Logged."
+    tool_return = _tool_return(result.all_messages(), "record_movement")
+    assert tool_return is not None and tool_return.get("movement_id"), tool_return
+    row = await demo_ledger.fetchrow(
+        """
+        SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
+        FROM movements m
+        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        LEFT JOIN transfer_labels l ON l.transfer_id = t.id
+        LEFT JOIN payees p ON p.id = l.payee_id
+        WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
+        """
+    )
+    assert row["amount_paise"] == 25_000
+    assert row["payee"] is None
+
+
 async def test_hinglish_expense_uses_the_same_contract(demo_ledger):
     deps = await _deps(demo_ledger, "cnv_wr_hinglish", "msg_wr_hinglish")
     script = _expense_script(

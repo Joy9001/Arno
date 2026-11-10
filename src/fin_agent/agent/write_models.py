@@ -28,7 +28,13 @@ class _MovementBase(WriteModel):
 class Expense(_MovementBase):
     kind: Literal["expense"]
     amount_rupees: Decimal
-    payee: str
+    payee: str | None = Field(
+        default=None,
+        description=(
+            "The shop or person they named. Leave it out when they named none; never invent a "
+            "placeholder."
+        ),
+    )
     account: str | None = None
     category: str | None = Field(default=None, description="Only if the user named one.")
     category_guess: str | None = Field(default=None, description="Best guess otherwise.")
@@ -83,7 +89,12 @@ class Refund(_MovementBase):
 class Settlement(_MovementBase):
     kind: Literal["settlement"]
     amount_rupees: Decimal
-    person: str
+    person: str = Field(
+        description=(
+            "The person on the other side of a debt already in the ledger: a split share or a "
+            "loan. Money spent on goods or a service is an expense, not a settlement."
+        )
+    )
     direction: Literal["they_paid", "i_paid"] = Field(
         default="they_paid", description="Who paid whom."
     )

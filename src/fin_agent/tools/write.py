@@ -348,8 +348,13 @@ def _movement_summary(result: dict[str, Any], amount_paise: int) -> str:
     first = transfers[0]
     text = money(amount_paise)["text"] if money(amount_paise) else ""
     if result.get("kind") == "expense":
-        who = first.get("payee_name") or first.get("to_name")
-        line = f"{text} to {who} from {first.get('from_name')}"
+        who = first.get("payee_name")
+        # An unnamed shop says nothing: "to Food & Dining" would name a category as a merchant.
+        line = (
+            f"{text} to {who} from {first.get('from_name')}"
+            if who
+            else f"{text} from {first.get('from_name')}"
+        )
         if first.get("category_name"):
             line += f", {first['category_name']}"
         return line
