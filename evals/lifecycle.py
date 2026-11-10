@@ -74,13 +74,11 @@ async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> Non
     if spec.source == "statement":
         # The malicious note travels the real L3 path: reader, parser, checks, reconcile,
         # commit, outside_text, capture, and layout. No import or statement row is hand-built.
+        # The fixture picks the window, so its printed balances agree with the ledger.
         await seed_injection_statement(
             conn,
             account_id=str(hdfc["id"]),
             narration=spec.text,
-            day=today - timedelta(days=1),
-            period_start=today - timedelta(days=30),
-            period_end=today,
         )
         return
     payee = await create_payee(

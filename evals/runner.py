@@ -33,6 +33,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import Model
+from pydantic_ai.tools import DeferredToolResults
 from pydantic_ai_harness.spend import InMemorySpendStore
 from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext
@@ -205,6 +206,10 @@ async def _run_turn(
     error: str | None = None
     history: list[ModelMessage] = []
     latency = 0.0
+    cards_approved = 0
+    # A multi-message case grades its last turn: "nothing was written" means since the user's
+    # last message, not since the case began.
+    last_turn_at = ""
 
     spend_store = InMemorySpendStore()
     agent = build_agent(
@@ -238,7 +243,9 @@ async def _run_turn(
                 flagged=outside if index == 0 else await _flagged(conn, thread_id),
                 user_texts=(text,),
             )
+            last_turn_at = datetime.now(UTC).isoformat()
             turn_start = time.perf_counter()
+            turn_run_ids = [run_id]
             try:
                 result = await agent.run(
                     text,
@@ -249,6 +256,33 @@ async def _run_turn(
                     timeout=300,
                     retries=2,
                 )
+                # A confirm card is the simulated user's yes when the case grades what lands
+                # after it. An injection or money-move trial keeps every card pending: the gate
+                # is that no lasting write happens without one, and a simulated yes would erase
+                # the question the case is asking.
+                approving = meta.category not in {"injection", "never_moves"}
+                for _round in range(3):
+                    if not approving or not isinstance(result.output, DeferredToolRequests):
+                        break
+                    cards = _approval_attempts(result.output)
+                    if not cards:
+                        break
+                    approvals.extend(cards)
+                    cards_approved += len(cards)
+                    # A deferred-tool resume is its own agent run, so it needs its own run id.
+                    resume_run_id = f"run_{uuid.uuid4().hex}"
+                    turn_run_ids.append(resume_run_id)
+                    run_ids.append(resume_run_id)
+                    result = await agent.run(
+                        message_history=[*result.all_messages()],
+                        deps=deps,
+                        run_id=resume_run_id,
+                        deferred_tool_results=DeferredToolResults(
+                            approvals={part.tool_call_id: True for part in result.output.approvals}
+                        ),
+                        timeout=300,
+                        retries=2,
+                    )
             except Exception as exc:  # noqa: BLE001 - a failed trial is still a transcript
                 error = f"{type(exc).__name__}: {exc}"
                 ending = "failed"
@@ -260,10 +294,12 @@ async def _run_turn(
             reply = _reply(result)
             replies.append(reply)
             turn_messages = [
-                message for message in history if getattr(message, "run_id", None) == run_id
+                message for message in history if getattr(message, "run_id", None) in turn_run_ids
             ]
-            attempts.extend(_tool_attempts(history, run_id))
+            for turn_run_id in turn_run_ids:
+                attempts.extend(_tool_attempts(turn_messages, turn_run_id))
             if isinstance(result.output, DeferredToolRequests):
+                # A card still pending: keep it in the transcript as a card, not only a call.
                 approvals.extend(_approval_attempts(result.output))
                 ending = "approval_required"
             classified = classify_messages(reply, history)
@@ -293,6 +329,8 @@ async def _run_turn(
         approvals=approvals,
         ending=ending,
         error=error,
+        cards_approved=cards_approved,
+        last_turn_at=last_turn_at,
         trial_db=current_database_url(),
         history_messages=len(history),
     )

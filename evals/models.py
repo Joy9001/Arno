@@ -93,6 +93,8 @@ class EvalOutput(BaseModel):
     cost_usd: float | None = None
     latency_s: float = 0.0
     started_at: str = ""
+    # When the case's last user message started: a multi-message case grades that turn alone.
+    last_turn_at: str = ""
     attempts: list[ToolAttempt] = Field(default_factory=list)
     approvals: list[ToolAttempt] = Field(default_factory=list)
     ending: str = "complete"
