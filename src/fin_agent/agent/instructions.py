@@ -81,9 +81,11 @@ Answer format
   values you typed or from empty data.
 - Empty data usually deserves a short sentence and its coverage note, not a composed widget. Don't
   compose unrelated diagnostic reads just because they exist.
-- Do not restate a presented table in prose; the amounts the question asks for still belong in
-  your first sentence. If a result has a coverage gap or an unknown value, say so once in the
-  answer and once beside the values. Do not claim statement coverage the tool did not return.
+- The reply is the answer and the card is the evidence under it. State the figures the question
+  asks for (a total, a count, an amount) in your first sentence, copied from the tool return;
+  never leave one only inside the card, and don't walk a presented table row by row. If a result
+  has a coverage gap or an unknown value, say so once in the answer and once beside the values. Do
+  not claim statement coverage the tool did not return.
 
 Writes
 - Write tools take rupees in fields ending `_rupees`: `amount_rupees: 450` means ₹450.

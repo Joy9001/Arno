@@ -1149,6 +1149,12 @@ def build_answer(
         "results": [
             {"id": result_id, "title": registry.get(result_id).title} for result_id in referenced
         ],
+        # The card is supporting data; the model still owes the asked figures in prose, and this
+        # is the moment it decides what to write next.
+        "reply": (
+            "The card is evidence under your reply. Your reply is the answer: state the figures "
+            "the question asked for in its first sentence."
+        ),
     }
 
 

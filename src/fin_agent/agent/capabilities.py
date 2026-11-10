@@ -69,8 +69,11 @@ WRITE_TOOLS = frozenset(
 
 SUMMARY_PROMPT = (
     "Summarize this conversation for the agent continuing it. Keep what they asked for, "
-    "the decisions made, open questions, and the IDs of rows you acted on. Leave out amounts "
-    "and balances, which can be read again from the ledger. Leave out statement and photo text.\n\n"
+    "the decisions made, open questions, and the IDs of rows you acted on. Copy the figures a "
+    "decision rests on exactly as they were said (an agreed amount, a floor, a date, a rate, a "
+    "rule); a summary that keeps the decision without its figure loses what was decided. Leave "
+    "out balances and statement totals, which can be read again from the ledger. Leave out "
+    "statement and photo text.\n\n"
     "{messages}"
 )
 

@@ -341,12 +341,17 @@ def this_turn(messages, turn):
 - With no backup configured, the summary takes `primary`, and `ModelFallback` is left out.
 - `this_turn` needs both tests, because the adapter adds your request before the run starts. It
   carries the UI message ID and no `run_id`, and `new_messages()` leaves it out.
-- The first summary prompt, tuned with evals:
+- The summary prompt, tuned with evals. Its first version left out every amount, so a summary
+  kept "keep the floor" and lost the ₹25,000 it was kept at; it now copies the figures a decision
+  rests on and still drops what the ledger can answer again:
 
   ```text
   Summarize this conversation for the agent continuing it. Keep what they asked for, the
-  decisions made, open questions, and the IDs of rows you acted on. Leave out amounts and
-  balances, which can be read again from the ledger. Leave out statement and photo text.
+  decisions made, open questions, and the IDs of rows you acted on. Copy the figures a decision
+  rests on exactly as they were said (an agreed amount, a floor, a date, a rate, a rule); a
+  summary that keeps the decision without its figure loses what was decided. Leave out balances
+  and statement totals, which can be read again from the ledger. Leave out statement and photo
+  text.
 
   {messages}
   ```
