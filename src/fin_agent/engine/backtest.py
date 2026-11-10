@@ -257,7 +257,7 @@ def _synthetic_inputs(history: SyntheticResult, as_of: date) -> ProjectionInput:
                 name="Synthetic salary account",
                 balance_paise=history.balances.get(as_of, SYNTHETIC_START_BALANCE),
                 as_of=as_of,
-                statement_age_days=0,
+                balance_age_days=0,
             ),
         ),
         events=tuple(events),

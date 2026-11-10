@@ -47,7 +47,7 @@ export type ProjectionGoal = {
   name: string;
   target?: Money | null;
   saved?: Money | null;
-  remaining?: Money | null;
+  remaining_after_plan?: Money | null;
   deadline: string | null;
   completes_on: string | null;
   slips_days: number | null;

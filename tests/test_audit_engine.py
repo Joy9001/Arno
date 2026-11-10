@@ -119,7 +119,7 @@ def test_a_future_emi_is_charged_over_its_installment_dates():
     assert result["floor_probability"] < 1.0
 
 
-def test_an_infeasible_future_card_purchase_still_gets_a_wait_tradeoff():
+def test_an_over_limit_card_purchase_is_a_no_with_no_cash_tradeoff():
     card = CardAccount(
         id="card",
         name="Small card",
@@ -134,8 +134,11 @@ def test_an_infeasible_future_card_purchase_still_gets_a_wait_tradeoff():
         runs=10,
     )
     assert result["hypothetical"]["feasible"] is False
-    assert result["verdict"] == "yes-but"
-    assert any(trade["kind"] == "wait" for trade in result["tradeoffs"])
+    # Cash would cover it on the asked date, so there is no wait to offer, and paying later is
+    # not a same-date tradeoff: the verdict stays `no` (e4 F11/F12).
+    assert result["verdict"] == "no"
+    assert result["tradeoffs"] == []
+    assert "available credit" in result["verdict_reason"]
 
 
 def test_two_what_ifs_share_the_same_baseline_and_write_nothing():

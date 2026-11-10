@@ -29,7 +29,7 @@ from fin_agent.engine.projection import (
     project as run_projection,
 )
 from fin_agent.ledger import schedules as schedules_mod
-from fin_agent.ledger.common import has_known_balance
+from fin_agent.ledger.common import balance_anchor, has_known_balance
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.settings import read_settings
 from fin_agent.tools.mark import mark
@@ -67,6 +67,20 @@ async def _horizon_for_loading(
     return min(3_650, max(90, ask_horizon_days or 0, furthest))
 
 
+async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) -> date | None:
+    """The date of the account's last movement on or before ``as_of``."""
+    return await conn.fetchval(
+        """
+        SELECT max(m.date)
+        FROM pgledger_transfers t
+        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        WHERE (t.from_account_id = $1 OR t.to_account_id = $1) AND m.date <= $2
+        """,
+        ledger_account_id,
+        as_of,
+    )
+
+
 async def _card_rows(
     conn: Connection, as_of: date, *, known_then: bool
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -87,12 +101,18 @@ async def _card_rows(
         outstanding = max(-balance, 0)
         stated = row["statement_balance_as_of"]
         known = has_known_balance(row) and stated is not None and stated <= as_of
+        anchor = balance_anchor(row, await _last_movement(conn, row["ledger_account_id"], as_of))
         cards.append(
             {
                 **dict(row),
                 "outstanding_paise": outstanding,
-                "available_credit_paise": max((row["credit_limit_paise"] or 0) - outstanding, 0),
-                "as_of": stated if known else None,
+                # A credit balance (an overpayment) is usable, the same rule as the account
+                # payload; an unknown card claims no credit at all.
+                "credit_paise": max(balance, 0) if known else 0,
+                "available_credit_paise": (
+                    max((row["credit_limit_paise"] or 0) + balance, 0) if known else None
+                ),
+                "as_of": anchor if known else None,
                 "known": known,
             }
         )
@@ -122,8 +142,11 @@ async def _liquid_rows(
     for row in rows:
         balance = await _balance_at(conn, row["ledger_account_id"], as_of)
         stated = row["statement_balance_as_of"]
-        known = has_known_balance(row) and stated is not None and stated <= as_of
-        as_of_date = stated if known else None
+        # A statement dated after as_of says nothing about the balance on as_of.
+        known = has_known_balance(row) and (stated is None or stated <= as_of)
+        # The age of the balance comes from ledger.common, the one definition the context uses.
+        anchor = balance_anchor(row, await _last_movement(conn, row["ledger_account_id"], as_of))
+        as_of_date = anchor if known else None
         age = (as_of - as_of_date).days if as_of_date is not None else None
         accounts.append(
             {
@@ -543,7 +566,7 @@ async def load_inputs(
             name=row["name"],
             balance_paise=int(row["balance_paise"]),
             as_of=row["as_of_date"],
-            statement_age_days=row["age_days"],
+            balance_age_days=row["age_days"],
             kind=row["kind"],
             known=row["known"],
         )
@@ -558,6 +581,7 @@ async def load_inputs(
             outstanding_paise=int(row["outstanding_paise"]),
             credit_limit_paise=int(row["credit_limit_paise"] or 0),
             known=row["known"],
+            credit_paise=int(row["credit_paise"]),
         )
         for row in card_rows
     )
@@ -762,7 +786,7 @@ def summary(result: dict[str, Any]) -> dict[str, Any]:
                 **goal,
                 "target": money(goal["target_paise"]),
                 "saved": money(goal["saved_paise"]),
-                "remaining": money(goal["remaining_paise"]),
+                "remaining_after_plan": money(goal["remaining_after_plan_paise"]),
             }
             for goal in result["goals"]
         ],
@@ -816,7 +840,7 @@ def card(result: dict[str, Any]) -> dict[str, Any]:
                 **goal,
                 "target": money(goal["target_paise"]),
                 "saved": money(goal["saved_paise"]),
-                "remaining": money(goal["remaining_paise"]),
+                "remaining_after_plan": money(goal["remaining_after_plan_paise"]),
             }
             for goal in result["goals"]
         ],

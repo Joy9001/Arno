@@ -22,7 +22,7 @@ export const projectionSchema = z.object({
   first_floor_crossing: z.string().nullable().default(null),
   goals: z.array(z.object({
     id: z.string(), name: z.string(), target: money.nullable().optional(),
-    saved: money.nullable().optional(), remaining: money.nullable().optional(),
+    saved: money.nullable().optional(), remaining_after_plan: money.nullable().optional(),
     deadline: z.string().nullable(), completes_on: z.string().nullable(),
     slips_days: number.nullable(), reached: z.boolean(),
   })).optional(),

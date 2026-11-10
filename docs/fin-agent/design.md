@@ -430,8 +430,11 @@ installments, card dues, goal contributions, and variable spend.
 | Verdict | Condition |
 |---|---|
 | yes | Paid as asked, the floor probability stays at or above the threshold, and no goal slips |
-| yes-but | Not as asked, but at least one of the tradeoffs listed later gets it there |
-| no | No tradeoff within the horizon does, or an obligation can't be met on its date |
+| yes-but | A same-date change—card float, card EMI, a category cut, a delayed goal—gets it there |
+| no | No same-date change does, or the only one is a later date, or an obligation can't be met on its date |
+
+A later date is a caveat, not a way to afford it as asked: the wait date is listed as a tradeoff,
+but it alone leaves the verdict `no`, and a wait date equal to the asked date is not a tradeoff.
 
 The threshold is 90%, settled at L5 (`plan.md` §6), so it matches the published P10-P90 band.
 
@@ -439,7 +442,7 @@ The engine computes each tradeoff by rerunning the projection:
 
 | Tradeoff | How |
 |---|---|
-| Wait until date X | Earliest purchase date within the horizon that meets the threshold |
+| Wait until date X | Earliest purchase date within the horizon that meets the threshold; context only, and skipped when it is the asked date |
 | Pay by card or EMI | Card float to the next due date, or `n` installments, within the card's available limit |
 | Delay a goal | Goal completion dates before versus after—"Goa slips three weeks" |
 | Cut a category | Shortfall spread over `reducible` categories' baselines until next payday, when the normal baseline resumes; feasible only below a sensible cut ratio |

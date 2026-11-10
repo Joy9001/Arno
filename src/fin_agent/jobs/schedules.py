@@ -212,8 +212,16 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
             """,
             payload,
         )
+        same_rule = row is not None and row["rule"] == question["rule"]
         try:
-            occurrence = next_occurrence(question["rule"], after=now, default_time=default_time)
+            occurrence = next_occurrence(
+                question["rule"],
+                after=now,
+                default_time=default_time,
+                # A COUNT or INTERVAL rule counts from its first occurrence, so an unchanged rule
+                # keeps the stored anchor; only a new rule starts a new phase.
+                anchor=row["dtstart"] if same_rule else None,
+            )
         except ValueError:
             logger.warning("scheduled question %s has an invalid rule", question_id)
             continue
@@ -231,23 +239,37 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
                 occurrence,
             )
             changed += 1
-        elif row["rule"] != question["rule"] or not row["active"]:
-            if occurrence is None:
+        elif not same_rule:
+            await conn.execute(
+                """
+                UPDATE job_schedules
+                SET rule = $1, next_run_at = $2, dtstart = $2, active = $3, updated_at = now()
+                WHERE id = $4
+                """,
+                question["rule"],
+                occurrence or row["next_run_at"],
+                occurrence is not None,
+                row["id"],
+            )
+            changed += 1
+        elif occurrence is None:
+            # A finite rule that has run its COUNT never restarts, and its anchor never moves.
+            if row["active"]:
                 await conn.execute(
                     "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = $1",
                     row["id"],
                 )
-            else:
-                await conn.execute(
-                    """
-                    UPDATE job_schedules
-                    SET rule = $1, next_run_at = $2, dtstart = $2, active = true, updated_at = now()
-                    WHERE id = $3
-                    """,
-                    question["rule"],
-                    occurrence,
-                    row["id"],
-                )
+                changed += 1
+        elif not row["active"]:
+            await conn.execute(
+                """
+                UPDATE job_schedules
+                SET next_run_at = $1, active = true, updated_at = now()
+                WHERE id = $2
+                """,
+                occurrence,
+                row["id"],
+            )
             changed += 1
     for row in await conn.fetch(
         "SELECT * FROM job_schedules WHERE kind = 'scheduled_question' AND active"

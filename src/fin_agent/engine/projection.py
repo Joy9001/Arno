@@ -36,7 +36,9 @@ class LiquidAccount:
     name: str
     balance_paise: int
     as_of: date | None = None
-    statement_age_days: int | None = None
+    # Days since the later of the last movement and the stated balance, the age the context
+    # reports; None when the balance is not known.
+    balance_age_days: int | None = None
     kind: str = "bank"
     known: bool = True
 
@@ -50,10 +52,12 @@ class CardAccount:
     outstanding_paise: int
     credit_limit_paise: int
     known: bool = True
+    # A positive ledger balance is an overpayment: usable credit beyond the limit.
+    credit_paise: int = 0
 
     @property
     def available_credit_paise(self) -> int:
-        return max(self.credit_limit_paise - self.outstanding_paise, 0)
+        return max(self.credit_limit_paise - self.outstanding_paise + self.credit_paise, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +147,13 @@ def _next_on_or_after(day: date, wanted_day: int) -> date:
     return _clamped_day(day.year, day.month + 1, wanted_day)
 
 
-def _statement_close(card: CardAccount, spend_date: date) -> date:
+def statement_close(card: CardAccount, spend_date: date) -> date:
+    """The date the statement holding ``spend_date`` closes.
+
+    A card's bill closes on its statement day; spend after that day closes on the next one. The
+    due date in `card_due_date` follows from this date, and the write and read tools quote both
+    from here, so no card bill date can drift from the projection.
+    """
     return _next_on_or_after(spend_date, card.statement_day)
 
 
@@ -154,7 +164,7 @@ def card_due_date(card: CardAccount, spend_date: date) -> date:
     day after that statement date, which may fall in the following month when the statement day is
     later than the due day, or when a short month clamps the due day onto the close itself.
     """
-    close = _statement_close(card, spend_date)
+    close = statement_close(card, spend_date)
     due = _clamped_day(close.year, close.month, card.due_day)
     if due > close:
         return due
@@ -282,7 +292,7 @@ def _simulate(
                 if pending_card == card_id
             )
             outstanding = 0 if card_id in paid_initial else card.outstanding_paise
-            used = outstanding + pending
+            used = outstanding - card.credit_paise + pending
             if used + amount > card.credit_limit_paise:
                 excess = used + amount - card.credit_limit_paise
                 credit_exceeded = True
@@ -432,7 +442,10 @@ def _goal_rows(inputs: ProjectionInput) -> list[dict[str, Any]]:
                 "name": goal.name,
                 "target_paise": goal.target_paise,
                 "saved_paise": goal.saved_paise,
-                "remaining_paise": max(goal.target_paise - saved, 0),
+                # Target minus saved minus the contributions planned inside the horizon. Named
+                # apart from a goal card's remaining_paise (target minus saved) so the two
+                # readings can never be presented as a contradiction.
+                "remaining_after_plan_paise": max(goal.target_paise - saved, 0),
                 "deadline": goal.deadline.isoformat() if goal.deadline else None,
                 "completes_on": completes.isoformat() if completes else None,
                 "slips_days": slips,
@@ -722,4 +735,5 @@ __all__ = [
     "reduce_categories",
     "safe_amount_today",
     "simulate_paths",
+    "statement_close",
 ]

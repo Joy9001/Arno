@@ -99,7 +99,7 @@ def amortize(
 
     ``annual_rate`` is a percentage (8.5 means 8.5% a year). A prepayment is applied before EMI
     number ``at_emi`` (counting from the next one) and either keeps the EMI and shortens the tenure
-    or keeps the tenure and lowers the EMI.
+    or keeps the EMIs the loan has left and lowers the EMI.
     """
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
@@ -166,7 +166,9 @@ def amortize(
         paid_interest = sum(walk.interest[:before], Decimal(0))
         balance = principal - sum(walk.principal[:before], Decimal(0))
         balance = max(balance - Decimal(amount), Decimal(0))
-        remaining = max(months - before, 1)
+        # The EMIs the loan actually has left, not the caller's tenure cap: a loan on track to
+        # finish early would otherwise be re-stretched to its original tenure.
+        remaining = max(len(walk.principal) - before, 1)
 
         if reduce == "tenure":
             new_emi = emi

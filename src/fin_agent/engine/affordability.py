@@ -3,7 +3,8 @@
 The verdict is never prose from a model. It is a rerun of the tested projection: pay as asked,
 then test whether the floor probability stays at the settled 90% threshold, no obligation is
 missed, and no goal is pushed past where it was. When the answer is "yes-but", each listed
-tradeoff was computed by rerunning the same engine with that change applied.
+tradeoff was computed by rerunning the same engine with that change applied. A later date alone
+stays a "no": the wait date is shown as a tradeoff, but yes-but needs a change that keeps the date.
 """
 
 from __future__ import annotations
@@ -202,6 +203,11 @@ def _passes(result: dict[str, Any], *, threshold: float) -> bool:
     return result["floor_probability"] >= threshold and result["obligations_met"]
 
 
+def _verdict(tradeoffs: list[dict[str, Any]]) -> str:
+    """Paying on a later date is a caveat, not a way to afford the purchase as asked."""
+    return "yes-but" if any(trade["kind"] != "wait" for trade in tradeoffs) else "no"
+
+
 def _wait_tradeoff(
     inputs: ProjectionInput,
     hypothetical: Hypothetical,
@@ -209,14 +215,18 @@ def _wait_tradeoff(
     runs: int,
     seed: int,
 ) -> dict[str, Any] | None:
+    when = max(hypothetical.date, inputs.as_of)
     found = first_full_payment_date(
         inputs,
         int(hypothetical.amount_paise),
-        start_on=max(hypothetical.date, inputs.as_of),
+        start_on=when,
         runs=runs,
         seed=seed,
     )
     if not found:
+        return None
+    if found["date"] == when.isoformat():
+        # Paying on the asked date is the ask, not a tradeoff.
         return None
     return {
         "kind": "wait",
@@ -429,7 +439,7 @@ def afford(
         wait = _wait_tradeoff(inputs, hypothetical, runs=runs, seed=seed)
         if wait:
             tradeoffs.append(wait)
-        result["verdict"] = "yes-but" if tradeoffs else "no"
+        result["verdict"] = _verdict(tradeoffs)
         result["verdict_reason"] = reason
         result["hypothetical"] = meta | {"feasible": False}
         result["tradeoffs"] = tradeoffs
@@ -479,7 +489,7 @@ def afford(
             )
             if cut:
                 tradeoffs.append(cut)
-            verdict = "yes-but" if tradeoffs else "no"
+            verdict = _verdict(tradeoffs)
             if slips:
                 verdict_reason = "A goal would slip past its current completion date."
             elif not result["obligations_met"]:

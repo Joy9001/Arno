@@ -57,7 +57,7 @@ def test_plenty_of_cash_is_a_yes_with_no_tradeoffs():
     assert result["goal_slips"] == []
 
 
-def test_a_later_salary_makes_wait_the_yes_but_tradeoff():
+def test_a_later_salary_alone_keeps_the_verdict_no_and_shows_the_wait():
     result = afford(
         _inputs(
             start=50_000,
@@ -73,7 +73,8 @@ def test_a_later_salary_makes_wait_the_yes_but_tradeoff():
         Hypothetical(amount_paise=100_000, date=date(2026, 1, 1)),
         runs=50,
     )
-    assert result["verdict"] == "yes-but"
+    # A later date is a caveat, not a way to afford it as asked (e4 F11/F12).
+    assert result["verdict"] == "no"
     wait = next(trade for trade in result["tradeoffs"] if trade["kind"] == "wait")
     assert wait["date"] == "2026-02-01"
 
@@ -313,7 +314,8 @@ def test_every_verdict_is_one_of_the_three_and_yes_clears_the_threshold():
             assert result["floor_probability"] >= result["floor_threshold"]
             assert result["tradeoffs"] == []
         if result["verdict"] == "no":
-            assert result["tradeoffs"] == []
+            # Waiting for a later date can still be listed; nothing else may be.
+            assert all(trade["kind"] == "wait" for trade in result["tradeoffs"])
 
 
 def test_an_unknown_starting_balance_gets_no_verdict_and_no_tradeoffs():
@@ -386,5 +388,6 @@ def test_the_card_tradeoff_is_not_offered_for_an_unknown_card():
         Hypothetical(amount_paise=100_000, date=date(2026, 1, 1), method="account"),
         runs=50,
     )
-    assert result["verdict"] == "yes-but"
-    assert all(trade["kind"] != "pay_by_card" for trade in result["tradeoffs"])
+    # The only tradeoff left is waiting for the salary, which keeps the verdict `no`.
+    assert result["verdict"] == "no"
+    assert all(trade["kind"] == "wait" for trade in result["tradeoffs"])

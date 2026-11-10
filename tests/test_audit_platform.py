@@ -561,15 +561,16 @@ async def test_demo_persona_keeps_every_ledger_invariant_at_any_anchor(db, ancho
         WHERE a.name = 'Home loan'
         """
     )
-    assert loan["balance"] == -350_000_000 + payments * 2_800_000
-
     interest = await db.fetchval(
         """
         SELECT coalesce(sum(s.amount_paise), 0) FROM v_spending s
         WHERE s.category_name = 'Loan Interest'
         """
     )
-    assert interest == payments * 350_000
+    # The persona splits each EMI with the ledger's own rule, so the loan falls by its principal
+    # (the payment minus the interest booked), not by a fixed 2,800,000 a month.
+    assert interest > payments * 350_000
+    assert loan["balance"] == -350_000_000 + payments * 3_150_000 - interest
 
     assert summary["statement_coverage"]["months"] == [
         f"{month:04d}-{number:02d}" for month, number in _complete_months(anchor)

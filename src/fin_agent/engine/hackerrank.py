@@ -281,7 +281,7 @@ def _inputs_for(
                 name=profile["user_id"],
                 balance_paise=_paise(profile["current_available_balance"]),
                 as_of=request_date,
-                statement_age_days=0,
+                balance_age_days=0,
             ),
         ),
         events=tuple(events),

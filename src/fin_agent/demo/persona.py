@@ -14,10 +14,12 @@ from fin_agent.db.conn import Connection
 from fin_agent.india.workdays import last_working_day
 from fin_agent.ledger.accounts import create_account, list_accounts, set_statement_balance
 from fin_agent.ledger.categories import ensure_default_categories, upsert_rule
+from fin_agent.ledger.common import get_account_row
 from fin_agent.ledger.common import today as ledger_today
 from fin_agent.ledger.goals import create_goal, update_goal
 from fin_agent.ledger.movements import (
     correct_movement,
+    loan_payment_parts,
     record_expense,
     record_income,
     record_lending,
@@ -594,13 +596,18 @@ async def seed_demo(
             )
         emi_day = _day(today, months_ago, 10)
         if emi_day <= today:
+            # The loan's own rule splits the EMI, so the seeded parts agree with its rate.
+            loan_row = await get_account_row(conn, loan)
+            principal_paise, interest_paise = await loan_payment_parts(
+                conn, loan_row, 3_150_000, on=emi_day
+            )
             await record_loan_payment(
                 conn,
                 account_id=hdfc,
                 loan_account_id=loan,
                 amount_paise=3_150_000,
-                principal_paise=2_800_000,
-                interest_paise=350_000,
+                principal_paise=principal_paise,
+                interest_paise=interest_paise,
                 interest_category_id=interest,
                 date=emi_day,
                 actor="system",
@@ -713,7 +720,7 @@ async def seed_demo(
         conn,
         account_id=hdfc,
         amount_paise=250_000,
-        description="Groceries, entered wrong",
+        description="Groceries",
         payee_id=bigbasket,
         category_id=groceries,
         date=today - timedelta(days=2),

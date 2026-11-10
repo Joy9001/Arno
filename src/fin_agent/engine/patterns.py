@@ -2,9 +2,11 @@
 
 Weekly, monthly, and yearly charges are recognised from at least three occurrences whose gaps are
 within three days of the interval and whose amount stays within ten percent of the median. A
-recurring charge with no matching schedule becomes a proposal; an expected schedule occurrence
-three or more days late with no matching payment becomes a missed-charge proposal. Nothing here
-writes a schedule: proposals go to the inbox and the agent only writes when the user accepts one.
+recurring charge with no matching schedule becomes a proposal; a schedule covers a charge when the
+merchant names match, or when its category, cadence, and amount do (a "Rent" schedule covers
+"Ramesh (landlord)"). An expected schedule occurrence three or more days late with no matching
+payment becomes a missed-charge proposal. Nothing here writes a schedule: proposals go to the
+inbox and the agent only writes when the user accepts one.
 
 A merchant copied from a statement keeps its `outside_text` flag through the proposal, so opening
 the proposal in chat still asks for a confirming tap before a lasting write.
@@ -63,6 +65,7 @@ class Charge:
     outside_text: bool
     date: date
     amount_paise: int
+    category_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +74,16 @@ class KnownSchedule:
     name: str
     normalized: str
     amount_paise: int | None
+    category_id: str | None = None
+    interval_days: int | None = None
+
+
+_FREQ_DAYS = {"WEEKLY": 7, "MONTHLY": 30, "YEARLY": 365}
+
+
+def _rule_interval(rule: str | None) -> int | None:
+    match = re.search(r"FREQ=(WEEKLY|MONTHLY|YEARLY)", (rule or "").upper())
+    return _FREQ_DAYS[match.group(1)] if match else None
 
 
 def _median(values: list[int]) -> int:
@@ -101,6 +114,23 @@ def _same_merchant(schedule: KnownSchedule, normalized: str) -> bool:
     return bool(left & right)
 
 
+def _same_charge(
+    schedule: KnownSchedule, categories: set[str], amount_paise: int, interval_days: int
+) -> bool:
+    """A schedule with the same category, cadence, and amount covers this charge.
+
+    A schedule's name is often a label ("Rent") while the payee is a person ("Ramesh
+    (landlord)"), so name matching alone calls a covered charge unscheduled.
+    """
+    if not schedule.category_id or schedule.category_id not in categories:
+        return False
+    if schedule.interval_days is not None and schedule.interval_days != interval_days:
+        return False
+    if not schedule.amount_paise:
+        return False
+    return abs(amount_paise - schedule.amount_paise) <= schedule.amount_paise * AMOUNT_TOLERANCE
+
+
 def detect_recurring(charges: list[Charge], schedules: list[KnownSchedule]) -> list[dict[str, Any]]:
     """Return new-recurring-charge proposals for merchants with no matching schedule."""
     grouped: dict[str, list[Charge]] = {}
@@ -124,7 +154,16 @@ def detect_recurring(charges: list[Charge], schedules: list[KnownSchedule]) -> l
             abs(amount - median) > median * AMOUNT_TOLERANCE for amount in amounts
         ):
             continue
-        if any(_same_merchant(schedule, normalized) for schedule in schedules):
+        if any(
+            _same_merchant(schedule, normalized)
+            or _same_charge(
+                schedule,
+                {item.category_id for item in items if item.category_id},
+                median,
+                interval,
+            )
+            for schedule in schedules
+        ):
             continue
         outside = any(item.outside_text for item in items)
         proposals.append(
@@ -153,6 +192,7 @@ async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
     rows = await conn.fetch(
         """
         SELECT v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text,
+               min(v.category_id) AS category_id,
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN payees p ON p.id = v.payee_id
@@ -176,6 +216,7 @@ async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
             outside_text=bool(row["outside_text"]),
             date=row["date"],
             amount_paise=int(row["amount_paise"]),
+            category_id=str(row["category_id"]) if row["category_id"] else None,
         )
         for row in rows
     ]
@@ -188,6 +229,8 @@ async def _load_schedules(conn: Connection) -> list[KnownSchedule]:
             name=str(row["name"]),
             normalized=normalize_merchant(row["name"]),
             amount_paise=int(row["amount_paise"]) if row["amount_paise"] else None,
+            category_id=str(row["category_id"]) if row["category_id"] else None,
+            interval_days=_rule_interval(row["rule"]),
         )
         for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name")
     ]
