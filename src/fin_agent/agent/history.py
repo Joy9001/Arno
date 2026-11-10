@@ -287,11 +287,60 @@ async def mark_run_started(conn: Connection, thread_id: str, run_id: str) -> Non
 
 def _body_text(message: dict[str, Any]) -> str:
     parts = message.get("parts") or []
-    return "\n".join(
+    texts = [
         str(part.get("text", ""))
         for part in parts
         if isinstance(part, dict) and part.get("type") == "text"
-    ).strip()
+    ]
+    # A blank line between two text parts: one newline renders them as one smashed sentence.
+    return join_text(texts)
+
+
+def join_text(parts: list[str]) -> str:
+    """Two text parts in a row are two paragraphs, never one smashed sentence ("done.Next")."""
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
+def merge_text_parts(parts: list[Any]) -> list[Any]:
+    """Collapse adjacent text parts of one message into one, separated by a blank line."""
+    merged: list[Any] = []
+    for part in parts:
+        previous = merged[-1] if merged else None
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and isinstance(previous, dict)
+            and previous.get("type") == "text"
+        ):
+            merged[-1] = {
+                **previous,
+                "text": join_text([str(previous.get("text", "")), str(part.get("text", ""))]),
+            }
+            continue
+        merged.append(part)
+    return merged
+
+
+def paragraphs(message: Any) -> Any:
+    """One text part per response, its paragraphs a blank line apart.
+
+    `dump_messages` joins consecutive text parts of a response with nothing between them, so
+    "…done." and "Next…" used to reach the transcript as "…done.Next…".
+    """
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    if not isinstance(message, ModelResponse):
+        return message
+    parts: list[Any] = []
+    for part in message.parts:
+        previous = parts[-1] if parts else None
+        if isinstance(part, TextPart) and isinstance(previous, TextPart):
+            parts[-1] = replace(previous, content=join_text([previous.content, part.content]))
+            continue
+        parts.append(part)
+    if len(parts) == len(message.parts):
+        return message
+    return replace(message, parts=parts)
 
 
 def _retried_calls(messages: list[Any]) -> set[str]:
@@ -366,7 +415,11 @@ async def save_records(
     from fin_agent.agent.cards import attach_to_last_assistant, ui_messages, with_data
 
     history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
-    ui = ui_messages(without_retried_text(turn_messages))
+    ui = ui_messages([paragraphs(message) for message in without_retried_text(turn_messages)])
+    for message in ui:
+        if message.get("role") == "assistant":
+            # The transcript renders each text part on its own; two in a row must be separated.
+            message["parts"] = merge_text_parts(list(message.get("parts") or []))
     run_started_at = await conn.fetchval(
         "SELECT run_started_at FROM conversations WHERE id = $1", thread_id
     )

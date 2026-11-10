@@ -74,23 +74,40 @@ WOKEN_NO_RETRY = """- This report is from an automatic retry. Do not start the p
 """
 
 
+async def _statement_names(ids: tuple[str, ...]) -> list[str]:
+    """The filenames of this turn's statement attachments, for the instruction block."""
+    try:
+        async with connect() as conn:
+            rows = await conn.fetch(
+                "SELECT id, filename FROM attachments WHERE id = ANY($1::text[])", list(ids)
+            )
+    except Exception:  # noqa: BLE001 - a missing database must not lose the prompt
+        return []
+    found = {str(row["id"]): str(row["filename"] or "statement") for row in rows}
+    return [found[identifier] for identifier in ids if identifier in found]
+
+
 async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
     text = render_instructions(await _categories())
     attachments = getattr(getattr(ctx, "deps", None), "statement_attachments", ())
     if attachments:
         count = len(attachments)
         noun = "file" if count == 1 else "files"
+        names = await _statement_names(tuple(attachments))
+        listed = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        named = f" ({listed})" if listed else ""
         text += f"""
 
 Uploaded statement files
-- This turn has {count} statement {noun}. Your first action is `delegate_task("parser", "Import the
-  statement files from this turn.", background=True)`, before any other tool call and before any
-  prose, then end your turn. Never put an attachment ID in the task text: the parser already has
-  this turn's files. One upload is one task, and each file becomes an import card.
-- Never say a file did not arrive or that this turn has no attachment while this block names one:
-  the upload is on this turn's message, and the import card shows its state. A statement you do
-  not hand over is a file the user believes you are reading. If you already answered without
-  handing it over, hand it to the parser now.
+- This turn has {count} statement {noun}{named}. Your first action is `delegate_task("parser",
+  "Import the statement files from this turn.", background=True)`, before any other tool call and
+  before any prose, then end your turn. Never put an attachment ID in the task text: the parser
+  already has this turn's files. One upload is one task, and each file becomes an import card.
+- These are the files this turn has. One of them may have been uploaded in an earlier turn of
+  this thread and carried forward, so it is here even though the message you are answering has no
+  attachment on it. Never say a file did not arrive, or that this thread has no statement, while
+  this block names one: search past messages and you will not find the file's text, because a
+  statement has none. If you already answered without handing it over, hand it to the parser now.
 - The parser reports a status, counts, and anything blocking. It never writes to the ledger, and
   you cannot commit an import. If it asks a question, answer from the ledger when you can and ask
   the user only when you cannot. If a parser task was interrupted by a restart, resume it with

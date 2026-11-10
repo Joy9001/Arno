@@ -9,6 +9,7 @@ a guessed number or a zero.
 from __future__ import annotations
 
 import copy
+import json
 import math
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -1163,20 +1164,33 @@ def _composed_data(item: Any) -> dict[str, Any] | None:
 
 
 def keep_last_answer(items: list[Any]) -> list[Any]:
-    """One composed answer per reply: a later `present` replaces the earlier one.
+    """One card per answer, one card per distinct result.
 
+    A later `present` replaces the earlier one, and a script that read the same data twice shows
+    one card, not one per call: the `result_id` is fresh every call, so the comparison drops it.
     Cards and stored parts share this shape, so both the streamed cards and the transcript pass
-    through here and a model that composes twice shows the answer it settled on.
+    through here.
     """
     answers = [
         index
         for index, item in enumerate(items)
         if (_composed_data(item) or {}).get("card") == "answer"
     ]
-    if len(answers) < 2:
-        return items
-    superseded = set(answers[:-1])
-    return [item for index, item in enumerate(items) if index not in superseded]
+    superseded = set(answers[:-1]) if len(answers) > 1 else set()
+    seen: set[str] = set()
+    kept: list[Any] = []
+    for index, item in enumerate(items):
+        if index in superseded:
+            continue
+        data = _composed_data(item)
+        if data is not None:
+            body = {key: value for key, value in data.items() if key != "result_id"}
+            key = json.dumps(body, sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(item)
+    return kept
 
 
 __all__ = [

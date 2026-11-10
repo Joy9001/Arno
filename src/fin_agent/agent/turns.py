@@ -13,12 +13,13 @@ import uuid
 import weakref
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import Any
 
 from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import RunCancelled
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import DeferredToolRequests, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.tools import DeferredToolResults, ToolDenied
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
@@ -26,12 +27,13 @@ from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 from fin_agent.agent import capabilities as caps
 from fin_agent.agent.cards import cards_from_messages, data_part
 from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import save_records
+from fin_agent.agent.history import join_text, merge_text_parts, save_records
 from fin_agent.agent.models import opencode_conversation
 from fin_agent.agent.number_check import check_messages
 from fin_agent.agent.presentation import keep_last_answer
 from fin_agent.agent.wake import KeepRetryMark, WakePolicy
 from fin_agent.db.conn import connect
+from fin_agent.engine.money import money
 
 logger = logging.getLogger("fin_agent.chat")
 
@@ -58,15 +60,110 @@ def declined_results(results: DeferredToolResults | None) -> DeferredToolResults
 UNREAD_STATEMENT_NOTE_PREFIX = "Nothing was imported: the attached statement"
 
 
-def unread_statement_note(count: int) -> str:
+def _plain(value: Any, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _rupees(value: Any) -> str | None:
+    """The amount in the app's own money format, or None when it is not a number."""
+    try:
+        amount = int(Decimal(str(value)) * 100)
+    except ArithmeticError, TypeError, ValueError:
+        return None
+    return money(amount)["text"]
+
+
+def _setup_sentence(action: str, data: dict[str, Any], entity: str) -> str:
+    floor = _rupees(data.get("floor_rupees"))
+    if entity == "settings":
+        if not floor:
+            return "Approve changing your settings."
+        return f"Approve setting your floor to {floor}."
+    if entity == "balance":
+        balance = _rupees(data.get("balance_rupees"))
+        if balance and data.get("account"):
+            return f"Approve setting the {_plain(data['account'], 40)} balance to {balance}."
+        return "Approve setting a balance."
+    noun = {
+        "account": "account",
+        "schedule": "schedule",
+        "goal": "goal",
+        "category": "category",
+        "payee": "payee",
+        "scheduled_question": "scheduled question",
+        "baseline": "baseline",
+    }.get(entity, entity.replace("_", " "))
+    verb = {"add": "adding", "update": "changing", "archive": "archiving"}.get(action, "changing")
+    name = data.get("name") or data.get("account") or data.get("category") or data.get("prompt")
+    return f"Approve {verb} the {noun} {_plain(name, 40)}." if name else f"Approve {verb} a {noun}."
+
+
+def approval_sentence(tool_name: str, arguments: dict[str, Any]) -> str:
+    """One plain sentence for a confirm card, from the call's own name and arguments.
+
+    The model is asked to write this itself; when it doesn't, the card still arrives with words.
+    """
+    if tool_name == "preference":
+        action = str(arguments.get("action") or "remember")
+        subject = _plain(arguments.get("text") or arguments.get("id") or "this memory").rstrip(".")
+        if action == "forget":
+            return f"Approve forgetting this: {subject}."
+        if action == "classify":
+            return f"Approve reclassifying this memory: {subject}."
+        return f"Approve saving this {_plain(arguments.get('kind') or 'memory', 20)}: {subject}."
+    if tool_name == "update_setup":
+        data = arguments.get("data")
+        return _setup_sentence(
+            str(arguments.get("action") or "update"),
+            data if isinstance(data, dict) else {},
+            str(arguments.get("entity") or ""),
+        )
+    return f"Approve running {tool_name.replace('_', ' ')}."
+
+
+def approval_text(output: Any, response: Any) -> str | None:
+    """The host's sentence for a confirm-card turn the model left wordless.
+
+    Returns None when the model wrote text itself, and when the run ended on anything but an
+    approval. Money is written the way tool returns write it.
+    """
+    if not isinstance(output, DeferredToolRequests) or not output.approvals:
+        return None
+    if isinstance(response, ModelResponse) and any(
+        isinstance(part, TextPart) and part.content.strip() for part in response.parts
+    ):
+        return None
+    sentences: list[str] = []
+    for call in output.approvals:
+        try:
+            arguments = call.args_as_dict()
+        except TypeError, ValueError:
+            arguments = {}
+        sentence = approval_sentence(call.tool_name, arguments)
+        if sentence and sentence not in sentences:
+            sentences.append(sentence)
+    return " ".join(sentences) if sentences else None
+
+
+def pending_approvals(messages: list[Any], answered: set[str]) -> list[ToolCallPart]:
+    """The confirm cards the last run offered that no tool result has closed yet."""
+    for message in reversed(messages):
+        if isinstance(message, ModelResponse) and message.tool_calls:
+            return [call for call in message.tool_calls if str(call.tool_call_id) not in answered]
+    return []
+
+
+def unread_statement_note(names: list[str]) -> str:
     """What the reply says when the model answered without handing the upload to the parser."""
-    if count == 1:
+    listed = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+    if len(names) == 1:
         return (
-            f"{UNREAD_STATEMENT_NOTE_PREFIX} file wasn't handed to the parser. "
+            f"{UNREAD_STATEMENT_NOTE_PREFIX} file ({listed}) wasn't handed to the parser. "
             'Say "read the statement" and I\'ll hand it over.'
         )
     return (
-        f"{UNREAD_STATEMENT_NOTE_PREFIX} files weren't handed to the parser. "
+        f"{UNREAD_STATEMENT_NOTE_PREFIX} files ({listed}) weren't handed to the parser. "
         'Say "read the statement" and I\'ll hand them over.'
     )
 
@@ -89,21 +186,29 @@ def _delegated_to_parser(messages: list[Any]) -> bool:
 
 
 async def _unread_statements(turn: ChatTurn, messages: list[Any]) -> list[str]:
-    """This turn's statement attachments that no import references.
+    """The filenames of this turn's statement attachments that no import references.
 
-    A model that forgot to delegate leaves the file orphaned, so the reply must say so. A
-    delegation still starting has no row yet, so the call itself is the first answer.
+    A model that forgot to delegate leaves the file orphaned, so the reply must say so, and name
+    the file: a retry that names nothing invites "no statement came through". A delegation still
+    starting has no row yet, so the call itself is the first answer.
     """
     attachments = tuple(dict.fromkeys(turn.deps.statement_attachments))
     if not attachments or _delegated_to_parser(messages):
         return []
     async with connect() as conn:
         rows = await conn.fetch(
-            "SELECT DISTINCT attachment_id FROM imports WHERE attachment_id = ANY($1::text[])",
+            """
+            SELECT a.id, a.filename,
+                   EXISTS (SELECT 1 FROM imports i WHERE i.attachment_id = a.id) AS imported
+            FROM attachments a
+            WHERE a.id = ANY($1::text[])
+            """,
             list(attachments),
         )
-    imported = {str(row["attachment_id"]) for row in rows}
-    return [attachment for attachment in attachments if attachment not in imported]
+    unread = {
+        str(row["id"]): str(row["filename"] or "statement") for row in rows if not row["imported"]
+    }
+    return [unread[attachment] for attachment in attachments if attachment in unread]
 
 
 class TurnBusy(RuntimeError):
@@ -161,6 +266,8 @@ class ChatTurn:
     reply_id: str | None = None
     note: str | None = None
     ending: str | None = None
+    # A confirm-card sentence the host wrote because the model wrote none.
+    host_text: str | None = None
     # Set on a turn the server started for a waiting task report; no user message opened it.
     wake: WakePolicy | None = None
 
@@ -211,7 +318,7 @@ def encode_saved_turn(ui_message: dict[str, Any]) -> list[str]:
     """Replay a saved assistant message as a Vercel AI data stream."""
     message_id = str(ui_message.get("id") or uuid.uuid4())
     chunks = [_event_chunk({"type": "start", "messageId": message_id})]
-    for index, part in enumerate(ui_message.get("parts") or []):
+    for index, part in enumerate(merge_text_parts(list(ui_message.get("parts") or []))):
         kind = part.get("type")
         if kind == "text":
             text_id = f"{message_id}-text-{index}"
@@ -360,8 +467,8 @@ class TurnManager:
         reply_fallback = False
         for message in reversed(messages):
             if isinstance(message, ModelResponse):
-                reply = "\n".join(
-                    part.content for part in message.parts if isinstance(part, TextPart)
+                reply = join_text(
+                    [part.content for part in message.parts if isinstance(part, TextPart)]
                 )
                 model_name = model_name or message.model_name
                 finish_reason = getattr(message, "finish_reason", None)
@@ -437,7 +544,7 @@ class TurnManager:
         try:
 
             async def on_complete(result: Any) -> None:
-                messages = result.all_messages()
+                messages = list(result.all_messages())
                 turn_messages = _this_turn(messages, turn.history, turn.run_id, turn.message_id)
                 failed: list[str] = []
                 # Every model call in this turn, not only the last one: a fallback in an
@@ -452,11 +559,30 @@ class TurnManager:
                             failed.append(str(getattr(item, "model_name", item)))
                 # Only this turn's messages: a delegate call in the history is another turn's.
                 unread = await _unread_statements(turn, turn_messages)
+                # A confirm card with no words is a broken confirm: the model was asked for one
+                # sentence and did not write it, so the host writes it from the call's arguments.
+                # It goes into the saved text too, so a reload shows the same words.
+                response = next(
+                    (
+                        message
+                        for message in reversed(messages)
+                        if isinstance(message, ModelResponse)
+                    ),
+                    None,
+                )
+                text = approval_text(result.output, response)
+                if text is not None and response is not None:
+                    turn.host_text = text
+                    patched = replace(response, parts=[*response.parts, TextPart(text)])
+                    messages = [patched if item is response else item for item in messages]
+                    turn_messages = [
+                        patched if item is response else item for item in turn_messages
+                    ]
                 await self._save(
                     turn,
                     turn_messages,
                     ending="complete",
-                    note=unread_statement_note(len(unread)) if unread else None,
+                    note=unread_statement_note(unread) if unread else None,
                     failed_attempts=[name for name in failed if name] or None,
                     all_messages=messages,
                 )
@@ -583,6 +709,13 @@ class TurnManager:
         }
         async for chunk in adapter.encode_stream(stream):
             if chunk.startswith("data: ") and '"type":"finish"' in chunk:
+                if turn.host_text:
+                    text_id = f"{turn.reply_id or 'reply'}-host"
+                    yield _event_chunk({"type": "text-start", "id": text_id})
+                    yield _event_chunk(
+                        {"type": "text-delta", "id": text_id, "delta": turn.host_text}
+                    )
+                    yield _event_chunk({"type": "text-end", "id": text_id})
                 for card in keep_last_answer(cards_from_messages(captured_ref[0])):
                     data = card.data if isinstance(card.data, dict) else {}
                     if (

@@ -40,10 +40,19 @@ _DIGITS = (
 _TOKEN = r"[A-Za-z0-9@#$%^&*!_+=.~/-]{3,64}"
 _SEPARATOR = r"(?:hain\b|hai\b|is\b|was\b|है|:|=|-)"
 
+# Hindi and Hinglish put the verb after the value ("mera password Kaveri#2026 hai") and sometimes a
+# word between the name and it ("password mera Kaveri#2026 hai"), so a token with no leading is/hai
+# counts too when a copula or the end of the sentence follows. The filler is letters only and the
+# value must carry a letter, so an amount or a date can never be taken for the secret.
+_COPOLA = r"(?:हैं|है|hai\b|hain\b|hota\b|hoti\b|tha\b|thi\b|the\b)"
+_WORD = r"[^\W\d_]+"
+
 _TYPED_SECRET = re.compile(
     rf"(?<!\w){_NAMED}(?!\w)(?!\s*(?:code|postal)\b)"
     rf"(?:\s*{_SEPARATOR}?\s*(?P<digits>{_DIGITS})"
-    rf"|\s*{_SEPARATOR}\s*(?P<token>{_TOKEN}))",
+    rf"|\s*{_SEPARATOR}\s*(?P<token>{_TOKEN})"
+    rf"|\s+(?:{_WORD}\s+){{0,2}}(?=[^\s]*[A-Za-z])(?P<token_after>{_TOKEN})"
+    rf"(?=\s*{_COPOLA}|$|[,.;!?]))",
     re.IGNORECASE,
 )
 
@@ -63,7 +72,7 @@ def _looks_like_a_password(token: str) -> bool:
 
 
 def _replace_typed_secret(match: re.Match[str]) -> str:
-    token = match.group("token")
+    token = match.group("token") or match.group("token_after")
     if token is not None and not _looks_like_a_password(token):
         return match.group()
     return _PLACEHOLDER.replace("{kind}", _kind(match))
@@ -87,7 +96,13 @@ _DETECTORS: list[TextDetector] = [
         only=["credit_card"],
         extra={
             "pan": r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
-            "aadhaar": r"\b[2-9]\d{3}[ -]\d{4}[ -]\d{4}\b",
+            # Not inside a longer run, in either direction: a 16-digit card that fails Luhn fell
+            # through to this pattern, which claimed its middle twelve digits as an Aadhaar and left
+            # the first and last four visible.
+            "aadhaar": r"(?<!\d)(?<!\d[ -])[2-9]\d{3}[ -]\d{4}[ -]\d{4}(?![\s-]?\d)",
+            # A card that fails Luhn is still a card: four groups of four, starting with a payment
+            # card's industry digit, is one and nothing else.
+            "card_number": r"\b(?=[2-6])(?:\d{4}[ -]){3}\d{4}\b",
         },
     ),
     keyword_secret_data,

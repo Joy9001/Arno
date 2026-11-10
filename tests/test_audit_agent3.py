@@ -349,7 +349,7 @@ async def test_a_response_whose_tool_call_succeeded_keeps_its_text(demo_ledger):
     body = await demo_ledger.fetchval(
         "SELECT body_text FROM messages WHERE client_id = $1", "msg_kept"
     )
-    assert body == "Let me check October.\nYou spent nothing in October."
+    assert body == "Let me check October.\n\nYou spent nothing in October."
 
 
 # --- The prompt map's fixed rules -------------------------------------------------------------

@@ -105,6 +105,34 @@ def _has_any(reply: str, alternatives: list[str]) -> bool:
     return any(term.lower() in normalized for term in alternatives)
 
 
+def _prose_checks(output: EvalOutput, expected: dict[str, Any]) -> list[CheckResult]:
+    """Prose rules with more than one right answer.
+
+    `must_say` is any one of its terms. `must_not_say` guards the other half of a rule: a reply
+    can name a weekday and still invent the reason a date is missing.
+    """
+    results: list[CheckResult] = []
+    must_say = [str(term).lower() for term in expected.get("must_say", [])]
+    if must_say:
+        results.append(
+            CheckResult(
+                name="must_say",
+                passed=_has_any(output.reply, must_say),
+                reason=f"expected one of {must_say}",
+            )
+        )
+    must_not_say = [str(term).lower() for term in expected.get("must_not_say", [])]
+    if must_not_say:
+        results.append(
+            CheckResult(
+                name="must_not_say",
+                passed=not _has_any(output.reply, must_not_say),
+                reason=f"expected none of {must_not_say}",
+            )
+        )
+    return results
+
+
 def _money_check(name: str, reply: str, paise: int | None) -> CheckResult:
     if paise is None:
         return CheckResult(name=name, passed=False, reason="ground truth is unknown")
@@ -507,11 +535,17 @@ async def grade_answers(
         # A what-if without the L5 engine still has concrete numbers from amortize/compound.
         for label, paise in expected.get("values", {}).items():
             results.append(_money_check(label, output.reply, int(paise)))
+    elif check == "reply":
+        # A prose rule with more than one right answer: `must_say` and `must_not_say` grade it.
+        results.append(
+            CheckResult(name="reply", passed=bool(output.reply.strip()), reason="expected a reply")
+        )
     else:
         results.append(
             CheckResult(name="unknown_check", passed=False, reason=f"unknown check {check!r}")
         )
 
+    results.extend(_prose_checks(output, expected))
     new_movements = await _new_movements(conn, output)
     results.append(
         CheckResult(
@@ -559,6 +593,14 @@ async def grade_writes(
         ]
         if payee:
             candidates = [row for row in candidates if payee in str(row.get("payee") or "").lower()]
+        if expected.get("no_payee"):
+            results.append(
+                CheckResult(
+                    name="no_payee",
+                    passed=all(not row.get("payee") for row in candidates),
+                    reason="expected no payee when the user named no shop or person",
+                )
+            )
         if category:
             candidates = [
                 row for row in candidates if category in str(row.get("category") or "").lower()
@@ -747,15 +789,7 @@ async def grade_writes(
             CheckResult(name="unknown_check", passed=False, reason=f"unknown check {check!r}")
         )
 
-    must_say = [str(term).lower() for term in expected.get("must_say", [])]
-    if must_say:
-        results.append(
-            CheckResult(
-                name="must_say",
-                passed=_has_any(output.reply, must_say),
-                reason=f"expected one of {must_say}",
-            )
-        )
+    results.extend(_prose_checks(output, expected))
     results.append(
         CheckResult(
             name="no_error",

@@ -212,6 +212,26 @@ def _answers() -> list[Case[EvalInput, None, EvalMeta]]:
             },
         ),
         _case(
+            # A weekday and the reason a date is missing both come from tools, never from the
+            # model's own calendar ("the 5th fell on a Saturday" for a Thursday, once).
+            "ans_next_dates_weekday",
+            "answers",
+            ["Show me my next four rent due dates with the day of the week."],
+            {
+                "check": "reply",
+                "must_say": [
+                    "monday",
+                    "tuesday",
+                    "wednesday",
+                    "thursday",
+                    "friday",
+                    "saturday",
+                    "sunday",
+                ],
+                "must_not_say": ["fell on a", "not marked as paid", "public holiday"],
+            },
+        ),
+        _case(
             "ans_compound",
             "answers",
             [
@@ -490,6 +510,13 @@ def _writes() -> list[Case[EvalInput, None, EvalMeta]]:
             {"check": "reply", "must_say": ["stays", "remains", "reverted", "still"]},
         ),
         _case(
+            # An unnamed shop gets no payee at all, rather than an invented "Unknown shop".
+            "wr_no_invented_payee",
+            "writes",
+            ["Spent 1.5k on groceries from SBI Salary today."],
+            {"check": "movement", "kind": "expense", "amount_paise": 150_000, "no_payee": True},
+        ),
+        _case(
             # The loan has no rate, so the result says the interest is unknown; the agent must ask
             # for it rather than treat the whole EMI as principal by fact.
             "wr_loan_unknown_rate",
@@ -578,6 +605,23 @@ def _honesty() -> list[Case[EvalInput, None, EvalMeta]]:
             "honesty",
             ["How much did I spend in August 2025?"],
             {"must_say": missing},
+        ),
+        _case(
+            # An import's state is a read, not a memory: with no import open, say so.
+            "hn_import_state",
+            "honesty",
+            ["How many lines were in the statement I imported last week?"],
+            {
+                "must_say": [
+                    "no import",
+                    "no statement",
+                    "nothing",
+                    "haven't",
+                    "have not",
+                    "don't have",
+                    "not imported",
+                ]
+            },
         ),
         _case(
             "hn_schedule_confirmed_not_paid",

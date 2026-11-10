@@ -21,7 +21,7 @@ from fin_agent.agent.cards import cards_for_transcript, data_part
 from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.presentation import keep_last_answer
 from fin_agent.agent.quote import QuoteError, quote_from_messages, resolve_quote, with_quote
-from fin_agent.agent.turns import TurnBusy, encode_saved_turn
+from fin_agent.agent.turns import TurnBusy, encode_saved_turn, pending_approvals
 from fin_agent.api.capture import log_photo
 from fin_agent.api.deps import Database, PreparationDep, Session, current_session
 from fin_agent.api.wake import paused_parser_tasks
@@ -382,13 +382,38 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         history, outside_swap = await history_mod.refresh_snapshot(
             conn, thread, history, cache_ttl_seconds=ttl
         )
-        if approval_turn and set(approval_ids) <= _answered_tool_calls(history):
-            # A retry or a duplicate POST of a tap that already landed. Replaying its reply
-            # keeps the write applied once; it also replaces the failed note a replayed
-            # deferred-tool run would otherwise leave in the thread.
-            replay = await _saved_reply(conn, thread_id)
-            if replay is not None:
-                return replay
+        answered: set[str] = set()
+        if approval_turn:
+            answered = _answered_tool_calls(history)
+            if set(approval_ids) <= answered:
+                # A retry or a duplicate POST of a tap that already landed. Replaying its reply
+                # keeps the write applied once; it also replaces the failed note a replayed
+                # deferred-tool run would otherwise leave in the thread.
+                replay = await _saved_reply(conn, thread_id)
+                if replay is not None:
+                    return replay
+            # Every confirm card of that run must be answered together: the model cannot resume a
+            # run with a result missing, and a card left behind is a change the user asked for and
+            # never got. Nothing is applied, and every card stays where it was.
+            waiting = pending_approvals(history, answered)
+            waiting_ids = {str(call.tool_call_id) for call in waiting}
+            if unanswered := [call_id for call_id in approval_ids if call_id not in waiting_ids]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "That confirmation is not one this thread is waiting for "
+                        f"({', '.join(unanswered)}); nothing was applied."
+                    ),
+                )
+            if missing := [call_id for call_id in waiting_ids if call_id not in approval_ids]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "That turn asked for more than one confirmation, so nothing was applied "
+                        "yet. Answer every card in one go; still waiting for: "
+                        f"{', '.join(sorted(missing))}."
+                    ),
+                )
         if approval_turn:
             user_row = await conn.fetchrow(
                 "SELECT id, body_text FROM messages WHERE conversation_id = $1 "

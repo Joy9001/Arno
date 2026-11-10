@@ -897,7 +897,7 @@ const AssistantMessage: FC = () => {
               }}
               attention={waiting}
             >
-              {shown.length > 0 ? <div className="flex flex-col">{shown}</div> : null}
+              {shown.length > 0 ? <div className="flex flex-col gap-3">{shown}</div> : null}
             </RunActivityGroup>
           );
         })()}

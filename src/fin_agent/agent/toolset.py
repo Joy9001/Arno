@@ -154,9 +154,11 @@ async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
     """The user's whole picture: today's date, settings, every account with its balance and the
     age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months, a
     card's next_statement_close and the next_bill_due for spend made today, each schedule's
-    next four dates (next_dates), the next 30 days of events (a null amount carries a note saying
-    why), goals, who owes what, remembered preferences, scheduled_questions, what setup is
-    missing, and data warnings. The sandbox has no clock, so get today's date here."""
+    next four runs (next_dates, each with date and weekday), the next 30 days of events (each with
+    date and weekday; a null amount carries a note saying why), goals, who owes what, remembered
+    preferences, scheduled_questions, open imports (status, account, period, line counts; read
+    them before saying anything about an import), what setup is missing, and data warnings. The
+    sandbox has no clock, so get today's date here."""
     payload = await _read_call(read_tools.get_financial_context)
     return await _finish_read(ctx, payload, kind="context")
 
@@ -200,7 +202,9 @@ async def summarize_spending(
     bills, investments, and money others owe never count as spending. To compare periods, call it
     twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year,
     "2026-09", a day "2026-11-10", or a range "2026-09-01..2026-09-15" (weeks start Monday). count
-    is the number of entries, with a corrected entry and its reversal left out."""
+    is the number of entries, with a corrected entry and its reversal left out. It returns one
+    object, never a list: read total as result["total"], and groups as a list of dicts each with
+    key, amount (paise), and count, so result["groups"][0]["key"]."""
     plain = filters.model_dump(exclude_none=True) if filters else None
     try:
         payload = await _read_call(
@@ -302,7 +306,7 @@ async def amortize(
     """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name
     to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to compare
     a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
-    instead of writing the formula."""
+    instead of writing the formula. It returns the schedule, not a card: show it with present."""
     start: date | None = ledger_today()
     if loan:
         async with connect() as conn:
@@ -332,10 +336,9 @@ async def amortize(
     card = {"card": "amortize", "title": "Loan schedule", **result}
     registered = ctx.deps.presentation.register_calculation("amortize", result, card)
     card["result_id"] = registered.result_id
-    return ToolReturn(
-        return_value={**result, "ui_results": [registered.descriptor()]},
-        metadata=_card_data(card),
-    )
+    # Thirty `amortize` calls in one script used to render thirty identical loan schedules. A
+    # calculation is a value to compute with; `present` is how it reaches the answer.
+    return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
 
 
 async def compound(
@@ -346,7 +349,7 @@ async def compound(
     start_paise: int = 0,
 ) -> ToolReturn:
     """Growth of a monthly investment at an assumed annual rate. The rate is an assumption, not a
-    prediction or advice: state it in your answer."""
+    prediction or advice: state it in your answer. Show it with present."""
     try:
         result = compound_fn(monthly_paise, annual_rate, months, start_paise=start_paise)
     except ValueError as exc:
@@ -354,10 +357,7 @@ async def compound(
     card = {"card": "compound", "title": "Growth at an assumed rate", **result}
     registered = ctx.deps.presentation.register_calculation("compound", result, card)
     card["result_id"] = registered.result_id
-    return ToolReturn(
-        return_value={**result, "ui_results": [registered.descriptor()]},
-        metadata=_card_data(card),
-    )
+    return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
 
 
 async def show_chart(
@@ -569,7 +569,8 @@ async def record_movement(
     works out the transfers. Ask first if the amount is missing or a split isn't clear. `date` is
     ISO, omit for today, never a future date. `account` is optional; code uses the payee's usual
     account, or the busiest/default one. Pass `category` only if the user named one; otherwise
-    pass `category_guess`. Amounts are rupees in `amount_rupees`, never paise.
+    pass `category_guess`. Amounts are rupees in `amount_rupees`, never paise. Pass `payee` only
+    when they name a merchant or a person, never a placeholder like "Unknown shop".
     Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
     "category": "Food & Dining"}."""
     payload_movement = movement.model_dump(exclude_none=True, mode="python")
@@ -635,6 +636,8 @@ async def update_setup(
     `*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits;
     the floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated
     balance; a baseline is typical daily spend.
+    A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in
+    credit is -500 for that card, passed once and not retried with the other sign.
     For action "add" on a card, a positive credit limit, a statement day, and a due day are
     required. If the user does not know one, leave the card pending instead of guessing. A bank
     needs only a name, and its balance and last4 are optional. An update changes only the fields
