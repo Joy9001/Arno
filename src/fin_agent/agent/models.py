@@ -10,13 +10,14 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any
+from typing import Any, override
 
+from pydantic_ai import RunContext
 from pydantic_ai.exceptions import ModelContextWindowExceededError
 from pydantic_ai.messages import ModelMessage, ModelResponse
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
@@ -32,7 +33,7 @@ _conversation_session: ContextVar[str | None] = ContextVar("opencode_conversatio
 
 
 @contextmanager
-def opencode_conversation(conversation_id: str) -> Iterator[None]:
+def opencode_conversation(conversation_id: str) -> Generator[None]:
     """Bind a stable, header-safe session to this conversation's async task."""
     digest = sha256(conversation_id.encode("utf-8")).hexdigest()
     token = _conversation_session.set(f"fin-agent-{digest}")
@@ -145,6 +146,7 @@ class WindowLimited(WrapperModel):
                 f"{self.window}-token window.",
             )
 
+    @override
     async def request(
         self,
         messages: list[ModelMessage],
@@ -154,18 +156,20 @@ class WindowLimited(WrapperModel):
         self._check(messages, model_request_parameters)
         return await self.wrapped.request(messages, model_settings, model_request_parameters)
 
+    @override
+    @asynccontextmanager
     async def request_stream(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
-        run_context: Any = None,
-    ) -> AsyncIterator[StreamedResponse]:
+        run_context: RunContext[Any] | None = None,
+    ) -> AsyncGenerator[StreamedResponse]:
         self._check(messages, model_request_parameters)
-        async for response in self.wrapped.request_stream(
+        async with self.wrapped.request_stream(
             messages, model_settings, model_request_parameters, run_context
-        ):
-            yield response
+        ) as response_stream:
+            yield response_stream
 
 
 def primary_model() -> Model:

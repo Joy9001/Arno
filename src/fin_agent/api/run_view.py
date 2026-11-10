@@ -135,6 +135,7 @@ def _scripts(messages: list[ModelMessage]) -> dict[str, dict[str, Any]]:
             first = True
             for part in message.parts:
                 if isinstance(part, ToolCallPart) and part.tool_name == SCRIPT_TOOL:
+                    args: dict[str, Any]
                     try:
                         args = part.args_as_dict()
                     except TypeError, ValueError:
@@ -149,13 +150,8 @@ def _scripts(messages: list[ModelMessage]) -> dict[str, dict[str, Any]]:
             if getattr(part, "part_kind", None) == "tool-return" and part.tool_name == SCRIPT_TOOL:
                 entry = scripts.setdefault(part.tool_call_id, {"code": "", "reasoning": None})
                 entry["result"] = part.content
-                entry["failed"] = getattr(part, "outcome", None) == "failed"
-            elif getattr(part, "part_kind", None) == "retry-prompt" and (
-                part.tool_name == SCRIPT_TOOL
-            ):
-                entry = scripts.setdefault(part.tool_call_id, {"code": "", "reasoning": None})
-                entry["result"] = part.content
-                entry["failed"] = True
+                # A retry is that call's own return marked `retried`; its content is the error.
+                entry["failed"] = getattr(part, "outcome", None) in {"failed", "retried"}
     return scripts
 
 
@@ -197,7 +193,7 @@ def build_run(
         run_id = event["run_id"]
         segment = by_run.get(run_id)
         if segment is None:
-            segment = {
+            fresh: dict[str, Any] = {
                 "run_id": run_id,
                 "used": 0,
                 "limit": limit,
@@ -205,8 +201,9 @@ def build_run(
                 "ended_at": None,
                 "stop": None,
             }
-            by_run[run_id] = segment
-            segments.append(segment)
+            by_run[run_id] = fresh
+            segments.append(fresh)
+            segment = fresh
         kind, name, call_id = event["kind"], event["tool_name"], event["tool_call_id"] or ""
         if kind == "tool_call_started":
             segment["used"] += 1
@@ -216,7 +213,7 @@ def build_run(
                 segment["stop"] = "budget" if "UsageLimitExceeded" in event["error"] else "error"
         if name == SCRIPT_TOOL:
             if kind == "tool_call_started":
-                step = {
+                step: dict[str, Any] = {
                     "id": call_id,
                     "segment": len(segments) - 1,
                     "started_at": event["timestamp"],
