@@ -30,12 +30,13 @@ Scheduled question
 
 
 async def _categories() -> list[str]:
+    categories: list[str] = []
     try:
         async with connect() as conn:
             rows = await conn.fetch("SELECT name FROM categories WHERE active ORDER BY name")
         categories = [str(row["name"]) for row in rows]
     except Exception:  # noqa: BLE001 - a missing database must not lose the prompt
-        categories = []
+        pass
     if not categories:
         categories = [
             "Food",
@@ -144,7 +145,7 @@ def build_agent(
     read_only: bool = False,
     name: str | None = None,
     parser_agent: Any = None,
-) -> Agent[AgentDeps, str]:
+) -> Agent[AgentDeps, DeferredToolRequests | str]:
     """Build an agent. Tests pass a `TestModel` or `FunctionModel`; production reads env.
 
     `run_budget_usd` and `context_window` exist for eval trials: one spend ceiling for the

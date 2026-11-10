@@ -6,6 +6,8 @@ UI kit; they can't fetch outside images under `img-src`.
 
 from __future__ import annotations
 
+from typing import override
+
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
@@ -23,6 +25,7 @@ CONTENT_SECURITY_POLICY = (
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    @override
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY

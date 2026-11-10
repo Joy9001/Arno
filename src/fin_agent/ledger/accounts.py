@@ -114,7 +114,7 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
                 "SELECT * FROM accounts WHERE kind = $1 ORDER BY created_at LIMIT 1", kind
             )
             if row is None:
-                ledger = await conn.fetchrow(
+                ledger = await conn.fetchrow_required(
                     """
                     SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
                     """,
@@ -122,7 +122,7 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
                     currency,
                     {"system": kind},
                 )
-                row = await conn.fetchrow(
+                row = await conn.fetchrow_required(
                     """
                     INSERT INTO accounts (id, kind, ledger_account_id, name, liquid)
                     VALUES ($1, $2, $3, $4, false)
@@ -135,7 +135,7 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
                 )
                 group.record_created("accounts", row)
             elif not row["active"]:
-                after = await conn.fetchrow(
+                after = await conn.fetchrow_required(
                     "UPDATE accounts SET active = true, updated_at = now() "
                     "WHERE id = $1 RETURNING *",
                     row["id"],
@@ -181,7 +181,7 @@ async def _create_account_in_group(
         tenure_months=tenure_months,
     )
 
-    ledger = await conn.fetchrow(
+    ledger = await conn.fetchrow_required(
         """
         SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
         """,
@@ -191,7 +191,7 @@ async def _create_account_in_group(
     )
     account_id = await new_id(conn, "acc")
     stated_as_of = opening_balance_as_of or today()
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         INSERT INTO accounts (
             id, kind, ledger_account_id, name, institution, last4,
@@ -362,7 +362,7 @@ async def update_account(
     columns = list(updates)
     assignments = [f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)]
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"""
             UPDATE accounts SET {", ".join(assignments)}, updated_at = now()
             WHERE id = ${len(columns) + 1} RETURNING *
@@ -431,7 +431,7 @@ async def set_statement_balance(
             )
             movement_id = record.id
 
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             """
             UPDATE accounts
             SET statement_balance_paise = $1,

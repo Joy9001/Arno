@@ -32,9 +32,11 @@ def test_amortize_prepay_shortens_tenure_and_saves_interest():
         240,
         prepay={"amount_paise": 5_000_000, "at_emi": 12, "reduce": "tenure"},
     )
-    assert prepaid["prepay"]["new_months"] < base["months"]
-    assert prepaid["prepay"]["interest_saved"]["paise"] > 0
-    assert prepaid["prepay"]["months_saved"] > 0
+    applied = prepaid["prepay"]
+    assert applied is not None
+    assert applied["new_months"] < base["months"]
+    assert applied["interest_saved"]["paise"] > 0
+    assert applied["months_saved"] > 0
 
 
 def test_amortize_prepay_lowers_the_emi():
@@ -44,7 +46,9 @@ def test_amortize_prepay_lowers_the_emi():
         240,
         prepay={"amount_paise": 5_000_000, "at_emi": 12, "reduce": "emi"},
     )
-    assert result["prepay"]["new_emi"]["paise"] < result["emi"]["paise"]
+    applied = result["prepay"]
+    assert applied is not None
+    assert applied["new_emi"]["paise"] < result["emi"]["paise"]
 
 
 def test_an_emi_that_never_repays_is_refused():

@@ -91,7 +91,7 @@ REVERIFY_TTL_MINUTES = 5
 
 def is_fresh(session: dict[str, Any]) -> bool:
     value = session.get("reverified_at")
-    if value is None:
+    if not isinstance(value, datetime):
         return False
     age = datetime.now(UTC) - value
     return timedelta(0) <= age <= timedelta(minutes=REVERIFY_TTL_MINUTES)

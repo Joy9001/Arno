@@ -34,6 +34,7 @@ from fin_agent.capture.transcribe import (
     payee_names_prompt,
     transcribe_audio,
 )
+from fin_agent.db.conn import Connection
 from fin_agent.engine.money import money
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.audit import new_id
@@ -83,7 +84,7 @@ def _audio_media_type(data: bytes, declared: str | None) -> str:
     return "application/octet-stream"
 
 
-async def _ensure_thread(conn, thread_id: str | None, title: str) -> dict[str, Any]:
+async def _ensure_thread(conn: Connection, thread_id: str | None, title: str) -> dict[str, Any]:
     if not thread_id or len(thread_id) > 100:
         raise HTTPException(
             status_code=422,
@@ -95,14 +96,16 @@ async def _ensure_thread(conn, thread_id: str | None, title: str) -> dict[str, A
     return thread
 
 
-async def _optional_thread(conn, thread_id: str | None, title: str) -> dict[str, Any] | None:
+async def _optional_thread(
+    conn: Connection, thread_id: str | None, title: str
+) -> dict[str, Any] | None:
     if not thread_id or len(thread_id) > 100:
         return None
     return await _ensure_thread(conn, thread_id, title)
 
 
 async def _save_attachment(
-    conn,
+    conn: Connection,
     *,
     data: bytes,
     kind: str,
@@ -120,7 +123,7 @@ async def _save_attachment(
             detail="The capture is empty.",
         )
     attachment_id = await new_id(conn, "att")
-    return await conn.fetchrow(
+    return await conn.fetchrow_required(
         """
         INSERT INTO attachments
             (id, kind, filename, content_type, size_bytes, sha256, data)
@@ -138,7 +141,7 @@ async def _save_attachment(
 
 
 async def _save_card(
-    conn,
+    conn: Connection,
     *,
     thread_id: str,
     client_id: str,
@@ -164,7 +167,7 @@ async def _save_card(
 
 
 async def _failure(
-    conn,
+    conn: Connection,
     *,
     thread: dict[str, Any] | None,
     attachment_id: str,
@@ -217,7 +220,7 @@ def _clean_upi_ref(value: str | None) -> str | None:
 
 
 async def _transcribe_saved(
-    conn,
+    conn: Connection,
     row: dict[str, Any],
     *,
     thread: dict[str, Any] | None,
@@ -267,7 +270,7 @@ def _photo_history_text(
 
 
 async def log_photo(
-    conn,
+    conn: Connection,
     thread: dict[str, Any],
     row: dict[str, Any],
     *,

@@ -53,11 +53,15 @@ async def ensure_vapid_keys(
         return row
 
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
     from py_vapid import Vapid02
 
-    vault = Vapid02()
-    vault.generate_keys()
-    public_point = vault.public_key.public_bytes(
+    # RFC 8292 fixes the curve at P-256. The key is generated here rather than by
+    # `Vapid02.generate_keys`, whose property the untyped library leaves unreadable to the
+    # checker, and handed to it so it still signs.
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    vault = Vapid02(private_key)
+    public_point = private_key.public_key().public_bytes(
         encoding=serialization.Encoding.X962,
         format=serialization.PublicFormat.UncompressedPoint,
     )
@@ -73,8 +77,7 @@ async def ensure_vapid_keys(
         private_key,
         subject,
     )
-    row = await conn.fetchrow("SELECT * FROM vapid_keys WHERE id = 1")
-    return row
+    return await conn.fetchrow_required("SELECT * FROM vapid_keys WHERE id = 1")
 
 
 async def public_push_key(conn: Connection) -> dict[str, Any]:
@@ -93,7 +96,7 @@ async def subscribe(
         raise ValueError("A push endpoint must be HTTPS")
     if not p256dh or not auth:
         raise ValueError("A push subscription needs p256dh and auth keys")
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         INSERT INTO push_subscriptions (endpoint, p256dh, auth)
         VALUES ($1, $2, $3)
@@ -160,7 +163,11 @@ async def list_notifications(conn: Connection, *, limit: int = 50) -> dict[str, 
         "SELECT * FROM notifications ORDER BY created_at DESC, id DESC LIMIT $1",
         limit,
     )
-    unread = await conn.fetchval("SELECT count(*) FROM notifications WHERE read_at IS NULL")
+    unread = (
+        await conn.fetchrow_required(
+            "SELECT count(*) AS n FROM notifications WHERE read_at IS NULL"
+        )
+    )["n"]
     return {
         "notifications": [_payload(row) for row in rows],
         "unread_count": int(unread),

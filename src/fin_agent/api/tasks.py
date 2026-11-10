@@ -12,7 +12,7 @@ import re
 import time
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, override
 from uuid import uuid4
 
 import anyio
@@ -58,6 +58,7 @@ class TaskOwner(DelegationTasks):
     refuses; the app itself writes from one event loop.
     """
 
+    @override
     async def save(self, record: DelegationTask) -> None:
         if self.directory is None:
             return

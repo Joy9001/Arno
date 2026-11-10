@@ -26,6 +26,7 @@ from fin_agent.engine.projection import (
     CashEvent,
     GoalPlan,
     LiquidAccount,
+    Projection,
     ProjectionInput,
     SpendCategory,
     card_due_date,
@@ -283,7 +284,7 @@ def _synthetic_inputs(history: SyntheticResult, as_of: date) -> ProjectionInput:
     )
 
 
-def _row(as_of: date, projected: dict[str, Any], actual: int) -> dict[str, Any]:
+def _row(as_of: date, projected: Projection, actual: int) -> dict[str, Any]:
     wanted = (as_of + timedelta(days=30)).isoformat()
     day = next(point for point in projected["curve"] if point["date"] == wanted)
     median = int(day["median_paise"])

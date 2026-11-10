@@ -96,7 +96,7 @@ class RestoreReport:
 
 
 async def build_manifest(conn: Connection) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT fin_agent_backup_manifest() AS manifest")
+    row = await conn.fetchrow_required("SELECT fin_agent_backup_manifest() AS manifest")
     return dict(row["manifest"])
 
 
@@ -245,7 +245,9 @@ async def ensure_roles(target_dsn: str) -> None:
                 await conn.execute(f"CREATE ROLE {quote_ident(role)} LOGIN")
         for statement in ROLE_STATEMENTS:
             await conn.execute(statement)
-        database = await conn.fetchval("SELECT current_database()")
+        database = (await conn.fetchrow_required("SELECT current_database() AS name"))["name"]
+        if not isinstance(database, str):
+            raise RestoreError("The target database's name could not be read.")
         await conn.execute(f"GRANT CONNECT ON DATABASE {quote_ident(database)} TO agent_ro, backup")
         await conn.execute(f"REVOKE TEMP ON DATABASE {quote_ident(database)} FROM PUBLIC")
 
@@ -321,7 +323,11 @@ async def verify_database(
     present = {str(row["table_name"]) for row in tables}
     checks["required_tables"] = REQUIRED_TABLES <= present
 
-    version = await conn.fetchval("SELECT coalesce(max(version), 0) AS version FROM schema_version")
+    version = (
+        await conn.fetchrow_required(
+            "SELECT coalesce(max(version), 0) AS version FROM schema_version"
+        )
+    )["version"]
     checks["schema_version"] = int(version) > 0
 
     unbalanced = await conn.fetchval(

@@ -14,6 +14,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fin_agent.db.conn import Connection, connect
 
@@ -87,11 +88,14 @@ def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
 
 async def current_version(conn: Connection) -> int:
     await conn.execute(SCHEMA_VERSION_DDL)
-    version = await conn.fetchval("SELECT coalesce(max(version), 0) AS version FROM schema_version")
-    return int(version)
+    # An aggregate with no GROUP BY always yields its one row.
+    row = await conn.fetchrow_required(
+        "SELECT coalesce(max(version), 0) AS version FROM schema_version"
+    )
+    return int(row["version"])
 
 
-async def applied(conn: Connection) -> list[dict]:
+async def applied(conn: Connection) -> list[dict[str, Any]]:
     await conn.execute(SCHEMA_VERSION_DDL)
     return await conn.fetch(
         "SELECT version, name, checksum, applied_at FROM schema_version ORDER BY version"

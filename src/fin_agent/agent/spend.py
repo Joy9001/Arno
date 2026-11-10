@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -50,7 +50,7 @@ class _SingleConnectionPool:
         self._lock_loop: Any = None
 
     @asynccontextmanager
-    async def acquire(self) -> AsyncIterator[Any]:
+    async def acquire(self) -> AsyncGenerator[Any]:
         loop = asyncio.get_running_loop()
         if self._lock is None or self._lock_loop is not loop:
             self._lock = asyncio.Lock()
@@ -142,17 +142,19 @@ class SharedSpendStore:
 
     async def get_many(self, keys: Sequence[str]) -> Mapping[str, Any]:
         try:
-            return await (await self._resolve()).get_many(keys)
+            counts: Mapping[str, Any] = await (await self._resolve()).get_many(keys)
         except Exception:  # noqa: BLE001 - telemetry-adjacent, never block a command
             logger.warning("shared spend read failed; running uncapped")
             return await _UnavailableStore().get_many(keys)
+        return counts
 
     async def add_many(self, entries: Sequence[Any]) -> Mapping[str, Any]:
         try:
-            return await (await self._resolve()).add_many(entries)
+            counts: Mapping[str, Any] = await (await self._resolve()).add_many(entries)
         except Exception:  # noqa: BLE001 - a failed ledger write must not fail the answer
             logger.warning("shared spend write failed; the counter is understated")
             return await _UnavailableStore().add_many(entries)
+        return counts
 
 
 async def make_spend_store(dsn: str) -> tuple[Any, Any]:
@@ -168,7 +170,7 @@ async def make_spend_store(dsn: str) -> tuple[Any, Any]:
 
 
 @asynccontextmanager
-async def spend_store_scope(store: Any = None) -> AsyncIterator[Any]:
+async def spend_store_scope(store: Any = None) -> AsyncGenerator[Any]:
     """Yield `store`, or a shared ledger store for this run that is closed afterwards.
 
     `None` means the database was unreachable: the work continues uncapped rather than

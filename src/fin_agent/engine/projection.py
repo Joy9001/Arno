@@ -18,7 +18,7 @@ import calendar
 import random
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
-from typing import Any
+from typing import NotRequired, Required, TypedDict
 
 DEFAULT_RUNS = 1_000
 DEFAULT_SEED = 20261103
@@ -34,6 +34,236 @@ MAX_CUT_RATIO = 0.50
 NO_LIQUID_ACCOUNT = "no liquid account"
 NO_CONFIRMED_INCOME = "no confirmed income schedule"
 UNUSABLE_SETUP_GAPS = (NO_LIQUID_ACCOUNT, NO_CONFIRMED_INCOME)
+
+
+class BalanceAge(TypedDict):
+    """One account or card balance and how old it is, as the data-quality note reports it."""
+
+    account: str
+    id: str
+    kind: str
+    as_of: str | None
+    age_days: int | None
+    balance_paise: int
+    known: bool
+
+
+class BaselineSource(TypedDict):
+    """The daily spend rate a category was given, and where that rate came from."""
+
+    category: str
+    id: str
+    source: str
+    amount_per_day_paise: int
+    real_days: int
+    card_share: float
+
+
+class Simulation(TypedDict):
+    """How the seeded walk ran, so a reader can tell sampling from a flat estimate."""
+
+    runs: int
+    seed: int
+    days: int
+    categories_sampled: list[str]
+    categories_flat: list[str]
+    credit_limit_exceeded: bool
+    obligation_misses: int
+    include_unconfirmed: bool
+    resampling: str
+
+
+class DataQuality(TypedDict, total=False):
+    """What the projection could not verify. The caller supplies what it knows; the walk adds."""
+
+    balance_ages: list[BalanceAge]
+    baseline_sources: list[BaselineSource]
+    gaps: list[str]
+    setup_gaps: list[str]
+    outside_text: bool
+    simulation: Simulation
+
+
+class SourceRef(TypedDict):
+    """One citable thing the projection read: an account, card, schedule, goal, category, payee."""
+
+    kind: str
+    id: str
+    name: str
+    detail: str
+    amount_paise: NotRequired[int | None]
+
+
+class CurvePoint(TypedDict):
+    """One day of the projected balance band."""
+
+    date: str
+    median_paise: int
+    p10_paise: int
+    p90_paise: int
+
+
+class MedianLow(TypedDict):
+    """The lowest median balance of the horizon, and the day it falls on."""
+
+    date: str
+    paise: int
+
+
+class GoalRow(TypedDict):
+    """One goal as the projection forecasts it, contributions inside the horizon included."""
+
+    id: str
+    name: str
+    target_paise: int
+    saved_paise: int
+    remaining_after_plan_paise: int
+    deadline: str | None
+    completes_on: str | None
+    slips_days: int | None
+    reached: bool
+
+
+class SourceIds(TypedDict):
+    """The ids behind every number in the projection, grouped by what they are."""
+
+    accounts: list[str]
+    cards: list[str]
+    schedules: list[str]
+    payees: list[str]
+    goals: list[str]
+    categories: list[str]
+
+
+class OptimisticIncome(TypedDict):
+    """One unconfirmed income event the optimistic case adds."""
+
+    date: str
+    name: str
+    amount_paise: int
+    source_id: str | None
+
+
+class Optimistic(TypedDict):
+    """The case where unconfirmed variable income does arrive. Never the verdict's case."""
+
+    floor_probability: float
+    median_low: MedianLow
+    first_floor_crossing: str | None
+    income: list[OptimisticIncome]
+
+
+class Installment(TypedDict):
+    """One instalment of a card-EMI purchase."""
+
+    date: str
+    amount_paise: int
+
+
+class HypotheticalMeta(TypedDict, total=False):
+    """The purchase an affordability verdict was tested against."""
+
+    amount_paise: int
+    date: str
+    method: str
+    emi_months: int | None
+    account: str | None
+    last_cash_date: str
+    card_id: str
+    card_name: str
+    due_date: str
+    installments: list[Installment]
+    total_paise: int
+    available_credit_paise: int
+    feasible: bool
+
+
+class GoalSlip(TypedDict):
+    """One goal the purchase pushes later, or off the horizon."""
+
+    id: str
+    name: str
+    slips_days: int | None
+    completes_on: str | None
+
+
+class CategoryCutRow(TypedDict):
+    """One reducible category and the daily rate a cut leaves it at."""
+
+    category: str
+    id: str
+    percent: float
+    baseline_per_day_paise: int
+    new_baseline_per_day_paise: int
+    until: str | None
+
+
+class Tradeoff(TypedDict, total=False):
+    """One change that keeps the purchase affordable, and what it costs."""
+
+    kind: Required[str]
+    detail: Required[str]
+    date: str
+    days: int
+    method: str
+    account: str | None
+    due_date: str | None
+    installments: list[Installment] | None
+    goal: str
+    goal_id: str
+    slips_days: int | None
+    completes_on: str | None
+    until: str
+    ratio: float
+    categories: list[CategoryCutRow]
+
+
+class Baseline(TypedDict):
+    """The same run without the purchase, so a verdict can be read against it."""
+
+    floor_probability: float
+    median_low: MedianLow
+    first_floor_crossing: str | None
+
+
+class PaymentDate(TypedDict):
+    """The earliest day a one-off payment clears the floor threshold."""
+
+    date: str
+    days: int
+    amount_paise: int
+
+
+class Projection(TypedDict):
+    """One projection run: the balance band, the floor odds, and every citation behind them."""
+
+    as_of: str
+    horizon_days: int
+    end: str
+    floor_paise: int
+    floor_set: bool
+    floor_threshold: float
+    floor_probability: float
+    median_low: MedianLow
+    p10_low_paise: int
+    first_floor_crossing: str | None
+    curve: list[CurvePoint]
+    goals: list[GoalRow]
+    obligations_met: bool
+    data_quality: DataQuality
+    sources: list[SourceRef]
+    source_ids: SourceIds
+    runs: int
+    seed: int
+    optimistic: Optimistic | None
+    # The affordability verdict: present only when a hypothetical purchase was tested.
+    verdict: NotRequired[str]
+    verdict_reason: NotRequired[str]
+    verdict_threshold: NotRequired[float]
+    tradeoffs: NotRequired[list[Tradeoff]]
+    goal_slips: NotRequired[list[GoalSlip]]
+    hypothetical: NotRequired[HypotheticalMeta]
+    baseline: NotRequired[Baseline]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +354,8 @@ class ProjectionInput:
     goals: tuple[GoalPlan, ...] = ()
     categories: tuple[SpendCategory, ...] = ()
     ask_horizon_days: int | None = None
-    data_quality: dict[str, Any] = field(default_factory=dict)
-    sources: tuple[dict[str, Any], ...] = ()
+    data_quality: DataQuality = field(default_factory=DataQuality)
+    sources: tuple[SourceRef, ...] = ()
 
     @property
     def starting_balance_paise(self) -> int:
@@ -188,9 +418,9 @@ def _first_due_on_or_after(card: CardAccount, day: date) -> date:
 
 def horizon_days(inputs: ProjectionInput) -> int:
     """max(90 days, the furthest goal deadline, the asked horizon), capped for sanity."""
-    asked = inputs.ask_horizon_days or 0
+    asked = inputs.ask_horizon_days if inputs.ask_horizon_days is not None else 0
     furthest = max(
-        ((goal.deadline - inputs.as_of).days for goal in inputs.goals if goal.deadline),
+        ((goal.deadline - inputs.as_of).days for goal in inputs.goals if goal.deadline is not None),
         default=0,
     )
     return max(1, min(MAX_HORIZON_DAYS, max(BASE_HORIZON_DAYS, asked, furthest)))
@@ -198,7 +428,7 @@ def horizon_days(inputs: ProjectionInput) -> int:
 
 def percentile(values: list[int], q: float) -> int:
     """Linear-interpolated percentile, so 1,000 runs give a stable P10 and P90."""
-    if not values:
+    if len(values) == 0:
         return 0
     ordered = sorted(values)
     position = (len(ordered) - 1) * q
@@ -209,7 +439,7 @@ def percentile(values: list[int], q: float) -> int:
 
 
 def _dense_history(category: SpendCategory) -> list[tuple[date, int]]:
-    if not category.history:
+    if len(category.history) == 0:
         return []
     by_day = {day: int(amount) for day, amount in category.history}
     start = min(by_day)
@@ -241,7 +471,7 @@ def _simulate(
     runs: int,
     seed: int,
     include_unconfirmed: bool = False,
-) -> tuple[list[list[int]], dict[str, Any]]:
+) -> tuple[list[list[int]], Simulation]:
     """Walk every run and return balances by day (index 0 is as_of)."""
     days = horizon_days(inputs)
     start = inputs.as_of
@@ -315,10 +545,10 @@ def _simulate(
         def apply_event(event: CashEvent, goal_saved: dict[str, int] = goal_saved) -> None:
             nonlocal balance
             amount = event.amount_paise
-            if event.card_id and amount < 0:
+            if event.card_id is not None and amount < 0:
                 balance -= charge_card(event.card_id, -amount, max(event.date, start))
                 return
-            if event.goal_id and amount < 0:
+            if event.goal_id is not None and amount < 0:
                 spent = -amount
                 balance -= spent
                 if event.goal_id in goal_saved:
@@ -359,7 +589,7 @@ def _simulate(
                     balance -= card.outstanding_paise
                     paid_initial.add(card.id)
                 due_amount = card_pending.pop((card.id, day), 0)
-                if due_amount:
+                if due_amount != 0:
                     balance -= due_amount
 
             if obligation_today and balance < 0:
@@ -380,14 +610,14 @@ def _simulate(
                 weekday, weekend, all_days, real = category_pools[category.id]
                 if real:
                     pool = weekend if day.weekday() >= 5 else weekday
-                    if not pool:
+                    if len(pool) == 0:
                         pool = all_days
                     amount = rng.choice(pool)
                 else:
                     amount = category.baseline_per_day_paise
                 if amount <= 0:
                     continue
-                if category.reduce_ratio and (
+                if category.reduce_ratio > 0 and (
                     category.reduce_until is None or day <= category.reduce_until
                 ):
                     amount = int(round(amount * (1 - category.reduce_ratio)))
@@ -397,10 +627,10 @@ def _simulate(
                 card_part = max(0, min(card_part, amount))
                 cash_part = amount - card_part
                 balance -= cash_part
-                if card_part:
+                if card_part != 0:
                     card = (
                         cards.get(category.card_id)
-                        if category.card_id
+                        if category.card_id is not None
                         else next(iter(inputs.cards), None)
                     )
                     if card is None:
@@ -424,12 +654,12 @@ def _simulate(
     }
 
 
-def _goal_rows(inputs: ProjectionInput) -> list[dict[str, Any]]:
+def _goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
     contributions: dict[str, list[CashEvent]] = {}
     for event in inputs.events:
-        if event.kind == "goal_contribution" and event.goal_id:
+        if event.kind == "goal_contribution" and event.goal_id is not None:
             contributions.setdefault(event.goal_id, []).append(event)
-    rows: list[dict[str, Any]] = []
+    rows: list[GoalRow] = []
     for goal in sorted(inputs.goals, key=lambda item: (item.priority, item.name)):
         saved = goal.saved_paise
         completes: date | None = inputs.as_of if saved >= goal.target_paise else None
@@ -452,8 +682,8 @@ def _goal_rows(inputs: ProjectionInput) -> list[dict[str, Any]]:
                 # apart from a goal card's remaining_paise (target minus saved) so the two
                 # readings can never be presented as a contradiction.
                 "remaining_after_plan_paise": max(goal.target_paise - saved, 0),
-                "deadline": goal.deadline.isoformat() if goal.deadline else None,
-                "completes_on": completes.isoformat() if completes else None,
+                "deadline": goal.deadline.isoformat() if goal.deadline is not None else None,
+                "completes_on": completes.isoformat() if completes is not None else None,
                 "slips_days": slips,
                 "reached": completes is not None,
             }
@@ -468,11 +698,11 @@ def _summary(
     runs: int,
     seed: int,
     include_unconfirmed: bool,
-    simulation: dict[str, Any],
-) -> dict[str, Any]:
+    simulation: Simulation,
+) -> Projection:
     days = horizon_days(inputs)
     floor = inputs.floor_paise
-    curve: list[dict[str, Any]] = []
+    curve: list[CurvePoint] = []
     for index in range(days + 1):
         values = [path[index] for path in paths]
         curve.append(
@@ -484,7 +714,7 @@ def _summary(
             }
         )
     run_minima = [min(path) for path in paths]
-    floor_probability = sum(1 for value in run_minima if value >= floor) / runs if runs else 0.0
+    floor_probability = sum(1 for value in run_minima if value >= floor) / runs if runs > 0 else 0.0
     median_curve = [point["median_paise"] for point in curve]
     lowest = min(median_curve)
     lowest_index = median_curve.index(lowest)
@@ -492,8 +722,9 @@ def _summary(
         (point["date"] for point in curve if point["median_paise"] < floor),
         None,
     )
-    data_quality = dict(inputs.data_quality)
-    existing_gaps = list(data_quality.get("gaps") or [])
+    data_quality: DataQuality = {**inputs.data_quality}
+    recorded_gaps = data_quality.get("gaps")
+    existing_gaps = list(recorded_gaps) if recorded_gaps is not None else []
     if simulation["credit_limit_exceeded"]:
         existing_gaps.append(
             "projected card spend exceeds the card limit; the excess is treated as cash spend"
@@ -501,21 +732,23 @@ def _summary(
     data_quality["gaps"] = existing_gaps
     data_quality["simulation"] = simulation
 
-    source_ids = {
+    source_ids: SourceIds = {
         "accounts": sorted({account.id for account in inputs.liquid}),
         "cards": sorted({card.id for card in inputs.cards}),
         "schedules": sorted(
             {
                 event.source_id
                 for event in inputs.events
-                if event.source_id and event.confirmed and not event.kind.startswith("owed_")
+                if event.source_id is not None
+                and event.confirmed
+                and not event.kind.startswith("owed_")
             }
         ),
         "payees": sorted(
             {
                 event.source_id
                 for event in inputs.events
-                if event.source_id and event.kind.startswith("owed_")
+                if event.source_id is not None and event.kind.startswith("owed_")
             }
         ),
         "goals": sorted({goal.id for goal in inputs.goals}),
@@ -552,7 +785,7 @@ def project(
     *,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
-) -> dict[str, Any]:
+) -> Projection:
     """Run the seeded projection and return the curve, floor probability, and data quality."""
     if runs < 1:
         raise ValueError("runs must be positive")
@@ -570,7 +803,7 @@ def project(
         for event in inputs.events
         if not event.confirmed and event.amount_paise > 0 and event.kind.startswith("income")
     ]
-    if unconfirmed:
+    if len(unconfirmed) > 0:
         optimistic_paths, optimistic_simulation = _simulate(
             inputs, runs=runs, seed=seed, include_unconfirmed=True
         )
@@ -633,7 +866,7 @@ def first_full_payment_date(
     start_on: date | None = None,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
-) -> dict[str, Any] | None:
+) -> PaymentDate | None:
     """Earliest date a single payment of ``amount_paise`` clears the floor threshold.
 
     A one-off payment only shifts every later day by the same amount, so prefix and suffix minima
@@ -685,7 +918,7 @@ def first_full_payment_date(
 
 def reduce_categories(
     inputs: ProjectionInput, ratio: float, *, until: date | None = None
-) -> tuple[ProjectionInput, list[dict[str, Any]]]:
+) -> tuple[ProjectionInput, list[CategoryCutRow]]:
     """Spend ``ratio`` less on reducible categories, going back to normal after ``until``.
 
     The ratio is applied to each simulated day rather than to the history, so a cut that runs
@@ -693,7 +926,7 @@ def reduce_categories(
     daily rates the user is agreeing to.
     """
     ratio = max(0.0, min(ratio, MAX_CUT_RATIO))
-    rows: list[dict[str, Any]] = []
+    rows: list[CategoryCutRow] = []
     categories: list[SpendCategory] = []
     for category in inputs.categories:
         if not category.reducible or category.baseline_per_day_paise <= 0:
@@ -708,7 +941,7 @@ def reduce_categories(
                 "percent": round(ratio * 100, 1),
                 "baseline_per_day_paise": category.baseline_per_day_paise,
                 "new_baseline_per_day_paise": baseline,
-                "until": until.isoformat() if until else None,
+                "until": until.isoformat() if until is not None else None,
             }
         )
     return replace(inputs, categories=tuple(categories)), rows

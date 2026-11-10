@@ -99,7 +99,7 @@ async def upload_attachment(
         raise HTTPException(status_code=422, detail="Unknown upload purpose.")
     digest = hashlib.sha256(data).hexdigest()
     attachment_id = await new_id(conn, "att")
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         INSERT INTO attachments
             (id, kind, filename, content_type, size_bytes, sha256, data)

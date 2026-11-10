@@ -58,7 +58,7 @@ async def _insert_challenge(
     setup_token_id: str | None = None,
 ) -> str:
     await conn.execute("DELETE FROM webauthn_challenges WHERE expires_at < now()")
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         INSERT INTO webauthn_challenges (
             kind, challenge, user_handle, user_id, setup_token_id, expires_at
@@ -73,7 +73,7 @@ async def _insert_challenge(
         setup_token_id,
         datetime.now(UTC) + CHALLENGE_TTL,
     )
-    return row["id"]
+    return str(row["id"])
 
 
 async def _pop_challenge(conn: Connection, challenge_id: str, kind: str) -> Challenge:
@@ -194,7 +194,7 @@ async def finish_registration(
         if not await consume_setup_token(conn, token["id"]):
             raise PasskeyError("This enrollment link expired or was already used.")
         if challenge.user_id is None:
-            user = await conn.fetchrow(
+            user = await conn.fetchrow_required(
                 """
                 INSERT INTO users (webauthn_user_handle, display_name)
                 VALUES ($1, $2)

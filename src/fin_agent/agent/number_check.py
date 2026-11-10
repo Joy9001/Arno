@@ -16,6 +16,7 @@ which the rules still forbid, kept apart from a number that has no source at all
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 SCALE = {
@@ -140,7 +141,10 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
     blanked = AGE.sub(lambda m: " " * len(m.group()), blanked)
     found: list[tuple[str, float, float, str]] = []
 
-    def take(pattern: re.Pattern[str], handler: Any) -> list[tuple[str, float, float, str]]:
+    def take(
+        pattern: re.Pattern[str],
+        handler: Callable[[re.Match[str]], tuple[str, float, float, str]],
+    ) -> list[tuple[str, float, float, str]]:
         nonlocal blanked
         out = [handler(match) for match in pattern.finditer(blanked)]
         blanked = pattern.sub(lambda m: " " * len(m.group()), blanked)
@@ -158,7 +162,7 @@ def extract(text: str) -> list[tuple[str, float, float, str]]:
         lambda m: ("percent", _value(m.group(1)), _unit(m.group(1)), m.group().strip()),
     )
 
-    def plain(prefix: str = "") -> Any:
+    def plain(prefix: str = "") -> Callable[[re.Match[str]], tuple[str, float, float, str]]:
         def handler(match: re.Match[str]) -> tuple[str, float, float, str]:
             shown = match.group(1)
             # Indian digit grouping ("18,04,797") is how this product writes money, so a

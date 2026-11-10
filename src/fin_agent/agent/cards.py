@@ -112,7 +112,10 @@ def _link_answer_charts(cards: list[DataChunk]) -> list[DataChunk]:
         enriched: list[Any] = []
         for result in results:
             chart = result.get("chart") if isinstance(result, dict) else None
-            native = charts.get(str(chart.get("chart_id"))) if isinstance(chart, dict) else None
+            if not isinstance(chart, dict):
+                enriched.append(result)
+                continue
+            native = charts.get(str(chart.get("chart_id")))
             if native is None:
                 enriched.append(result)
                 continue

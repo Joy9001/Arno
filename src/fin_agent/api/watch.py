@@ -60,13 +60,13 @@ class PushUnsubscribe(ApiModel):
 class QuestionCreate(ApiModel):
     prompt: str = Field(min_length=1, max_length=2000)
     rule: str = Field(min_length=1, max_length=500)
-    spend_limit_usd: Decimal | None = Field(default=None, ge=0)
+    spend_limit_usd: Decimal | None = Field(default=None, ge=Decimal(0))
 
 
 class QuestionUpdate(ApiModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=2000)
     rule: str | None = Field(default=None, min_length=1, max_length=500)
-    spend_limit_usd: Decimal | None = Field(default=None, ge=0)
+    spend_limit_usd: Decimal | None = Field(default=None, ge=Decimal(0))
     active: bool | None = None
 
 
@@ -210,7 +210,7 @@ async def get_job_activity(conn: Database, since: datetime | None = None) -> dic
     The cursor is read first and runs a little behind, so a job that finishes during this read
     or commits late is reported on the next poll, never lost. The app dedupes the overlap.
     """
-    now = await conn.fetchval("SELECT now() - interval '2 seconds'")
+    now = (await conn.fetchrow_required("SELECT now() - interval '2 seconds' AS now"))["now"]
     active_rows = await conn.fetch(
         """
         SELECT * FROM jobs

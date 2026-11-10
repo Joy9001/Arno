@@ -10,7 +10,7 @@ import logging
 from collections.abc import AsyncIterable
 from dataclasses import replace
 from decimal import Decimal
-from typing import Any
+from typing import Any, override
 
 from pydantic_ai import ModelSettings, RunContext
 from pydantic_ai.capabilities import (
@@ -113,6 +113,7 @@ class RootSpanIO(AbstractCapability[Any]):
     those attributes on the existing span, inside the instrumentation's outermost layer.
     """
 
+    @override
     async def wrap_run(self, ctx: RunContext[Any], *, handler: WrapRunHandler) -> Any:
         from opentelemetry.trace import get_current_span
 
@@ -141,6 +142,7 @@ class RootSpanIO(AbstractCapability[Any]):
 class ToolErrorsToModel(AbstractCapability[AgentDeps]):
     """A tool that throws something unexpected becomes a failed result the model can explain."""
 
+    @override
     async def on_tool_execute_error(
         self,
         ctx: RunContext[AgentDeps],
@@ -208,6 +210,7 @@ def sandbox_help() -> str:
 class CodeModeHints(AbstractCapability[AgentDeps]):
     """A failed `run_code` call names the helpers and modules it could have used."""
 
+    @override
     async def wrap_tool_execute(
         self,
         ctx: RunContext[AgentDeps],
@@ -256,6 +259,7 @@ class TaskTextIsOutside(AbstractCapability[AgentDeps]):
     def __init__(self) -> None:
         self._flagged: set[str] = set()
 
+    @override
     async def before_model_request(self, ctx: RunContext[AgentDeps], request_context: Any) -> Any:
         deps = ctx.deps
         conversation_id = getattr(deps, "conversation_id", None)
@@ -304,7 +308,7 @@ async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
         if row is None or row["snapshot_at"] is None:
             return f"Today is {day}."
         written = (
-            await conn.fetchrow(
+            await conn.fetchrow_required(
                 "SELECT count(*) AS n FROM audit_log WHERE created_at > $1",
                 row["snapshot_at"],
             )

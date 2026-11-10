@@ -16,8 +16,11 @@ from typing import Any
 
 import typer
 import uvicorn
+from pydantic_ai import Agent
+from pydantic_ai.messages import DeferredToolRequests
 
 from fin_agent.agent.builder import build_agent
+from fin_agent.agent.deps import AgentDeps
 from fin_agent.agent.history import (
     create_thread,
     ensure_history,
@@ -31,9 +34,9 @@ from fin_agent.agent.history import (
 from fin_agent.auth.enrollment import enrollment_message
 from fin_agent.auth.sessions import revoke_all_sessions
 from fin_agent.auth.setup import issue_setup_token, setup_required
-from fin_agent.config import REPO_ROOT, ConfigurationError, get_settings
+from fin_agent.config import REPO_ROOT, ConfigurationError, Settings, get_settings
 from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
-from fin_agent.db.conn import connect
+from fin_agent.db.conn import Connection, connect
 from fin_agent.db.migrate import run_migrations
 from fin_agent.db.pre_migration import dump_before_migrating
 from fin_agent.demo.persona import seed_demo
@@ -55,7 +58,7 @@ app.add_typer(demo_app, name="demo")
 logger = logging.getLogger("fin_agent")
 
 
-def _settings():
+def _settings() -> Settings:
     try:
         return get_settings(refresh=True)
     except ConfigurationError as exc:
@@ -85,7 +88,7 @@ def _entry() -> None:
     _configure_console()
 
 
-async def _migrate(settings) -> list[str]:
+async def _migrate(settings: Settings) -> list[int]:
     async with connect(settings.database_url) as conn:
         await dump_before_migrating(conn, settings)
         applied = await run_migrations(conn)
@@ -130,7 +133,7 @@ def setup() -> None:
     setup_token()
 
 
-async def _setup_token(settings) -> Any:
+async def _setup_token(settings: Settings) -> Any:
     async with connect(settings.database_url) as conn:
         if not await setup_required(conn):
             return None
@@ -154,7 +157,7 @@ def setup_token() -> None:
     )
 
 
-async def _passkeys_list(settings) -> list[dict[str, Any]]:
+async def _passkeys_list(settings: Settings) -> list[dict[str, Any]]:
     async with connect(settings.database_url) as conn:
         return await conn.fetch(
             """
@@ -179,7 +182,7 @@ def passkeys_list() -> None:
         typer.echo(f"{row['id']}  {row['name']}  created {row['created_at']}  last used {used}")
 
 
-async def _passkeys_reset(settings) -> tuple[int, int, Any]:
+async def _passkeys_reset(settings: Settings) -> tuple[int, int, Any]:
     async with connect(settings.database_url) as conn:
         async with conn.transaction():
             status_str = await conn.execute("DELETE FROM webauthn_credentials")
@@ -225,7 +228,7 @@ def chat(
     asyncio.run(_run_chat_command(settings, thread_id, message))
 
 
-async def _run_chat_command(settings, thread_id: str | None, message: str | None) -> None:
+async def _run_chat_command(settings: Settings, thread_id: str | None, message: str | None) -> None:
     from fin_agent.agent.spend import SharedSpendStore
 
     spend_store = SharedSpendStore()
@@ -260,7 +263,13 @@ async def _run_chat_command(settings, thread_id: str | None, message: str | None
         spend_store.close()
 
 
-async def _run_cli_turn(conn, agent, thread: dict, history: list, text: str) -> list:
+async def _run_cli_turn(
+    conn: Connection,
+    agent: Agent[AgentDeps, DeferredToolRequests | str],
+    thread: dict[str, Any],
+    history: list[Any],
+    text: str,
+) -> list[Any]:
     from fin_agent.agent.deps import AgentDeps
     from fin_agent.agent.number_check import check_messages
     from fin_agent.agent.turns import _this_turn
@@ -409,7 +418,7 @@ def eval_command(
         raise typer.Exit(code=1)
 
 
-async def _run_backtest(settings, *, source: str, runs: int) -> Any:
+async def _run_backtest(settings: Settings, *, source: str, runs: int) -> Any:
     from fin_agent.engine.backtest import backtest as run_backtest
 
     async with connect(settings.database_url) as conn:
@@ -443,7 +452,7 @@ def backtest_command(
         typer.echo("README.md updated.")
 
 
-async def _run_repair_openings(settings, *, dry_run: bool) -> list[dict[str, Any]]:
+async def _run_repair_openings(settings: Settings, *, dry_run: bool) -> list[dict[str, Any]]:
     from fin_agent.importers.repair import repair_openings
 
     async with connect(settings.database_url) as conn:
@@ -506,7 +515,7 @@ def hackerrank_command(
         raise typer.Exit(code=3)
 
 
-async def _export(settings, *, format: str) -> Any:
+async def _export(settings: Settings, *, format: str) -> Any:
     async with connect(settings.database_url) as conn:
         if format == "json":
             payload = await ledger_export.export_json(conn)
@@ -553,7 +562,7 @@ async def _restore(
     force: bool,
     require_manifest: bool,
 ) -> Any:
-    from fin_agent.backup_restore import restore_from_directory, restore_from_restic
+    from fin_agent.backup_restore import RestoreError, restore_from_directory, restore_from_restic
 
     if from_dir is not None:
         return await restore_from_directory(
@@ -562,6 +571,8 @@ async def _restore(
             force=force,
             require_manifest=require_manifest,
         )
+    if repository is None:
+        raise RestoreError("a restic restore needs --repository or RESTIC_REPOSITORY")
     return await restore_from_restic(
         repository=repository,
         password=os.environ.get("RESTIC_PASSWORD", ""),
@@ -696,7 +707,7 @@ def import_spike(
 
 
 async def _demo_seed(
-    settings,
+    settings: Settings,
     *,
     anchor: date | None,
     reset: bool,
@@ -762,7 +773,7 @@ def demo_seed(
 
 
 async def _demo_template(
-    settings, *, target: str, anchor: date | None, coverage_gap: bool
+    settings: Settings, *, target: str, anchor: date | None, coverage_gap: bool
 ) -> tuple[str, dict[str, Any]]:
     async with connect(settings.database_url) as conn:
         await run_migrations(conn)

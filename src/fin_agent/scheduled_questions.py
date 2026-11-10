@@ -114,7 +114,7 @@ async def create_question(
         raise InvalidLedgerError("A scheduled question needs a prompt")
     await _check_rule(conn, rule)
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO scheduled_questions (prompt, rule, spend_limit_cents)
             VALUES ($1, $2, $3) RETURNING *
@@ -159,7 +159,7 @@ async def update_question(
     columns = list(updates)
     assignments = ", ".join(f"{column} = ${index}" for index, column in enumerate(columns, start=1))
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"""
             UPDATE scheduled_questions
             SET {assignments}, updated_at = now()

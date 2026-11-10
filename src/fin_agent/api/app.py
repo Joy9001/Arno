@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic_ai_harness.step_persistence import PostgresStepStore
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -60,8 +62,8 @@ from fin_agent.observability import bootstrap_observability, shutdown_observabil
 logger = logging.getLogger("fin_agent")
 
 
-async def _bootstrap(settings: Settings) -> list[str]:
-    applied: list[str] = []
+async def _bootstrap(settings: Settings) -> list[int]:
+    applied: list[int] = []
     async with connect(settings.database_url) as conn:
         if settings.auto_migrate:
             await dump_before_migrating(conn, settings)
@@ -98,7 +100,7 @@ async def _bootstrap(settings: Settings) -> list[str]:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     pool = None
     tasks_pool = None
     await _bootstrap(app.state.settings)
@@ -142,7 +144,11 @@ async def lifespan(app: FastAPI):
             logger.exception("import status reconcile failed")
         app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
         app.state.turns = TurnManager(app.state.agent, tasks=tasks)
-        app.state.turns.waker = lambda thread_id: wake(app, thread_id)
+
+        async def wake_thread(thread_id: str) -> None:
+            await wake(app, thread_id)
+
+        app.state.turns.waker = wake_thread
         for thread_id in waiting_threads(tasks, since=time.time() - 86_400):
             app.state.turns.schedule_wake(thread_id)
         app.state.jobs = JobRunner()
@@ -207,19 +213,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(static.router)
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_exception(request: Request, exc: StarletteHTTPException):
+    async def http_exception(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         detail = exc.detail if isinstance(exc.detail, str) else None
-        return problem(exc.status_code, detail=detail, headers=exc.headers)
+        return problem(
+            exc.status_code,
+            detail=detail,
+            headers=dict(exc.headers) if exc.headers is not None else None,
+        )
 
     @app.exception_handler(RequestValidationError)
-    async def validation_exception(request: Request, exc: RequestValidationError):
+    async def validation_exception(request: Request, exc: RequestValidationError) -> JSONResponse:
         return problem(422, detail="The request body or query is not valid.")
 
     @app.exception_handler(asyncpg.PostgresConnectionError)
     @app.exception_handler(asyncpg.CannotConnectNowError)
     @app.exception_handler(asyncpg.ConnectionDoesNotExistError)
     @app.exception_handler(OSError)
-    async def database_unreachable(request: Request, exc: Exception):
+    async def database_unreachable(request: Request, exc: Exception) -> JSONResponse:
         route = request.scope.get("route")
         logger.warning(
             "database unreachable while serving %s",
@@ -228,7 +238,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return problem(503, detail="The database is unreachable.")
 
     @app.exception_handler(LedgerError)
-    async def ledger_rule(request: Request, exc: LedgerError):
+    async def ledger_rule(request: Request, exc: LedgerError) -> JSONResponse:
         return problem(exc.status, title=exc.title, detail=exc.message, extra=exc.details)
 
     return app

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import asyncpg
 import pytest
 from pydantic_ai import DeferredToolRequests
@@ -11,6 +13,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from fin_agent.agent.builder import build_agent
 from fin_agent.agent.cards import cards_from_messages
 from fin_agent.agent.deps import AgentDeps
+from fin_agent.engine.money import Prepay
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.tools import read as read_tools
 from fin_agent.tools import write as write_tools
@@ -495,6 +498,12 @@ async def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger
     assert terms["emi_paise"] == 3_150_000
     now = amortize_fn(**terms, prepay={"amount_paise": 5_000_000})
     later = amortize_fn(**terms, prepay={"amount_paise": 5_000_000, "at_emi": 13})
-    assert 0 < later["prepay"]["interest_saved"]["paise"] < now["prepay"]["interest_saved"]["paise"]
+    now_prepay = now["prepay"]
+    later_prepay = later["prepay"]
+    assert now_prepay is not None
+    assert later_prepay is not None
+    assert 0 < later_prepay["interest_saved"]["paise"] < now_prepay["interest_saved"]["paise"]
+    # An unknown key must still be refused at runtime; the type cannot express a deliberate miss.
+    rejected = cast(Prepay, {"amount_paise": 5_000_000, "after_months": 12})
     with pytest.raises(ValueError, match="after_months"):
-        amortize_fn(**terms, prepay={"amount_paise": 5_000_000, "after_months": 12})
+        amortize_fn(**terms, prepay=rejected)

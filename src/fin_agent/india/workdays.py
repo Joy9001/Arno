@@ -71,7 +71,7 @@ def adjust_to_working_day(
     """Move a holiday or weekend day according to the schedule's policy."""
     if policy == "none":
         return day
-    calendar = calendar or IndiaCalendar.for_span(day, day)
+    calendar = calendar if calendar is not None else IndiaCalendar.for_span(day, day)
     if calendar.is_working_day(day):
         return day
     if policy == "next":
@@ -82,5 +82,5 @@ def adjust_to_working_day(
 def last_working_day(year: int, month: int, calendar: IndiaCalendar | None = None) -> date:
     """The last Monday-Friday that is not a national holiday in the month."""
     last = date(year, month, _calendar.monthrange(year, month)[1])
-    calendar = calendar or IndiaCalendar.for_span(last, last)
+    calendar = calendar if calendar is not None else IndiaCalendar.for_span(last, last)
     return calendar.previous_working_day(last)

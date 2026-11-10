@@ -28,7 +28,7 @@ INDIA = ZoneInfo("Asia/Kolkata")
 def _inclusive_until(match: re.Match[str]) -> str:
     """A date-based schedule means "through" a date-time UNTIL, not up to its midnight."""
     moment = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
-    if match.group(3):
+    if match.group(3) != "":
         moment = moment.replace(tzinfo=UTC).astimezone(INDIA)
     return f"UNTIL={moment:%Y%m%d}T235959"
 
@@ -59,7 +59,7 @@ def _clamp_month_end(text: str) -> str:
 
 def normalize_rule(rule: str) -> str:
     text = rule.strip()
-    if not text:
+    if len(text) == 0:
         raise ValueError("A schedule needs an RRULE")
     # dateutil rejects a UTC UNTIL against a naive DTSTART, and a date-time UNTIL would drop the
     # final day's noon occurrence.
@@ -88,7 +88,7 @@ def parse_rule(rule: str, starts: date) -> rrule:
 def first_occurrence(rule: str, starts: date) -> date | None:
     parsed = parse_rule(rule, starts)
     first = parsed.after(datetime.combine(starts, time(0)), inc=True)
-    return first.date() if first else None
+    return first.date() if first is not None else None
 
 
 def _between(parsed: rrule, start: date, end: date) -> Iterator[date]:
@@ -118,7 +118,11 @@ def expand_rule(
     if end < start:
         return []
 
-    calendar = calendar or calendar_for(start - timedelta(days=7), end + timedelta(days=7))
+    calendar = (
+        calendar
+        if calendar is not None
+        else calendar_for(start - timedelta(days=7), end + timedelta(days=7))
+    )
     buffer_start = start - timedelta(days=7)
     buffer_end = end + timedelta(days=7)
     dates: set[date] = set()

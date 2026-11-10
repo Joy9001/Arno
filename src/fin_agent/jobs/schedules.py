@@ -45,7 +45,8 @@ def _rule_text(rule: str) -> str:
 
 
 async def _settings(conn: Connection) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
+    # Migration 0003 inserts the settings row and nothing deletes it.
+    row = await conn.fetchrow_required("SELECT * FROM settings WHERE id = 1")
     return dict(row)
 
 
@@ -220,7 +221,7 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
                 default_time=default_time,
                 # A COUNT or INTERVAL rule counts from its first occurrence, so an unchanged rule
                 # keeps the stored anchor; only a new rule starts a new phase.
-                anchor=row["dtstart"] if same_rule else None,
+                anchor=row["dtstart"] if row is not None and same_rule else None,
             )
         except ValueError:
             logger.warning("scheduled question %s has an invalid rule", question_id)

@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from datetime import date
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext, Tool
@@ -83,6 +83,7 @@ class ParseReport(BaseModel):
     imports: list[ImportReport] = Field(default_factory=list)
     blocking: str | None = None
 
+    @override
     def __str__(self) -> str:
         return json.dumps(self.model_dump(), ensure_ascii=False)
 
@@ -678,7 +679,7 @@ async def import_state(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, 
     del ctx
     async with connect() as conn:
         row = await _row(conn, import_id)
-        counts = await conn.fetchrow(
+        counts = await conn.fetchrow_required(
             """
             SELECT count(*) AS lines,
                    count(*) FILTER (WHERE debit_paise > 0) AS debits,

@@ -12,7 +12,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
-from typing import Any
 
 from fin_agent.engine.money import money
 from fin_agent.engine.projection import (
@@ -23,7 +22,13 @@ from fin_agent.engine.projection import (
     MAX_HORIZON_DAYS,
     CardAccount,
     CashEvent,
+    GoalRow,
+    GoalSlip,
+    HypotheticalMeta,
+    Installment,
+    Projection,
     ProjectionInput,
+    Tradeoff,
     card_due_date,
     first_full_payment_date,
     project,
@@ -64,7 +69,7 @@ def _pick_card(inputs: ProjectionInput, account: str | None) -> CardAccount | No
 
 def _hypothetical_inputs(
     inputs: ProjectionInput, hypothetical: Hypothetical
-) -> tuple[ProjectionInput, dict[str, Any], str | None]:
+) -> tuple[ProjectionInput, HypotheticalMeta, str | None]:
     """Apply the purchase and return the new inputs, its metadata, and an infeasible reason."""
     amount = int(hypothetical.amount_paise)
     if amount <= 0:
@@ -74,7 +79,7 @@ def _hypothetical_inputs(
     when = max(hypothetical.date, inputs.as_of)
     at_start = hypothetical.date <= inputs.as_of
     name = "Hypothetical purchase"
-    meta: dict[str, Any] = {
+    meta: HypotheticalMeta = {
         "amount_paise": amount,
         "date": hypothetical.date.isoformat(),
         "method": hypothetical.method,
@@ -112,7 +117,7 @@ def _hypothetical_inputs(
         available = money(card.available_credit_paise)["text"]
         return (
             inputs,
-            meta | {"available_credit_paise": card.available_credit_paise},
+            {**meta, "available_credit_paise": card.available_credit_paise},
             f"{card.name} has only {available} of available credit",
         )
     meta["card_id"] = card.id
@@ -134,7 +139,7 @@ def _hypothetical_inputs(
 
     base = amount // months
     remainder = amount - base * months
-    installments: list[dict[str, Any]] = []
+    installments: list[Installment] = []
     events: list[CashEvent] = []
     for index in range(months):
         part = base + (remainder if index == months - 1 else 0)
@@ -156,7 +161,7 @@ def _hypothetical_inputs(
     return replace(inputs, events=inputs.events + tuple(events)), meta, None
 
 
-def _extend_horizon(inputs: ProjectionInput, meta: dict[str, Any]) -> ProjectionInput:
+def _extend_horizon(inputs: ProjectionInput, meta: HypotheticalMeta) -> ProjectionInput:
     """Cover the plan's last cash date, so an EMI's later installments are not ignored."""
     last_cash = meta.get("last_cash_date")
     if not last_cash:
@@ -167,9 +172,9 @@ def _extend_horizon(inputs: ProjectionInput, meta: dict[str, Any]) -> Projection
     return inputs
 
 
-def _goal_slips(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _goal_slips(before: list[GoalRow], after: list[GoalRow]) -> list[GoalSlip]:
     old = {goal["id"]: goal for goal in before}
-    slips: list[dict[str, Any]] = []
+    slips: list[GoalSlip] = []
     for goal in after:
         previous = old.get(goal["id"])
         if previous is None:
@@ -199,11 +204,12 @@ def _goal_slips(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> li
     return slips
 
 
-def _passes(result: dict[str, Any], *, threshold: float) -> bool:
-    return result["floor_probability"] >= threshold and result["obligations_met"]
+def _passes(result: Projection, *, threshold: float) -> bool:
+    floor_ok = float(result["floor_probability"]) >= threshold
+    return floor_ok and bool(result["obligations_met"])
 
 
-def _verdict(tradeoffs: list[dict[str, Any]]) -> str:
+def _verdict(tradeoffs: list[Tradeoff]) -> str:
     """Paying on a later date is a caveat, not a way to afford the purchase as asked."""
     return "yes-but" if any(trade["kind"] != "wait" for trade in tradeoffs) else "no"
 
@@ -214,7 +220,7 @@ def _wait_tradeoff(
     *,
     runs: int,
     seed: int,
-) -> dict[str, Any] | None:
+) -> Tradeoff | None:
     when = max(hypothetical.date, inputs.as_of)
     found = first_full_payment_date(
         inputs,
@@ -243,7 +249,7 @@ def _card_tradeoff(
     runs: int,
     seed: int,
     threshold: float,
-) -> dict[str, Any] | None:
+) -> Tradeoff | None:
     for method in ("card", "emi"):
         if hypothetical.method == method:
             continue
@@ -290,8 +296,8 @@ def _delay_goal_tradeoff(
     runs: int,
     seed: int,
     threshold: float,
-    baseline_goals: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    baseline_goals: list[GoalRow],
+) -> Tradeoff | None:
     when = max(hypothetical.date, inputs.as_of)
     window_end = when + timedelta(days=31)
     for goal in sorted(inputs.goals, key=lambda item: (item.priority, item.name)):
@@ -357,8 +363,8 @@ def _cut_category_tradeoff(
     runs: int,
     seed: int,
     threshold: float,
-    with_purchase: dict[str, Any],
-) -> dict[str, Any] | None:
+    with_purchase: Projection,
+) -> Tradeoff | None:
     floor = inputs.floor_paise
     headroom = int(with_purchase.get("p10_low_paise") or 0) - floor
     if headroom >= 0:
@@ -384,10 +390,10 @@ def _cut_category_tradeoff(
     for step in range(6):
         ratio = min(MAX_CUT_RATIO, start_ratio + step * 0.02)
         reduced, rows = reduce_categories(inputs, ratio, until=payday)
-        with_purchase, _meta, reason = _hypothetical_inputs(reduced, hypothetical)
+        purchase_inputs, _meta, reason = _hypothetical_inputs(reduced, hypothetical)
         if reason is not None:
             continue
-        result = project(with_purchase, runs=runs, seed=seed)
+        result = project(purchase_inputs, runs=runs, seed=seed)
         if not _passes(result, threshold=threshold):
             continue
         names = ", ".join(row["category"] for row in rows)
@@ -411,7 +417,7 @@ def afford(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     threshold: float = FLOOR_THRESHOLD,
-) -> dict[str, Any]:
+) -> Projection:
     """Return the projection with the purchase applied and a tested verdict and tradeoffs."""
     if hypothetical.amount_paise <= 0:
         raise ValueError("the amount must be positive")
@@ -434,14 +440,14 @@ def afford(
     baseline = project(inputs, runs=runs, seed=seed)
     if reason is not None:
         result = baseline
-        slips: list[dict[str, Any]] = []
-        tradeoffs: list[dict[str, Any]] = []
+        slips: list[GoalSlip] = []
+        tradeoffs: list[Tradeoff] = []
         wait = _wait_tradeoff(inputs, hypothetical, runs=runs, seed=seed)
         if wait:
             tradeoffs.append(wait)
         result["verdict"] = _verdict(tradeoffs)
         result["verdict_reason"] = reason
-        result["hypothetical"] = meta | {"feasible": False}
+        result["hypothetical"] = {**meta, "feasible": False}
         result["tradeoffs"] = tradeoffs
         result["goal_slips"] = slips
         result["floor_threshold"] = threshold
@@ -456,7 +462,7 @@ def afford(
         approved = _passes(result, threshold=threshold) and not slips and result["obligations_met"]
         if approved:
             verdict = "yes"
-            tradeoffs: list[dict[str, Any]] = []
+            tradeoffs: list[Tradeoff] = []
             verdict_reason = (
                 f"{result['floor_probability']:.0%} of simulated futures "
                 "stay at or above the floor, no obligation is missed, and no goal slips."
@@ -502,7 +508,7 @@ def afford(
                 )
         result["verdict"] = verdict
         result["verdict_reason"] = verdict_reason
-        result["hypothetical"] = meta | {"feasible": True}
+        result["hypothetical"] = {**meta, "feasible": True}
         result["tradeoffs"] = tradeoffs
         result["goal_slips"] = slips
         result["floor_threshold"] = threshold

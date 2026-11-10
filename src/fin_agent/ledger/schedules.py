@@ -158,7 +158,7 @@ async def create_schedule(
         conn=conn,
     )
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO schedules (
                 kind, subtype, name, amount_paise, account_id, category_id,
@@ -253,7 +253,7 @@ async def update_schedule(
     columns = list(updates)
     assignments = ", ".join(f"{column} = ${index}" for index, column in enumerate(columns, start=1))
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"""
             UPDATE schedules SET {assignments},
                 updated_at = now()

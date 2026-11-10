@@ -79,7 +79,7 @@ async def create_goal(
             name=f"{name.strip()} goal",
             liquid=False,
         )
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO goals
                 (name, target_paise, deadline, priority, account_id, contribution_schedule_id)
@@ -155,7 +155,7 @@ async def update_goal(
     columns = list(updates)
     assignments = ", ".join(f"{column} = ${index}" for index, column in enumerate(columns, start=1))
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"""
             UPDATE goals SET {assignments},
                 updated_at = now()

@@ -173,13 +173,10 @@ async def seed_demo(
             f"dated after today ({ledger_day.isoformat()}); pass today or an earlier date."
         )
     if not reset:
-        existing = (
-            await conn.fetchrow(
-                "SELECT count(*) AS n FROM accounts "
-                "WHERE kind NOT IN ('spending', 'income', 'equity')"
-            )
-        )["n"]
-        if existing:
+        existing = await conn.fetchrow_required(
+            "SELECT count(*) AS n FROM accounts WHERE kind NOT IN ('spending', 'income', 'equity')"
+        )
+        if existing["n"]:
             raise DemoSeedError("The ledger already has accounts; pass reset=True")
     else:
         await conn.execute(_RESET_TABLES)
@@ -748,7 +745,7 @@ async def seed_demo(
         actor="system",
     )
 
-    coverage = {"months": [], "gap": None, "imports": 0}
+    coverage: dict[str, Any] = {"months": [], "gap": None, "imports": 0}
     if statement_coverage:
         coverage = await _seed_statement_coverage(
             conn,
@@ -761,13 +758,13 @@ async def seed_demo(
         "today": today.isoformat(),
         "accounts": len(await list_accounts(conn, include_system=True)),
         "categories": len(await ensure_default_categories(conn)),
-        "schedules": (await conn.fetchrow("SELECT count(*) AS n FROM schedules"))["n"],
-        "goals": (await conn.fetchrow("SELECT count(*) AS n FROM goals"))["n"],
-        "movements": (await conn.fetchrow("SELECT count(*) AS n FROM movements"))["n"],
+        "schedules": (await conn.fetchrow_required("SELECT count(*) AS n FROM schedules"))["n"],
+        "goals": (await conn.fetchrow_required("SELECT count(*) AS n FROM goals"))["n"],
+        "movements": (await conn.fetchrow_required("SELECT count(*) AS n FROM movements"))["n"],
         "imports": coverage["imports"],
         "statement_coverage": coverage,
         "people": (
-            await conn.fetchrow(
+            await conn.fetchrow_required(
                 "SELECT count(*) AS n FROM payees WHERE kind IN ('person', 'organization')"
             )
         )["n"],

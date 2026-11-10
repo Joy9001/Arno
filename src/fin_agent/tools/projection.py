@@ -8,7 +8,7 @@ shares, and hands back source IDs for every underlying account, schedule, goal, 
 from __future__ import annotations
 
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, cast
 
 from fin_agent.db.conn import Connection
 from fin_agent.engine.affordability import Hypothetical, afford
@@ -20,11 +20,16 @@ from fin_agent.engine.projection import (
     MIN_REAL_DAYS,
     NO_CONFIRMED_INCOME,
     NO_LIQUID_ACCOUNT,
+    BalanceAge,
+    BaselineSource,
     CardAccount,
     CashEvent,
     GoalPlan,
     LiquidAccount,
+    MedianLow,
+    Projection,
     ProjectionInput,
+    SourceRef,
     SpendCategory,
 )
 from fin_agent.engine.projection import (
@@ -211,7 +216,7 @@ async def _spend_categories(
     *,
     as_of: date,
     covered_category_ids: set[str],
-) -> tuple[list[SpendCategory], list[dict[str, Any]], list[str]]:
+) -> tuple[list[SpendCategory], list[BaselineSource], list[str]]:
     from fin_agent.tools.read import _reversed_ids  # one definition of a corrected-away row
 
     reversed_ids = await _reversed_ids(conn)
@@ -293,7 +298,7 @@ async def _spend_categories(
             card_choice[category_id] = (str(row["card_id"]), amount)
 
     result: list[SpendCategory] = []
-    baseline_rows: list[dict[str, Any]] = []
+    baseline_rows: list[BaselineSource] = []
     days = [window_start + timedelta(days=offset) for offset in range(HISTORY_DAYS)]
     for category in categories:
         category_id = str(category["id"])
@@ -367,7 +372,7 @@ async def _spend_categories(
 
 async def _owed_events(
     conn: Connection, *, as_of: date, end: date, known_then: bool
-) -> tuple[list[CashEvent], list[dict[str, Any]], list[str]]:
+) -> tuple[list[CashEvent], list[SourceRef], list[str]]:
     # The person account's balance is what is still owed; a label's transfer amount is not.
     # Reading the label amount counted a repaid or reversed split as an expected receipt.
     rows = await conn.fetch(
@@ -392,7 +397,7 @@ async def _owed_events(
         known_then,
     )
     events: list[CashEvent] = []
-    sources: list[dict[str, Any]] = []
+    sources: list[SourceRef] = []
     gaps: list[str] = []
     for row in rows:
         expected = row["expected_date"]
@@ -407,7 +412,10 @@ async def _owed_events(
         balance = int(row["balance_paise"])
         signed = balance
         kind = "owed_receipt" if signed > 0 else "owed_payment"
-        display_name = mark(row["display_name"]) if row["outside_text"] else row["display_name"]
+        # payees.display_name is NOT NULL, so its mark is never null either.
+        display_name = cast(
+            str, mark(row["display_name"]) if row["outside_text"] else row["display_name"]
+        )
         events.append(
             CashEvent(
                 date=when,
@@ -459,7 +467,7 @@ async def load_inputs(
     card_by_account = {row["id"]: row for row in card_rows}
 
     events: list[CashEvent] = []
-    schedule_sources: dict[str, dict[str, Any]] = {}
+    schedule_sources: dict[str, SourceRef] = {}
     covered_categories: set[str] = set()
     schedule_rows = await conn.fetch(
         """
@@ -478,14 +486,15 @@ async def load_inputs(
         )
         if not occurrences:
             continue
+        # schedules.name is NOT NULL, so its mark is never null either.
+        display_name = cast(str, mark(row["name"]) if row["outside_text"] else row["name"])
         schedule_sources[str(row["id"])] = {
             "kind": "schedule",
             "id": row["id"],
-            "name": mark(row["name"]) if row["outside_text"] else row["name"],
+            "name": display_name,
             "detail": f"{row['kind']} · {row['rule']}",
             "amount_paise": int(amount) if amount else None,
         }
-        display_name = mark(row["name"]) if row["outside_text"] else row["name"]
         for occurrence in occurrences:
             if (
                 occurrence["kind"] in {"obligation", "instalment"}
@@ -498,8 +507,10 @@ async def load_inputs(
                 continue
             when = date.fromisoformat(occurrence["date"])
             kind = occurrence["kind"]
-            display_name = (
-                mark(occurrence["name"]) if occurrence["outside_text"] else occurrence["name"]
+            # An occurrence's name comes from its schedule, which is NOT NULL.
+            display_name = cast(
+                str,
+                mark(occurrence["name"]) if occurrence["outside_text"] else occurrence["name"],
             )
             if kind.startswith("income"):
                 events.append(
@@ -613,7 +624,7 @@ async def load_inputs(
         for row in goal_rows
     )
 
-    balance_ages = [
+    balance_ages: list[BalanceAge] = [
         {
             "account": row["name"],
             "id": row["id"],
@@ -637,7 +648,7 @@ async def load_inputs(
         for row in card_rows
     ]
 
-    sources: list[dict[str, Any]] = []
+    sources: list[SourceRef] = []
     for row in liquid_rows:
         sources.append(
             {
@@ -695,7 +706,7 @@ async def load_inputs(
             }
         )
     sources.extend(owed_sources)
-    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    unique: dict[tuple[str, str], SourceRef] = {}
     for source in sources:
         unique[(source["kind"], source["id"])] = source
     outside = any(
@@ -758,7 +769,7 @@ async def project(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     known_then: bool = False,
-) -> dict[str, Any]:
+) -> Projection:
     """The full projection or affordability result, including the daily curve and sources."""
     purchase = _hypothetical(hypothetical)
     load_horizon = horizon_days
@@ -778,14 +789,15 @@ async def project(
     return run_projection(inputs, runs=runs, seed=seed)
 
 
-def _money_low(row: dict[str, Any] | None) -> dict[str, Any] | None:
+def _money_low(row: MedianLow | None) -> dict[str, Any] | None:
     if not row:
         return None
     return {"date": row["date"], "amount": money(int(row["paise"]))}
 
 
-def summary(result: dict[str, Any]) -> dict[str, Any]:
+def summary(result: Projection) -> dict[str, Any]:
     """The compact model-facing payload: numbers, citations, and data quality, no curve."""
+    optimistic = result["optimistic"]
     payload: dict[str, Any] = {
         "as_of": result["as_of"],
         "horizon_days": result["horizon_days"],
@@ -811,16 +823,11 @@ def summary(result: dict[str, Any]) -> dict[str, Any]:
         "outside_text": bool(result["data_quality"].get("outside_text")),
         "optimistic": (
             {
-                "floor_probability": result["optimistic"]["floor_probability"],
-                "median_low": _money_low(
-                    {
-                        "date": result["optimistic"]["median_low"]["date"],
-                        "paise": result["optimistic"]["median_low"]["paise"],
-                    }
-                ),
-                "income": result["optimistic"]["income"],
+                "floor_probability": optimistic["floor_probability"],
+                "median_low": _money_low(optimistic["median_low"]),
+                "income": optimistic["income"],
             }
-            if result.get("optimistic")
+            if optimistic is not None
             else None
         ),
     }
@@ -834,7 +841,7 @@ def summary(result: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def card(result: dict[str, Any]) -> dict[str, Any]:
+def card(result: Projection) -> dict[str, Any]:
     """The UI metadata card: the full curve, sources, verdict, and every citation."""
     payload: dict[str, Any] = {
         "card": "projection",

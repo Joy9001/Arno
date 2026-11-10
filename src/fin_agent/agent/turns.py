@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
@@ -136,6 +136,7 @@ def approval_text(output: Any, response: Any) -> str | None:
         return None
     sentences: list[str] = []
     for call in output.approvals:
+        arguments: dict[str, Any]
         try:
             arguments = call.args_as_dict()
         except TypeError, ValueError:
@@ -376,7 +377,7 @@ class TurnManager:
         self.tasks = tasks
         self.turns: dict[str, ChatTurn] = {}
         # Starts a turn for a thread whose task report is waiting; the app sets it.
-        self.waker: Callable[[str], Awaitable[Any]] | None = None
+        self.waker: Callable[[str], Coroutine[Any, Any, Any]] | None = None
         self._waking: set[asyncio.Task[Any]] = set()
         self.closing = False
         self._guard = asyncio.Lock()

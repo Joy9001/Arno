@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -254,7 +255,7 @@ class ResultRegistry:
         return Registration([result], fallback)
 
     def register_calculation(
-        self, kind: str, payload: dict[str, Any], card: dict[str, Any]
+        self, kind: str, payload: Mapping[str, Any], card: dict[str, Any]
     ) -> PresentationResult:
         builder = {
             "amortize": self._register_amortize,
@@ -263,7 +264,8 @@ class ResultRegistry:
         }.get(kind)
         if builder is None:  # pragma: no cover - internal misuse
             raise PresentationError(f"Unknown calculation kind {kind!r}")
-        return builder(payload, card)
+        # The builders read the payload as a loose mapping; every caller passes a typed payload.
+        return builder(dict(payload), card)
 
     def register_table(self, table: TableInput) -> PresentationResult:
         columns = [
@@ -534,9 +536,8 @@ class ResultRegistry:
         self, payload: dict[str, Any], context: dict[str, Any]
     ) -> PresentationResult:
         del payload
-        card = context.get("card")
-        if not isinstance(card, dict):
-            card = {}
+        found = context.get("card")
+        card: dict[str, Any] = found if isinstance(found, dict) else {}
         goals = card.get("goals") or []
         shown_goals = goals[:MAX_TABLE_ROWS]
         title = "Affordability" if card.get("verdict") else "Projection"
@@ -1152,7 +1153,7 @@ def build_answer(
 
 
 def _node_types(node: AnswerNode) -> list[str]:
-    types = [node.type]
+    types: list[str] = [node.type]
     for child in node.children or []:
         types.extend(_node_types(child))
     return types

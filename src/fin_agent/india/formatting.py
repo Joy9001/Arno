@@ -19,7 +19,7 @@ def _group_indian(digits: str) -> str:
     while len(head) > 2:
         groups.insert(0, head[-2:])
         head = head[:-2]
-    if head:
+    if len(head) > 0:
         groups.insert(0, head)
     return ",".join([*groups, tail])
 

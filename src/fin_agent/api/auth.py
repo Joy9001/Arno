@@ -55,7 +55,8 @@ class RenamePasskeyBody(BaseModel):
 
 
 def _settings(request: Request) -> Settings:
-    return request.app.state.settings
+    settings: Settings = request.app.state.settings
+    return settings
 
 
 def _set_session_cookie(response: Response, token: str, ttl_days: int, secure: bool) -> None:
@@ -194,7 +195,8 @@ async def login_begin(request: Request, conn: Database) -> Any:
     settings = _settings(request)
     if await setup_required(conn):
         return problem(409, detail="Setup is not complete. Open the setup page first.")
-    user = await conn.fetchrow("SELECT id FROM users ORDER BY created_at LIMIT 1")
+    # `setup_required` is false only once a user exists, so this row is there.
+    user = await conn.fetchrow_required("SELECT id FROM users ORDER BY created_at LIMIT 1")
     credential_ids = [
         row["credential_id"]
         for row in await conn.fetch(

@@ -35,7 +35,9 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
 
 
 async def count_unread(conn: Connection) -> int:
-    row = await conn.fetchrow("SELECT count(*) AS n FROM notifications WHERE read_at IS NULL")
+    row = await conn.fetchrow_required(
+        "SELECT count(*) AS n FROM notifications WHERE read_at IS NULL"
+    )
     return int(row["n"])
 
 

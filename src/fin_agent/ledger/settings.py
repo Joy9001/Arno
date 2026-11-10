@@ -72,13 +72,14 @@ async def update_settings(
             ZoneInfo(time_zone)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise InvalidLedgerError(f"Unknown time zone: {time_zone}") from exc
+    parsed_time: time | None = None
     if notification_time is not None:
         try:
-            notification_time = time.fromisoformat(notification_time)
+            parsed_time = time.fromisoformat(notification_time)
         except ValueError as exc:
             raise InvalidLedgerError("The notification time is HH:MM") from exc
 
-    before = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
+    before = await conn.fetchrow_required("SELECT * FROM settings WHERE id = 1")
     user_before = await conn.fetchrow("SELECT * FROM users ORDER BY created_at LIMIT 1")
     updates: dict[str, Any] = {}
     for key, value in {
@@ -86,7 +87,7 @@ async def update_settings(
         "base_currency": base_currency.upper() if base_currency else None,
         "time_zone": time_zone,
         "default_horizon_days": default_horizon_days,
-        "notification_time": notification_time,
+        "notification_time": parsed_time,
         "weekly_briefing_dow": weekly_briefing_dow,
         "reminder_lead_days": reminder_lead_days,
     }.items():
@@ -104,7 +105,7 @@ async def update_settings(
             assignments = ", ".join(
                 f"{column} = ${index}" for index, column in enumerate(columns, start=1)
             )
-            after = await conn.fetchrow(
+            after = await conn.fetchrow_required(
                 f"""
                 UPDATE settings SET {assignments},
                     updated_at = now()
@@ -116,7 +117,7 @@ async def update_settings(
         if display_name is not None:
             if user_before is None:
                 raise InvalidLedgerError("There is no user profile yet")
-            user_after = await conn.fetchrow(
+            user_after = await conn.fetchrow_required(
                 "UPDATE users SET display_name = $1 WHERE id = $2 RETURNING *",
                 display_name.strip(),
                 user_before["id"],
@@ -143,6 +144,9 @@ async def backup_status(conn: Connection, *, now: datetime | None = None) -> dic
     )
     due_at = last_success_at + BACKUP_DUE_AFTER if last_success_at is not None else None
     alert_at = last_success_at + BACKUP_ALERT_AFTER if last_success_at is not None else None
+    # No backup yet is due and overdue; both timestamps are absent in exactly that case.
+    due = due_at is None or now >= due_at
+    overdue = alert_at is None or now >= alert_at
     return {
         "last_success_at": last_success_at.isoformat() if last_success_at else None,
         "last_success_age_seconds": age_seconds,
@@ -161,8 +165,8 @@ async def backup_status(conn: Connection, *, now: datetime | None = None) -> dic
             else None
         ),
         "due_at": due_at.isoformat() if due_at else None,
-        "due": last_success_at is None or now >= due_at,
+        "due": due,
         "alert_at": alert_at.isoformat() if alert_at else None,
-        "overdue": last_success_at is None or now >= alert_at,
+        "overdue": overdue,
         "checked_at": now.isoformat(),
     }

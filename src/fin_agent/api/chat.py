@@ -289,8 +289,8 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         last = (str(body.get("messageId") or uuid.uuid4()), "")
     message_id, text = last
     thread_id = _request_thread_id(body)
-    statement_refs = [] if approval_turn else _statement_refs(messages)
-    photo_refs = [] if approval_turn else _photo_refs(messages)
+    statement_refs: list[dict[str, str]] = [] if approval_turn else _statement_refs(messages)
+    photo_refs: list[dict[str, str]] = [] if approval_turn else _photo_refs(messages)
     try:
         quote = None if approval_turn else quote_from_messages(messages)
     except QuoteError as exc:
@@ -743,7 +743,7 @@ async def patch_preference(
     if row is None:
         raise HTTPException(status_code=404, detail="That preference does not exist.")
     async with conn.transaction():
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             "UPDATE preferences SET active = $1, updated_at = now() WHERE id = $2 RETURNING *",
             body.active,
             preference_id,
@@ -770,12 +770,12 @@ async def patch_preference_kind(
     if row is None:
         raise HTTPException(status_code=404, detail="That preference does not exist.")
     async with conn.transaction():
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             "UPDATE preferences SET kind = $1, updated_at = now() WHERE id = $2 RETURNING *",
             body.kind,
             preference_id,
         )
-        audit = await conn.fetchrow(
+        audit = await conn.fetchrow_required(
             """
             INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
             VALUES ('user', pgledger_generate_id('und'), 'preferences', $1, $2, $3)

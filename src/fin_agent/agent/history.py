@@ -28,7 +28,8 @@ RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    return json.loads(ModelMessagesTypeAdapter.dump_json(messages))
+    dumped: list[dict[str, Any]] = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
+    return dumped
 
 
 def _load(data: Any) -> list[Any]:
@@ -43,13 +44,13 @@ async def create_thread(
     conn: Connection, *, title: str | None = None, thread_id: str | None = None
 ) -> dict[str, Any]:
     if thread_id:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             "INSERT INTO conversations (id, title) VALUES ($1, $2) RETURNING *",
             thread_id,
             title,
         )
     else:
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             "INSERT INTO conversations (title) VALUES ($1) RETURNING *", title
         )
     return row
@@ -94,7 +95,7 @@ async def ensure_history(conn: Connection, thread: dict[str, Any]) -> tuple[list
     outside = False
     if not history:
         history, outside = await build_snapshot_history(conn)
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             UPDATE conversations
             SET model_history = $1, snapshot_at = now(), updated_at = now(),
@@ -150,7 +151,7 @@ async def refresh_snapshot(
         if rest and isinstance(rest[0], ModelResponse) and _is_snapshot_reply(rest[0]):
             rest = rest[1:]
     history = replacement + rest
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         UPDATE conversations
         SET model_history = $1, snapshot_at = now(), updated_at = now(),
@@ -197,7 +198,7 @@ async def append_outside_entry(
         ModelRequest(parts=[UserPromptPart(content=marked_text)]),
         ModelResponse(parts=[TextPart(reply)]),
     ]
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         UPDATE conversations
         SET model_history = $1,
@@ -247,7 +248,7 @@ async def record_user_message(
                 },
             }
         )
-    content = {
+    content: dict[str, Any] = {
         "id": client_id,
         "role": "user",
         "parts": parts,
@@ -270,7 +271,10 @@ async def record_user_message(
         content,
         safe,
     )
-    return row or await conn.fetchrow("SELECT * FROM messages WHERE client_id = $1", client_id)
+    if row is None:
+        # `ON CONFLICT` keeps the row an earlier retry of this message already stored.
+        row = await conn.fetchrow_required("SELECT * FROM messages WHERE client_id = $1", client_id)
+    return row
 
 
 async def mark_run_started(conn: Connection, thread_id: str, run_id: str) -> None:
@@ -345,17 +349,16 @@ def paragraphs(message: Any) -> Any:
 
 def _retried_calls(messages: list[Any]) -> set[str]:
     """The tool calls the model had to redo, so the attempt that made them was abandoned."""
-    from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart
 
     retried: set[str] = set()
     for message in messages:
         if not isinstance(message, ModelRequest):
             continue
         for part in message.parts:
+            # A retry that answers a tool call is that call's own return, marked retried. The
+            # deprecated `RetryPromptPart` a stored transcript still holds loads as one.
             if isinstance(part, ToolReturnPart) and part.outcome == "retried":
-                retried.add(str(part.tool_call_id))
-            elif isinstance(part, RetryPromptPart) and part.tool_call_id:
-                # A transcript saved before retries travelled as tool returns.
                 retried.add(str(part.tool_call_id))
     return retried
 
@@ -462,12 +465,14 @@ async def save_records(
         (message for message in reversed(ui) if message.get("role") == "assistant"), None
     )
     if last_assistant is None and (save_note or extra_cards or ending in {"failed", "cancelled"}):
-        last_assistant = {
+        parts: list[Any] = []
+        blank: dict[str, Any] = {
             "id": await new_id(conn, "msg"),
             "role": "assistant",
-            "parts": [],
+            "parts": parts,
         }
-        ui.append(last_assistant)
+        last_assistant = blank
+        ui.append(blank)
     if last_assistant is not None:
         if reply_id:
             last_assistant["id"] = reply_id
@@ -519,7 +524,9 @@ async def save_records(
             # A finished run ends at its last response; a stopped or failed one ends now.
             finished_at=None if ending == "complete" else datetime.now(UTC),
         )
-        metadata = last_assistant.setdefault("metadata", {})
+        stored_metadata = last_assistant.get("metadata")
+        metadata: dict[str, Any] = stored_metadata if isinstance(stored_metadata, dict) else {}
+        last_assistant["metadata"] = metadata
         if timing is not None:
             timing["toolCallCount"] = sum(
                 1
@@ -600,7 +607,7 @@ async def recover_crashed_runs(conn: Connection) -> list[dict[str, Any]]:
         if started is not None:
             writes = int(
                 (
-                    await conn.fetchrow(
+                    await conn.fetchrow_required(
                         "SELECT count(*) AS n FROM audit_log WHERE created_at >= $1", started
                     )
                 )["n"]

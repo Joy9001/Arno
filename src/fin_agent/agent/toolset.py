@@ -17,7 +17,7 @@ import asyncpg
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import RunContext, ToolReturn
 from pydantic_ai.exceptions import ApprovalRequired, ModelRetry
-from pydantic_ai.toolsets import FunctionToolset
+from pydantic_ai.toolsets import FunctionToolset, SetMetadataToolset
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
 from fin_agent.agent.deps import AgentDeps
@@ -28,6 +28,7 @@ from fin_agent.agent.presentation import (
 )
 from fin_agent.agent.write_models import Movement, MovementChanges, SetupData
 from fin_agent.db.conn import Connection, connect, quote_ident
+from fin_agent.engine.money import Prepay as PrepayPayload
 from fin_agent.engine.money import amortize as amortize_fn
 from fin_agent.engine.money import compound as compound_fn
 from fin_agent.engine.money import money
@@ -314,22 +315,26 @@ async def amortize(
                 terms = await loan_terms(conn, loan)
             except LoanTermsError as exc:
                 raise ModelRetry(exc.message) from exc
-        principal_paise = terms["principal_paise"]
-        annual_rate = terms["annual_rate"]
-        months = terms["months"]
+        principal = terms["principal_paise"]
+        rate = terms["annual_rate"]
+        count = terms["months"]
         emi_paise = terms["emi_paise"]
     else:
-        emi_paise = None
         if principal_paise is None or annual_rate is None or months is None:
             raise ModelRetry("Pass a loan name, or principal_paise, annual_rate, and months")
+        principal = principal_paise
+        rate = annual_rate
+        count = months
+        emi_paise = None
     try:
+        # Loan terms come from rows and sandbox calls; normalize them before the maths.
         result = amortize_fn(
-            int(principal_paise),
-            float(annual_rate),
-            int(months),
+            int(principal),
+            float(rate),
+            int(count),
             emi_paise=emi_paise,
             start_date=start,
-            prepay=prepay.model_dump() if prepay else None,
+            prepay=PrepayPayload(**prepay.model_dump()) if prepay is not None else None,
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
@@ -465,7 +470,7 @@ async def present(ctx: RunContext[AgentDeps], display: dict[str, Any]) -> ToolRe
     return ToolReturn(return_value=return_value, metadata=_card_data(card))
 
 
-def build_read_toolset() -> FunctionToolset[AgentDeps]:
+def build_read_toolset() -> SetMetadataToolset[AgentDeps]:
     return FunctionToolset(
         tools=[
             get_financial_context,

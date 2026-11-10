@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import TypedDict, overload
 
 from fin_agent.india.formatting import format_paise
 
@@ -21,7 +21,80 @@ def _paise(value: Decimal | float | int) -> int:
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def money(paise: int | None) -> dict[str, Any] | None:
+class Money(TypedDict):
+    """The shared Money shape: whole paise and its display text."""
+
+    paise: int
+    text: str
+
+
+class ScheduleRow(TypedDict):
+    """One month of an amortization schedule."""
+
+    n: int
+    date: str | None
+    interest_paise: int
+    principal_paise: int
+    balance_paise: int
+
+
+class Prepay(TypedDict, total=False):
+    """A prepayment: the lump sum, the EMI it lands before, and what it keeps."""
+
+    amount_paise: int
+    at_emi: int
+    reduce: str
+
+
+class PrepayResult(TypedDict):
+    """What the prepayment changed, beside the loan it was applied to."""
+
+    new_emi: Money
+    new_months: int
+    new_total_interest: Money
+    interest_saved: Money
+    months_saved: int
+
+
+class Amortization(TypedDict):
+    """An EMI plan: the schedule, its totals, and the prepayment if one was asked for."""
+
+    emi: Money
+    months: int
+    total_interest: Money
+    total_paid: Money
+    payoff_date: str | None
+    schedule: list[ScheduleRow]
+    prepay: PrepayResult | None
+    assumptions: list[str]
+
+
+class YearlyRow(TypedDict):
+    """The balance at the end of one year of compounding."""
+
+    year: int
+    balance_paise: int
+
+
+class CompoundResult(TypedDict):
+    """Growth at an assumed rate: the final value, what went in, and the growth."""
+
+    final: Money
+    contributed: Money
+    growth: Money
+    yearly: list[YearlyRow]
+    assumptions: list[str]
+
+
+@overload
+def money(paise: None) -> None: ...
+
+
+@overload
+def money(paise: int) -> Money: ...
+
+
+def money(paise: int | None) -> Money | None:
     """The shared Money shape: unknown is null, never zero."""
     if paise is None:
         return None
@@ -78,7 +151,7 @@ def _walk(principal: Decimal, monthly_rate: Decimal, emi: Decimal, months: int) 
         interest.append(month_interest)
         principal_paid.append(month_principal)
         balance -= month_principal
-    if balance > 0 and principal_paid:
+    if balance > 0 and len(principal_paid) > 0:
         # A rounded EMI can leave a few paise after the last month; the final installment pays
         # them, so the schedule's principal always sums to the loan.
         principal_paid[-1] += balance
@@ -92,9 +165,9 @@ def amortize(
     *,
     emi_paise: int | None = None,
     start_date: date | None = None,
-    prepay: dict[str, Any] | None = None,
+    prepay: Prepay | None = None,
     assumptions: list[str] | None = None,
-) -> dict[str, Any]:
+) -> Amortization:
     """EMI, total interest, payoff date, and a monthly schedule, optionally with a prepayment.
 
     ``annual_rate`` is a percentage (8.5 means 8.5% a year). A prepayment is applied before EMI
@@ -114,15 +187,17 @@ def amortize(
     emi = emi.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     walk = _walk(principal, monthly_rate, emi, months)
 
-    def schedule(w: _Walk) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
+    def schedule(w: _Walk) -> list[ScheduleRow]:
+        rows: list[ScheduleRow] = []
         for index, (balance, interest, principal_paid) in enumerate(
             zip(w.balances, w.interest, w.principal, strict=True), start=1
         ):
             rows.append(
                 {
                     "n": index,
-                    "date": _add_months(start_date, index).isoformat() if start_date else None,
+                    "date": _add_months(start_date, index).isoformat()
+                    if start_date is not None
+                    else None,
                     "interest_paise": int(interest),
                     "principal_paise": int(principal_paid),
                     "balance_paise": int(balance - principal_paid),
@@ -131,35 +206,38 @@ def amortize(
         return rows
 
     total_interest = sum(walk.interest, Decimal(0))
-    result: dict[str, Any] = {
+    result: Amortization = {
         "emi": money(int(emi)),
         "months": len(walk.principal),
         "total_interest": money(int(total_interest)),
         "total_paid": money(int(principal + total_interest)),
         "payoff_date": _add_months(start_date, len(walk.principal)).isoformat()
-        if start_date
+        if start_date is not None
         else None,
         "schedule": schedule(walk),
         "prepay": None,
         "assumptions": assumptions
-        or [f"{annual_rate:g}% a year, as entered; a floating rate can change"],
+        if assumptions is not None and len(assumptions) > 0
+        else [f"{annual_rate:g}% a year, as entered; a floating rate can change"],
     }
 
-    if prepay:
+    if prepay is not None and len(prepay) > 0:
         unknown = sorted(set(prepay) - {"amount_paise", "at_emi", "reduce"})
-        if unknown:
+        if len(unknown) > 0:
             # An ignored timing key once priced "after 12 EMIs" as "now" without a word.
             raise ValueError(
                 f"prepay takes amount_paise, at_emi, and reduce, not {', '.join(unknown)}"
             )
-        amount = int(prepay.get("amount_paise") or 0)
+        raw_amount = prepay.get("amount_paise")
+        amount = int(raw_amount) if raw_amount is not None and raw_amount != 0 else 0
         if amount <= 0:
             raise ValueError("a prepayment must be positive")
         raw_at_emi = prepay.get("at_emi")
         at_emi = int(raw_at_emi) if raw_at_emi is not None else 1
         if not 1 <= at_emi <= len(walk.principal):
             raise ValueError("at_emi must be between the next EMI and the last one")
-        reduce = str(prepay.get("reduce") or "tenure")
+        raw_reduce = prepay.get("reduce")
+        reduce = str(raw_reduce) if raw_reduce is not None and raw_reduce != "" else "tenure"
         if reduce not in {"tenure", "emi"}:
             raise ValueError("reduce is tenure or emi")
         before = at_emi - 1
@@ -197,7 +275,7 @@ def compound(
     months: int,
     *,
     start_paise: int = 0,
-) -> dict[str, Any]:
+) -> CompoundResult:
     """Growth of a monthly investment at an assumed annual rate, paid at the start of each month.
 
     The rate is an assumption, not a prediction: the caller must state it in the answer.
@@ -211,7 +289,7 @@ def compound(
 
     monthly_rate = Decimal(str(annual_rate)) / (HUNDRED * MONTHS_IN_YEAR)
     balance = Decimal(start_paise)
-    yearly: list[dict[str, Any]] = []
+    yearly: list[YearlyRow] = []
     for month in range(1, months + 1):
         balance = ((balance + Decimal(monthly_paise)) * (Decimal(1) + monthly_rate)).quantize(
             Decimal("1"), rounding=ROUND_HALF_UP

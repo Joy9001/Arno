@@ -123,7 +123,7 @@ def _add_months(day: date, months: int) -> date:
 
 def _recurring_date(pattern: dict[str, Any], index: int) -> date:
     """The pattern's occurrence ``index`` steps after its last settled date, anchored there."""
-    anchor = pattern["last"]
+    anchor: date = pattern["last"]
     if pattern["step"] == "monthly":
         return _add_months(anchor, index)
     if pattern["step"] == "yearly":
@@ -139,10 +139,10 @@ def _events_for(
         event
         for event in user_events
         if event.get("settlement_date")
-        and _day(event["settlement_date"]) is not None
-        and request_date < _day(event["settlement_date"]) <= end
         and event["status"] in {"scheduled", "pending"}
         and event["direction"] in {"debit", "credit"}
+        and (settled := _day(event["settlement_date"])) is not None
+        and request_date < settled <= end
     ]
     events: list[CashEvent] = []
     covered: set[str] = set()
@@ -327,7 +327,7 @@ def _installment_feasible(
         for index in range(count)
     )
     result = project(replace(inputs, events=inputs.events + events), runs=runs, seed=seed)
-    return result["floor_probability"] >= 0.90 and result["obligations_met"]
+    return bool(result["floor_probability"] >= 0.90 and result["obligations_met"])
 
 
 def _predict(

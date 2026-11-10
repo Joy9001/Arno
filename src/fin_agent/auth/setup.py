@@ -43,7 +43,7 @@ def _hash(token: str) -> bytes:
 
 async def setup_required(conn: Connection) -> bool:
     """Setup is open until a user exists with at least one passkey."""
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         SELECT EXISTS (SELECT 1 FROM users) AS has_user,
                EXISTS (SELECT 1 FROM webauthn_credentials) AS has_credential
@@ -66,7 +66,7 @@ async def _insert_token(
             "DELETE FROM setup_tokens WHERE kind = $1 AND consumed_at IS NULL",
             kind,
         )
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO setup_tokens (token_hash, kind, user_id, expires_at)
             VALUES ($1, $2, $3, now() + $4)
@@ -119,7 +119,7 @@ async def ensure_setup_token(conn: Connection, *, ttl_hours: int = 24) -> str | 
     """
     if not await setup_required(conn):
         return None
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """
         SELECT EXISTS (
             SELECT 1 FROM setup_tokens

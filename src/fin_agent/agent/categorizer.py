@@ -12,7 +12,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, ModelSettings, RunContext
@@ -32,8 +32,9 @@ from fin_agent.agent.capabilities import (
 from fin_agent.agent.models import primary_model
 from fin_agent.db.conn import connect
 from fin_agent.importers import rules as rules_mod
+from fin_agent.importers.rules import normalize_pattern
 from fin_agent.ledger.audit import write_group
-from fin_agent.ledger.categories import normalize_pattern, upsert_rule_in_group
+from fin_agent.ledger.categories import upsert_rule_in_group
 
 logger = logging.getLogger("fin_agent.agent.categorizer")
 
@@ -79,6 +80,7 @@ class CategorizeReport(BaseModel):
     uncategorized: int = 0
     note: str | None = None
 
+    @override
     def __str__(self) -> str:
         return f"{self.status}: {self.labeled} labeled, {self.uncategorized} uncategorized"
 
@@ -477,7 +479,7 @@ async def save_categories(
                         hint,
                         movement_id,
                     )
-                    after = await conn.fetchrow(
+                    after = await conn.fetchrow_required(
                         "SELECT * FROM movements WHERE id = $1", movement_id
                     )
                     group.record_updated("movements", movement_id, dict(before), dict(after))

@@ -9,8 +9,10 @@ import pytest
 from fin_agent.engine.projection import (
     CardAccount,
     CashEvent,
+    CurvePoint,
     GoalPlan,
     LiquidAccount,
+    Projection,
     ProjectionInput,
     SpendCategory,
     first_full_payment_date,
@@ -41,7 +43,7 @@ def _inputs(
     )
 
 
-def _by_date(result: dict) -> dict[str, dict]:
+def _by_date(result: Projection) -> dict[str, CurvePoint]:
     return {point["date"]: point for point in result["curve"]}
 
 
@@ -226,8 +228,10 @@ def test_unconfirmed_variable_income_is_only_an_optimistic_case():
         runs=50,
     )
     assert result["floor_probability"] == 0.0
-    assert result["optimistic"]["floor_probability"] == 1.0
-    assert result["optimistic"]["income"][0]["name"] == "Freelance"
+    optimistic = result["optimistic"]
+    assert optimistic is not None
+    assert optimistic["floor_probability"] == 1.0
+    assert optimistic["income"][0]["name"] == "Freelance"
 
 
 def test_a_category_with_too_few_real_days_falls_back_to_a_flat_estimate():
