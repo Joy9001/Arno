@@ -18,6 +18,8 @@ from fin_agent.engine.projection import (
     DEFAULT_SEED,
     HISTORY_DAYS,
     MIN_REAL_DAYS,
+    NO_CONFIRMED_INCOME,
+    NO_LIQUID_ACCOUNT,
     CardAccount,
     CashEvent,
     GoalPlan,
@@ -81,16 +83,30 @@ async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) 
     )
 
 
+# An account is known on a day when its row existed then, or when the ledger already held an entry
+# for it: a backfill is imported after the history it covers, so `created_at` alone hid a
+# backfilled account from the whole backtest.
+_KNOWN_ON_DAY = """
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1
+               OR EXISTS (
+                   SELECT 1 FROM pgledger_entries e
+                   JOIN pgledger_transfers t ON t.id = e.transfer_id
+                   LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+                   WHERE e.account_id = accounts.ledger_account_id
+                     AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $1
+               ))
+"""
+
+
 async def _card_rows(
     conn: Connection, as_of: date, *, known_then: bool
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
-        """
+        f"""
         SELECT * FROM accounts
-        WHERE kind = 'card' AND active
-          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        WHERE kind = 'card' AND active{_KNOWN_ON_DAY}
         ORDER BY name
-        """,
+        """,  # noqa: S608 - the fragment is a constant of this module
         as_of,
         known_then,
     )
@@ -128,12 +144,11 @@ async def _liquid_rows(
     conn: Connection, as_of: date, *, known_then: bool
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
-        """
+        f"""
         SELECT * FROM accounts
-        WHERE liquid AND active
-          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        WHERE liquid AND active{_KNOWN_ON_DAY}
         ORDER BY name
-        """,
+        """,  # noqa: S608 - the fragment is a constant of this module
         as_of,
         known_then,
     )
@@ -546,11 +561,11 @@ async def load_inputs(
     obligation_count = sum(1 for row in current if row["kind"] in {"obligation", "instalment"})
     setup_gaps: list[str] = []
     if not liquid_rows:
-        setup_gaps.append("no liquid account")
+        setup_gaps.append(NO_LIQUID_ACCOUNT)
     if floor <= 0:
         setup_gaps.append("no floor set; the projection uses zero")
     if not income_count:
-        setup_gaps.append("no confirmed income schedule")
+        setup_gaps.append(NO_CONFIRMED_INCOME)
     if not obligation_count:
         setup_gaps.append("no obligations")
     if not goal_rows:

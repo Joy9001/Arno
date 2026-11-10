@@ -191,12 +191,14 @@ def test_the_cut_tradeoff_ends_at_the_next_payday():
 async def test_a_projection_as_of_a_past_day_ignores_rows_created_later(ledger):
     today = ledger_today()
     as_of = today - timedelta(days=60)
+    # The account's own ledger starts after `as_of`, so nothing of it existed then. (A backfilled
+    # entry dated on or before that day does count; see tests/test_audit_anchor.py.)
     bank = await create_account(
         ledger,
         kind="bank",
         name="SBI",
         opening_balance_paise=1_000_000,
-        opening_balance_as_of=as_of,
+        opening_balance_as_of=as_of + timedelta(days=5),
     )
     schedule = await create_schedule(
         ledger,

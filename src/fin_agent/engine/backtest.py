@@ -21,6 +21,7 @@ from fin_agent.engine.money import money
 from fin_agent.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
+    UNUSABLE_SETUP_GAPS,
     CardAccount,
     CashEvent,
     GoalPlan,
@@ -288,6 +289,7 @@ def _row(as_of: date, projected: dict[str, Any], actual: int) -> dict[str, Any]:
     median = int(day["median_paise"])
     p10 = int(day["p10_paise"])
     p90 = int(day["p90_paise"])
+    setup_gaps = list(projected["data_quality"].get("setup_gaps") or [])
     return {
         "as_of": as_of.isoformat(),
         "actual_paise": actual,
@@ -298,7 +300,13 @@ def _row(as_of: date, projected: dict[str, Any], actual: int) -> dict[str, Any]:
         "absolute_error_paise": abs(median - actual),
         "in_band": p10 <= actual <= p90,
         "floor_probability": projected["floor_probability"],
+        # A month the projection could not even start from measures its own missing setup.
+        "blocking_gaps": [gap for gap in setup_gaps if gap in UNUSABLE_SETUP_GAPS],
     }
+
+
+def _blocking_gaps(rows: list[dict[str, Any]]) -> list[str]:
+    return sorted({gap for row in rows for gap in row.get("blocking_gaps") or []})
 
 
 def _summarize(rows: list[dict[str, Any]], source: str) -> dict[str, Any]:
@@ -309,6 +317,7 @@ def _summarize(rows: list[dict[str, Any]], source: str) -> dict[str, Any]:
             "median_error_paise": None,
             "median_absolute_error_paise": None,
             "band_calibration": None,
+            "blocking_gaps": [],
             "rows": [],
         }
     errors = sorted(row["error_paise"] for row in rows)
@@ -324,6 +333,7 @@ def _summarize(rows: list[dict[str, Any]], source: str) -> dict[str, Any]:
         "median_error_paise": median(errors),
         "median_absolute_error_paise": median(absolute),
         "band_calibration": round(sum(1 for row in rows if row["in_band"]) / len(rows), 4),
+        "blocking_gaps": _blocking_gaps(rows),
         "rows": rows,
     }
 
@@ -423,6 +433,14 @@ def format_report(result: dict[str, Any]) -> str:
     if not result["months"]:
         return f"No completed 30-day windows were available for the {result['source']}."
     lines = [f"Source: {result['source']}"]
+    blocking = list(result.get("blocking_gaps") or [])
+    if blocking:
+        blocked = sum(1 for row in result["rows"] if row.get("blocking_gaps"))
+        lines.append(
+            f"NOT A MEASUREMENT: {blocked} of {result['months']} month(s) had no usable starting "
+            f"point ({', '.join(blocking)}), so their error is the missing setup, not the engine."
+        )
+        lines.append("These numbers must not be published, and this run writes nothing to README.")
     if result["source"] == "real backfill":
         lines.append(
             "Known limit: accounts, schedules, and goals created after a month start are "
@@ -447,6 +465,15 @@ def format_report(result: dict[str, Any]) -> str:
 
 
 def publish_report(result: dict[str, Any], readme: Path) -> None:
+    blocking = list(result.get("blocking_gaps") or [])
+    if blocking:
+        # A published error that measures missing setup would read as a claim about the engine.
+        raise ValueError(
+            "this backtest is not a measurement: "
+            + ", ".join(blocking)
+            + f" left {sum(1 for row in result['rows'] if row.get('blocking_gaps'))} of "
+            f"{result['months']} month(s) with nothing to project from. README.md was not changed."
+        )
     start = "<!-- backtest:start -->"
     end = "<!-- backtest:end -->"
     body = f"{start}\n{format_report(result)}\n{end}"

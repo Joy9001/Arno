@@ -11,6 +11,7 @@ from fin_agent.agent.parser import submit_parser_code
 from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.layout import detect_fingerprint
 from fin_agent.importers.layouts import save_version
+from fin_agent.importers.periods import ledger_opening as opening_balance
 from fin_agent.importers.pipeline import (
     _account_fingerprint,
     _store_unlocked,
@@ -338,7 +339,9 @@ async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledg
         account=raw_account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    result = await commit_import(ledger, import_id)
+    # The adjustment is the user's call on the review screen.
+    result = await commit_import(ledger, import_id, adjustment_confirmed=True)
+
     assert result["adjustment_paise"] == 5000
     row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     assert row["statement_balance_paise"] == 24522890
@@ -456,12 +459,7 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
         {"suggested_transfer_account_id": other["id"]},
         lines[0]["id"],
     )
-    await ledger.execute(
-        "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
-        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0},
-        {"manual_opening_paise": 0},
-        import_id,
-    )
+    await _verify(ledger, import_id)
 
     with pytest.raises(ConflictLedgerError, match="Confirm every payment"):
         await commit_import(ledger, import_id)
@@ -531,9 +529,15 @@ async def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> 
     )
 
 
-async def _verify(conn, import_id: str, opening_paise: int = 0) -> None:
+async def _verify(conn, import_id: str, opening_paise: int | None = None) -> None:
     row = await conn.fetchrow("SELECT review FROM imports WHERE id = $1", import_id)
     review = dict(row["review"] or {})
+    if opening_paise is None:
+        # The statement prints the balance the ledger held before its period, so the fixture does
+        # too: a made-up zero would be booked as a real correction at the first day.
+        account_id = await conn.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id)
+        previous = await opening_balance(conn, account_id, date(2026, 4, 1))
+        opening_paise = int(previous["paise"]) if previous else 0
     review["manual_opening_paise"] = opening_paise
     await conn.execute(
         "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",

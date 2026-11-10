@@ -435,8 +435,53 @@ def backtest_command(
         raise typer.Exit(code=2) from exc
     typer.echo(format_report(result))
     if publish:
-        publish_report(result, REPO_ROOT / "README.md")
+        try:
+            publish_report(result, REPO_ROOT / "README.md")
+        except ValueError as exc:
+            typer.echo(f"error: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
         typer.echo("README.md updated.")
+
+
+async def _run_repair_openings(settings, *, dry_run: bool) -> list[dict[str, Any]]:
+    from fin_agent.importers.repair import repair_openings
+
+    async with connect(settings.database_url) as conn:
+        return await repair_openings(conn, dry_run=dry_run)
+
+
+@app.command("repair-openings")
+def repair_openings_command(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print what would change, in aggregate, and write nothing."
+    ),
+    yes: bool = typer.Option(False, "--yes", help="Apply without asking."),
+) -> None:
+    """Place each committed import's opening at its statement's first day.
+
+    For a ledger written before the commit path booked openings: every date a statement covered
+    read short by its printed opening. Run it once after upgrading; it is idempotent.
+    """
+    from fin_agent.importers.repair import format_changes
+
+    settings = _settings()
+    preview = asyncio.run(_run_repair_openings(settings, dry_run=True))
+    if not preview:
+        typer.echo(
+            "Nothing to repair: every import with an evidenced opening already has it at its "
+            "statement's first day."
+        )
+        return
+    typer.echo(format_changes(preview))
+    if dry_run:
+        typer.echo("Dry run: nothing written.")
+        return
+    if not yes and not typer.confirm(f"Apply these {len(preview)} repair(s)?"):
+        typer.echo("Nothing written.")
+        raise typer.Exit(code=1)
+    applied = asyncio.run(_run_repair_openings(settings, dry_run=False))
+    typer.echo(format_changes(applied))
+    typer.echo("Repaired. Undo an import from the Imports screen to reverse its repair too.")
 
 
 @app.command("hackerrank")

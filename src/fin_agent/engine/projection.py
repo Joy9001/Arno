@@ -29,6 +29,12 @@ MAX_HORIZON_DAYS = 3_650
 BASE_HORIZON_DAYS = 90
 MAX_CUT_RATIO = 0.50
 
+# Set-up gaps that leave a projection with nothing to project from. A backtest over a month with
+# one of these measures its own missing setup, not the engine, so it may never be published.
+NO_LIQUID_ACCOUNT = "no liquid account"
+NO_CONFIRMED_INCOME = "no confirmed income schedule"
+UNUSABLE_SETUP_GAPS = (NO_LIQUID_ACCOUNT, NO_CONFIRMED_INCOME)
+
 
 @dataclass(frozen=True, slots=True)
 class LiquidAccount:

@@ -18,6 +18,7 @@ from pydantic_ai.models.function import AgentInfo
 
 from fin_agent.importers.categorize import run_categorize
 from fin_agent.importers.commit import commit_import, undo_import
+from fin_agent.importers.periods import ledger_opening as opening_balance
 from fin_agent.importers.reconcile import insert_lines, reconcile
 from fin_agent.ledger import movements as movements_mod
 from fin_agent.ledger.accounts import create_account
@@ -54,6 +55,11 @@ async def _category_id(conn, name: str) -> str:
 async def _review(conn, account: dict, rows: list[dict]) -> str:
     """One import in `review`, verified with a manual opening, lines already reconciled."""
     raw_account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    # The statement prints the balance the ledger held before its period, not a made-up zero: a
+    # stated opening the ledger disagrees with is booked as a visible adjustment (and would be
+    # replaced by the next, overlapping statement).
+    previous = await opening_balance(conn, account["id"], PERIOD[0])
+    opening = int(previous["paise"]) if previous else 0
     import_id = await new_id(conn, "imp")
     await conn.execute(
         """
@@ -66,8 +72,8 @@ async def _review(conn, account: dict, rows: list[dict]) -> str:
         account["id"],
         PERIOD[0],
         PERIOD[1],
-        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0},
-        {"manual_opening_paise": 0},
+        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": opening},
+        {"manual_opening_paise": opening},
     )
     await insert_lines(
         conn, import_id=import_id, account=raw_account, parsed_account={"rows": rows}
