@@ -163,6 +163,34 @@ async def _validated_statements(conn: Any, refs: list[dict[str, str]]) -> list[d
     ]
 
 
+async def _unread_statements(conn: Any, thread_id: str) -> list[dict[str, str]]:
+    """Statement files this thread uploaded and no import has read yet.
+
+    A turn that ends without the parser still leaves the upload in the thread, so the next
+    turn carries it again instead of losing the file: asking me to read it is a real retry. A
+    file a running parser already opened has its import row and is not offered again; one still
+    on its first model call could be, and `create_import` then returns the same row for both.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT a.id, a.filename
+        FROM messages m
+        CROSS JOIN LATERAL jsonb_array_elements(coalesce(m.content -> 'parts', '[]'::jsonb)) part
+        JOIN attachments a ON a.id = part -> 'data' ->> 'attachment_id'
+        WHERE m.conversation_id = $1
+          AND part ->> 'type' = 'data-statement'
+          AND a.kind = 'statement' AND a.data IS NOT NULL AND a.purged_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM imports i WHERE i.attachment_id = a.id)
+        ORDER BY a.id
+        """,
+        thread_id,
+    )
+    return [
+        {"attachment_id": str(row["id"]), "filename": str(row["filename"] or "statement")}
+        for row in rows
+    ]
+
+
 def _photo_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """App-owned receipt photo refs from the last user turn, never file URLs."""
     for message in reversed(messages):
@@ -326,6 +354,13 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         # capture keeps its own idempotency key, so a resend cannot write twice.
         statements = await _validated_statements(conn, statement_refs)
         photos = await _validated_photos(conn, photo_refs)
+        own_statements = statements
+        if not statements and not approval_turn:
+            # A file the last turn never handed over stays with the thread, so the user's
+            # "read the statement" carries it into this turn (not onto their message).
+            statements = await _unread_statements(conn, thread_id)
+            if statements and not text.strip():
+                text = "Import the attached statement."
         initial_cards: list[dict[str, Any]] = []
         statement_attachments = tuple(statement["attachment_id"] for statement in statements)
 
@@ -368,7 +403,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 thread_id=thread_id,
                 client_id=message_id,
                 text=text,
-                statements=statements,
+                statements=own_statements,
                 photos=photos,
                 quote=quote,
             )

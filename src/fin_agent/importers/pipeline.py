@@ -106,6 +106,8 @@ async def _resolve_parsed_account(
     doc: Doc,
 ) -> dict[str, Any] | None:
     if current is not None:
+        # An account already chosen — inferred at open, or answered on the import card — is the
+        # user's; the script's own naming cannot overrule it.
         return current
     accounts = await _real_accounts(conn)
     last4 = scrub_account_number(parsed_account.get("account_number"))

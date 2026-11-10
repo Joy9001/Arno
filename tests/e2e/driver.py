@@ -630,28 +630,6 @@ def wait_for_health(base_url: str, timeout: float, process: subprocess.Popen) ->
 
 # --- the SQL truth ----------------------------------------------------------------------------
 
-# A live reversal cancels its movement, and the reversal row itself is bookkeeping: both stay out
-# of every effective total. The parity of the reversal chain decides, so an undo of an undo
-# restores the original — the same rule as the ledger's own `_effectively_reversed_ids`.
-_HIDDEN = """
-WITH RECURSIVE chain AS (
-    SELECT m.id AS root, m.id AS node, 0 AS depth
-    FROM movements m
-    WHERE m.id IN (SELECT reverses_id FROM movements WHERE reverses_id IS NOT NULL)
-    UNION ALL
-    SELECT c.root, child.id, c.depth + 1
-    FROM chain c JOIN movements child ON child.reverses_id = c.node
-), leaf AS (
-    SELECT c.root, max(c.depth) AS depth FROM chain c
-    WHERE NOT EXISTS (SELECT 1 FROM movements x WHERE x.reverses_id = c.node)
-    GROUP BY c.root
-), hidden AS (
-    SELECT root AS id FROM leaf WHERE depth % 2 = 1
-    UNION
-    SELECT id FROM movements WHERE kind = 'reversal'
-)
-"""
-
 
 def ledger_summary() -> dict[str, Any]:
     """Balances, spending, debts, goals, schedules, and open imports, read straight from SQL.
@@ -661,6 +639,9 @@ def ledger_summary() -> dict[str, Any]:
     schedule's RRULE, which SQL cannot do), so an active schedule is listed with its rule.
     """
     from fin_agent.db.conn import connect
+    from fin_agent.ledger.movements import (
+        _effectively_reversed_ids,  # noqa: SLF001 - the ledger's own rule
+    )
 
     today = ledger_today()
     this_month = today.replace(day=1)
@@ -683,8 +664,7 @@ def ledger_summary() -> dict[str, Any]:
                 """
             )
             spending = await conn.fetch(
-                _HIDDEN
-                + """
+                """
                 SELECT to_char(m.date, 'YYYY-MM') AS month,
                        coalesce(c.name, 'Uncategorized') AS category,
                        sum(CASE WHEN t.to_account_id = sp.ledger_account_id
@@ -697,12 +677,14 @@ def ledger_summary() -> dict[str, Any]:
                 WHERE m.date >= $1 AND m.date < $2
                   AND (t.from_account_id = sp.ledger_account_id
                        OR t.to_account_id = sp.ledger_account_id)
-                  AND m.id NOT IN (SELECT id FROM hidden)
+                  AND m.kind <> 'reversal'
+                  AND m.id <> ALL($3::text[])
                 GROUP BY 1, 2
                 ORDER BY 1 DESC, 3 DESC
                 """,
                 last_month,
                 next_month,
+                await _effectively_reversed_ids(conn),
             )
             owed = await conn.fetch(
                 """

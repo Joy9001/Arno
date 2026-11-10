@@ -330,8 +330,22 @@ async def task_answer(
         f"The statement is for the account {account['name']} "
         f"({account['institution'] or account['kind']}), id {account['id']}."
     )
-    if not tasks.answer(task_id, question_id=body.question_id, answer=answer):
-        raise HTTPException(status_code=409, detail="That task is not waiting on this question.")
+    async with conn.transaction():
+        # The answer is the import's account from now on: an import that could not be filed
+        # takes it here, and the parser's next submit reads it instead of guessing again.
+        await conn.execute(
+            """
+            UPDATE imports SET account_id = $1, updated_at = now()
+            WHERE task_id = $2 AND account_id IS NULL
+              AND status NOT IN ('committed', 'rejected')
+            """,
+            account["id"],
+            task_id,
+        )
+        if not tasks.answer(task_id, question_id=body.question_id, answer=answer):
+            raise HTTPException(
+                status_code=409, detail="That task is not waiting on this question."
+            )
     return await task_payload(conn, tasks, task_id, answered=body.question_id)
 
 

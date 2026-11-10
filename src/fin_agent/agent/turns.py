@@ -18,7 +18,7 @@ from typing import Any
 
 from pydantic_ai import capture_run_messages
 from pydantic_ai.exceptions import RunCancelled
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.tools import DeferredToolResults, ToolDenied
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
@@ -53,6 +53,57 @@ def declined_results(results: DeferredToolResults | None) -> DeferredToolResults
         calls=results.calls,
         metadata=results.metadata,
     )
+
+
+UNREAD_STATEMENT_NOTE_PREFIX = "Nothing was imported: the attached statement"
+
+
+def unread_statement_note(count: int) -> str:
+    """What the reply says when the model answered without handing the upload to the parser."""
+    if count == 1:
+        return (
+            f"{UNREAD_STATEMENT_NOTE_PREFIX} file wasn't handed to the parser. "
+            'Say "read the statement" and I\'ll hand it over.'
+        )
+    return (
+        f"{UNREAD_STATEMENT_NOTE_PREFIX} files weren't handed to the parser. "
+        'Say "read the statement" and I\'ll hand them over.'
+    )
+
+
+def _delegated_to_parser(messages: list[Any]) -> bool:
+    """Whether this turn handed the files over, whatever the parser has written so far."""
+    for message in messages:
+        if not isinstance(message, ModelResponse):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolCallPart) or part.tool_name != "delegate_task":
+                continue
+            try:
+                args = part.args_as_dict()
+            except TypeError, ValueError:
+                continue
+            if str(args.get("agent_name") or "") == "parser":
+                return True
+    return False
+
+
+async def _unread_statements(turn: ChatTurn, messages: list[Any]) -> list[str]:
+    """This turn's statement attachments that no import references.
+
+    A model that forgot to delegate leaves the file orphaned, so the reply must say so. A
+    delegation still starting has no row yet, so the call itself is the first answer.
+    """
+    attachments = tuple(dict.fromkeys(turn.deps.statement_attachments))
+    if not attachments or _delegated_to_parser(messages):
+        return []
+    async with connect() as conn:
+        rows = await conn.fetch(
+            "SELECT DISTINCT attachment_id FROM imports WHERE attachment_id = ANY($1::text[])",
+            list(attachments),
+        )
+    imported = {str(row["attachment_id"]) for row in rows}
+    return [attachment for attachment in attachments if attachment not in imported]
 
 
 class TurnBusy(RuntimeError):
@@ -399,10 +450,13 @@ class TurnManager:
                             failed.append(str(item.get("model_name") or item.get("model")))
                         else:
                             failed.append(str(getattr(item, "model_name", item)))
+                # Only this turn's messages: a delegate call in the history is another turn's.
+                unread = await _unread_statements(turn, turn_messages)
                 await self._save(
                     turn,
                     turn_messages,
                     ending="complete",
+                    note=unread_statement_note(len(unread)) if unread else None,
                     failed_attempts=[name for name in failed if name] or None,
                     all_messages=messages,
                 )

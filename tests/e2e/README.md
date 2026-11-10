@@ -201,9 +201,10 @@ question and `driver answer <task> "SBI Salary"` answers it with an account id o
 `state` prints account balances (a card's statement balance says `unknown` until a statement sets
 it), this and last month's spending by category, who owes what, active goals, active schedules, and
 open imports. It does not call the app's own read paths, so comparing it with what the bot said is
-a real cross-check. Spending leaves out reversed pairs and the reversal rows themselves, with the
-parity of the reversal chain deciding — the same rule the ledger uses, so an undo of an undo
-restores the original.
+a real cross-check. Spending leaves out reversed movements and the reversal rows themselves by
+calling the ledger's own `_effectively_reversed_ids`, so the rule lives in one place: each
+movement's sign is one minus its reversal children's, and a pair is cancelled when the signs cancel
+(an undo of an undo restores the original).
 
 `invariants` runs `tests.invariants` against the same database: `OK: 673 checks` on the persona
 after the journeys above.

@@ -160,6 +160,7 @@ one task mixes banks, submit one script for each bank's imports.
 | `doc_words(import_id, page)` | positioned words on one page |
 | `doc_words_range(import_id, first, last)` | many pages at once, any range; prefer one call |
 | `doc_cells(import_id, sheet=0)` | a sheet's rows by index or name |
+| `import_state(import_id)` | status, check, line counts, earlier imports of the file |
 | `ledger_opening(import_id, account=None)` | the ledger balance before this statement, or null |
 | `check_statement(import_id, rows, opening, closing, headers=...)` | preview the checks |
 | `transcribe_page(import_id, page)` | an isolated VISION call for a page with no text layer |
@@ -262,7 +263,12 @@ wrong payee name. Never quote statement text in a question or a report.
 
 Use `ask_parent(question)` only for a fact the file cannot give: which account this statement is
 for, or an opening balance that is not printed and the ledger does not have. Ask one question at
-a time, with no statement text in it. The main agent answers from the ledger when it can.
+a time, with no statement text in it. The main agent answers from the ledger when it can. Call it
+directly as a tool, never inside a script: a script has no `ask_parent` and fails with `NameError`.
+
+Before you ask about a file the user may have uploaded before, call `import_state(import_id)`:
+`earlier_imports` shows an older import of the same bytes and its status, so an undone or rejected
+one is a fresh import and needs no question.
 
 Finish with a report: `status` is `ready` when every import is in review, `not_a_statement` with
 the kind found, `blocked` with what you need, or `gave_up` with the reason and what you tried.
@@ -664,6 +670,63 @@ async def doc_cells(
     return (await _load_doc(ctx, import_id)).cells(sheet)
 
 
+async def import_state(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, Any]:
+    """This import's status, check, line counts, and earlier imports of the same file.
+
+    Host-written facts only: never a statement line's text. Reading it writes nothing.
+    """
+    del ctx
+    async with connect() as conn:
+        row = await _row(conn, import_id)
+        counts = await conn.fetchrow(
+            """
+            SELECT count(*) AS lines,
+                   count(*) FILTER (WHERE debit_paise > 0) AS debits,
+                   count(*) FILTER (WHERE credit_paise > 0) AS credits
+            FROM statement_lines WHERE import_id = $1
+            """,
+            import_id,
+        )
+        account = (
+            await conn.fetchrow("SELECT name FROM accounts WHERE id = $1", row["account_id"])
+            if row["account_id"]
+            else None
+        )
+        earlier = await conn.fetch(
+            """
+            SELECT id, status, created_at FROM imports
+            WHERE file_hash = $1 AND id <> $2
+            ORDER BY created_at DESC
+            """,
+            row["file_hash"],
+            import_id,
+        )
+    check = row["check_result"] or {}
+    return {
+        "import_id": row["id"],
+        "status": row["status"],
+        "check": check.get("status"),
+        "account": account["name"] if account is not None else None,
+        "period": {
+            "start": row["period_start"].isoformat() if row["period_start"] else None,
+            "end": row["period_end"].isoformat() if row["period_end"] else None,
+        },
+        "reason": row["reason"],
+        "counts": row["counts"] or {},
+        "lines": int(counts["lines"] or 0),
+        "debits": int(counts["debits"] or 0),
+        "credits": int(counts["credits"] or 0),
+        "earlier_imports": [
+            {
+                "import_id": str(item["id"]),
+                "status": item["status"],
+                "created_at": item["created_at"].isoformat(),
+            }
+            for item in earlier
+        ],
+    }
+
+
 async def ledger_opening(
     ctx: RunContext[AgentDeps], import_id: str, account: str | None = None
 ) -> dict[str, Any] | None:
@@ -1023,6 +1086,7 @@ def build_parser_agent(
             doc_words,
             doc_words_range,
             doc_cells,
+            import_state,
             ledger_opening,
             check_statement,
             transcribe_page,

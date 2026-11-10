@@ -45,6 +45,9 @@ Each stage works as follows:
    `parser` subagent with `background=True`, and your turn ends. No model copies an attachment
    ID: the parser's first tool reads the turn's files from the host. One upload is one task, so 12 monthly PDFs from a new bank get one parser, written once
    and replayed on the rest, with no two runs racing to save it.
+   The hand-off is never left to chance. If a turn that carried statement files ends without
+   handing them over, the reply says the file wasn't read, and the thread keeps the unread file:
+   the next turn carries it again, so asking me to read it is a real retry, not another upload.
 2. **Open.** The subagent's first tool creates the import rows, so the card appears within seconds.
    The reader finds each file's type from its contents. A PDF with more than 150 pages isn't read:
    the card asks you to download it in shorter date ranges, one quarter at a time, and upload each
@@ -71,7 +74,12 @@ Each stage works as follows:
    import to review.
 5. **Ask or report.** A fact the file can't give—which account, an opening balance that isn't
    printed—goes up through `ask_parent`. The main agent answers from the ledger when it can and asks
-   you only when it can't. Doubts about single rows never block; they show on the review screen.
+   you only when it can't. `ask_parent` is a tool, never a call inside a script: the sandbox does not
+   have it. Before asking about a file that may have been uploaded before, the parser reads
+   `import_state(import_id)`: status, check verdict, line counts, and earlier imports of the same
+   bytes, so a re-upload after an undo or a reject needs no question. Answering "which account?" on
+   the card writes that account onto the import, and the parser files against it whatever name its
+   script printed. Doubts about single rows never block; they show on the review screen.
    The subagent ends with a report: status, reason, counts, and what's blocking. The main agent
    either resumes it with a fix or tells you the import is ready.
 6. **Dedupe.** Match against earlier imports by `content_hash`.
