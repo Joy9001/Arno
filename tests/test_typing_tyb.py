@@ -18,9 +18,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.test import TestModel
 
-from fin_agent.agent.models import WindowLimited
-from fin_agent.api.run_view import build_run
-from fin_agent.notifications import ensure_vapid_keys
+from arno.agent.models import WindowLimited
+from arno.api.run_view import build_run
+from arno.notifications import ensure_vapid_keys
 
 
 async def test_the_window_limited_model_streams_like_the_model_it_wraps():

@@ -10,14 +10,14 @@ from datetime import date
 
 import pytest
 
-from fin_agent.importers.baselines import WINDOW_DAYS, recompute_baselines
-from fin_agent.importers.commit import undo_import
-from fin_agent.importers.synthetic import seed_committed_statement
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.movements import correct_movement, record_expense
-from fin_agent.ledger.payees import create_payee
-from fin_agent.tools import periods
-from fin_agent.tools import read as read_tools
+from arno.importers.baselines import WINDOW_DAYS, recompute_baselines
+from arno.importers.commit import undo_import
+from arno.importers.synthetic import seed_committed_statement
+from arno.ledger.accounts import create_account
+from arno.ledger.movements import correct_movement, record_expense
+from arno.ledger.payees import create_payee
+from arno.tools import periods
+from arno.tools import read as read_tools
 
 # 2026-11-11 is a Wednesday, so the open week has run for three days and last week is whole.
 WEDNESDAY = date(2026, 11, 11)

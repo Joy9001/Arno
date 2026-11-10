@@ -30,7 +30,7 @@ Google Drive is the current recommended setup, with your own Google OAuth client
 client ID is rate-limited and being retired):
 
 ```dotenv
-RESTIC_REPOSITORY=rclone:gdrive:fin-agent-backups
+RESTIC_REPOSITORY=rclone:gdrive:arno-backups
 RCLONE_CONFIG_GDRIVE_TYPE=drive
 RCLONE_CONFIG_GDRIVE_SCOPE=drive.file
 RCLONE_CONFIG_GDRIVE_CLIENT_ID=<client id>
@@ -39,7 +39,7 @@ RCLONE_CONFIG_GDRIVE_TOKEN='{"access_token":"...","token_type":"Bearer","refresh
 ```
 
 Get the token with `rclone authorize "drive"` and a base64 blob that carries the client and the
-`drive.file` scope; `docs/fin-agent/self-hosting.md` §6.1 has the console steps and the command.
+`drive.file` scope; `docs/arno/self-hosting.md` §6.1 has the console steps and the command.
 `drive.file` covers only the files this client creates, not the rest of your Drive. The client
 secret and refresh token are credentials: keep them out of git.
 
@@ -74,12 +74,12 @@ The milestone 37 drill is one command. On a fresh machine, with the repository a
 
 ```bash
 docker compose up -d db
-docker compose run --rm --no-deps --user root api fin-agent restore
+docker compose run --rm --no-deps --user root api arno restore
 docker compose up -d
 ```
 
 The default local `backup-data` volume is root-owned, so the one-off restore reads it as root. An
-off-site repository does not need `--user root`. `fin-agent restore` pulls the dump and manifest out
+off-site repository does not need `--user root`. `arno restore` pulls the dump and manifest out
 of the newest snapshot, creates the target
 database if it is absent, restores the dump, recomputes every table's row count and hash, and then
 checks that every pgledger transfer sums to zero and every account balance equals its entries. It
@@ -89,9 +89,9 @@ tables unless `--force` is passed.
 To choose a snapshot, or to use files extracted by `restic`:
 
 ```bash
-fin-agent restore --repository "$RESTIC_REPOSITORY" --snapshot <id>
+arno restore --repository "$RESTIC_REPOSITORY" --snapshot <id>
 restic restore <id> --target /restore
-fin-agent restore --from-dir /restore
+arno restore --from-dir /restore
 ```
 
 A manual `pg_dump` has no manifest; pass `--allow-no-manifest` to accept its internal ledger checks
@@ -100,7 +100,7 @@ conversations, a message, an attachment, schedules, goals, and audit rows goes t
 restic repository and comes back into a fresh database, compared table by table.
 
 After building the images, `tests/test_image_runtime.py` can also check the tools and writable
-paths in the actual containers. Set `FIN_AGENT_API_TEST_IMAGE` and `FIN_AGENT_BACKUP_TEST_IMAGE`
+paths in the actual containers. Set `ARNO_API_TEST_IMAGE` and `ARNO_BACKUP_TEST_IMAGE`
 to the image tags, and set `DATABASE_URL` to a disposable database ending in `_test` before
 running `uv run pytest tests/test_image_runtime.py`. Like the rest of the test suite, these tests
 reset that database.

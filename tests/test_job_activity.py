@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fin_agent.importers.pipeline import import_payload
-from fin_agent.notifications import create_notification
+from arno.importers.pipeline import import_payload
+from arno.notifications import create_notification
 
 JOB_VIEW_KEYS = {
     "id",
@@ -331,7 +331,7 @@ async def test_categorize_state_waits_on_a_batch(db):
 
 
 async def test_a_retried_job_that_fails_again_raises_a_fresh_alert(authed_client, db):
-    from fin_agent.jobs.runner import JobGaveUp, JobRunner
+    from arno.jobs.runner import JobGaveUp, JobRunner
 
     def handler(payload):
         del payload

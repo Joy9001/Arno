@@ -39,7 +39,7 @@ export function App() {
     return (
       <main className="centered">
         <section className="card">
-          <h1>Fin-Agent</h1>
+          <h1>Arno</h1>
           <p className="error" role="alert">
             {error}
           </p>

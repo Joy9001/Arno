@@ -6,15 +6,15 @@ import hashlib
 from datetime import date
 from pathlib import Path
 
-from fin_agent.importers.commit import commit_import
-from fin_agent.importers.gate import run_gate
-from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.layouts import layout_for, rollback_layout, save_version
-from fin_agent.importers.monty import ScriptContext
-from fin_agent.importers.readers import Doc, open_documents
-from fin_agent.importers.reconcile import insert_lines
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.importers.commit import commit_import
+from arno.importers.gate import run_gate
+from arno.importers.layout import detect_fingerprint
+from arno.importers.layouts import layout_for, rollback_layout, save_version
+from arno.importers.monty import ScriptContext
+from arno.importers.readers import Doc, open_documents
+from arno.importers.reconcile import insert_lines
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 

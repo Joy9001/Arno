@@ -10,16 +10,16 @@ from datetime import timedelta
 
 import pytest
 
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import ConflictLedgerError
-from fin_agent.ledger.movements import record_expense
-from fin_agent.ledger.schedule_payments import (
+from arno.ledger.accounts import create_account
+from arno.ledger.common import today
+from arno.ledger.errors import ConflictLedgerError
+from arno.ledger.movements import record_expense
+from arno.ledger.schedule_payments import (
     link_payment,
     unlink_payment,
     validate_restored_payment,
 )
-from fin_agent.ledger.schedules import create_schedule
+from arno.ledger.schedules import create_schedule
 
 
 async def test_restoring_a_payment_whose_occurrence_is_gone_conflicts(ledger):

@@ -1,0 +1,156 @@
+"""Runtime configuration, read from the environment once per process."""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+# Installed console commands need the runtime workspace, rather than site-packages.
+REPO_ROOT = Path(os.environ.get("ARNO_REPO_ROOT") or Path(__file__).resolve().parents[2]).resolve()
+
+DEFAULT_TRUSTED_HOSTS = ("localhost", "127.0.0.1", "testserver", "*.ts.net")
+
+
+class ConfigurationError(RuntimeError):
+    """Raised when the environment cannot produce a usable configuration."""
+
+
+def _flag(name: str, default: bool) -> bool:
+    """A boolean setting: unset or blank keeps the default, and a typo is an error, not False."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(
+        f"{name} must be one of 1/0, true/false, yes/no, or on/off, not {value!r}"
+    )
+
+
+def _positive_int(name: str, default: int) -> int:
+    """A whole number greater than zero, with the variable named in any error."""
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        number = int(value)
+    except ValueError:
+        raise ConfigurationError(f"{name} must be a whole number, not {value!r}") from None
+    if number <= 0:
+        raise ConfigurationError(f"{name} must be greater than zero, not {number}")
+    return number
+
+
+def _validate_postgres_dsn(dsn: str) -> None:
+    from arno.db.conn import conninfo_to_dict
+
+    info = conninfo_to_dict(dsn)
+    if not info.get("host"):
+        raise ValueError("DATABASE_URL is missing a host")
+    if not info.get("dbname"):
+        raise ValueError("DATABASE_URL is missing a database name")
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    database_url: str
+    web_dir: Path
+    rp_id: str
+    rp_origin: str
+    rp_name: str
+    trusted_hosts: tuple[str, ...]
+    cookie_secure: bool
+    session_ttl_days: int
+    setup_token_ttl_hours: int
+    auto_migrate: bool
+    jobs_enabled: bool
+    agent_ro_password: str | None
+    backup_password: str | None
+    pre_migration_dir: Path
+    tasks_dir: Path
+    vapid_subject: str = "mailto:arno@localhost"
+
+    @property
+    def cookie_name(self) -> str:
+        return "arno_session"
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        database_url = os.environ.get("DATABASE_URL", "").strip()
+        if not database_url:
+            raise ConfigurationError(
+                "DATABASE_URL is not set. Example: postgresql://app:app@localhost:5432/arno"
+            )
+        try:
+            _validate_postgres_dsn(database_url)
+        except Exception as exc:  # noqa: BLE001 - normalize driver errors
+            raise ConfigurationError(f"DATABASE_URL is not a valid libpq URI: {exc}") from exc
+
+        rp_id = os.environ.get("ARNO_RP_ID", "localhost").strip()
+        if not rp_id:
+            raise ConfigurationError("ARNO_RP_ID must be a hostname such as box.tailnet.ts.net")
+        rp_origin = os.environ.get("ARNO_RP_ORIGIN", f"http://{rp_id}:8000").strip().rstrip("/")
+        parsed_origin = urlsplit(rp_origin)
+        if (
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.path
+            or parsed_origin.query
+            or parsed_origin.fragment
+        ):
+            raise ConfigurationError(
+                "ARNO_RP_ORIGIN must be an origin such as https://box.tailnet.ts.net, "
+                "with no path, query, or fragment"
+            )
+
+        hosts = os.environ.get("ARNO_TRUSTED_HOSTS")
+        trusted_hosts = (
+            tuple(h.strip() for h in hosts.split(",") if h.strip())
+            if hosts
+            else DEFAULT_TRUSTED_HOSTS
+        )
+
+        web_dir = Path(os.environ.get("ARNO_WEB_DIR", REPO_ROOT / "web" / "dist"))
+
+        return cls(
+            database_url=database_url,
+            web_dir=web_dir,
+            rp_id=rp_id,
+            rp_origin=rp_origin,
+            rp_name=os.environ.get("ARNO_RP_NAME", "Arno").strip(),
+            trusted_hosts=trusted_hosts,
+            cookie_secure=_flag("ARNO_COOKIE_SECURE", rp_origin.startswith("https://")),
+            session_ttl_days=_positive_int("ARNO_SESSION_TTL_DAYS", 30),
+            setup_token_ttl_hours=_positive_int("ARNO_SETUP_TOKEN_TTL_HOURS", 24),
+            auto_migrate=_flag("ARNO_AUTO_MIGRATE", True),
+            jobs_enabled=_flag("ARNO_JOBS_ENABLED", True),
+            agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,
+            backup_password=os.environ.get("BACKUP_PASSWORD") or None,
+            pre_migration_dir=Path(
+                os.environ.get(
+                    "ARNO_PRE_MIGRATION_DIR",
+                    Path(tempfile.gettempdir()) / "arno-pre-migration",
+                )
+            ),
+            tasks_dir=Path(
+                os.environ.get("ARNO_TASKS_DIR", Path(tempfile.gettempdir()) / "arno-tasks")
+            ),
+            vapid_subject=os.environ.get("ARNO_VAPID_SUBJECT", "mailto:arno@localhost").strip(),
+        )
+
+
+_cached: Settings | None = None
+
+
+def get_settings(refresh: bool = False) -> Settings:
+    """Return the process configuration. Tests clear this with `refresh=True`."""
+    global _cached
+    if _cached is None or refresh:
+        _cached = Settings.from_env()
+    return _cached

@@ -12,15 +12,15 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.engine.money import money
-from fin_agent.ledger import payees as payees_mod
-from fin_agent.ledger.accounts import create_account, get_account
-from fin_agent.ledger.common import has_known_balance
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.movements import record_split
-from fin_agent.ledger.schedules import create_schedule, expand_schedule
-from fin_agent.tools import read as read_tools
-from fin_agent.tools import write as write_tools
+from arno.engine.money import money
+from arno.ledger import payees as payees_mod
+from arno.ledger.accounts import create_account, get_account
+from arno.ledger.common import has_known_balance
+from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import record_split
+from arno.ledger.schedules import create_schedule, expand_schedule
+from arno.tools import read as read_tools
+from arno.tools import write as write_tools
 
 
 def _context_account(context: dict, account_id: str) -> dict:

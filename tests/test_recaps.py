@@ -6,11 +6,11 @@ from datetime import date
 
 import pytest
 
-from fin_agent.jobs import recaps as recap_job
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.movements import record_expense, record_income, record_refund
-from fin_agent.ledger.payees import create_payee
-from fin_agent.tools import recaps
+from arno.jobs import recaps as recap_job
+from arno.ledger.accounts import create_account
+from arno.ledger.movements import record_expense, record_income, record_refund
+from arno.ledger.payees import create_payee
+from arno.tools import recaps
 
 TODAY = date(2026, 11, 9)  # a Monday
 

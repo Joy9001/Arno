@@ -4,9 +4,9 @@ import hashlib
 
 from fastapi.testclient import TestClient
 
-from fin_agent.api.app import create_app
-from fin_agent.auth.setup import issue_setup_token
-from fin_agent.db.conn import connect
+from arno.api.app import create_app
+from arno.auth.setup import issue_setup_token
+from arno.db.conn import connect
 from tests.software_authenticator import SoftwareAuthenticator
 
 
@@ -146,7 +146,7 @@ async def test_only_the_session_hash_is_stored(client, setup_token, settings, db
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
     assert _complete_setup(client, setup_token, authenticator).status_code == 200
 
-    token = client.cookies["fin_agent_session"]
+    token = client.cookies["arno_session"]
     row = await db.fetchrow("SELECT token_hash FROM sessions")
 
     assert row["token_hash"] == hashlib.sha256(token.encode()).digest()

@@ -1,5 +1,5 @@
-export const ASK_EVENT = "fin-agent:ask";
-export const ATTACH_EVENT = "fin-agent:attach";
+export const ASK_EVENT = "arno:ask";
+export const ATTACH_EVENT = "arno:attach";
 
 /** Ask the global assistant from anywhere, without prop-drilling through every page. */
 export function askAgent(text: string, options: { send?: boolean } = {}): void {

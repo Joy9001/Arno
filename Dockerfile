@@ -18,11 +18,11 @@ FROM postgres:18.6 AS pgclient
 FROM python:3.14-slim AS runtime
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FIN_AGENT_REPO_ROOT=/app \
+    ARNO_REPO_ROOT=/app \
     PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 
-# restic and rclone are in the runtime image so `fin-agent restore` can read local, S3/R2, or
+# restic and rclone are in the runtime image so `arno restore` can read local, S3/R2, or
 # rclone (Google Drive) repositories with one command, without a second tool on the host.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends restic \
@@ -61,4 +61,4 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
 COPY --chown=fin:fin --from=web /web/dist ./web/dist
 
 EXPOSE 8000
-CMD ["fin-agent", "serve", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["arno", "serve", "--host", "0.0.0.0", "--port", "8000"]

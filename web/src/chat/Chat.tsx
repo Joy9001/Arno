@@ -76,7 +76,7 @@ const AUI_CONFIG = AuiConfig({
   tools: Tools({ toolkit: CHAT_TOOLKIT }),
 });
 
-const THREAD_STORAGE = "fin-agent-thread";
+const THREAD_STORAGE = "arno-thread";
 
 type CaptureCard = Record<string, unknown>;
 type ReportCapture = (
@@ -224,7 +224,7 @@ function ChatHeader({
         <h2>{title}</h2>
         <p className={running ? "aui-replying" : "fine"}>
           {running && <Typing />}
-          {running ? "Replying…" : "Fin-Agent"}
+          {running ? "Replying…" : "Arno"}
         </p>
       </div>
       <div className="assistant-actions">
@@ -436,7 +436,7 @@ export function Assistant(props: AssistantProps) {
   );
 }
 
-function useFinAgentThreadRuntime({
+function useArnoThreadRuntime({
   voice,
   checkpoints,
   setCapture,
@@ -597,7 +597,7 @@ function AssistantChat({
   const adapter = useMemo(() => createThreadListAdapter(queryRef), []);
   const runtimeHook = () =>
     // eslint-disable-next-line react-hooks/rules-of-hooks
-    useFinAgentThreadRuntime({
+    useArnoThreadRuntime({
       voice,
       checkpoints,
       setCapture,
@@ -1017,7 +1017,7 @@ function ChatShell({
       } catch {
         setSurfaceError(
           originId,
-          "Stopped here. Fin-Agent could not confirm the server stopped, so it may keep finishing this answer.",
+          "Stopped here. Arno could not confirm the server stopped, so it may keep finishing this answer.",
         );
       }
     },

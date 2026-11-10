@@ -21,8 +21,8 @@ export function chatErrorMessage(error: Error): string {
       return "Your session expired. Reload the page and sign in again.";
     }
     if (error.isRetryable) {
-      return "Fin-Agent could not be reached or is temporarily unavailable. Try again.";
+      return "Arno could not be reached or is temporarily unavailable. Try again.";
     }
   }
-  return "Fin-Agent could not finish that answer. Your earlier messages are still here. Try again.";
+  return "Arno could not finish that answer. Your earlier messages are still here. Try again.";
 }

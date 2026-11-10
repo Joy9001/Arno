@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fin-Agent backup sidecar.
+# Arno backup sidecar.
 #
 # Checks hourly. If the last successful backup is over MAX_AGE old, it dumps the app database,
 # hands the dump to restic, prunes old snapshots, and records the attempt in Postgres through the
@@ -13,6 +13,7 @@ umask 077
 
 INTERVAL="${BACKUP_INTERVAL_SECONDS:-3600}"
 MAX_AGE="${BACKUP_MAX_AGE_SECONDS:-86400}"
+# The backup format predates the Arno name; existing archives carry it.
 DUMP="${BACKUP_DUMP_PATH:-/tmp/fin_agent.dump}"
 MANIFEST="${BACKUP_MANIFEST_PATH:-/tmp/backup_manifest.json}"
 
@@ -76,7 +77,7 @@ run_backup() {
     start_epoch=$(date +%s)
     log "starting pg_dump"
 
-    snapshot_dir=$(mktemp -d "${TMPDIR:-/tmp}/fin-agent-backup.XXXXXX")
+    snapshot_dir=$(mktemp -d "${TMPDIR:-/tmp}/arno-backup.XXXXXX")
     snapshot_in="$snapshot_dir/in"
     snapshot_out="$snapshot_dir/out"
     mkfifo "$snapshot_in" "$snapshot_out"
@@ -94,6 +95,7 @@ run_backup() {
         printf '%s\n' 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;'
         printf '%s\n' "SELECT 'SNAPSHOT:' || pg_export_snapshot();"
         printf '\\o %s\n' "$MANIFEST"
+        # The backup format predates the Arno name; existing archives carry it.
         printf '%s\n' 'SELECT jsonb_pretty(fin_agent_backup_manifest());'
         printf '%s\n' '\o'
         printf '%s\n' '\echo MANIFEST_READY'
@@ -163,7 +165,7 @@ run_backup() {
         fi
     fi
 
-    if summary=$(restic backup --json --tag fin-agent --host fin-agent "$DUMP" "$MANIFEST"); then
+    if summary=$(restic backup --json --tag arno --host arno "$DUMP" "$MANIFEST"); then
         snapshot=$(printf '%s' "$summary" | jq -r 'select(.message_type == "summary") | .snapshot_id' | tail -n 1)
         restic forget --keep-daily 7 --keep-weekly 4 --prune >/dev/null 2>&1 || true
         finished=$(date -u +%Y-%m-%dT%H:%M:%SZ)

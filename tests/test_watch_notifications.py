@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fin_agent.notifications import create_notification, send_push_for_kind
+from arno.notifications import create_notification, send_push_for_kind
 
 
 async def test_unread_badge_and_mark_read(authed_client, db):
@@ -94,7 +94,7 @@ async def test_push_subscription_and_a_contentless_ping(authed_client, db, monke
         sent.append(kwargs)
         return "ok"
 
-    monkeypatch.setattr("fin_agent.notifications.webpush", fake_webpush)
+    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
     await send_push_for_kind(db, "weekly_briefing")
     assert len(sent) == 1
     payload = json.loads(sent[0]["data"])

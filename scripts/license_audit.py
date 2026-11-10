@@ -51,7 +51,7 @@ FORBIDDEN = {
     "UNKNOWN",
 }
 
-SKIP_PYTHON = {"fin-agent"}
+SKIP_PYTHON = {"arno"}
 
 
 def _classify(text: str) -> str:

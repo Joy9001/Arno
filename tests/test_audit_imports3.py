@@ -14,18 +14,18 @@ from typing import cast
 import pytest
 from pydantic_ai import RunContext
 
-from fin_agent.agent.builder import _instructions  # noqa: PLC2701 - the note itself is the subject
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import ledger_opening, submit_parser_code
-from fin_agent.importers.commit import commit_import, reject_import
-from fin_agent.importers.layouts import save_version
-from fin_agent.importers.pipeline import create_import, import_payload
-from fin_agent.importers.readers import Doc
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.movements import record_expense
-from fin_agent.tools import write as write_tools
+from arno.agent.builder import _instructions  # noqa: PLC2701 - the note itself is the subject
+from arno.agent.deps import AgentDeps
+from arno.agent.parser import ledger_opening, submit_parser_code
+from arno.importers.commit import commit_import, reject_import
+from arno.importers.layouts import save_version
+from arno.importers.pipeline import create_import, import_payload
+from arno.importers.readers import Doc
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
+from arno.ledger.movements import record_expense
+from arno.tools import write as write_tools
 from tests.invariants import check_ledger
 
 # A wallet export as the app's own exports look: preamble lines with amounts in them, and one
@@ -269,7 +269,7 @@ async def test_a_cash_statement_is_filed_against_the_cash_account(ledger):
 
 
 async def test_a_wallet_statement_is_not_filed_as_the_cash_account(ledger):
-    from fin_agent.importers.pipeline import _infer_account
+    from arno.importers.pipeline import _infer_account
 
     wallet = await _wallet(ledger)
     # The persona's cash account has no institution, and the wallet's file says "CASHBACK".
@@ -296,7 +296,7 @@ async def test_a_wallet_statement_is_not_filed_as_the_cash_account(ledger):
 
 
 async def test_a_statement_naming_another_accounts_last_four_still_files_by_its_bank(ledger):
-    from fin_agent.importers.pipeline import _infer_account
+    from arno.importers.pipeline import _infer_account
 
     sbi = await create_account(
         ledger,
@@ -333,7 +333,7 @@ async def test_a_statement_naming_another_accounts_last_four_still_files_by_its_
 
 
 async def test_a_word_inside_another_does_not_name_an_account(ledger):
-    from fin_agent.importers.pipeline import _infer_account
+    from arno.importers.pipeline import _infer_account
 
     await create_account(ledger, kind="cash", name="Cash", opening_balance_paise=100000)
     await create_account(ledger, kind="bank", name="Some bank", institution="Some Bank")
@@ -345,7 +345,7 @@ async def test_a_word_inside_another_does_not_name_an_account(ledger):
 
 
 async def test_the_import_card_offers_the_cash_account():
-    from fin_agent.api.tasks import ACCOUNT_KINDS
+    from arno.api.tasks import ACCOUNT_KINDS
 
     assert "cash" in ACCOUNT_KINDS
 
@@ -354,7 +354,7 @@ async def test_the_import_card_offers_the_cash_account():
 
 
 async def test_rejecting_a_running_import_sticks_against_every_late_parser_write(ledger):
-    from fin_agent.importers.pipeline import _finalize, _set_status
+    from arno.importers.pipeline import _finalize, _set_status
 
     wallet = await _wallet(ledger)
     import_id = await _upload(
@@ -425,7 +425,7 @@ async def test_rejecting_a_running_import_sticks_against_every_late_parser_write
 
 
 async def test_the_card_opening_answer_completes_a_first_card_statement(ledger):
-    from fin_agent.importers.pipeline import set_manual_opening
+    from arno.importers.pipeline import set_manual_opening
     from tests.import_fixtures import SLICE_PARSER
 
     card = await create_account(
@@ -490,9 +490,9 @@ def test_a_semicolon_delimited_statement_with_commas_in_narrations_stays_semicol
 
 
 async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
-    from fin_agent.agent.parser import suggest_transfers
-    from fin_agent.importers.reconcile import resolve_line
-    from fin_agent.ledger import movements as movements_mod
+    from arno.agent.parser import suggest_transfers
+    from arno.importers.reconcile import resolve_line
+    from arno.ledger import movements as movements_mod
 
     here = await create_account(
         ledger,
@@ -687,7 +687,7 @@ def test_up_keep_restarts_the_server_and_leaves_the_ledger_alone(monkeypatch, tm
     monkeypatch.setattr(
         driver,
         "prepare_database",
-        lambda *, empty, seed: calls.setdefault("database", (empty, seed)) and "fin_agent_x_test",
+        lambda *, empty, seed: calls.setdefault("database", (empty, seed)) and "arno_x_test",
     )
     monkeypatch.setattr(driver, "start_server", lambda port, log_path: SimpleNamespace(pid=987))
     monkeypatch.setattr(
@@ -725,7 +725,7 @@ async def test_the_uploaded_statement_note_reaches_a_later_turn(ledger):
     from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models.function import FunctionModel
 
-    from fin_agent.agent.builder import build_agent
+    from arno.agent.builder import build_agent
 
     seen: list[str | None] = []
 

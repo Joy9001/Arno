@@ -47,12 +47,12 @@ phone. Note anything that looks wrong with a screenshot.
 
 ## 3. Agent eval for schedule payments (costs money)
 
-`fin-agent eval` is the only command that calls real models. Check the case first for free, then
+`arno eval` is the only command that calls real models. Check the case first for free, then
 run only that case:
 
 ```bash
-uv run fin-agent eval --dry-run --case hn_schedule_confirmed_not_paid
-uv run fin-agent eval --case hn_schedule_confirmed_not_paid --repeat 3
+uv run arno eval --dry-run --case hn_schedule_confirmed_not_paid
+uv run arno eval --case hn_schedule_confirmed_not_paid --repeat 3
 ```
 
 Pass means the agent says a confirmed schedule is not proof of payment. The README scorecard
@@ -77,10 +77,10 @@ agent:
 They hold only synthetic test data and are harmless. To remove them:
 
 ```bash
-docker compose exec -T db sh -c 'for d in fin_agent_payments_test fin_agent_payments_gw0_test fin_agent_payments_gw1_test; do psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"; done'
+docker compose exec -T db sh -c 'for d in arno_payments_test arno_payments_gw0_test arno_payments_gw1_test; do psql -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS $d WITH (FORCE)"; done'
 ```
 
-Never drop `fin_agent` (your real data) or anything not ending in `_test`.
+Never drop `arno` (your real data) or anything not ending in `_test`.
 
 ## 6. Check that Cash on hand includes every wallet you spend from
 
@@ -89,7 +89,7 @@ with the bank, cash, and wallet tiles. If a wallet you spend from is missing, as
 <wallet name> as a liquid account", or check directly:
 
 ```bash
-docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d fin_agent -c "SELECT name, kind, liquid, active FROM accounts WHERE kind IN ('"'"'bank'"'"','"'"'cash'"'"','"'"'wallet'"'"') ORDER BY kind, name"'
+docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d arno -c "SELECT name, kind, liquid, active FROM accounts WHERE kind IN ('"'"'bank'"'"','"'"'cash'"'"','"'"'wallet'"'"') ORDER BY kind, name"'
 ```
 
 ## 7. Still parked

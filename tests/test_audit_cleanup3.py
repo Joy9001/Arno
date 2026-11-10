@@ -14,16 +14,16 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import SANDBOX_HELPERS
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.engine.money import money
-from fin_agent.ledger.accounts import create_account, set_statement_balance
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.movements import record_expense
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.tools import projection as projection_tools
-from fin_agent.tools import read as read_tools
+from arno.agent.builder import build_agent
+from arno.agent.capabilities import SANDBOX_HELPERS
+from arno.agent.deps import AgentDeps
+from arno.engine.money import money
+from arno.ledger.accounts import create_account, set_statement_balance
+from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import record_expense
+from arno.ledger.schedules import create_schedule
+from arno.tools import projection as projection_tools
+from arno.tools import read as read_tools
 
 
 def _context_account(context: dict, account_id: str) -> dict:
@@ -48,7 +48,7 @@ def _answered(messages: list, tool_name: str) -> bool:
 def test_the_statement_close_rule_is_public():
     import re
 
-    from fin_agent.engine import projection
+    from arno.engine import projection
 
     assert "statement_close" in projection.__all__
     assert "closes" in (projection.statement_close.__doc__ or "")
@@ -177,7 +177,7 @@ async def test_an_unknown_card_bill_keeps_its_reason_in_the_context(ledger):
 
 
 def test_the_context_description_names_the_new_fields():
-    from fin_agent.agent import toolset
+    from arno.agent import toolset
 
     text = toolset.get_financial_context.__doc__ or ""
     for field in (
@@ -194,7 +194,7 @@ def test_the_context_description_names_the_new_fields():
 
 
 def test_the_period_descriptions_name_a_single_day():
-    from fin_agent.agent import toolset
+    from arno.agent import toolset
 
     assert '"2026-11-10"' in (toolset.query_movements.__doc__ or "")
     assert '"2026-11-10"' in (toolset.summarize_spending.__doc__ or "")
@@ -203,7 +203,7 @@ def test_the_period_descriptions_name_a_single_day():
 
 
 def test_schedule_payment_states_the_thirty_one_day_window():
-    from fin_agent.agent import toolset
+    from arno.agent import toolset
 
     assert "31 days" in (toolset.schedule_payment.__doc__ or "")
 
@@ -212,7 +212,7 @@ def test_schedule_payment_states_the_thirty_one_day_window():
 
 
 def test_the_rupee_helper_is_a_sandbox_helper():
-    from fin_agent.agent.toolset import rupees
+    from arno.agent.toolset import rupees
 
     assert rupees(12_345_678) == "₹1,23,456.78"
     assert rupees(-33) == "-₹0.33"
@@ -247,7 +247,7 @@ async def test_the_helper_list_matches_the_read_toolset():
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.toolset import build_read_toolset
+    from arno.agent.toolset import build_read_toolset
 
     ctx = RunContext(
         deps=AgentDeps(conversation_id="cnv_helpers3"), model=TestModel(), usage=RunUsage()

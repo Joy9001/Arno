@@ -1,6 +1,6 @@
-"""A reusable driver for real user journeys against a real, running Fin-Agent.
+"""A reusable driver for real user journeys against a real, running Arno.
 
-The terminal `fin-agent chat` runs the agent in the caller's process, so it cannot do what a
+The terminal `arno chat` runs the agent in the caller's process, so it cannot do what a
 browser does: upload a statement, answer a confirm card, review and commit an import, or show the
 cards and tool calls a turn produced. This driver speaks the same HTTP the web app speaks, to a
 server it starts itself on a scratch database, and keeps its session in a small state file so
@@ -12,7 +12,7 @@ separate shell invocations continue the same conversation.
     uv run python -m tests.e2e.driver down
 
 State (cookie, base URL, current thread, the last turn's confirm cards) lives under `$E2E_STATE`,
-defaulting to `<tempdir>/fin-agent-e2e-<database>`. The server's log is `server.log` there.
+defaulting to `<tempdir>/arno-e2e-<database>`. The server's log is `server.log` there.
 `tests/e2e/README.md` documents every command and the journeys this was proven on.
 """
 
@@ -38,11 +38,11 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from fin_agent.auth.sessions import COOKIE_NAME
-from fin_agent.ledger.common import today as ledger_today
+from arno.auth.sessions import COOKIE_NAME
+from arno.ledger.common import today as ledger_today
 from tests.software_authenticator import SoftwareAuthenticator
 
-SERVE_COMMAND = ["uv", "run", "fin-agent", "serve"]
+SERVE_COMMAND = ["uv", "run", "arno", "serve"]
 STATE_FILE = "state.json"
 LOG_FILE = "server.log"
 DEFAULT_TIMEOUT = 300.0
@@ -60,7 +60,7 @@ def _dsn() -> str:
 
 
 def _db_name(dsn: str | None = None) -> str:
-    from fin_agent.db.conn import conninfo_to_dict
+    from arno.db.conn import conninfo_to_dict
 
     return str(conninfo_to_dict(dsn or _dsn()).get("dbname", ""))
 
@@ -70,7 +70,7 @@ def state_dir() -> Path:
     override = os.environ.get("E2E_STATE")
     if override:
         return Path(override).expanduser()
-    return Path(tempfile.gettempdir()) / f"fin-agent-e2e-{_db_name()}"
+    return Path(tempfile.gettempdir()) / f"arno-e2e-{_db_name()}"
 
 
 def load_state() -> dict[str, Any]:
@@ -504,11 +504,11 @@ def render_turn(turn: dict[str, Any]) -> str:
 def server_env(port: int) -> dict[str, str]:
     """What `serve` needs to be a browser-reachable, job-running instance on this port."""
     return {
-        "FIN_AGENT_RP_ID": "localhost",
-        "FIN_AGENT_RP_ORIGIN": f"http://localhost:{port}",
-        "FIN_AGENT_COOKIE_SECURE": "0",
-        "FIN_AGENT_JOBS_ENABLED": "1",
-        "FIN_AGENT_TRUSTED_HOSTS": "localhost,127.0.0.1,testserver",
+        "ARNO_RP_ID": "localhost",
+        "ARNO_RP_ORIGIN": f"http://localhost:{port}",
+        "ARNO_COOKIE_SECURE": "0",
+        "ARNO_JOBS_ENABLED": "1",
+        "ARNO_TRUSTED_HOSTS": "localhost,127.0.0.1,testserver",
         "OTEL_SDK_DISABLED": "true",
         "PYTHONIOENCODING": "utf-8",
         "PYDANTIC_AI_NO_BANNER": "1",
@@ -525,11 +525,11 @@ def _require_free_port(port: int) -> None:
 
 def prepare_database(*, empty: bool, seed: bool) -> str:
     """Migrations, role passwords, and (optionally) the demo persona. Returns the database name."""
-    from fin_agent.config import get_settings
-    from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
-    from fin_agent.db.conn import connect
-    from fin_agent.db.migrate import run_migrations
-    from fin_agent.demo.persona import seed_demo
+    from arno.config import get_settings
+    from arno.db.bootstrap import set_agent_ro_password, set_backup_password
+    from arno.db.conn import connect
+    from arno.db.migrate import run_migrations
+    from arno.demo.persona import seed_demo
 
     settings = get_settings(refresh=True)
     name = _db_name(settings.database_url)
@@ -553,8 +553,8 @@ def prepare_database(*, empty: bool, seed: bool) -> str:
 
 def issue_setup_token() -> str:
     """A fresh first-run enrollment token, rotating the one the server logged at startup."""
-    from fin_agent.auth.setup import issue_setup_token as issue
-    from fin_agent.db.conn import connect
+    from arno.auth.setup import issue_setup_token as issue
+    from arno.db.conn import connect
 
     async def run() -> str:
         async with connect(_dsn()) as conn:
@@ -564,9 +564,9 @@ def issue_setup_token() -> str:
 
 
 def reset_passkeys() -> str:
-    """Reopen first-run setup the way `fin-agent passkeys reset` does, and return its token."""
-    from fin_agent.cli import _passkeys_reset  # the CLI's own recovery path, not a copy
-    from fin_agent.config import get_settings
+    """Reopen first-run setup the way `arno passkeys reset` does, and return its token."""
+    from arno.cli import _passkeys_reset  # the CLI's own recovery path, not a copy
+    from arno.config import get_settings
 
     _deleted, _revoked, issued = asyncio.run(_passkeys_reset(get_settings(refresh=True)))
     if issued is None:
@@ -635,8 +635,8 @@ def ledger_summary() -> dict[str, Any]:
     this. Spending covers this month and last month; due dates are not expanded (that needs the
     schedule's RRULE, which SQL cannot do), so an active schedule is listed with its rule.
     """
-    from fin_agent.db.conn import connect
-    from fin_agent.ledger.movements import (
+    from arno.db.conn import connect
+    from arno.ledger.movements import (
         _effectively_reversed_ids,  # noqa: SLF001 - the ledger's own rule
     )
 
@@ -729,7 +729,7 @@ def ledger_summary() -> dict[str, Any]:
 
 def import_rows(limit: int = 20) -> list[dict[str, Any]]:
     """Recent imports with the parser task each one runs under."""
-    from fin_agent.db.conn import connect
+    from arno.db.conn import connect
 
     async def run() -> list[dict[str, Any]]:
         async with connect(_dsn()) as conn:
@@ -1137,7 +1137,7 @@ def cmd_state(args: argparse.Namespace) -> int:
 
 def cmd_invariants(args: argparse.Namespace) -> int:
     """`tests.invariants`, against the driver's own database."""
-    from fin_agent.db.conn import connect
+    from arno.db.conn import connect
     from tests.invariants import check_ledger, checks_run
 
     async def run() -> list[Any]:
@@ -1158,7 +1158,7 @@ def cmd_invariants(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tests.e2e.driver",
-        description="Drive real Fin-Agent journeys against a real server on a scratch database.",
+        description="Drive real Arno journeys against a real server on a scratch database.",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 

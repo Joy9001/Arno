@@ -85,7 +85,7 @@ function openConversation(threadId: string, messageId: string | null) {
   if (!THREAD_ID.test(threadId)) return;
   const detail =
     messageId && THREAD_ID.test(messageId) ? { threadId, messageId } : threadId;
-  window.dispatchEvent(new CustomEvent("fin-agent:open-thread", { detail }));
+  window.dispatchEvent(new CustomEvent("arno:open-thread", { detail }));
 }
 
 function buildParams(filters: Filters, cursor: string | null): string {

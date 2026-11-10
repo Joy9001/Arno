@@ -10,11 +10,11 @@ from datetime import date
 
 import pytest
 
-from fin_agent.importers.commit import commit_import
-from fin_agent.importers.pipeline import import_payload
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.importers.commit import commit_import
+from arno.importers.pipeline import import_payload
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 
 PERIOD = (date(2026, 4, 1), date(2026, 4, 30))
 OPENING = 29020000
@@ -136,7 +136,7 @@ async def test_a_real_counterparty_still_becomes_the_payee(ledger):
 
 
 async def test_a_split_share_owed_by_a_placeholder_person_is_refused(demo_ledger):
-    from fin_agent.tools.write import ToolInputError, record_movement
+    from arno.tools.write import ToolInputError, record_movement
 
     with pytest.raises(ToolInputError, match="isn't a person"):
         await record_movement(

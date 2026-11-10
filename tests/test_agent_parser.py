@@ -24,17 +24,17 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.step_persistence import PostgresStepStore
 from pydantic_ai_harness.subagents import DelegationReports, SubAgents
 
-from fin_agent.agent.builder import AUTO_BACKGROUND_SECONDS, build_agent
-from fin_agent.agent.capabilities import MODEL_SETTINGS
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
-from fin_agent.api.tasks import TaskOwner, task_payload
-from fin_agent.importers.commit import commit_import
-from fin_agent.importers.passwords import PASSWORDS
-from fin_agent.importers.pipeline import create_import, import_payload
-from fin_agent.importers.readers import DocError
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.agent.builder import AUTO_BACKGROUND_SECONDS, build_agent
+from arno.agent.capabilities import MODEL_SETTINGS
+from arno.agent.deps import AgentDeps
+from arno.agent.parser import ImportReport, ParseReport, build_parser_agent, open_imports
+from arno.api.tasks import TaskOwner, task_payload
+from arno.importers.commit import commit_import
+from arno.importers.passwords import PASSWORDS
+from arno.importers.pipeline import create_import, import_payload
+from arno.importers.readers import DocError
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 from tests.agent_helpers import streaming_model
 from tests.import_fixtures import SBI_PARSER, UNION_PARSER, sbi_csv, union_tsv
 
@@ -454,7 +454,7 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
 async def test_the_password_never_touches_history_the_task_record_or_the_plan(
     ledger, monkeypatch, tmp_path
 ):
-    import fin_agent.agent.parser as parser_module
+    import arno.agent.parser as parser_module
 
     secret = "ARJU0101-unique-secret"
     real_open = parser_module.open_documents
@@ -899,7 +899,7 @@ async def test_a_parser_question_flags_the_conversation(ledger):
 
 
 async def test_a_wrong_password_asks_again_and_is_not_handed_back(ledger, monkeypatch):
-    import fin_agent.agent.parser as parser_module
+    import arno.agent.parser as parser_module
 
     secret = "right-secret"
     real_open = parser_module.open_documents
@@ -942,7 +942,7 @@ async def test_a_wrong_password_asks_again_and_is_not_handed_back(ledger, monkey
 
 
 def test_the_password_wait_outlasts_the_toolset_timeout():
-    import fin_agent.agent.parser as parser_module
+    import arno.agent.parser as parser_module
 
     found = []
 

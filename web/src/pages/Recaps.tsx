@@ -167,7 +167,7 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
         setPeriods((entries) =>
           entries.map((entry) => (entry.id === period.id ? { ...entry, new: false } : entry)),
         );
-        window.dispatchEvent(new Event("fin-agent:recaps-seen"));
+        window.dispatchEvent(new Event("arno:recaps-seen"));
       })
       .catch(() => {
         // The badge and the pill retry on the next open.
@@ -269,7 +269,7 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
           </div>
           <div className="story-head">
             <Orb size={28} />
-            <b>Fin-Agent</b>
+            <b>Arno</b>
             <span>· {displayText(period.title)}</span>
           </div>
           {detail.loading ? (

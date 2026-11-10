@@ -8,8 +8,8 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from fin_agent.agent.number_check import check
-from fin_agent.db.conn import connect
+from arno.agent.number_check import check
+from arno.db.conn import connect
 from tests.agent_helpers import streaming_model
 
 # --- Approval cards through the real chat endpoint -------------------------------------------
@@ -212,9 +212,9 @@ async def test_a_failed_mark_cleanup_does_not_turn_a_saved_setup_into_a_failure(
     from pydantic_ai import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent import toolset
-    from fin_agent.agent.deps import AgentDeps
-    from fin_agent.agent.write_models import AccountSetup
+    from arno.agent import toolset
+    from arno.agent.deps import AgentDeps
+    from arno.agent.write_models import AccountSetup
 
     await _flagged_thread("thread-mark-cleanup")
 
@@ -336,9 +336,9 @@ async def test_the_staleness_reminder_counts_writes_since_the_snapshot(demo_ledg
     from pydantic_ai import RunContext
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.capabilities import date_and_changes
-    from fin_agent.agent.deps import AgentDeps
-    from fin_agent.agent.history import create_thread, ensure_history
+    from arno.agent.capabilities import date_and_changes
+    from arno.agent.deps import AgentDeps
+    from arno.agent.history import create_thread, ensure_history
 
     thread = await create_thread(demo_ledger, title="stale", thread_id="thread-stale")
     await ensure_history(demo_ledger, thread)
@@ -373,8 +373,8 @@ async def test_a_second_turn_on_one_thread_is_refused():
     import pytest
     from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
-    from fin_agent.agent.deps import AgentDeps
-    from fin_agent.agent.turns import ChatTurn, TurnBusy, TurnManager
+    from arno.agent.deps import AgentDeps
+    from arno.agent.turns import ChatTurn, TurnBusy, TurnManager
 
     manager = TurnManager(SimpleNamespace())
     manager.turns["thread-busy"] = ChatTurn(
@@ -401,7 +401,7 @@ async def test_a_second_turn_on_one_thread_is_refused():
 async def test_rupees_become_paise_exactly_once(demo_ledger):
     from decimal import Decimal
 
-    from fin_agent.tools import write as write_tools
+    from arno.tools import write as write_tools
 
     result = await write_tools.record_movement(
         demo_ledger,
@@ -429,8 +429,8 @@ async def test_rupees_become_paise_exactly_once(demo_ledger):
 
 
 async def test_a_script_cannot_call_a_write_tool(demo_ledger):
-    from fin_agent.agent.builder import build_agent
-    from fin_agent.agent.deps import AgentDeps
+    from arno.agent.builder import build_agent
+    from arno.agent.deps import AgentDeps
 
     before = await demo_ledger.fetchval("SELECT count(*) FROM movements")
     code = (
@@ -462,9 +462,9 @@ async def test_a_script_cannot_call_a_write_tool(demo_ledger):
 
 
 async def test_a_fractional_chart_value_is_a_retry_not_a_truncated_number(demo_ledger):
-    from fin_agent.agent.builder import build_agent
-    from fin_agent.agent.cards import cards_from_messages
-    from fin_agent.agent.deps import AgentDeps
+    from arno.agent.builder import build_agent
+    from arno.agent.cards import cards_from_messages
+    from arno.agent.deps import AgentDeps
 
     code = (
         "r = await show_chart(type='bar', title='Share', unit='percent', "
@@ -495,7 +495,7 @@ async def test_a_fractional_chart_value_is_a_retry_not_a_truncated_number(demo_l
 
 
 def test_redaction_covers_card_formats_and_leaves_amounts_upi_and_utr():
-    from fin_agent.agent.redaction import redact_text
+    from arno.agent.redaction import redact_text
 
     for card in ("4111-1111-1111-1111", "4111 1111 1111 1111", "5500000000000004"):
         redacted = redact_text(f"card {card} please")

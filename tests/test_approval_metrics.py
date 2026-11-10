@@ -8,8 +8,8 @@ from pydantic_ai.exceptions import ApprovalRequired
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.usage import RunUsage
 
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.toolset import _gate
+from arno.agent.deps import AgentDeps
+from arno.agent.toolset import _gate
 
 
 def _ctx(deps: AgentDeps, *, approved: bool = False) -> RunContext[AgentDeps]:

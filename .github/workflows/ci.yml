@@ -16,16 +16,16 @@ jobs:
       # requires-python is ">=3.14"; pin the interpreter so the lockfile is reproducible.
       UV_PYTHON: "3.14"
       # A scratch database. conftest refuses any name that doesn't end in _test.
-      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/fin_agent_test
+      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/arno_test
       AGENT_RO_PASSWORD: agent_ro_test_password
       BACKUP_PASSWORD: backup_test_password
       # The runner may also have an older client; pin the one matching the server.
       PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
       PSQL: /usr/lib/postgresql/18/bin/psql
       PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore
-      FIN_AGENT_RP_ID: localhost
-      FIN_AGENT_RP_ORIGIN: http://localhost:8000
-      FIN_AGENT_COOKIE_SECURE: "0"
+      ARNO_RP_ID: localhost
+      ARNO_RP_ORIGIN: http://localhost:8000
+      ARNO_COOKIE_SECURE: "0"
       # Model requests are blocked: every role points at a closed loopback port, and conftest
       # refuses non-loopback sockets and DNS lookups.
       CHAT_BASE_URL: http://127.0.0.1:9/v1
@@ -40,11 +40,11 @@ jobs:
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app
-          POSTGRES_DB: fin_agent_test
+          POSTGRES_DB: arno_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U app -d fin_agent_test"
+          --health-cmd "pg_isready -U app -d arno_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -76,11 +76,11 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check
-        # Policy in docs/fin-agent/typing.md; any error or warning fails.
+        # Policy in docs/arno/typing.md; any error or warning fails.
         run: uv run pyrefly check --output-format=github
 
       - name: Dependency vulnerability audit
-        # Audit the lockfile, not the installed project: fin-agent itself is not on PyPI.
+        # Audit the lockfile, not the installed project: arno itself is not on PyPI.
         run: |
           uv export --frozen --no-emit-project --format requirements-txt -q > "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"

@@ -24,9 +24,9 @@ from pydantic_ai_harness.compaction import (
     compact_now,
 )
 
-from fin_agent.agent.capabilities import build_capabilities
-from fin_agent.agent.instructions import render_instructions
-from fin_agent.agent.presentation import ResultRegistry, build_answer
+from arno.agent.capabilities import build_capabilities
+from arno.agent.instructions import render_instructions
+from arno.agent.presentation import ResultRegistry, build_answer
 
 DECISION = "We agreed to keep the floor at ₹25,000 and not add a new subscription this month."
 

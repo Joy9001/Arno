@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fin_agent.jobs.backup import backup_alert
+from arno.jobs.backup import backup_alert
 
 
 async def _success(db, when: datetime) -> None:

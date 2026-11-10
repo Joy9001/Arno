@@ -1,4 +1,4 @@
-name: fin-agent
+name: arno
 
 x-logging: &default-logging
   driver: json-file
@@ -14,7 +14,7 @@ services:
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: fin_agent
+      POSTGRES_DB: arno
       PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-}
     volumes:
       # Postgres 18 images store data under /var/lib/postgresql/<major>/; mounting data/ is
@@ -23,9 +23,9 @@ services:
       - ./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/phoenix-db.sh:ro
     # Published on loopback for development (tests, psql). Not reachable from the tailnet.
     ports:
-      - "127.0.0.1:${FIN_AGENT_DB_PORT:-5433}:5432"
+      - "127.0.0.1:${ARNO_DB_PORT:-5433}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U app -d fin_agent"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U app -d arno"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -33,26 +33,26 @@ services:
 
   api:
     build: .
-    image: ghcr.io/joy9001/fin-agent:${FIN_AGENT_VERSION:-0.1.2}
+    image: ghcr.io/joy9001/arno:${ARNO_VERSION:-0.1.2}
     restart: unless-stopped
     logging: *default-logging
     env_file:
       # Optional: Compose still requires POSTGRES_PASSWORD, so a missing .env fails loudly.
-      - path: ${FIN_AGENT_ENV_FILE:-.env}
+      - path: ${ARNO_ENV_FILE:-.env}
         required: false
     environment:
       # Inside Compose the database is `db`, not the loopback address in .env.
-      DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD}@db:5432/fin_agent
-      FIN_AGENT_WEB_DIR: /app/web/dist
-      FIN_AGENT_AUTO_MIGRATE: "1"
-      FIN_AGENT_PRE_MIGRATION_DIR: /app/pre-migration
-      FIN_AGENT_TASKS_DIR: /app/tasks
+      DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD}@db:5432/arno
+      ARNO_WEB_DIR: /app/web/dist
+      ARNO_AUTO_MIGRATE: "1"
+      ARNO_PRE_MIGRATION_DIR: /app/pre-migration
+      ARNO_TASKS_DIR: /app/tasks
       # Native Pydantic AI traces go straight to Phoenix over OTLP/HTTP. This Compose Phoenix
       # requires authentication. By default the local Phoenix admin secret is the bearer token,
       # so a normal start exports with no extra provisioning step. PHOENIX_API_KEY overrides it
       # when the operator has a real Phoenix API key.
       PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:6006/v1/traces}
-      PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-fin-agent}
+      PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-arno}
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}
       OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       # The shared env_file also contains backend credentials. The app gets only the single
@@ -66,12 +66,12 @@ services:
       - pre-migration-data:/app/pre-migration
       # The parser subagent's task records. The step store in Postgres holds each run's steps.
       - tasks-data:/app/tasks
-      # Read-only access to the default restic repository so `fin-agent restore` works with the
+      # Read-only access to the default restic repository so `arno restore` works with the
       # local volume. Off-site repositories are read through restic directly.
       - backup-data:/backups:ro
     ports:
       # Loopback only. `tailscale serve --bg` proxies HTTPS on the tailnet to this port.
-      - "127.0.0.1:${FIN_AGENT_API_PORT:-8000}:8000"
+      - "127.0.0.1:${ARNO_API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -93,15 +93,15 @@ services:
     build:
       context: .
       dockerfile: backup/Dockerfile
-    image: ghcr.io/joy9001/fin-agent-backup:${FIN_AGENT_VERSION:-0.1.2}
+    image: ghcr.io/joy9001/arno-backup:${ARNO_VERSION:-0.1.2}
     restart: unless-stopped
     logging: *default-logging
     env_file:
-      - path: ${FIN_AGENT_ENV_FILE:-.env}
+      - path: ${ARNO_ENV_FILE:-.env}
         required: false
     environment:
       # Its own role: SELECT for pg_dump, INSERT into backup_runs only.
-      DATABASE_URL: postgresql://backup:${BACKUP_PASSWORD:?set BACKUP_PASSWORD in .env}@db:5432/fin_agent
+      DATABASE_URL: postgresql://backup:${BACKUP_PASSWORD:?set BACKUP_PASSWORD in .env}@db:5432/arno
       RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backups/restic}
       RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-3600}

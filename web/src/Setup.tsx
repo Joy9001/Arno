@@ -63,7 +63,7 @@ export function Setup({ authState }: { authState: AuthState }) {
         <section className="card">
           <div className="auth-brand">
             <Orb size={120} live />
-            Fin-Agent
+            Arno
           </div>
           <h1>Open this page at the passkey origin</h1>
           <p className="muted">
@@ -86,9 +86,9 @@ export function Setup({ authState }: { authState: AuthState }) {
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
           <Orb size={120} live />
-          Fin-Agent
+          Arno
         </div>
-        <h1>{addDevice ? "Add this device" : "Set up Fin-Agent"}</h1>
+        <h1>{addDevice ? "Add this device" : "Set up Arno"}</h1>
 
         {setupComplete && (
           <p className="notice">
@@ -151,7 +151,7 @@ export function Setup({ authState }: { authState: AuthState }) {
         <p className="fine">
           Passkeys need HTTPS and a stable hostname. This page must be opened at{" "}
           <code>{authState.rp_origin}</code>; a passkey made on another origin won&apos;t work.
-          No link? Run <code>fin-agent setup</code> on the host, or use Settings → Passkeys → Add
+          No link? Run <code>arno setup</code> on the host, or use Settings → Passkeys → Add
           a device.
         </p>
       </form>

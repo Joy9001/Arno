@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 def _per_worker_env() -> None:
     """Point each xdist worker at its own database and task folders.
 
-    Runs before `fin_agent` is imported, so `Settings.from_env()` sees the worker values. Without
+    Runs before `arno` is imported, so `Settings.from_env()` sees the worker values. Without
     xdist nothing changes.
     """
     worker = os.environ.get("PYTEST_XDIST_WORKER")
@@ -52,22 +52,22 @@ def _per_worker_env() -> None:
     if dsn:
         os.environ["DATABASE_URL"] = dsn
     temp = Path(tempfile.gettempdir())
-    os.environ["FIN_AGENT_TASKS_DIR"] = str(temp / f"fin-agent-tasks-{worker}")
-    os.environ["FIN_AGENT_PRE_MIGRATION_DIR"] = str(temp / f"fin-agent-pre-migration-{worker}")
+    os.environ["ARNO_TASKS_DIR"] = str(temp / f"arno-tasks-{worker}")
+    os.environ["ARNO_PRE_MIGRATION_DIR"] = str(temp / f"arno-pre-migration-{worker}")
 
 
 _per_worker_env()
 
-# Set before importing fin_agent, so Settings.from_env sees them.
-os.environ.setdefault("FIN_AGENT_RP_ID", "localhost")
-os.environ.setdefault("FIN_AGENT_RP_ORIGIN", "http://localhost:8000")
-os.environ.setdefault("FIN_AGENT_COOKIE_SECURE", "0")
+# Set before importing arno, so Settings.from_env sees them.
+os.environ.setdefault("ARNO_RP_ID", "localhost")
+os.environ.setdefault("ARNO_RP_ORIGIN", "http://localhost:8000")
+os.environ.setdefault("ARNO_COOKIE_SECURE", "0")
 for _role in ("CHAT", "VISION", "STT"):
     os.environ.setdefault(f"{_role}_BASE_URL", "http://127.0.0.1:9/v1")
     os.environ.setdefault(f"{_role}_MODEL", "blocked-in-tests")
 
 # The job loop is tested directly; the API tests must not race it.
-os.environ.setdefault("FIN_AGENT_JOBS_ENABLED", "0")
+os.environ.setdefault("ARNO_JOBS_ENABLED", "0")
 
 # Tests never export ambient telemetry. The standard SDK kill switch stops the process
 # bootstrap from installing Phoenix; a smoke test uses its own isolated process.
@@ -84,21 +84,21 @@ os.environ["OTEL_SDK_DISABLED"] = "true"
 # No test can spend money. Only evals turn this on.
 from pydantic_ai import models  # noqa: E402
 
-from fin_agent.api.app import create_app  # noqa: E402
-from fin_agent.auth.setup import issue_setup_token  # noqa: E402
-from fin_agent.config import Settings, get_settings  # noqa: E402
-from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
-from fin_agent.db.conn import (  # noqa: E402
+from arno.api.app import create_app  # noqa: E402
+from arno.auth.setup import issue_setup_token  # noqa: E402
+from arno.config import Settings, get_settings  # noqa: E402
+from arno.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
+from arno.db.conn import (  # noqa: E402
     Connection,
     connect,
     conninfo_to_dict,
     make_conninfo,
     quote_ident,
 )
-from fin_agent.db.migrate import run_migrations  # noqa: E402
-from fin_agent.demo.persona import seed_demo  # noqa: E402
-from fin_agent.ledger.accounts import ensure_system_accounts  # noqa: E402
-from fin_agent.ledger.categories import ensure_default_categories  # noqa: E402
+from arno.db.migrate import run_migrations  # noqa: E402
+from arno.demo.persona import seed_demo  # noqa: E402
+from arno.ledger.accounts import ensure_system_accounts  # noqa: E402
+from arno.ledger.categories import ensure_default_categories  # noqa: E402
 from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 
 # A module-level `bool` flag the library itself rebinds; its inferred type is `Literal[True]`.
@@ -245,13 +245,13 @@ def pytest_configure(config: pytest.Config) -> None:
     if not dsn:
         raise pytest.UsageError(
             "DATABASE_URL must point at a scratch database whose name ends in _test, e.g. "
-            "postgresql://app:app@127.0.0.1:5433/fin_agent_test"
+            "postgresql://app:app@127.0.0.1:5433/arno_test"
         )
     dbname = conninfo_to_dict(dsn).get("dbname", "")
-    if not dbname.endswith("_test") and not os.environ.get("FIN_AGENT_ALLOW_DATABASE_RESET"):
+    if not dbname.endswith("_test") and not os.environ.get("ARNO_ALLOW_DATABASE_RESET"):
         raise pytest.UsageError(
             f"Refusing to reset database {dbname!r}: its name must end in _test. "
-            "Set FIN_AGENT_ALLOW_DATABASE_RESET=1 to override."
+            "Set ARNO_ALLOW_DATABASE_RESET=1 to override."
         )
 
 

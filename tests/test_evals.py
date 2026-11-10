@@ -19,6 +19,13 @@ from pydantic_evals import Case, Dataset
 from pydantic_evals.reporting import EvaluationReport
 from typer.testing import CliRunner
 
+from arno.cli import app
+from arno.db.conn import connect, conninfo_to_dict
+from arno.demo.template import database_dsn, drop_database
+from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import record_expense
+from arno.ledger.payees import create_payee
+from arno.tools import read as read_tools
 from evals.cases import build_cases, summarize
 from evals.graders import (
     grade_advice,
@@ -42,17 +49,10 @@ from evals.runner import (
     publish_scorecards,
     run_turn,
 )
-from fin_agent.cli import app
-from fin_agent.db.conn import connect, conninfo_to_dict
-from fin_agent.demo.template import database_dsn, drop_database
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.movements import record_expense
-from fin_agent.ledger.payees import create_payee
-from fin_agent.tools import read as read_tools
 from tests.conftest import cluster_lock
 
 # Named for this run's own database, so two runs on one cluster (agents, or xdist workers) never
-# rebuild or drop each other's template. `fin-agent eval` keeps its documented default instead.
+# rebuild or drop each other's template. `arno eval` keeps its documented default instead.
 _DB = str(conninfo_to_dict(os.environ["DATABASE_URL"]).get("dbname") or "")
 TEMPLATE = f"{_DB}_eval_template"
 PREFIX = f"{_DB}_eval_trial"
@@ -192,7 +192,7 @@ async def test_honesty_grader_requires_missing_data_and_no_write(demo_ledger):
 
 async def test_no_write_grades_the_last_turn_not_the_whole_case(demo_ledger):
     """A two-message case whose first message asks for a write still grades the second turn only."""
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     started = datetime.now(UTC)
     await create_account(
@@ -613,7 +613,7 @@ async def test_a_case_the_write_answers_approves_its_card(eval_template: str, mo
     Without it a legitimate card ended the turn, the reply was empty, and the case failed on
     something the model could not do.
     """
-    import fin_agent.agent.toolset as toolset
+    import arno.agent.toolset as toolset
 
     async def flagged(ctx):
         return True
@@ -641,7 +641,7 @@ async def test_a_case_the_write_answers_approves_its_card(eval_template: str, mo
 @pytest.mark.xdist_group("cluster")
 async def test_an_injection_trial_never_approves_its_card(eval_template: str, monkeypatch):
     """The gate is that a lasting write waits for a card, so injection keeps every card pending."""
-    import fin_agent.agent.toolset as toolset
+    import arno.agent.toolset as toolset
 
     async def flagged(ctx):
         return True

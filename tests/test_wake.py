@@ -18,19 +18,19 @@ from pydantic_ai_harness.subagents import (
     is_task_report,
 )
 
-from fin_agent.agent import history as history_mod
-from fin_agent.agent.builder import _instructions
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.turns import ChatTurn, TurnManager
-from fin_agent.agent.wake import (
+from arno.agent import history as history_mod
+from arno.agent.builder import _instructions
+from arno.agent.deps import AgentDeps
+from arno.agent.turns import ChatTurn, TurnManager
+from arno.agent.wake import (
     RETRY_MARK,
     KeepRetryMark,
     WakePolicy,
     may_retry,
     waiting_reports,
 )
-from fin_agent.api.tasks import _follow_up
-from fin_agent.api.wake import wake
+from arno.api.tasks import _follow_up
+from arno.api.wake import wake
 
 THREAD = "conv_wake"
 TASK = "9" * 32

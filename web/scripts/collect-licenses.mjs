@@ -17,7 +17,7 @@ const output = execFileSync(command, args, {
 const groups = JSON.parse(output);
 const seen = new Set();
 const sections = [
-  "Fin-Agent third-party notices for the web bundle",
+  "Arno third-party notices for the web bundle",
   "",
   "The complete license text of every production package resolved by pnpm is below.",
   "The app source is MIT; the full notice file also ships at this path in the image.",

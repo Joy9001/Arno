@@ -9,12 +9,12 @@ from pathlib import Path
 
 
 def test_repo_root_env_override_wins_over_the_package_location(tmp_path):
-    env = {**os.environ, "FIN_AGENT_REPO_ROOT": str(tmp_path)}
+    env = {**os.environ, "ARNO_REPO_ROOT": str(tmp_path)}
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "from fin_agent.config import REPO_ROOT; print(REPO_ROOT)",
+            "from arno.config import REPO_ROOT; print(REPO_ROOT)",
         ],
         env=env,
         capture_output=True,

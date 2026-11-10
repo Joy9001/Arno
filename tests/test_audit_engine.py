@@ -7,10 +7,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fin_agent.engine.affordability import Hypothetical, _delay_goal_tradeoff, afford
-from fin_agent.engine.money import amortize
-from fin_agent.engine.patterns import _load_charges, detect_missed
-from fin_agent.engine.projection import (
+from arno.engine.affordability import Hypothetical, _delay_goal_tradeoff, afford
+from arno.engine.money import amortize
+from arno.engine.patterns import _load_charges, detect_missed
+from arno.engine.projection import (
     DEFAULT_SEED,
     CardAccount,
     CashEvent,
@@ -22,14 +22,14 @@ from fin_agent.engine.projection import (
     card_due_date,
     project,
 )
-from fin_agent.india.recurrence import expand_rule
-from fin_agent.jobs.patterns import _suggested_rule
-from fin_agent.jobs.reminders import send_reminders
-from fin_agent.jobs.risk import risk_warning
-from fin_agent.jobs.schedules import INDIA, enqueue_due_schedules, period_for
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.movements import (
+from arno.india.recurrence import expand_rule
+from arno.jobs.patterns import _suggested_rule
+from arno.jobs.reminders import send_reminders
+from arno.jobs.risk import risk_warning
+from arno.jobs.schedules import INDIA, enqueue_due_schedules, period_for
+from arno.ledger.accounts import create_account
+from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import (
     correct_movement,
     record_expense,
     record_lending,
@@ -37,12 +37,12 @@ from fin_agent.ledger.movements import (
     record_settlement,
     record_split,
 )
-from fin_agent.ledger.payees import create_payee
-from fin_agent.ledger.schedule_payments import link_payment
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.tools.projection import card as projection_card
-from fin_agent.tools.projection import load_inputs
-from fin_agent.tools.projection import summary as projection_summary
+from arno.ledger.payees import create_payee
+from arno.ledger.schedule_payments import link_payment
+from arno.ledger.schedules import create_schedule
+from arno.tools.projection import card as projection_card
+from arno.tools.projection import load_inputs
+from arno.tools.projection import summary as projection_summary
 
 UTC = ZoneInfo("UTC")
 
@@ -435,7 +435,7 @@ def test_a_monthly_charge_on_a_short_month_end_suggests_the_last_day():
 
 
 def test_backtest_median_error_and_band_calibration_are_computed():
-    from fin_agent.engine.backtest import _summarize
+    from arno.engine.backtest import _summarize
 
     rows = [
         {"error_paise": 10, "absolute_error_paise": 10, "in_band": True},
@@ -451,7 +451,7 @@ def test_backtest_median_error_and_band_calibration_are_computed():
 
 
 def test_a_month_end_recurrence_keeps_its_day_of_month():
-    from fin_agent.engine.hackerrank import _events_for
+    from arno.engine.hackerrank import _events_for
 
     def settled(day: str) -> dict[str, str]:
         return {
@@ -502,7 +502,7 @@ async def test_a_late_biweekly_run_keeps_its_fourteen_day_phase(db):
 
 
 async def test_a_card_due_forecast_follows_the_statement_close(ledger):
-    from fin_agent.ledger.schedules import upcoming
+    from arno.ledger.schedules import upcoming
 
     card = await create_account(
         ledger,
@@ -654,7 +654,7 @@ async def test_a_partially_paid_bill_is_not_reported_missed(ledger):
 
 
 async def test_a_missed_bill_pushes_a_missed_notification(ledger, monkeypatch):
-    from fin_agent.jobs import patterns as jobs_patterns
+    from arno.jobs import patterns as jobs_patterns
 
     bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
     await create_schedule(
@@ -718,7 +718,7 @@ async def test_a_configured_income_outside_the_horizon_is_not_a_setup_gap(ledger
 
 
 async def test_a_far_out_emi_loads_the_income_after_the_purchase(ledger):
-    from fin_agent.tools import projection as projection_tools
+    from arno.tools import projection as projection_tools
 
     bank = await create_account(
         ledger,

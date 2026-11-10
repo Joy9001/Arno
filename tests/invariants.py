@@ -1,6 +1,6 @@
 """Whole-ledger invariants: one checker every test and end-to-end run can call.
 
-The rules are the "Financial invariants" list in `docs/fin-agent/e2e-user-journeys.md`, derived
+The rules are the "Financial invariants" list in `docs/arno/e2e-user-journeys.md`, derived
 from the write paths in `ledger/movements.py` and `tests`' own view definitions. The two balance
 checks come from `backup_restore.verify_database`, which the restore drill already relies on, so
 there is one definition of "the ledger balances".
@@ -23,14 +23,14 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from fin_agent.backup_restore import verify_database
-from fin_agent.db.conn import Connection, connect, conninfo_to_dict
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import InvalidLedgerError
-from fin_agent.ledger.movements import _reversal_state
-from fin_agent.ledger.schedule_payments import _capacity, payment_evidence, payment_status
-from fin_agent.tools import read as read_tools
-from fin_agent.tools import recaps as recap_tools
+from arno.backup_restore import verify_database
+from arno.db.conn import Connection, connect, conninfo_to_dict
+from arno.ledger.common import today
+from arno.ledger.errors import InvalidLedgerError
+from arno.ledger.movements import _reversal_state
+from arno.ledger.schedule_payments import _capacity, payment_evidence, payment_status
+from arno.tools import read as read_tools
+from arno.tools import recaps as recap_tools
 
 SYSTEM_KINDS = {"spending", "income", "equity"}
 

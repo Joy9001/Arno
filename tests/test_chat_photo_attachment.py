@@ -10,8 +10,8 @@ from datetime import date
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo
 
-from fin_agent.capture.photo import PaymentPhoto
-from fin_agent.ledger.audit import new_id
+from arno.capture.photo import PaymentPhoto
+from arno.ledger.audit import new_id
 from tests.agent_helpers import streaming_model
 from tests.import_fixtures import sbi_csv
 from tests.test_agent_turns import _first_text_delta, _until, live_server
@@ -121,7 +121,7 @@ def _capture_cards(thread: dict) -> list[dict]:
 
 
 async def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger, monkeypatch):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     photo = _upload_photo(authed_client)
     body = _body("client_photo_only", photos=[photo])
 
@@ -168,7 +168,7 @@ async def test_image_only_is_staged_then_logged_once(authed_client, demo_ledger,
 async def test_image_and_text_keeps_caption_and_single_receipt(
     authed_client, demo_ledger, monkeypatch
 ):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     photo = _upload_photo(authed_client)
     body = _body("client_photo_text", text="Log this Swiggy receipt", photos=[photo])
 
@@ -184,7 +184,7 @@ async def test_image_and_text_keeps_caption_and_single_receipt(
 
 
 async def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_ledger, monkeypatch):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     statement = authed_client.post(
         "/api/attachments",
         files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
@@ -227,7 +227,7 @@ async def test_mixed_photo_and_statement_starts_one_each(authed_client, demo_led
 async def test_a_missing_photo_ref_is_refused_before_any_capture(
     authed_client, demo_ledger, monkeypatch
 ):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     body = _body(
         "client_photo_missing",
         text="Log this receipt",
@@ -246,7 +246,7 @@ async def test_a_missing_photo_ref_is_refused_before_any_capture(
 async def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
     authed_client, demo_ledger, monkeypatch
 ):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _failed_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _failed_extraction)
     photo = _upload_photo(authed_client)
     body = _body("client_photo_fail", text="Log this receipt", photos=[photo])
 
@@ -261,7 +261,7 @@ async def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
     assert cards[0]["data"]["kind"] == "photo"
     assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     retried = authed_client.post(f"/api/chat/thread_photo/photo/{photo['id']}")
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "logged"
@@ -277,7 +277,7 @@ async def test_photo_upload_refuses_a_non_image_and_the_size_limit(authed_client
     assert refused.status_code == 415
     assert "PNG, JPEG" in refused.json()["detail"]
 
-    monkeypatch.setattr("fin_agent.api.imports.MAX_UPLOAD_BYTES", 8)
+    monkeypatch.setattr("arno.api.imports.MAX_UPLOAD_BYTES", 8)
     oversized = _upload(authed_client, name="large.png", data=PNG + b"x")
     assert oversized.status_code == 413
 
@@ -307,7 +307,7 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
             await asyncio.sleep(0.01)
         return await _fake_extraction()
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", slow_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", slow_extraction)
     async with live_server(app, monkeypatch, _model()) as client:
         upload = await client.post(
             "/api/attachments",
@@ -390,7 +390,7 @@ async def test_a_replay_during_streaming_is_not_blocked(app, demo_ledger, monkey
 
 
 async def test_stop_after_a_photo_send_keeps_one_receipt(app, demo_ledger, monkeypatch):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
 
     attachment_id = await new_id(demo_ledger, "att")
     await demo_ledger.execute(

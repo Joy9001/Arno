@@ -9,12 +9,12 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
-from fin_agent.agent import toolset as agent_tools
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.cards import cards_from_messages
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.tools import projection as projection_tools
+from arno.agent import toolset as agent_tools
+from arno.agent.builder import build_agent
+from arno.agent.cards import cards_from_messages
+from arno.agent.deps import AgentDeps
+from arno.ledger.common import today as ledger_today
+from arno.tools import projection as projection_tools
 
 
 async def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
@@ -89,8 +89,8 @@ async def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_l
 
 
 async def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger):
-    from fin_agent.ledger.accounts import create_account
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
 
     account = await create_account(ledger, kind="bank", name="SBI Savings")
     await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
@@ -109,7 +109,7 @@ async def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(l
 
 
 async def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     await create_account(ledger, kind="bank", name="SBI Savings")
 

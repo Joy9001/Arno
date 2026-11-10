@@ -13,12 +13,12 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Text
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.spend import SpendEntry
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS, turn_limits
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.models import WindowLimited
-from fin_agent.agent.spend import _SingleConnectionPool, make_spend_store
-from fin_agent.config import get_settings
+from arno.agent.builder import build_agent
+from arno.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS, turn_limits
+from arno.agent.deps import AgentDeps
+from arno.agent.models import WindowLimited
+from arno.agent.spend import _SingleConnectionPool, make_spend_store
+from arno.config import get_settings
 from tests.agent_helpers import streaming_model
 
 
@@ -70,7 +70,7 @@ def test_the_cli_connection_is_replaced_across_loops_and_closed_explicitly(monke
         created.append(connection)
         return connection
 
-    monkeypatch.setattr("fin_agent.agent.spend.asyncpg.connect", connect)
+    monkeypatch.setattr("arno.agent.spend.asyncpg.connect", connect)
     pool = _SingleConnectionPool("postgresql://unused")
 
     async def use():

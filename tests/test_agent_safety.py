@@ -6,9 +6,9 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.redaction import redact_text
-from fin_agent.tools.mark import mark
+from arno.agent.deps import AgentDeps
+from arno.agent.redaction import redact_text
+from arno.tools.mark import mark
 from tests.agent_helpers import streaming_model
 
 
@@ -120,7 +120,7 @@ async def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger)
 
 
 def test_redaction_through_the_input_guardrail_drops_the_card():
-    from fin_agent.agent.builder import build_agent
+    from arno.agent.builder import build_agent
 
     seen: list[str] = []
 

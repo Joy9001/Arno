@@ -15,14 +15,14 @@ from typing import cast
 import pypdfium2 as pdfium
 from pydantic_ai import RunContext
 
-from fin_agent.agent import parser as parser_module
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import open_imports, submit_parser_code
-from fin_agent.importers.monty import ScriptContext, run_script
-from fin_agent.importers.pipeline import create_import
-from fin_agent.importers.readers import Doc
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.agent import parser as parser_module
+from arno.agent.deps import AgentDeps
+from arno.agent.parser import open_imports, submit_parser_code
+from arno.importers.monty import ScriptContext, run_script
+from arno.importers.pipeline import create_import
+from arno.importers.readers import Doc
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 

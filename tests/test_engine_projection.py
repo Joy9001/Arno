@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.engine.projection import (
+from arno.engine.projection import (
     CardAccount,
     CashEvent,
     CurvePoint,

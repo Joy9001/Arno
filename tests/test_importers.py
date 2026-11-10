@@ -7,10 +7,10 @@ import zipfile
 
 import pytest
 
-from fin_agent.importers.checks import check_statement
-from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.monty import ScriptContext, normalize_accounts, run_script
-from fin_agent.importers.readers import Doc, DocError, decode_text, open_documents, sniff
+from arno.importers.checks import check_statement
+from arno.importers.layout import detect_fingerprint
+from arno.importers.monty import ScriptContext, normalize_accounts, run_script
+from arno.importers.readers import Doc, DocError, decode_text, open_documents, sniff
 from tests.import_fixtures import (
     SBI_PARSER,
     SLICE_PARSER,
@@ -207,7 +207,7 @@ def test_a_manual_opening_wins_over_a_parser_claim_and_is_labeled_manual():
 )
 async def test_synthetic_indian_parsers_verify(payload, parser, opening, closing):
     doc = Doc(payload)
-    from fin_agent.importers.periods import derive_period
+    from arno.importers.periods import derive_period
 
     period = derive_period(doc)
     assert period is not None
@@ -274,7 +274,7 @@ def test_normalize_accounts_keeps_a_clean_counterparty():
 
 
 def test_derive_period_yearless_range_takes_year_from_short_token():
-    from fin_agent.importers.periods import derive_period
+    from arno.importers.periods import derive_period
 
     doc = Doc(b"12 JUL - 11 AUG\n14 Aug '26 \xe2\x80\xa2 UPI 100.00\n")
     assert derive_period(doc) == {

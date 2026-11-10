@@ -13,14 +13,14 @@ from pydantic import ValidationError
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.api.capture import _clean_upi_ref
-from fin_agent.capture.photo import PaymentPhoto
-from fin_agent.jobs.briefing import compose_briefing, send_weekly_briefing
-from fin_agent.jobs.questions import run_scheduled_question
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.scheduled_questions import create_question
+from arno.agent.builder import build_agent
+from arno.api.capture import _clean_upi_ref
+from arno.capture.photo import PaymentPhoto
+from arno.jobs.briefing import compose_briefing, send_weekly_briefing
+from arno.jobs.questions import run_scheduled_question
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.scheduled_questions import create_question
 from tests.agent_helpers import streaming_model
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"audit2-image"
@@ -101,7 +101,7 @@ async def test_retrying_a_logged_photo_appends_the_note_once(
             upi_ref="4145 1234 5678",
         )
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", extraction)
     first = authed_client.post(
         "/api/chat/cnv_watch2_retry/photo",
         files={"file": ("receipt.png", PNG, "image/png")},

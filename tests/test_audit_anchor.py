@@ -22,15 +22,15 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from fin_agent.cli import app as cli_app
-from fin_agent.engine import backtest
-from fin_agent.importers.commit import _adjust_closing, commit_import, undo_import
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account, set_statement_balance
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance
-from fin_agent.tools.projection import _balance_at, load_inputs
+from arno.cli import app as cli_app
+from arno.engine import backtest
+from arno.importers.commit import _adjust_closing, commit_import, undo_import
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account, set_statement_balance
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance
+from arno.tools.projection import _balance_at, load_inputs
 from tests.invariants import check_ledger
 
 # --- helpers ----------------------------------------------------------------------------------
@@ -469,7 +469,7 @@ async def _legacy_import(
 
 
 async def test_the_repair_dry_run_writes_nothing_and_the_apply_fixes_the_history(ledger):
-    from fin_agent.importers.repair import repair_openings
+    from arno.importers.repair import repair_openings
 
     account = await _stated_bank(ledger)
     before_import = await _curve(ledger, account)
@@ -510,7 +510,7 @@ async def test_the_repair_dry_run_writes_nothing_and_the_apply_fixes_the_history
 
 
 async def test_the_repair_walks_a_chain_of_imports_in_statement_order(ledger):
-    from fin_agent.importers.repair import repair_openings
+    from arno.importers.repair import repair_openings
 
     account = await _stated_bank(ledger)
     first_rows = [
@@ -551,7 +551,7 @@ async def test_the_repair_walks_a_chain_of_imports_in_statement_order(ledger):
 
 
 async def test_the_repair_command_prints_what_it_would_change(ledger):
-    from fin_agent.importers.repair import repair_openings
+    from arno.importers.repair import repair_openings
 
     account = await _stated_bank(ledger)
     await _legacy_import(

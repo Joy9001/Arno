@@ -16,10 +16,10 @@ import pytest
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
-from fin_agent.capture.photo import PaymentPhoto
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger import payees as payees_mod
-from fin_agent.ledger.audit import new_id
+from arno.capture.photo import PaymentPhoto
+from arno.ledger import movements as movements_mod
+from arno.ledger import payees as payees_mod
+from arno.ledger.audit import new_id
 from tests.agent_helpers import streaming_model
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
@@ -247,7 +247,7 @@ async def _failed_extraction(*_args, **_kwargs) -> PaymentPhoto:
 async def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
     authed_client, demo_ledger, monkeypatch
 ):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     response = authed_client.post(
         "/api/chat/cnv_photo_1/photo",
         files={"file": ("upi.png", PNG, "image/png")},
@@ -314,7 +314,7 @@ async def test_a_photo_is_saved_logged_once_and_marked_by_the_server(
 async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     authed_client, demo_ledger, monkeypatch
 ):
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _failed_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _failed_extraction)
     response = authed_client.post(
         "/api/chat/cnv_photo_fail/photo",
         files={"file": ("upi.png", PNG, "image/png")},
@@ -337,7 +337,7 @@ async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
         == 0
     )
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", _fake_extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
     retried = authed_client.post(f"/api/chat/cnv_photo_fail/photo/{payload['attachment_id']}")
     assert retried.status_code == 200, retried.text
     assert retried.json()["status"] == "logged"

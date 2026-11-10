@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 960 448" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-framework-title sd-framework-desc" id="sd-framework-root">
+        <title id="sd-framework-title">Agentic system design in ten steps</title>
+        <desc id="sd-framework-desc">Arno's design walk in four groups: decide, the agent's world, earn trust, and run it, with evals sending the walk back to the requirements.</desc>
+        <defs>
+      <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
+      #sd-framework-root { --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', 'Noto Serif KR', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace; }
+      #sd-framework-root { font-family: var(--font-sans); color: var(--color-ink); }
+      #sd-framework-root .diagram-container { width: 100%; overflow-x: auto; }
+      @media print {
+#sd-framework-root .diagram-container { overflow-x: visible; }
+}</style>
+          <marker id="sd-framework-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+          <marker id="sd-framework-arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#bf4520"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Arrows (drawn before boxes) -->
+        <path d="M 242,134 H 266" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#sd-framework-arrow)"/>
+        <path d="M 468,134 H 492" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#sd-framework-arrow)"/>
+        <path d="M 694,134 H 718" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#sd-framework-arrow)"/>
+        <path d="M 593,312 V 336 Q 593,344 585,344 H 149 Q 141,344 141,336 V 312" fill="none" stroke="#bf4520" stroke-width="1.4" stroke-dasharray="5,4" marker-end="url(#sd-framework-arrow-accent)"/>
+        <rect x="320" y="324" width="96" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="368" y="333" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">RE-VALIDATES 1</text>
+
+        <!-- Group 1: Decide -->
+        <rect x="40" y="72" width="202" height="240" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="72" width="202" height="240" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="52" y="92" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">DECIDE</text>
+
+        <circle cx="64" cy="120" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="64" y="123" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1</text>
+        <text x="82" y="124" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Requirements, success</text>
+        <text x="82" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">what it must do; how</text>
+        <text x="82" y="152" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">"works" is measured</text>
+
+        <rect x="46" y="168" width="190" height="60" rx="4" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <circle cx="64" cy="188" r="9" fill="#bf4520"/>
+        <text x="64" y="191" fill="#ffffff" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">2</text>
+        <text x="82" y="192" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Control and autonomy</text>
+        <text x="82" y="208" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">code or model: who picks</text>
+        <text x="82" y="220" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">each next step</text>
+
+        <circle cx="64" cy="256" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="64" y="259" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">3</text>
+        <text x="82" y="260" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Agent core</text>
+        <text x="82" y="276" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">one agent, models, loop,</text>
+        <text x="82" y="288" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">budgets</text>
+
+        <!-- Group 2: The agent's world -->
+        <rect x="266" y="72" width="202" height="240" rx="6" fill="#f5f5f5"/>
+        <rect x="266" y="72" width="202" height="240" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="278" y="92" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">THE AGENT'S WORLD</text>
+
+        <circle cx="290" cy="120" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="290" y="123" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">4</text>
+        <text x="308" y="124" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Ground truth</text>
+        <text x="308" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">the ledger every answer</text>
+        <text x="308" y="152" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">must agree with</text>
+
+        <circle cx="290" cy="188" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="290" y="191" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">5</text>
+        <text x="308" y="192" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Tools</text>
+        <text x="308" y="208" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">what it can read and</text>
+        <text x="308" y="220" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">write, and how</text>
+
+        <circle cx="290" cy="256" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="290" y="259" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">6</text>
+        <text x="308" y="260" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Context and memory</text>
+        <text x="308" y="276" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">what the model sees</text>
+        <text x="308" y="288" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">each turn</text>
+
+        <!-- Group 3: Earn trust -->
+        <rect x="492" y="72" width="202" height="240" rx="6" fill="#f5f5f5"/>
+        <rect x="492" y="72" width="202" height="240" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="504" y="92" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">EARN TRUST</text>
+
+        <circle cx="516" cy="120" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="516" y="123" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">7</text>
+        <text x="534" y="124" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Safety and trust</text>
+        <text x="534" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">injection, privacy, data</text>
+        <text x="534" y="152" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">leaving the box</text>
+
+        <circle cx="516" cy="188" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="516" y="191" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">8</text>
+        <text x="534" y="192" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Reliability</text>
+        <text x="534" y="208" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">what fails, and how it</text>
+        <text x="534" y="220" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">recovers</text>
+
+        <circle cx="516" cy="256" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="516" y="259" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">9</text>
+        <text x="534" y="260" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Evals, observability</text>
+        <text x="534" y="276" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">measured, traced, and</text>
+        <text x="534" y="288" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">scored for each model</text>
+
+        <!-- Group 4: Run it -->
+        <rect x="718" y="72" width="202" height="104" rx="6" fill="#f5f5f5"/>
+        <rect x="718" y="72" width="202" height="104" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="730" y="92" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">RUN IT</text>
+
+        <circle cx="742" cy="120" r="9" fill="none" stroke="#2d3142" stroke-width="1"/>
+        <text x="742" y="123" fill="#2d3142" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">10</text>
+        <text x="760" y="124" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif">Interfaces, operations</text>
+        <text x="760" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">API, auth, deployment,</text>
+        <text x="760" y="152" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">cost and latency</text>
+
+        <!-- Callout -->
+        <text x="718" y="216" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">The questions a backend</text>
+        <text x="718" y="232" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">framework doesn't ask: who</text>
+        <text x="718" y="248" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">picks each step, what the</text>
+        <text x="718" y="264" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">agent can touch, what it sees.</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="384" x2="920" y2="384" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>
+        <text x="40" y="412" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="402" width="16" height="10" rx="2" fill="#bf4520" stroke="#bf4520" stroke-width="1" fill-opacity="0.08"/>
+        <text x="144" y="411" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">the question that makes it agentic</text>
+        <line x1="400" y1="407" x2="424" y2="407" stroke="#bf4520" stroke-width="1.4" stroke-dasharray="5,4"/>
+        <text x="432" y="411" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">evals send the walk back to step 1</text>
+      </svg>

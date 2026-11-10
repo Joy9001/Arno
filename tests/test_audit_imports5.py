@@ -10,19 +10,19 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.agent.parser import ParseReport
-from fin_agent.importers.checks import check_statement
-from fin_agent.importers.commit import commit_import
-from fin_agent.importers.pipeline import import_payload
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.importers.rules import apply_rules, match_rule
-from fin_agent.importers.seed_rules import SEED_RULES, ensure_seed_rules
-from fin_agent.importers.task_status import NOT_A_STATEMENT_REASON, settle_imports
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance, today
-from fin_agent.ledger.errors import ConflictLedgerError
+from arno.agent.parser import ParseReport
+from arno.importers.checks import check_statement
+from arno.importers.commit import commit_import
+from arno.importers.pipeline import import_payload
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.importers.rules import apply_rules, match_rule
+from arno.importers.seed_rules import SEED_RULES, ensure_seed_rules
+from arno.importers.task_status import NOT_A_STATEMENT_REASON, settle_imports
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance, today
+from arno.ledger.errors import ConflictLedgerError
 
 PERIOD = (date(2026, 4, 1), date(2026, 4, 30))
 

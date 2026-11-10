@@ -392,7 +392,7 @@ function ProfileSection({ settings }: { settings: ApiState<SettingsPayload> }) {
     <SettingsSection
       id="profile"
       title="Profile & floor"
-      description="Set the details Fin-Agent uses when answering questions, and the balance the projection must not cross."
+      description="Set the details Arno uses when answering questions, and the balance the projection must not cross."
     >
       <Loadable
         state={settings}
@@ -1768,7 +1768,7 @@ function JobsSection() {
     <SettingsSection
       id="jobs"
       title="Background work"
-      description="What Fin-Agent does on its own, and when each task next runs. A missed run starts once when the machine wakes."
+      description="What Arno does on its own, and when each task next runs. A missed run starts once when the machine wakes."
     >
       <Loadable
         state={jobs}
@@ -2045,7 +2045,7 @@ function BackupCard({ status }: { status: BackupStatus }) {
       <div className="stg-callout">
         <ShieldCheck size={16} strokeWidth={1.8} aria-hidden="true" />
         <p>
-          Restore runs on the host, not from this page. <code>fin-agent restore</code> restores the
+          Restore runs on the host, not from this page. <code>arno restore</code> restores the
           newest restic snapshot and verifies every table; see the README for the full drill.
         </p>
       </div>
@@ -2059,7 +2059,7 @@ const EXPORT_FORMATS = [
     title: "JSON",
     description: "Every table and record in one readable file. Best for inspecting or moving your data.",
     path: "/api/export/json",
-    filename: "fin-agent-export.json",
+    filename: "arno-export.json",
     action: "Download JSON",
     Icon: FileJson,
   },
@@ -2068,7 +2068,7 @@ const EXPORT_FORMATS = [
     title: "CSV ZIP",
     description: "One spreadsheet per table, packed in a ZIP. Best for analysis in a spreadsheet app.",
     path: "/api/export/csv",
-    filename: "fin-agent-export.zip",
+    filename: "arno-export.zip",
     action: "Download CSV ZIP",
     Icon: FileSpreadsheet,
   },
@@ -2077,7 +2077,7 @@ const EXPORT_FORMATS = [
     title: "Database dump",
     description: "The complete PostgreSQL database as SQL. Best for a full recovery or migration.",
     path: "/api/export/pg_dump",
-    filename: "fin-agent-export.sql",
+    filename: "arno-export.sql",
     action: "Download database dump",
     Icon: Database,
   },

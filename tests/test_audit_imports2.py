@@ -5,15 +5,15 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
-from fin_agent.agent.parser import submit_parser_code
-from fin_agent.importers.commit import commit_import, reject_import, undo_import
-from fin_agent.importers.pipeline import create_import, import_payload, set_manual_opening
-from fin_agent.importers.readers import Doc
-from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
-from fin_agent.importers.synthetic import seed_committed_statement, synthetic_statement_csv
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance, system_account
+from arno.agent.parser import submit_parser_code
+from arno.importers.commit import commit_import, reject_import, undo_import
+from arno.importers.pipeline import create_import, import_payload, set_manual_opening
+from arno.importers.readers import Doc
+from arno.importers.reconcile import insert_lines, reconcile, resolve_line
+from arno.importers.synthetic import seed_committed_statement, synthetic_statement_csv
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance, system_account
 
 # The documented parser contract for a card: a purchase is a debit, a repayment a credit, and
 # every printed balance (the amount owed) is returned negated, in ledger sign.

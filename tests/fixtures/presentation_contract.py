@@ -8,16 +8,16 @@ from __future__ import annotations
 import json
 from typing import cast
 
-from fin_agent.agent.presentation import (
+from arno.agent.presentation import (
     Registration,
     ResultRegistry,
     TableColumn,
     TableInput,
     build_answer,
 )
-from fin_agent.engine.money import amortize, compound, money
-from fin_agent.engine.projection import SourceIds
-from fin_agent.tools.projection import card as projection_card
+from arno.engine.money import amortize, compound, money
+from arno.engine.projection import SourceIds
+from arno.tools.projection import card as projection_card
 
 
 def _id(registration: Registration) -> str:

@@ -27,12 +27,12 @@ export function Login({ onDone }: { onDone: () => void }) {
       <form className="card" onSubmit={(event) => void submit(event)}>
         <div className="auth-brand">
           <Orb size={120} live />
-          Fin-Agent
+          Arno
         </div>
         <h1>Sign in</h1>
         <p className="muted">This instance is behind one passkey. There is no password.</p>
         <p className="fine">
-          Lost the passkey? Run <code>fin-agent passkeys</code> on the host.
+          Lost the passkey? Run <code>arno passkeys</code> on the host.
         </p>
         {error && (
           <p className="error" role="alert">

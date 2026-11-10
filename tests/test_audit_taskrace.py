@@ -15,7 +15,7 @@ import shutil
 import pytest
 from pydantic_ai_harness.subagents import DelegationTask, DelegationTasks
 
-from fin_agent.api.tasks import TaskOwner
+from arno.api.tasks import TaskOwner
 
 ROUNDS = 60
 

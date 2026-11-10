@@ -31,7 +31,7 @@ export async function openNotification(item: NotificationItem): Promise<void> {
     method: "POST",
   });
   window.dispatchEvent(
-    new CustomEvent("fin-agent:open-thread", { detail: result.thread_id }),
+    new CustomEvent("arno:open-thread", { detail: result.thread_id }),
   );
 }
 

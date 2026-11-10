@@ -2,7 +2,7 @@ import asyncio
 
 import httpx2
 
-from fin_agent.agent.models import RoleConfig, build_model, opencode_conversation
+from arno.agent.models import RoleConfig, build_model, opencode_conversation
 
 
 async def test_opencode_sessions_are_stable_and_isolated_between_concurrent_conversations(

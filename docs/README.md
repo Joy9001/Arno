@@ -4,35 +4,35 @@ Everything written lives here, in three trees that carry different kinds of auth
 
 | Tree | What it is | Authority |
 |---|---|---|
-| [`fin-agent/`](fin-agent/) | The project: plan, design, decisions | Current and authoritative |
+| [`arno/`](arno/) | The project: plan, design, decisions | Current and authoritative |
 | [`research/`](research/) | Independent surveys of outside fields | Reference. Describes the world, not this project |
 | [`archive/`](archive/) | Superseded work, kept for history | _Not authoritative._ Never cite as a decision |
 
 ---
 
-## Project docs in the `fin-agent/` directory
+## Project docs in the `arno/` directory
 
 Start with the plan. It owns decisions, and the other docs own the detail. If they disagree, the
 plan wins. The project has the following docs:
 
 | Doc | Holds |
 |---|---|
-| [`plan.md`](fin-agent/plan.md) | Start here. The final product: scope, stack, architecture, build order, definition of done |
-| [`design.md`](fin-agent/design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
-| [`tools.md`](fin-agent/tools.md) | Each tool's description, input, output, and logic |
-| [`platform.md`](fin-agent/platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
-| [`harness.md`](fin-agent/harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
-| [`import.md`](fin-agent/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
-| [`parked.md`](fin-agent/parked.md) | Deliberately out of the product, each with a trigger to revisit |
-| [`system-design.md`](fin-agent/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
-| [`typing.md`](fin-agent/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
-| [`observability.md`](fin-agent/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
-| [`recaps.md`](fin-agent/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
-| [`web-interface-design.md`](fin-agent/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
-| [`completion-checklist.md`](fin-agent/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
-| [`e2e-user-journeys.md`](fin-agent/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
-| [`e2e-run-log.md`](fin-agent/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
-| [`release-hardening.md`](fin-agent/release-hardening.md) | The November 2026 hardening pass: method, findings with commit SHAs, decisions, and what remains simulated, blocked, or impossible here |
+| [`plan.md`](arno/plan.md) | Start here. The final product: scope, stack, architecture, build order, definition of done |
+| [`design.md`](arno/design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
+| [`tools.md`](arno/tools.md) | Each tool's description, input, output, and logic |
+| [`platform.md`](arno/platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
+| [`harness.md`](arno/harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
+| [`import.md`](arno/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
+| [`parked.md`](arno/parked.md) | Deliberately out of the product, each with a trigger to revisit |
+| [`system-design.md`](arno/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
+| [`typing.md`](arno/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
+| [`observability.md`](arno/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
+| [`recaps.md`](arno/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
+| [`web-interface-design.md`](arno/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
+| [`completion-checklist.md`](arno/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
+| [`e2e-user-journeys.md`](arno/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
+| [`e2e-run-log.md`](arno/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
+| [`release-hardening.md`](arno/release-hardening.md) | The November 2026 hardening pass: method, findings with commit SHAs, decisions, and what remains simulated, blocked, or impossible here |
 
 **Rule for keeping these readable:** a decision and its one-line rationale go in the `plan.md`
 file. Anything that needs a table, a schema, or three paragraphs of justification goes in a
@@ -81,11 +81,11 @@ The following house rules record the choices the guide leaves open and the place
 departs from it. Where they differ from the guide, the house rules win.
 
 - **Voice:** the author writes in the first person (_I_, _my_) about their own money and setup.
-  Project-level statements name Fin-Agent instead of using _we_, _our_, or _us_.
+  Project-level statements name Arno instead of using _we_, _our_, or _us_.
 - **Spelling:** American, in prose. Code keeps its own spelling, so the `instalment` schema value
   stays even though the prose says _installment_.
 - **Headings:** sentence case. Use a colon, not a dash, before a subtitle, and capitalize the word
-  after it. Avoid code in headings; if you need it, add a noun, as in "the `fin-agent/` directory."
+  after it. Avoid code in headings; if you need it, add a noun, as in "the `arno/` directory."
 - **Dates:** write them out, as in "October 7, 2026." In table cells, abbreviate the month, as in
   "Oct 7, 2026."
 - **Bold:** only for run-in headings at the start of a paragraph or list item, with the ending colon

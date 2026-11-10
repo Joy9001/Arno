@@ -1,4 +1,4 @@
-# Fin-Agent
+# Arno
 
 A single-user, self-hosted personal finance agent (India-first, amounts in integer paise). One
 FastAPI process + one Postgres 18 database, a PydanticAI agent over plain-Python tools, and a Vite
@@ -7,13 +7,13 @@ this file holds only what you can't read off the code.
 
 ## Where the truth lives
 
-- [`docs/fin-agent/plan.md`](docs/fin-agent/plan.md) owns decisions. If a satellite doc
+- [`docs/arno/plan.md`](docs/arno/plan.md) owns decisions. If a satellite doc
   (`design.md`, `tools.md`, `platform.md`, `harness.md`, `import.md`) disagrees, the plan wins and
   the satellite is stale. Read the matching satellite before changing its area.
 - `docs/archive/` is superseded. Never cite it as a decision. `docs/research/` describes the
   outside world, not this project.
 - Never hand-edit the README blocks between `<!-- eval-scorecard -->`, `<!-- backtest -->`, and
-  `<!-- hackerrank -->` markers. `fin-agent eval`, `backtest`, and `hackerrank` write them.
+  `<!-- hackerrank -->` markers. `arno eval`, `backtest`, and `hackerrank` write them.
 
 ## Architecture rules (plan.md §4) that code must not break
 
@@ -33,10 +33,10 @@ this file holds only what you can't read off the code.
 
 ## Database
 
-- Schema changes are a new numbered file in `src/fin_agent/db/migrations/` (`NNNN_name.sql`, plain
+- Schema changes are a new numbered file in `src/arno/db/migrations/` (`NNNN_name.sql`, plain
   SQL, one transaction each). A migration's checksum is recorded when it runs: **never edit an
   applied migration**, add the next one.
-- `src/fin_agent/db/vendor/pgledger/` is vendored unmodified at a pinned commit. Don't edit it; its
+- `src/arno/db/vendor/pgledger/` is vendored unmodified at a pinned commit. Don't edit it; its
   licence notice is in `THIRD_PARTY_NOTICES.md`.
 - Three roles: `app` (owns schema), `agent_ro` (agent's `run_query`: SELECT only on ledger-side
   tables and views, no auth tables, 2 s timeout), `backup`. A new table the agent should see needs a
@@ -49,13 +49,13 @@ Python 3.14 via `uv`; web uses pnpm 11 (Node 24). Use `uv run` and `pnpm --dir w
 
 ```bash
 docker compose up -d db                       # dev Postgres on 127.0.0.1:5433
-uv run fin-agent migrate && uv run fin-agent serve
+uv run arno migrate && uv run arno serve
 pnpm --dir web dev                            # Vite, proxies /api to the API
 pnpm --dir web build                          # what the API serves; web/dist is gitignored
 ```
 
 Tests need a scratch database whose name ends in `_test`; `conftest.py` refuses anything else. Set
-`DATABASE_URL` (e.g. `postgresql://app:<pw>@127.0.0.1:5433/fin_agent_test`), `AGENT_RO_PASSWORD`,
+`DATABASE_URL` (e.g. `postgresql://app:<pw>@127.0.0.1:5433/arno_test`), `AGENT_RO_PASSWORD`,
 and `BACKUP_PASSWORD` first. The suite blocks non-loopback sockets and DNS and points every model
 role at a closed port, so tests can never call a model. xdist gives each worker its own database.
 
@@ -67,13 +67,13 @@ full set.
 - Iterating: `uv run pytest tests/test_<area>.py -q -n 0`.
 - Any Python change: `uv run ruff check . && uv run ruff format --check .` (line length 100) and
   `uv run pyrefly check` (zero errors and zero warnings; how to fix one without hiding it is in
-  [`typing.md`](docs/fin-agent/typing.md)), then the affected test files. Run the whole
+  [`typing.md`](docs/arno/typing.md)), then the affected test files. Run the whole
   `uv run pytest -q` when you touch `ledger/`, `db/`, `tools/`, `agent/`, or `api/`, since they are
   shared.
 - `web/` change: `pnpm --dir web lint && pnpm --dir web typecheck`; before finishing, `pnpm --dir web
   build`. A change to answer or result cards in `web/src/chat/` also needs
   `pnpm --dir web test:answers` (it reads fixtures from `tests/fixtures/presentation_contract.py`).
-- `ledger/`, `tools/`, `importers/`, or `engine/` change: after `uv run fin-agent demo seed`, run
+- `ledger/`, `tools/`, `importers/`, or `engine/` change: after `uv run arno demo seed`, run
   `uv run python -m tests.invariants` on a scratch `_test` database and keep the invariant tests
   green.
 - Real journeys: [`tests/e2e/`](tests/e2e/README.md) drives a live API process with the real model
@@ -93,7 +93,7 @@ full set.
 - Before designing a new agent mechanism, check the current PydanticAI and `pydantic-ai-harness`
   docs and source for a built-in (the `pydantic-*` skills in `.agents/skills/` cover this). Likewise
   read assistant-ui's docs before any chat UI work (the `assistant-ui` skill in `.claude/skills/`).
-- `fin-agent eval` is the only path that enables real model requests and it spends money. Don't run
+- `arno eval` is the only path that enables real model requests and it spends money. Don't run
   it unless asked; `--dry-run` lists cases for free.
 
 ## assistant-ui
@@ -112,7 +112,7 @@ Key patterns:
 
 `private/`, `statements/`, `.env`, `evals/results/`, and the HackerRank dataset are real or
 unlicensed data and are gitignored. Don't commit, quote, or paste their contents into docs, tests,
-or fixtures; use the synthetic demo persona (`src/fin_agent/demo/`) and `tests/fixtures/` instead.
+or fixtures; use the synthetic demo persona (`src/arno/demo/`) and `tests/fixtures/` instead.
 
 ## Working conventions
 

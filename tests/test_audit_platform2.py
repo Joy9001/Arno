@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from fin_agent.backup_restore import restore_from_directory
-from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
+from arno.backup_restore import restore_from_directory
+from arno.db.conn import connect, conninfo_to_dict, make_conninfo
 
 
 def _binary(env_name: str, name: str) -> str | None:
@@ -49,6 +49,7 @@ def _dump(directory: Path, *, privileges: bool) -> None:
     command = [pg_dump, "--no-owner"]
     if not privileges:
         command.append("--no-privileges")
+    # The backup format predates the Arno name; existing archives carry it.
     command += ["--format=custom", "-f", str(directory / "fin_agent.dump"), source]
     dumped = subprocess.run(command, capture_output=True, env=env, check=False)
     assert dumped.returncode == 0, dumped.stderr.decode("utf-8", "replace")
@@ -66,7 +67,7 @@ CLIENT_SKIP = (
 async def test_a_restored_dump_keeps_the_agents_read_boundary(demo_ledger, tmp_path: Path):
     _dump(tmp_path, privileges=True)
 
-    async with _fresh_database("fin_agent_platform2_restore_test") as target:
+    async with _fresh_database("arno_platform2_restore_test") as target:
         report = await restore_from_directory(tmp_path, target, force=True, require_manifest=False)
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
@@ -135,7 +136,7 @@ async def test_an_older_dump_without_grants_still_restores(demo_ledger, tmp_path
     """A dump from an older image still restores and runs; only `agent_ro` stays unprivileged."""
     _dump(tmp_path, privileges=False)
 
-    async with _fresh_database("fin_agent_platform2_old_dump_test") as target:
+    async with _fresh_database("arno_platform2_old_dump_test") as target:
         report = await restore_from_directory(tmp_path, target, force=True, require_manifest=False)
         assert report.ok, report.as_dict()
         async with connect(target) as restored:

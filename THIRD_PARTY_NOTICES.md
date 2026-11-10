@@ -1,6 +1,6 @@
 # Third-party notices
 
-Fin-Agent is built on the following third-party work. These notices ship in the Docker image.
+Arno is built on the following third-party work. These notices ship in the Docker image.
 
 ## pgledger
 
@@ -103,7 +103,7 @@ These are installed from PyPI and carry their own license files in the image:
 ## Python runtime dependencies
 
 Every Python distribution installed by `uv sync` ships its own license file in the image, under
-its `.dist-info` directory. The direct dependencies below are the ones Fin-Agent chooses; the
+its `.dist-info` directory. The direct dependencies below are the ones Arno chooses; the
 audit in `scripts/license_audit.py` covers every transitive package too.
 
 | Package | License |
@@ -127,11 +127,12 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `segno` | BSD-3-Clause |
 | `striprtf` | BSD-3-Clause |
 | `typer` | MIT |
+| `tzdata` (Windows only: time-zone data that Linux takes from the system) | Apache-2.0 |
 | `uvicorn` | BSD-3-Clause |
 | `webauthn` | BSD-3-Clause |
 
 Weak-copyleft libraries are used unmodified: `pywebpush` is MPL-2.0.
-These are the direct dependency licenses. Fin-Agent's own source is MIT (`LICENSE`). The
+These are the direct dependency licenses. Arno's own source is MIT (`LICENSE`). The
 `python:3.14-slim` base image ships Debian packages under their own licenses, and the database
 and Phoenix services run as separate Compose images with their own licenses, listed under
 [Compose service images](#compose-service-images); Phoenix uses Elastic License 2.0.
@@ -179,7 +180,7 @@ sources. Each ships beside its file in `web/public/fonts/` with its full license
 
 ## Compose service images
 
-These images run as separate Compose services. They are not part of the Fin-Agent application
+These images run as separate Compose services. They are not part of the Arno application
 image, and each ships its own license file. Where the image has one project license, the
 identifier below was checked against the official `LICENSE` file for the pinned version.
 
@@ -189,8 +190,8 @@ identifier below was checked against the official `LICENSE` file for the pinned 
 | `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2) |
 | `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
 | `ghcr.io/speaches-ai/speaches:0.8.3-cpu` (optional `local-stt` profile) | MIT |
-| `ghcr.io/joy9001/fin-agent` (this repository) | MIT for Fin-Agent code; bundled dependencies as listed above |
-| `ghcr.io/joy9001/fin-agent-backup` (this repository) | MIT for Fin-Agent code; `restic` BSD-2-Clause, `jq` MIT |
+| `ghcr.io/joy9001/arno` (this repository) | MIT for Arno code; bundled dependencies as listed above |
+| `ghcr.io/joy9001/arno-backup` (this repository) | MIT for Arno code; `restic` BSD-2-Clause, `jq` MIT |
 
 ## Base images and build tools
 

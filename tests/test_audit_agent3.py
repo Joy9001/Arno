@@ -22,18 +22,18 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from arno.agent.builder import build_agent
+from arno.agent.capabilities import SANDBOX_HELPERS, SANDBOX_MODULES, sandbox_help
+from arno.agent.cards import cards_from_messages
+from arno.agent.deps import AgentDeps
+from arno.agent.history import save_records
+from arno.agent.instructions import render_instructions
+from arno.agent.presentation import PresentationError, keep_last_answer
+from arno.agent.toolset import show_chart
+from arno.db.conn import connect
+from arno.jobs.questions import run_scheduled_question
 from evals.graders import grade_writes
 from evals.models import EvalOutput
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import SANDBOX_HELPERS, SANDBOX_MODULES, sandbox_help
-from fin_agent.agent.cards import cards_from_messages
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import save_records
-from fin_agent.agent.instructions import render_instructions
-from fin_agent.agent.presentation import PresentationError, keep_last_answer
-from fin_agent.agent.toolset import show_chart
-from fin_agent.db.conn import connect
-from fin_agent.jobs.questions import run_scheduled_question
 from tests.agent_helpers import streaming_model
 
 # --- A failed script says what it could have used ---------------------------------------------
@@ -83,7 +83,7 @@ async def test_the_helper_list_matches_the_read_toolset():
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.toolset import build_read_toolset
+    from arno.agent.toolset import build_read_toolset
 
     ctx = RunContext(
         deps=AgentDeps(conversation_id="cnv_helpers"), model=TestModel(), usage=RunUsage()
@@ -175,7 +175,7 @@ async def test_one_answer_card_reaches_the_transcript(demo_ledger):
 
 def test_the_answer_tree_error_shows_one_valid_answer(demo_ledger):
     """e6 F8: the error names a shape the caller can copy."""
-    from fin_agent.agent.presentation import ResultRegistry, build_answer
+    from arno.agent.presentation import ResultRegistry, build_answer
 
     with pytest.raises(PresentationError) as excinfo:
         build_answer(ResultRegistry(), {"_type": "Stack", "children": [{"result_id": "res_1"}]})
@@ -448,7 +448,7 @@ def _preference_script(text: str = "Never warn about rent"):
 def _run_ctx(conn: Any) -> Any:
     from types import SimpleNamespace
 
-    from fin_agent.agent.presentation import ResultRegistry
+    from arno.agent.presentation import ResultRegistry
 
     return SimpleNamespace(
         deps=SimpleNamespace(

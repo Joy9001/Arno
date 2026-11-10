@@ -38,7 +38,7 @@ declare global {
 
 const worker = self as unknown as WorkerScope;
 
-const SHARE_CACHE = "fin-agent-share";
+const SHARE_CACHE = "arno-share";
 const SHARE_KEY = "/share-target/image";
 
 type FetchLike = Event & {
@@ -91,7 +91,7 @@ worker.addEventListener("fetch", (event: Event) => {
 worker.addEventListener("push", (event: Event) => {
   const push = event as PushLike;
   let payload: NotificationData = {
-    title: "Fin-Agent",
+    title: "Arno",
     body: "You have a new notification",
     url: "/",
   };
@@ -101,12 +101,12 @@ worker.addEventListener("push", (event: Event) => {
     // A malformed payload still shows the generic ping.
   }
   push.waitUntil(
-    worker.registration.showNotification(payload.title ?? "Fin-Agent", {
+    worker.registration.showNotification(payload.title ?? "Arno", {
       body: payload.body ?? "You have a new notification",
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",
       data: { url: payload.url ?? "/" },
-      tag: "fin-agent-inbox",
+      tag: "arno-inbox",
       renotify: false,
     }),
   );

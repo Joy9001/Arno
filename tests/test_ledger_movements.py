@@ -4,11 +4,11 @@ from datetime import date
 
 import pytest
 
-from fin_agent.ledger.accounts import create_account, get_account
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.categories import resolve_category, upsert_rule
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from fin_agent.ledger.movements import (
+from arno.ledger.accounts import create_account, get_account
+from arno.ledger.audit import undo_group
+from arno.ledger.categories import resolve_category, upsert_rule
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.ledger.movements import (
     correct_movement,
     get_movement,
     list_movements,
@@ -21,7 +21,7 @@ from fin_agent.ledger.movements import (
     record_split,
     record_transfer,
 )
-from fin_agent.ledger.payees import create_payee
+from arno.ledger.payees import create_payee
 
 
 async def _category(conn, name: str) -> str:

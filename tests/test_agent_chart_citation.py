@@ -15,9 +15,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.cards import cards_for_transcript, cards_from_messages
-from fin_agent.agent.deps import AgentDeps
+from arno.agent.builder import build_agent
+from arno.agent.cards import cards_for_transcript, cards_from_messages
+from arno.agent.deps import AgentDeps
 
 
 async def test_a_run_code_chart_carries_its_script_and_calculation_time(demo_ledger):

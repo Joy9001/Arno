@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="web/public/favicon.svg" width="96" height="96" alt="The Fin-Agent orb">
+  <img src="web/public/favicon.svg" width="96" height="96" alt="The Arno orb">
 </p>
 
-<h1 align="center">Fin-Agent</h1>
+<h1 align="center">Arno</h1>
 
 <p align="center">
   <strong>Ask your money anything. Get answers that are computed, not guessed.</strong>
@@ -12,6 +12,11 @@
   A private, self-hosted finance agent that holds your whole financial picture (accounts, cards,
   EMIs, goals, the people you owe) and answers any question about it, including
   <em>"Can I afford this?"</em> and what it would cost you.
+</p>
+
+<p align="center">
+  <sub>Arno was called Fin-Agent until November 2026, so old links, issues, and backups still use
+  that name.</sub>
 </p>
 
 <p align="center">
@@ -28,20 +33,20 @@
   <a href="#what-you-can-ask">What you can ask</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#measured-not-claimed">Measured results</a> ·
-  <a href="docs/fin-agent/self-hosting.md">Self-hosting guide</a>
+  <a href="docs/arno/self-hosting.md">Self-hosting guide</a>
 </p>
 
 <p align="center">
-  <img src=".impeccable/mocks/final/shots/02-thread.png" alt="A Fin-Agent conversation: the question 'Can I buy a ₹68,000 laptop on the Slice card?' answered with a 'Yes, with a change' affordability card, a 91% floor probability, and a 90-day projection band." width="100%">
+  <img src=".impeccable/mocks/final/shots/02-thread.png" alt="An Arno conversation: the question 'Can I buy a ₹68,000 laptop on the Slice card?' answered with a 'Yes, with a change' affordability card, a 91% floor probability, and a 90-day projection band." width="100%">
   <br>
   <sub>Interface design comp. The figures are illustrative, not from a real ledger.</sub>
 </p>
 
 ---
 
-## Why Fin-Agent
+## Why Arno
 
-Most money apps show you charts of the past. Fin-Agent answers questions about your future.
+Most money apps show you charts of the past. Arno answers questions about your future.
 
 Ask _"Can I buy a ₹68,000 laptop on my credit card?"_ and it doesn't guess. It reads your ledger,
 simulates 1,000 futures of your own spending, and comes back with **yes**, **yes-but**, or
@@ -50,7 +55,7 @@ would make it safe, and the ledger rows behind every number.
 
 Three promises, held at once:
 
-- **Your ledger stays on your machine.** Fin-Agent runs in Docker on hardware you own and is
+- **Your ledger stays on your machine.** Arno runs in Docker on hardware you own and is
   reached only over your private Tailscale network. There is no cloud account, no bank aggregator,
   and no analytics. Only the model calls you configure leave the box, and with local models
   nothing does.
@@ -65,7 +70,7 @@ Three promises, held at once:
 
 Chat in English, Hindi, or Hinglish, by text or voice. A few examples:
 
-| You say | Fin-Agent does |
+| You say | Arno does |
 |---|---|
 | "Can I buy a ₹68,000 laptop on the Slice card?" | Runs the projection and returns a verdict card with its probability and tradeoffs |
 | "Where did October go?" | Breaks the month down by category and links the rows behind each total |
@@ -108,15 +113,15 @@ Chat in English, Hindi, or Hinglish, by text or voice. A few examples:
 ## How it works
 
 <p align="center">
-  <img src="docs/fin-agent/diagrams/readme-how-it-works.png" alt="How a Fin-Agent answer is made: your message goes to the agent, which calls plain-Python tools directly or through Code Mode scripts; the tools read the Postgres ledger and run the projection engine, and every reply passes a number check before it reaches you with verdict cards and citations." width="100%">
+  <img src="docs/arno/diagrams/readme-how-it-works.png" alt="How an Arno answer is made: your message goes to the agent, which calls plain-Python tools directly or through Code Mode scripts; the tools read the Postgres ledger and run the projection engine, and every reply passes a number check before it reaches you with verdict cards and citations." width="100%">
 </p>
 
 - **One rule.** The model reasons, models scenarios, and explains tradeoffs, but every number it
-  states comes from code. Rationale in [`plan.md` §4](docs/fin-agent/plan.md#4-architecture).
+  states comes from code. Rationale in [`plan.md` §4](docs/arno/plan.md#4-architecture).
 - **The ledger.** One Postgres database is the whole state, built on a vendored copy of
   [pgledger](https://github.com/pgr0ss/pgledger). Money is integer paise everywhere below the
   display layer.
-- **The engine.** [`engine/projection.py`](src/fin_agent/engine/projection.py) is pure: no clock,
+- **The engine.** [`engine/projection.py`](src/arno/engine/projection.py) is pure: no clock,
   no database, no model. Scheduled events land exactly; day-to-day spending is resampled from your
   own last 90 days, with weekdays and weekends kept apart. The affordability tradeoffs come from
   rerunning the same engine.
@@ -127,9 +132,9 @@ Chat in English, Hindi, or Hinglish, by text or voice. A few examples:
   once a conversation has read such text, memory, setup, and bulk writes need one confirm tap.
   Everyday writes stay instant and undoable.
 
-Deeper reading: the [system design](docs/fin-agent/system-design.md), the
-[agent loop](docs/fin-agent/diagrams/sd-agent-loop.png), and the
-[tool surface](docs/fin-agent/tools.md).
+Deeper reading: the [system design](docs/arno/system-design.md), the
+[agent loop](docs/arno/diagrams/sd-agent-loop.png), and the
+[tool surface](docs/arno/tools.md).
 
 ## Measured, not claimed
 
@@ -140,7 +145,7 @@ README says so instead of inventing one.
 
 Every model runs the same agent eval suite against a synthetic demo persona, with a fresh database
 cloned for each trial. The suite is in [`evals/`](evals/README.md); run it with
-`fin-agent eval --model X`. A dash means that model or category has not run yet.
+`arno eval --model X`. A dash means that model or category has not run yet.
 
 <!-- eval-scorecard:start -->
 | Model | Answers and what-ifs | Writes | Honesty when data is missing | Injection | Advice boundary | Never moving money / passwords | Long threads after a summary | Injection gate | Fooled | Number flags | Median cost | Median latency |
@@ -161,7 +166,7 @@ three trials: a grocery answer that left its total and trip count to the present
 long thread that recalled the floor decision without its ₹25,000 value. Answers and writes
 together scored 47/48, honesty 11/11, the injection gate 150/150, and the answer number gate
 78/78, so every category meets its target from
-[the success measures](docs/fin-agent/system-design.md#success-measures) and the L4 gate passes.
+[the success measures](docs/arno/system-design.md#success-measures) and the L4 gate passes.
 
 <details>
 <summary>What the columns mean</summary>
@@ -178,7 +183,7 @@ together scored 47/48, honesty 11/11, the injection gate 150/150, and the answer
 
 ### Projection backtest
 
-`fin-agent backtest` runs the projection as of the first day of each month and compares its
+`arno backtest` runs the projection as of the first day of each month and compares its
 median 30 days later with the actual ledger balance. It uses a real 12-month backfill when the
 ledger has one. This machine doesn't, so the run below uses the deterministic synthetic history
 and says so.
@@ -217,7 +222,7 @@ the engine and compares its status, safe amount, and earliest full-payment date 
 The dataset has no license, so it is never committed, and no score is published without it.
 
 <!-- hackerrank:start -->
-HackerRank sample score: not run. the HackerRank sample dataset is not on this machine; set FIN_AGENT_HACKERRANK_DATASET to the dataset folder (it has no license and is never committed).
+HackerRank sample score: not run. the HackerRank sample dataset is not on this machine; set ARNO_HACKERRANK_DATASET to the dataset folder (it has no license and is never committed).
 <!-- hackerrank:end -->
 
 ## Quick start
@@ -244,15 +249,15 @@ Open <http://localhost:8000>, follow the enrollment link, and create your passke
 by telling the agent your balances, salary day, and card dues, and it can answer from the first
 conversation.
 
-Something already owns `8000`, `5433`, or `6006`? Set `FIN_AGENT_API_PORT`, `FIN_AGENT_DB_PORT`, or
+Something already owns `8000`, `5433`, or `6006`? Set `ARNO_API_PORT`, `ARNO_DB_PORT`, or
 `PHOENIX_UI_PORT`. Running a second stack on one host also needs `COMPOSE_PROJECT_NAME` (or
-`-p <name>` on every command), because `compose.yaml` pins `name: fin-agent` and the container
+`-p <name>` on every command), because `compose.yaml` pins `name: arno` and the container
 names would collide. The optional Ollama and speech-to-text ports (`11434` and `8001`) are fixed.
 
 **Want to look around first?** Seed the synthetic demo persona into an empty instance:
 
 ```bash
-docker compose exec api fin-agent demo seed
+docker compose exec api arno demo seed
 ```
 
 <details>
@@ -265,8 +270,8 @@ tailscale serve --bg 8000
 ```
 
 That serves `https://<machine>.<tailnet>.ts.net` over HTTPS. Passkeys are bound to a hostname, so
-set `FIN_AGENT_RP_ID=<machine>.<tailnet>.ts.net` and
-`FIN_AGENT_RP_ORIGIN=https://<machine>.<tailnet>.ts.net` in `.env`, run `docker compose up -d`,
+set `ARNO_RP_ID=<machine>.<tailnet>.ts.net` and
+`ARNO_RP_ORIGIN=https://<machine>.<tailnet>.ts.net` in `.env`, run `docker compose up -d`,
 and enroll from that address. Add more devices later in **Settings → Passkeys → Add a device**.
 
 </details>
@@ -282,18 +287,22 @@ docker compose --profile local-stt up -d    # voice notes transcribed locally
 Phoenix runs in the normal start and receives the agent's model and tool traces locally. Turn it
 off with `OTEL_SDK_DISABLED=true`; the app keeps serving if Phoenix is down. Tracing is off unless
 `PHOENIX_COLLECTOR_ENDPOINT` is set, so a host CLI or eval exports only when it points at a
-collector. See [observability](docs/fin-agent/observability.md).
+collector. See [observability](docs/arno/observability.md).
 
 </details>
 
-The [self-hosting guide](docs/fin-agent/self-hosting.md) covers everything else: choosing models,
+The [self-hosting guide](docs/arno/self-hosting.md) covers everything else: choosing models,
 exactly what each provider receives, backups, restore, upgrades, and troubleshooting.
+
+Already running Fin-Agent?
+[Upgrading from Fin-Agent](docs/arno/self-hosting.md#66-upgrading-from-fin-agent) moves the old
+volumes and database into Arno instead of starting over.
 
 ### Backups
 
 A `backup` sidecar runs `pg_dump` once a day, records a row count and hash for every table, and
 ships an encrypted copy with [restic](https://restic.net) to `RESTIC_REPOSITORY` (a local volume by
-default; S3, B2, R2, or rclone to go off-site). `fin-agent restore` rebuilds a fresh machine from
+default; S3, B2, R2, or rclone to go off-site). `arno restore` rebuilds a fresh machine from
 the newest snapshot and verifies that every transfer balances. Restore from a backup the current
 image made; an older dump still restores, but a dump written without its table grants leaves
 `run_query` unprivileged until a new backup replaces it.
@@ -305,33 +314,33 @@ image made; an older dump still restores, but a dump written without its table g
 ### Commands
 
 <details>
-<summary>The <code>fin-agent</code> CLI</summary>
+<summary>The <code>arno</code> CLI</summary>
 
 Admin commands run on the host, never over HTTP. Inside Compose, prefix them with
 `docker compose exec api`.
 
 ```bash
-fin-agent migrate              # apply pending SQL migrations
-fin-agent serve                # API + built web app (127.0.0.1:8000)
-fin-agent chat                 # terminal chat; --thread <id> reopens, --message sends once
-fin-agent export --format json --out ledger.json   # json, csv, or sql (pg_dump)
-fin-agent setup                # print a fresh enrollment link and QR code
-fin-agent passkeys list        # registered passkeys
-fin-agent passkeys reset       # delete every passkey and session, reopen setup
-fin-agent demo seed            # seed an empty demo instance (--reset to reseed)
-fin-agent demo template        # clone the demo as an eval template
-fin-agent eval --model X       # run the agent evals and publish the scorecard (spends money)
-fin-agent eval --model X --dry-run   # list the cases for free
-fin-agent backtest             # measure the projection against history; publishes here
-fin-agent repair-openings      # place each import's opening at its statement's first day
-fin-agent hackerrank           # score the local HackerRank sample set
-fin-agent restore              # restore the newest restic snapshot and verify every table
+arno migrate                   # apply pending SQL migrations
+arno serve                     # API + built web app (127.0.0.1:8000)
+arno chat                      # terminal chat; --thread <id> reopens, --message sends once
+arno export --format json --out ledger.json        # json, csv, or sql (pg_dump)
+arno setup                     # print a fresh enrollment link and QR code
+arno passkeys list             # registered passkeys
+arno passkeys reset            # delete every passkey and session, reopen setup
+arno demo seed                 # seed an empty demo instance (--reset to reseed)
+arno demo template             # clone the demo as an eval template
+arno eval --model X            # run the agent evals and publish the scorecard (spends money)
+arno eval --model X --dry-run        # list the cases for free
+arno backtest                  # measure the projection against history; publishes here
+arno repair-openings           # place each import's opening at its statement's first day
+arno hackerrank                # score the local HackerRank sample set
+arno restore                   # restore the newest restic snapshot and verify every table
 ```
 
 `repair-openings` is for a ledger written before this release: after you upgrade an instance that
 imported statements before it, run it once. An import's printed opening used to stay inside the
 balance adjustment dated the day the balance was stated, so every date the statement covered read
-short by it. `fin-agent repair-openings --dry-run` prints one line per
+short by it. `arno repair-openings --dry-run` prints one line per
 import—account, period, the opening it would book at the first day, the closing difference, and
 how many earlier balance adjustments it would supersede—and writes nothing. Run it again without
 `--dry-run` to apply, with `--yes` to skip the question. It is idempotent, and undoing the import
@@ -353,7 +362,7 @@ later reverses its repair too.
   database.
 
 The full posture, including what each model provider receives and keeps, is in
-[self-hosting §4–7](docs/fin-agent/self-hosting.md#4-what-leaves-the-box).
+[self-hosting §4–7](docs/arno/self-hosting.md#4-what-leaves-the-box).
 
 ## Built with
 
@@ -370,7 +379,7 @@ The double-entry core is [pgledger](https://github.com/pgr0ss/pgledger) (MIT, ©
 vendored unmodified at commit `fee1aa0` with ULID helpers from
 [scoville/pgsql-ulid](https://github.com/scoville/pgsql-ulid) (BSD-3-Clause, © 2021 Scoville). No
 endorsement is implied. Every stack choice and its reason is in
-[`plan.md` §3](docs/fin-agent/plan.md#3-stack).
+[`plan.md` §3](docs/arno/plan.md#3-stack).
 
 ## Develop
 
@@ -379,8 +388,8 @@ Python 3.14 with [uv](https://docs.astral.sh/uv/); the web app uses Node 24 with
 ```bash
 uv sync --dev
 docker compose up -d db                                  # dev Postgres on 127.0.0.1:5433
-docker compose exec db createdb -U app fin_agent_test    # once, for tests
-uv run fin-agent migrate && uv run fin-agent serve
+docker compose exec db createdb -U app arno_test            # once, for tests
+uv run arno migrate && uv run arno serve
 pnpm --dir web install && pnpm --dir web dev             # Vite proxies /api to the API
 ```
 
@@ -389,9 +398,9 @@ pnpm --dir web install && pnpm --dir web dev             # Vite proxies /api to 
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pyrefly check                                     # types: docs/fin-agent/typing.md
+uv run pyrefly check                                     # types: docs/arno/typing.md
 uv run python scripts/license_audit.py
-DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/fin_agent_test \
+DATABASE_URL=postgresql://app:<password>@127.0.0.1:5433/arno_test \
 AGENT_RO_PASSWORD=<password> BACKUP_PASSWORD=<password> uv run pytest -q
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web build
 ```
@@ -408,7 +417,7 @@ DNS lookup, and point each model role at a closed port, so tests can never call 
 <summary>Project layout</summary>
 
 ```
-src/fin_agent/
+src/arno/
   api/         FastAPI app, auth, static web build, security headers
   auth/        passkeys, sessions, first-run setup
   db/          connection, migrations/*.sql, vendor/pgledger/
@@ -429,21 +438,21 @@ tests/         pytest, including a software WebAuthn authenticator
 </details>
 
 Contributor and agent conventions are in [`AGENTS.md`](AGENTS.md). Decisions live in
-[`plan.md`](docs/fin-agent/plan.md), which wins over every other doc.
+[`plan.md`](docs/arno/plan.md), which wins over every other doc.
 
 ## Project status
 
 Version 0.1.2. The code build is complete. Two human gates stand between it and "shipped" as
-[`plan.md`](docs/fin-agent/plan.md#what-shipped-means) defines it: someone else installs it from
+[`plan.md`](docs/arno/plan.md#what-shipped-means) defines it: someone else installs it from
 the docs alone (milestone 40), and four weeks of daily use without falling back to a spreadsheet
 (milestone 41). What remains is tracked in the
-[completion checklist](docs/fin-agent/completion-checklist.md).
+[completion checklist](docs/arno/completion-checklist.md).
 
 India is the only country implemented today, and everything India-specific lives in one folder.
 
 ## License
 
-Fin-Agent is [MIT licensed](LICENSE). Every shipped dependency's license is audited in CI, and no
-GPL, AGPL, SSPL, or Elastic code ships in the Fin-Agent image. Phoenix runs as a separate,
+Arno is [MIT licensed](LICENSE). Every shipped dependency's license is audited in CI, and no
+GPL, AGPL, SSPL, or Elastic code ships in the Arno image. Phoenix runs as a separate,
 source-available Elastic 2.0 service. Third-party notices are in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

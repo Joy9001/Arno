@@ -1,5 +1,5 @@
 ---
-name: Fin-Agent
+name: Arno
 description: An agent-first money interface with an iridescent presence and computed receipts.
 colors:
   ground: "#0e0f0c"
@@ -90,7 +90,7 @@ components:
     padding: "2px 8px"
 ---
 
-# Design system: Fin-Agent
+# Design system: Arno
 
 ## Overview
 

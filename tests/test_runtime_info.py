@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fin_agent.api.runtime_info import ROLES, payload
+from arno.api.runtime_info import ROLES, payload
 
 
 def _clear_roles(monkeypatch) -> None:
@@ -57,13 +57,11 @@ def test_runtime_info_unsafe_model_label_is_omitted(monkeypatch):
 
 def test_phoenix_ui_url_is_only_the_explicit_operator_url(monkeypatch):
     _clear_roles(monkeypatch)
-    monkeypatch.delenv("FIN_AGENT_PHOENIX_UI_URL", raising=False)
+    monkeypatch.delenv("ARNO_PHOENIX_UI_URL", raising=False)
     monkeypatch.setenv("PHOENIX_COLLECTOR_ENDPOINT", "http://phoenix:6006")
     assert payload()["phoenix_ui_url"] is None
 
-    monkeypatch.setenv(
-        "FIN_AGENT_PHOENIX_UI_URL", "https://admin:pw@phoenix.example.com/ui?token=abc"
-    )
+    monkeypatch.setenv("ARNO_PHOENIX_UI_URL", "https://admin:pw@phoenix.example.com/ui?token=abc")
     assert payload()["phoenix_ui_url"] == "https://phoenix.example.com/ui"
 
 

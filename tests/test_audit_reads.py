@@ -15,10 +15,10 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.india.formatting import format_paise
-from fin_agent.ledger import export, uncategorized
-from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
-from fin_agent.ledger.movements import (
+from arno.india.formatting import format_paise
+from arno.ledger import export, uncategorized
+from arno.ledger.accounts import create_account, get_account, set_statement_balance
+from arno.ledger.movements import (
     correct_movement,
     record_expense,
     record_income,
@@ -28,9 +28,9 @@ from fin_agent.ledger.movements import (
     record_split,
     record_transfer,
 )
-from fin_agent.ledger.payees import create_payee
-from fin_agent.tools import periods, recaps
-from fin_agent.tools import read as read_tools
+from arno.ledger.payees import create_payee
+from arno.tools import periods, recaps
+from arno.tools import read as read_tools
 
 TODAY = date(2026, 11, 9)  # a Monday
 MONTH = "2026-10"
@@ -481,7 +481,7 @@ async def test_same_day_rows_page_without_repeating_or_skipping(ledger):
 
 
 async def test_a_covered_month_with_no_spend_is_zero_not_unknown(ledger):
-    from fin_agent.importers.synthetic import seed_committed_statement
+    from arno.importers.synthetic import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -676,7 +676,7 @@ async def test_answering_a_group_labels_only_the_spending_side_and_catches_a_bar
 
 
 async def test_a_statement_row_with_no_payee_is_marked_in_the_biggest_story(ledger):
-    from fin_agent.importers.synthetic import seed_committed_statement
+    from arno.importers.synthetic import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -709,7 +709,7 @@ async def test_a_statement_row_with_no_payee_is_marked_in_the_biggest_story(ledg
 
 
 async def test_a_statement_description_is_marked_even_when_its_payee_is_known(ledger):
-    from fin_agent.importers.synthetic import seed_committed_statement
+    from arno.importers.synthetic import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -831,7 +831,7 @@ def test_recap_weeks_start_on_monday_and_compare_like_for_like():
 
 
 async def test_coverage_does_not_count_the_future_as_a_gap(ledger, monkeypatch):
-    from fin_agent.importers.synthetic import seed_committed_statement
+    from arno.importers.synthetic import seed_committed_statement
 
     account = await create_account(
         ledger, kind="bank", name="Covered bank", opening_balance_paise=1_000_000

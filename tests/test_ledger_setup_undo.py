@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import date
 
-from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.categories import list_rules, upsert_rule
-from fin_agent.ledger.goals import create_goal, get_goal
-from fin_agent.ledger.schedules import create_schedule, get_schedule
-from fin_agent.ledger.settings import read_settings, update_settings
+from arno.ledger.accounts import create_account, get_account, set_statement_balance
+from arno.ledger.audit import undo_group
+from arno.ledger.categories import list_rules, upsert_rule
+from arno.ledger.goals import create_goal, get_goal
+from arno.ledger.schedules import create_schedule, get_schedule
+from arno.ledger.settings import read_settings, update_settings
 
 
 async def _category(conn, name: str) -> str:

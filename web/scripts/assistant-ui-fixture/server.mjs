@@ -1,5 +1,5 @@
 /**
- * Synthetic Fin-Agent API for the assistant-ui migration checks.
+ * Synthetic Arno API for the assistant-ui migration checks.
  *
  * It speaks the Vercel UIMessage SSE protocol (`text/event-stream`) for
  * `POST /api/chat`, keeps detached turn buffers, and replays them from

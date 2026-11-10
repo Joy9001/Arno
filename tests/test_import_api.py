@@ -5,10 +5,10 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
-from fin_agent.agent.parser import submit_parser_code
-from fin_agent.importers.passwords import PASSWORDS
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.agent.parser import submit_parser_code
+from arno.importers.passwords import PASSWORDS
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 

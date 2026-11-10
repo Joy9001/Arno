@@ -12,8 +12,8 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-from fin_agent.agent.cards import data_part, with_data
-from fin_agent.agent.turns import encode_saved_turn
+from arno.agent.cards import data_part, with_data
+from arno.agent.turns import encode_saved_turn
 from tests.agent_helpers import streaming_model
 
 WEB = Path(__file__).resolve().parents[1] / "web"

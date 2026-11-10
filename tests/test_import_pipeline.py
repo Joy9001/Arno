@@ -8,23 +8,23 @@ from typing import cast
 
 import pytest
 
-from fin_agent.agent.parser import submit_parser_code
-from fin_agent.importers.commit import commit_import, reject_import, undo_import
-from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.layouts import save_version
-from fin_agent.importers.periods import ledger_opening as opening_balance
-from fin_agent.importers.pipeline import (
+from arno.agent.parser import submit_parser_code
+from arno.importers.commit import commit_import, reject_import, undo_import
+from arno.importers.layout import detect_fingerprint
+from arno.importers.layouts import save_version
+from arno.importers.periods import ledger_opening as opening_balance
+from arno.importers.pipeline import (
     _account_fingerprint,
     _store_unlocked,
     create_import,
     import_payload,
 )
-from fin_agent.importers.readers import Doc
-from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
-from fin_agent.ledger.accounts import account_summary, create_account, set_statement_balance
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance, system_account
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.importers.readers import Doc
+from arno.importers.reconcile import insert_lines, reconcile, resolve_line
+from arno.ledger.accounts import account_summary, create_account, set_statement_balance
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance, system_account
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 
@@ -200,8 +200,8 @@ async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger)
 
 
 async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
-    from fin_agent.importers.checks import check_statement
-    from fin_agent.ledger import movements as movements_mod
+    from arno.importers.checks import check_statement
+    from arno.ledger import movements as movements_mod
 
     account = await _account(ledger)
     raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
@@ -285,8 +285,8 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
 
 
 async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledger):
-    from fin_agent.importers.checks import check_statement
-    from fin_agent.ledger import movements as movements_mod
+    from arno.importers.checks import check_statement
+    from arno.ledger import movements as movements_mod
 
     account = await _account(ledger)
     raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
@@ -860,7 +860,7 @@ async def test_a_saved_printed_zero_opening_without_evidence_blocks_commit(ledge
 
 
 async def test_a_bank_printed_opening_without_running_balances_still_commits(ledger):
-    from fin_agent.importers.checks import check_statement
+    from arno.importers.checks import check_statement
 
     account = await _account(ledger)
     raw_account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])

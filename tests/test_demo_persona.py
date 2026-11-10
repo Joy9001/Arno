@@ -4,16 +4,16 @@ from datetime import date
 
 import pytest
 
-from fin_agent.config import get_settings
-from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
-from fin_agent.demo.persona import seed_demo
-from fin_agent.demo.template import clone_database, drop_database
-from fin_agent.ledger.accounts import list_accounts
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.goals import list_goals
-from fin_agent.ledger.movements import list_movements
-from fin_agent.ledger.schedules import list_schedules, upcoming
-from fin_agent.tools import read as read_tools
+from arno.config import get_settings
+from arno.db.conn import connect, conninfo_to_dict, make_conninfo
+from arno.demo.persona import seed_demo
+from arno.demo.template import clone_database, drop_database
+from arno.ledger.accounts import list_accounts
+from arno.ledger.audit import undo_group
+from arno.ledger.goals import list_goals
+from arno.ledger.movements import list_movements
+from arno.ledger.schedules import list_schedules, upcoming
+from arno.tools import read as read_tools
 
 DEMO_DAY = date(2026, 11, 1)
 
@@ -184,7 +184,7 @@ async def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
 @pytest.mark.xdist_group("cluster")
 async def test_demo_template_can_be_cloned():
     settings = get_settings(refresh=True)
-    target = "fin_agent_demo_template_test"
+    target = "arno_demo_template_test"
     source = conninfo_to_dict(settings.database_url)["dbname"]
     async with connect(settings.database_url) as conn:
         await seed_demo(conn, today=DEMO_DAY, reset=True)

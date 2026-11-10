@@ -19,14 +19,14 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTrace
 from opentelemetry.proto.trace.v1.trace_pb2 import Span
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT = "fin-agent-smoke"
+PROJECT = "arno-smoke"
 
 CHILD = r"""
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import FunctionModel
 
-from fin_agent.observability import bootstrap_observability, shutdown_observability
+from arno.observability import bootstrap_observability, shutdown_observability
 
 
 def script(messages, info):
@@ -42,7 +42,7 @@ def script(messages, info):
 
 
 bootstrap_observability()
-agent = Agent(FunctionModel(script), name="fin-agent-smoke")
+agent = Agent(FunctionModel(script), name="arno-smoke")
 
 
 @agent.tool_plain

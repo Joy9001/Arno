@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fin_agent.api import provenance
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.movements import get_movement, record_expense
+from arno.api import provenance
+from arno.ledger.accounts import create_account
+from arno.ledger.movements import get_movement, record_expense
 
 
 async def test_movement_detail_exposes_only_real_chat_provenance(ledger):

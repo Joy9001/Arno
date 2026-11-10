@@ -19,12 +19,12 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.compaction import is_pinned
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.capabilities import MODEL_SETTINGS
-from fin_agent.agent.history import recover_crashed_runs
-from fin_agent.api import app as app_module
-from fin_agent.api.deps import current_session
-from fin_agent.ledger.accounts import create_account
+from arno.agent.builder import build_agent
+from arno.agent.capabilities import MODEL_SETTINGS
+from arno.agent.history import recover_crashed_runs
+from arno.api import app as app_module
+from arno.api.deps import current_session
+from arno.ledger.accounts import create_account
 from tests.agent_helpers import streaming_model
 
 

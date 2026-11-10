@@ -7,20 +7,20 @@ from typing import Any
 
 import pytest
 
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from fin_agent.ledger.goals import create_goal
-from fin_agent.ledger.movements import (
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import undo_group
+from arno.ledger.common import today
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.ledger.goals import create_goal
+from arno.ledger.movements import (
     correct_movement,
     record_expense,
     record_income,
     record_transfer,
 )
-from fin_agent.ledger.schedule_payments import link_payment, unlink_payment
-from fin_agent.ledger.schedules import create_schedule, get_occurrence, upcoming, update_schedule
-from fin_agent.tools.projection import load_inputs
+from arno.ledger.schedule_payments import link_payment, unlink_payment
+from arno.ledger.schedules import create_schedule, get_occurrence, upcoming, update_schedule
+from arno.tools.projection import load_inputs
 
 
 async def _plan(conn, *, amount=100_000, kind="obligation"):
@@ -282,7 +282,7 @@ async def test_api_payment_match_round_trip_and_undo(authed_client):
 
 
 async def test_agent_match_is_undoable_and_marks_outside_descriptions(ledger):
-    from fin_agent.tools import write
+    from arno.tools import write
 
     bank, schedule, due = await _plan(ledger)
     movement = await record_expense(
@@ -383,7 +383,7 @@ async def test_bank_to_card_payment_can_cover_an_explicit_bill_schedule(ledger):
 async def test_concurrent_matches_cannot_spend_the_same_allocation_twice(ledger):
     import asyncio
 
-    from fin_agent.db.conn import connect
+    from arno.db.conn import connect
 
     bank, schedule, due = await _plan(ledger)
     payment = await record_expense(ledger, account_id=bank["id"], amount_paise=100_000)

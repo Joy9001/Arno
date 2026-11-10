@@ -13,18 +13,18 @@ from datetime import date
 
 import pytest
 
-from fin_agent.importers.checks import check_statement
-from fin_agent.importers.commit import commit_import, undo_import
-from fin_agent.importers.monty import normalize_accounts
-from fin_agent.importers.periods import ledger_opening
-from fin_agent.importers.pipeline import import_payload
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.importers.rules import payee_key, pending_rows
-from fin_agent.ledger.accounts import create_account, set_statement_balance
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance
-from fin_agent.ledger.errors import ConflictLedgerError
-from fin_agent.ledger.payees import is_placeholder_name
+from arno.importers.checks import check_statement
+from arno.importers.commit import commit_import, undo_import
+from arno.importers.monty import normalize_accounts
+from arno.importers.periods import ledger_opening
+from arno.importers.pipeline import import_payload
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.importers.rules import payee_key, pending_rows
+from arno.ledger.accounts import create_account, set_statement_balance
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance
+from arno.ledger.errors import ConflictLedgerError
+from arno.ledger.payees import is_placeholder_name
 from tests.invariants import check_ledger
 
 PERIOD = (date(2026, 10, 1), date(2026, 11, 10))

@@ -4,7 +4,7 @@ from datetime import date
 
 import pytest
 
-from fin_agent.ledger.accounts import (
+from arno.ledger.accounts import (
     account_summary,
     archive_account,
     create_account,
@@ -13,8 +13,8 @@ from fin_agent.ledger.accounts import (
     set_statement_balance,
     update_account,
 )
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.errors import InvalidLedgerError
+from arno.ledger.audit import undo_group
+from arno.ledger.errors import InvalidLedgerError
 
 
 async def _card(ledger, name="Slice card", **kwargs):
@@ -67,7 +67,7 @@ async def test_card_cycle_limit_and_available_credit(ledger):
     assert card["card_outstanding_paise"] == 0
     assert card["available_credit_paise"] == 10_000_000
 
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.movements import record_expense
 
     # Move a card purchase through the ledger; the card balance becomes a liability.
     category = (await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Shopping'"))["id"]
@@ -99,7 +99,7 @@ async def test_unknown_card_does_not_claim_zero_debt_or_full_available_credit(le
 
 
 async def test_a_card_movement_alone_leaves_the_outstanding_unknown(ledger):
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.movements import record_expense
 
     card = await _card(ledger)
     await record_expense(
@@ -249,7 +249,7 @@ async def test_liquid_total_quality_separates_unknown_zero_and_empty(ledger):
 
 @pytest.mark.parametrize("kind", ["expense", "income"])
 async def test_a_movement_alone_does_not_make_an_unknown_balance_known(ledger, kind):
-    from fin_agent.ledger import movements
+    from arno.ledger import movements
 
     account = await create_account(ledger, kind="bank", name="SBI Savings")
     await getattr(movements, f"record_{kind}")(
@@ -286,7 +286,7 @@ async def test_an_explicit_zero_opening_is_known_and_stays_zero(ledger):
 
 
 async def test_a_stated_balance_after_activity_becomes_known(ledger):
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.movements import record_expense
 
     account = await create_account(ledger, kind="bank", name="SBI Savings")
     await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
@@ -316,7 +316,7 @@ async def test_undoing_the_only_stated_balance_returns_to_unknown(ledger):
 
 
 async def test_undoing_an_expense_keeps_a_surviving_anchor(ledger):
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.movements import record_expense
 
     account = await create_account(
         ledger,
@@ -339,7 +339,7 @@ async def test_undoing_an_expense_keeps_a_surviving_anchor(ledger):
 
 
 async def test_mixed_known_and_unknown_activity_reports_an_incomplete_total(ledger):
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.movements import record_expense
 
     await create_account(ledger, kind="bank", name="Zero bank", opening_balance_paise=0)
     unknown = await create_account(ledger, kind="bank", name="SBI Savings")

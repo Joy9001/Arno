@@ -8,7 +8,7 @@ from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.function import FunctionModel
 
-from fin_agent.agent.builder import build_agent
+from arno.agent.builder import build_agent
 from tests.agent_helpers import streaming_model
 
 

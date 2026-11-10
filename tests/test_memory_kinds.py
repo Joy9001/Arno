@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fin_agent.tools import write as write_tools
+from arno.tools import write as write_tools
 
 
 async def _remember(db, text: str, kind: str | None = None) -> dict:

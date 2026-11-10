@@ -16,16 +16,16 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo
 
-from fin_agent.importers.categorize import run_categorize
-from fin_agent.importers.commit import commit_import, undo_import
-from fin_agent.importers.periods import ledger_opening as opening_balance
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.categories import upsert_rule
-from fin_agent.ledger.common import ledger_balance
-from fin_agent.ledger.errors import ConflictLedgerError
+from arno.importers.categorize import run_categorize
+from arno.importers.commit import commit_import, undo_import
+from arno.importers.periods import ledger_opening as opening_balance
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
+from arno.ledger.categories import upsert_rule
+from arno.ledger.common import ledger_balance
+from arno.ledger.errors import ConflictLedgerError
 from tests.agent_helpers import streaming_model
 from tests.invariants import check_ledger
 

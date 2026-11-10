@@ -50,20 +50,20 @@ from evals.models import (
     EvalOutput,
     ToolAttempt,
 )
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import (
+from arno.agent.builder import build_agent
+from arno.agent.deps import AgentDeps
+from arno.agent.history import (
     create_thread,
     ensure_history,
     mark_run_started,
     record_user_message,
 )
-from fin_agent.agent.models import model_for
-from fin_agent.agent.number_check import check_messages, classify_messages
-from fin_agent.config import REPO_ROOT, get_settings
-from fin_agent.db.conn import connect, current_database_url
-from fin_agent.demo.template import drop_database
-from fin_agent.observability import bootstrap_observability
+from arno.agent.models import model_for
+from arno.agent.number_check import check_messages, classify_messages
+from arno.config import REPO_ROOT, get_settings
+from arno.db.conn import connect, current_database_url
+from arno.demo.template import drop_database
+from arno.observability import bootstrap_observability
 
 RESULTS_DIR = REPO_ROOT / "evals" / "results"
 README_PATH = REPO_ROOT / "README.md"
@@ -400,7 +400,7 @@ def build_dataset(
         cases = cases[:limit]
     meta_by_id = {case.inputs.case_id: case_meta(case) for case in cases}
     dataset = Dataset(
-        name=f"fin-agent-{_slug(model_name)}",
+        name=f"arno-{_slug(model_name)}",
         cases=cases,
         evaluators=[OutcomeEvaluator(judge=judge)],
     )
@@ -447,7 +447,7 @@ async def evaluate_model(
 
     return await dataset.evaluate(
         task,
-        name=f"fin-agent-{_slug(model_name)}",
+        name=f"arno-{_slug(model_name)}",
         repeat=repeat,
         lifecycle=lifecycle_factory(admin_dsn, template=template),
         max_concurrency=max_concurrency,
@@ -719,7 +719,7 @@ def format_scorecard(card: Scorecard) -> str:
 def format_scorecards_table(cards: list[Scorecard]) -> str:
     if not cards:
         return (
-            "No model run is recorded yet. This table fills after `fin-agent eval --model X`.\n"
+            "No model run is recorded yet. This table fills after `arno eval --model X`.\n"
             "A cloud model needs `CHAT_BASE_URL`, `CHAT_API_KEY`, and a pinned `CHAT_MODEL`; a\n"
             "local model needs the same variables pointed at Ollama. The judge needs\n"
             "`EVAL_JUDGE_MODEL` pinned to an exact dated version."
@@ -779,7 +779,7 @@ def publish_scorecards(cards: list[Scorecard], *, readme: Path = README_PATH) ->
         "## Model scorecard\n\n"
         "Every model is run through the same agent eval suite on the demo persona, with a fresh\n"
         "database cloned for each trial. The suite is in [`evals/`](evals/README.md); run it with\n"
-        "`fin-agent eval --model X`. A dash means that model or category has not run yet.\n\n"
+        "`arno eval --model X`. A dash means that model or category has not run yet.\n\n"
         f"{START_MARKER}\n{body}\n{END_MARKER}\n"
     )
     if START_MARKER in text and END_MARKER in text:
@@ -963,7 +963,7 @@ async def _run_eval(
         judge_name = judge_model or os.environ.get("EVAL_JUDGE_MODEL") or model_names[0]
         # A fresh provider session for the judge. A fixed session lets a provider cache or
         # continue context from an earlier eval run, which can leak a previous trial's wording.
-        os.environ["OPENCODE_SESSION_ID"] = f"fin-agent-eval-judge-{uuid.uuid4()}"
+        os.environ["OPENCODE_SESSION_ID"] = f"arno-eval-judge-{uuid.uuid4()}"
         judge = LLMJudge(model_for(judge_name), name=judge_name)
         for model_name in model_names:
             started = datetime.now(UTC).isoformat()
@@ -973,7 +973,7 @@ async def _run_eval(
                 # Each trial gets its own provider session so one trial's wording cannot leak
                 # into the next, and the pass^3 trials stay independent.
                 return model_for(
-                    model_name, session_id=f"fin-agent-eval-{model_name}-{uuid.uuid4()}"
+                    model_name, session_id=f"arno-eval-{model_name}-{uuid.uuid4()}"
                 )
 
             report = await evaluate_model(

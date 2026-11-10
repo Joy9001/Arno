@@ -16,21 +16,21 @@ from typing import cast
 
 import pytest
 
-from fin_agent.db.conn import connect
-from fin_agent.importers.checks import check_statement
-from fin_agent.importers.commit import commit_import, reject_import, undo_import
-from fin_agent.importers.gate import run_gate
-from fin_agent.importers.layout import detect_fingerprint
-from fin_agent.importers.monty import ScriptContext
-from fin_agent.importers.periods import ledger_opening as opening_balance
-from fin_agent.importers.readers import Doc
-from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
-from fin_agent.importers.task_status import reconcile as reconcile_task_imports
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
-from fin_agent.ledger.common import ledger_balance, system_account
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.db.conn import connect
+from arno.importers.checks import check_statement
+from arno.importers.commit import commit_import, reject_import, undo_import
+from arno.importers.gate import run_gate
+from arno.importers.layout import detect_fingerprint
+from arno.importers.monty import ScriptContext
+from arno.importers.periods import ledger_opening as opening_balance
+from arno.importers.readers import Doc
+from arno.importers.reconcile import insert_lines, reconcile, resolve_line
+from arno.importers.task_status import reconcile as reconcile_task_imports
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
+from arno.ledger.common import ledger_balance, system_account
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 PERIOD = (date(2026, 4, 1), date(2026, 4, 30))
@@ -458,7 +458,7 @@ def _reversing_ids(monkeypatch) -> None:
         state["n"] += 1
         return f"stl_{1000 - state['n']:04d}"
 
-    monkeypatch.setattr("fin_agent.importers.reconcile.new_id", fake)
+    monkeypatch.setattr("arno.importers.reconcile.new_id", fake)
 
 
 async def test_the_gate_compares_rows_in_parser_order_not_id_order(ledger, monkeypatch):
@@ -589,7 +589,7 @@ async def _card_review(
 
 
 async def test_a_stated_opening_unblocks_a_first_card_statement(ledger):
-    from fin_agent.importers.pipeline import set_manual_opening
+    from arno.importers.pipeline import set_manual_opening
 
     card = await _card(ledger)
     import_id = await _card_review(
@@ -611,7 +611,7 @@ async def test_a_stated_opening_unblocks_a_first_card_statement(ledger):
 
 
 async def test_an_opening_that_does_not_add_up_keeps_the_import_blocked(ledger):
-    from fin_agent.importers.pipeline import set_manual_opening
+    from arno.importers.pipeline import set_manual_opening
 
     card = await _card(ledger)
     import_id = await _card_review(
@@ -636,7 +636,7 @@ def test_the_opening_route_needs_a_session(client):
 
 
 def test_an_iso_period_header_is_read_as_a_period():
-    from fin_agent.importers.periods import derive_period
+    from arno.importers.periods import derive_period
 
     doc = Doc(b"Statement Period: 2026-04-01 to 2026-04-30\n01/04/2026 SWIGGY 450.00\n")
     assert derive_period(doc) == {
@@ -647,7 +647,7 @@ def test_an_iso_period_header_is_read_as_a_period():
 
 
 def test_periods_take_the_year_from_the_rows_across_a_year_rollover():
-    from fin_agent.importers.periods import derive_period
+    from arno.importers.periods import derive_period
 
     doc = Doc(b"Cycle 25 DEC - 24 JAN\n26 Dec '25 UPI 450.00\n02 Jan '26 UPI 120.00\n")
     assert derive_period(doc) == {
@@ -683,7 +683,7 @@ def test_a_dropped_or_duplicated_line_breaks_the_running_balance():
 def test_money_parses_indian_grouping_and_negatives_without_floats():
     from pydantic_monty import AsyncMonty  # noqa: F401 - the helper block runs as script text
 
-    from fin_agent.importers.helpers import PRELUDE
+    from arno.importers.helpers import PRELUDE
 
     namespace: dict[str, object] = {}
     exec(compile(PRELUDE, "<helpers>", "exec"), namespace)  # noqa: S102 - our own constant
@@ -772,7 +772,7 @@ async def test_a_card_repayment_imported_from_both_statements_is_one_movement(le
 
 
 async def test_a_user_category_survives_a_later_rule_run(ledger):
-    from fin_agent.importers import rules as rules_mod
+    from arno.importers import rules as rules_mod
 
     account = await _account(ledger)
     import_id = await _review_import(
@@ -820,7 +820,7 @@ async def test_a_user_rule_beats_a_later_llm_answer_for_the_same_payee(ledger):
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.categorizer import CategorizerDeps, save_categories
+    from arno.agent.categorizer import CategorizerDeps, save_categories
 
     account = await _account(ledger)
     import_id = await _review_import(
@@ -867,7 +867,7 @@ async def test_a_user_rule_beats_a_later_llm_answer_for_the_same_payee(ledger):
 
 
 async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
-    from fin_agent.ledger.audit import undo_group
+    from arno.ledger.audit import undo_group
 
     account = await _account(ledger)
     logged = await movements_mod.record_expense(
@@ -901,7 +901,7 @@ async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
 
 
 async def test_a_committed_import_cannot_be_parsed_and_booked_again(ledger):
-    from fin_agent.agent.parser import submit_parser_code
+    from arno.agent.parser import submit_parser_code
 
     account = await _account(ledger, opening_paise=24567890)
     payload = sbi_csv()
@@ -972,8 +972,8 @@ async def test_a_zip_of_statements_is_refused_rather_than_half_imported(ledger):
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.deps import AgentDeps
-    from fin_agent.agent.parser import open_imports
+    from arno.agent.deps import AgentDeps
+    from arno.agent.parser import open_imports
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:

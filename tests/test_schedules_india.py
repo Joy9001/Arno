@@ -4,13 +4,13 @@ from datetime import date
 
 import pytest
 
-from fin_agent.india.formatting import format_paise
-from fin_agent.india.recurrence import expand_rule
-from fin_agent.india.workdays import adjust_to_working_day, last_working_day
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.errors import InvalidLedgerError
-from fin_agent.ledger.movements import record_expense
-from fin_agent.ledger.schedules import create_schedule, upcoming
+from arno.india.formatting import format_paise
+from arno.india.recurrence import expand_rule
+from arno.india.workdays import adjust_to_working_day, last_working_day
+from arno.ledger.accounts import create_account
+from arno.ledger.errors import InvalidLedgerError
+from arno.ledger.movements import record_expense
+from arno.ledger.schedules import create_schedule, upcoming
 
 
 async def _category(conn, name: str) -> str:

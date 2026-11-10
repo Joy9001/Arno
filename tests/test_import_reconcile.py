@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from datetime import date
 
-from fin_agent.importers.baselines import recompute_baselines
-from fin_agent.importers.identifiers import find_upi_ref, match_hash, scrub, scrub_account_number
-from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.importers.baselines import recompute_baselines
+from arno.importers.identifiers import find_upi_ref, match_hash, scrub, scrub_account_number
+from arno.importers.reconcile import insert_lines, reconcile, resolve_line
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 
 
 async def _account(conn) -> dict:
@@ -174,8 +174,8 @@ async def test_reimport_dedupes_by_content_hash(ledger):
 
 
 async def test_a_keyed_identifier_hash_matches_a_logged_payee(ledger):
-    from fin_agent.importers.identifiers import match_hash
-    from fin_agent.ledger import payees
+    from arno.importers.identifiers import match_hash
+    from arno.ledger import payees
 
     account = await _account(ledger)
     payee = await payees.create_payee(

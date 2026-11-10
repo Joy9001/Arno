@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 
 
 async def _add_import(

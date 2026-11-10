@@ -8,13 +8,13 @@ from typing import Any
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.engine.patterns import Charge, KnownSchedule, detect_missed, detect_recurring
-from fin_agent.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
-from fin_agent.jobs.questions import run_scheduled_question, spend_budget
-from fin_agent.jobs.reminders import send_reminders
-from fin_agent.jobs.risk import risk_warning
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.scheduled_questions import create_question
+from arno.engine.patterns import Charge, KnownSchedule, detect_missed, detect_recurring
+from arno.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
+from arno.jobs.questions import run_scheduled_question, spend_budget
+from arno.jobs.reminders import send_reminders
+from arno.jobs.risk import risk_warning
+from arno.ledger.common import today as ledger_today
+from arno.scheduled_questions import create_question
 from tests.agent_helpers import streaming_model
 
 
@@ -24,7 +24,7 @@ def _prose_model(text: str) -> FunctionModel:
 
 
 async def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
-    from fin_agent.ledger import goals as goals_mod
+    from arno.ledger import goals as goals_mod
 
     await goals_mod.create_goal(
         ledger, name="Trip", target_paise=5000000, deadline=date(2027, 3, 1)
@@ -49,7 +49,7 @@ async def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
 
 
 async def test_briefing_does_not_report_an_unknown_liquid_balance_as_zero(ledger):
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     await create_account(ledger, kind="bank", name="SBI Savings")
 
@@ -60,8 +60,8 @@ async def test_briefing_does_not_report_an_unknown_liquid_balance_as_zero(ledger
 
 
 async def test_briefing_keeps_a_movement_only_account_unknown(ledger):
-    from fin_agent.ledger.accounts import create_account
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
 
     account = await create_account(ledger, kind="bank", name="SBI Savings")
     await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
@@ -73,7 +73,7 @@ async def test_briefing_keeps_a_movement_only_account_unknown(ledger):
 
 
 async def test_briefing_does_not_report_an_unknown_card_owed_as_zero(ledger):
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     await create_account(
         ledger,
@@ -154,7 +154,7 @@ async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
         del conn, kwargs
         return dict(state)
 
-    monkeypatch.setattr("fin_agent.tools.projection.project", fake_project)
+    monkeypatch.setattr("arno.tools.projection.project", fake_project)
     first = await risk_warning(db)
     assert first is not None
     assert first["kind"] == "risk_warning"
@@ -225,7 +225,7 @@ async def test_a_scheduled_question_runs_read_only_and_writes_the_inbox(db):
     assert spend_budget({"spend_limit_cents": 250}) == 2.5
     assert str(spend_budget({"spend_limit_cents": None})) == "1.00"
 
-    from fin_agent.agent.builder import build_agent
+    from arno.agent.builder import build_agent
 
     agent = build_agent(
         model=_prose_model("You spent a small amount on food; the ledger has the detail."),
@@ -250,6 +250,6 @@ async def test_a_scheduled_question_runs_read_only_and_writes_the_inbox(db):
 
 
 def test_question_budget_defaults_and_ceiling_constants():
-    from fin_agent.jobs.questions import REQUEST_LIMIT
+    from arno.jobs.questions import REQUEST_LIMIT
 
     assert REQUEST_LIMIT == 20

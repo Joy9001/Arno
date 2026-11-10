@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from fin_agent.importers.spike import check_real_command, run_synthetic
+from arno.importers.spike import check_real_command, run_synthetic
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 
@@ -36,7 +36,7 @@ def test_no_real_folder_means_no_model_call(tmp_path):
         [
             sys.executable,
             "-c",
-            "from fin_agent.importers.spike import run_real; from pathlib import Path; "
+            "from arno.importers.spike import run_real; from pathlib import Path; "
             "print(run_real(Path('private/statements-does-not-exist')))",
         ],
         capture_output=True,

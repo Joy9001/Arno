@@ -89,7 +89,7 @@ def test_a_stored_approval_merges_into_a_closed_card():
     )
     from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-    from fin_agent.api.chat import _merge_saved_state
+    from arno.api.chat import _merge_saved_state
 
     history: list[ModelMessage] = [
         ModelRequest(

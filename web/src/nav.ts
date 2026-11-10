@@ -3,7 +3,7 @@ import type { User } from "./types";
 
 export type PageId = "ask" | "chats" | "money" | "activity" | "recaps" | "settings";
 
-export const NAVIGATE_EVENT = "fin-agent:navigate";
+export const NAVIGATE_EVENT = "arno:navigate";
 
 /** Move to an area (and optional sub-route) from anywhere, without prop-drilling. */
 export function goTo(page: PageId, sub?: string): void {

@@ -8,10 +8,10 @@ from datetime import date
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.toolset import update_setup
-from fin_agent.agent.write_models import AccountSetup
+from arno.agent.builder import build_agent
+from arno.agent.deps import AgentDeps
+from arno.agent.toolset import update_setup
+from arno.agent.write_models import AccountSetup
 
 
 async def _deps(conn, thread_id: str, message_id: str) -> AgentDeps:
@@ -343,10 +343,10 @@ async def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
 
 
 async def test_schedule_payment_tool_matches_existing_money_and_returns_undo(ledger):
-    from fin_agent.ledger.accounts import create_account
-    from fin_agent.ledger.common import today
-    from fin_agent.ledger.movements import record_expense
-    from fin_agent.ledger.schedules import create_schedule
+    from arno.ledger.accounts import create_account
+    from arno.ledger.common import today
+    from arno.ledger.movements import record_expense
+    from arno.ledger.schedules import create_schedule
 
     bank = await create_account(ledger, kind="bank", name="Match bank")
     schedule = await create_schedule(

@@ -9,9 +9,9 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolRetu
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai_harness.compaction import is_pinned
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import (
+from arno.agent.builder import build_agent
+from arno.agent.deps import AgentDeps
+from arno.agent.history import (
     create_thread,
     ensure_history,
     refresh_snapshot,
@@ -110,7 +110,7 @@ async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
 
     thread = await create_thread(demo_ledger, title="saved")
     history, _ = await ensure_history(demo_ledger, thread)
-    from fin_agent.agent.history import record_user_message
+    from arno.agent.history import record_user_message
 
     await record_user_message(
         demo_ledger, thread_id=thread["id"], client_id="client-saved", text="hello"
@@ -146,7 +146,7 @@ async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
 async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-    from fin_agent.agent.history import record_user_message
+    from arno.agent.history import record_user_message
 
     thread = await create_thread(demo_ledger, title="steps")
     history, _ = await ensure_history(demo_ledger, thread)

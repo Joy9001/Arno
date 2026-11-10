@@ -1,7 +1,7 @@
 # The end-to-end driver
 
 `tests/e2e/driver.py` runs real user journeys against a real API process on a scratch database.
-The terminal `fin-agent chat` runs the agent inside the caller's process, so it cannot do what a
+The terminal `arno chat` runs the agent inside the caller's process, so it cannot do what a
 browser does: upload a statement, answer a confirm card, review and commit an import, or show the
 cards and tool calls a turn produced. This driver speaks the same HTTP the web app speaks, to a
 server it starts itself.
@@ -12,20 +12,20 @@ It is for later end-to-end agents and for a developer checking a change by hand.
 ## Start and stop
 
 ```bash
-export DATABASE_URL=postgresql://app:<pw>@127.0.0.1:5433/fin_agent_e2e_test
+export DATABASE_URL=postgresql://app:<pw>@127.0.0.1:5433/arno_e2e_test
 export AGENT_RO_PASSWORD=...  BACKUP_PASSWORD=...   # what the app needs to bootstrap
 uv run python -m tests.e2e.driver up --port 8123 --seed demo
 uv run python -m tests.e2e.driver down
 ```
 
 `up` refuses any database whose name does not end in `_test`. It runs the migrations, seeds the
-synthetic persona when asked, starts `uv run fin-agent serve` on `127.0.0.1:<port>` with jobs on
+synthetic persona when asked, starts `uv run arno serve` on `127.0.0.1:<port>` with jobs on
 and the passkey origin at `http://localhost:<port>`, waits for `/api/health`, then enrolls a
 software passkey through the real setup token and WebAuthn ceremony. `--empty` drops the schema
 first instead of seeding.
 
 The session, base URL, current thread, and the last turn's confirm cards live under `$E2E_STATE`
-(default `<tempdir>/fin-agent-e2e-<database>`), as `state.json` plus `server.log`. So separate
+(default `<tempdir>/arno-e2e-<database>`), as `state.json` plus `server.log`. So separate
 shell invocations continue the same conversation.
 
 **`--seed demo` re-seeds and truncates the ledger**, so it is for a first start only. To restart a
@@ -237,7 +237,7 @@ uv run pytest tests/test_e2e_driver.py -q -n 0
 
 - `tests/test_e2e_driver.py` empties every table in `DATABASE_URL`, like every test in this suite.
   Running it against the database you are driving leaves an empty ledger: `up --seed demo` again.
-- Parser task files under `FIN_AGENT_TASKS_DIR` are never cleared, so a `--seed` run of a database
+- Parser task files under `ARNO_TASKS_DIR` are never cleared, so a `--seed` run of a database
   that a previous run used keeps that run's task records. Only an id you ask for reaches them.
 - `state` lists an active schedule with its rule, not its due dates: expanding an RRULE is the
   app's job, not SQL's.

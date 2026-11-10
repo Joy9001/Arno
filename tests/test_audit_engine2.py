@@ -6,8 +6,8 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.engine.backtest import format_report
-from fin_agent.engine.projection import (
+from arno.engine.backtest import format_report
+from arno.engine.projection import (
     CurvePoint,
     LiquidAccount,
     Projection,
@@ -16,16 +16,16 @@ from fin_agent.engine.projection import (
     project,
     reduce_categories,
 )
-from fin_agent.india.recurrence import expand_rule, first_occurrence
-from fin_agent.jobs.risk import risk_warning
-from fin_agent.jobs.schedules import enqueue_due_schedules
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.goals import create_goal
-from fin_agent.ledger.movements import correct_movement, record_expense
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.scheduled_questions import create_question
-from fin_agent.tools.projection import load_inputs
+from arno.india.recurrence import expand_rule, first_occurrence
+from arno.jobs.risk import risk_warning
+from arno.jobs.schedules import enqueue_due_schedules
+from arno.ledger.accounts import create_account
+from arno.ledger.common import today as ledger_today
+from arno.ledger.goals import create_goal
+from arno.ledger.movements import correct_movement, record_expense
+from arno.ledger.schedules import create_schedule
+from arno.scheduled_questions import create_question
+from arno.tools.projection import load_inputs
 
 
 def _curve(result: Projection) -> dict[str, CurvePoint]:
@@ -135,8 +135,8 @@ def test_a_category_cut_applies_only_until_its_date():
 def test_the_cut_tradeoff_ends_at_the_next_payday():
     from dataclasses import replace
 
-    from fin_agent.engine.affordability import Hypothetical, _cut_category_tradeoff
-    from fin_agent.engine.projection import CashEvent
+    from arno.engine.affordability import Hypothetical, _cut_category_tradeoff
+    from arno.engine.projection import CashEvent
 
     category = SpendCategory(
         id="cat_food",
@@ -351,7 +351,7 @@ async def test_risk_warns_against_zero_when_no_floor_is_set(db, monkeypatch):
         del conn, kwargs
         return _fake_projection(first_floor_crossing="2026-11-20")
 
-    monkeypatch.setattr("fin_agent.tools.projection.project", fake_project)
+    monkeypatch.setattr("arno.tools.projection.project", fake_project)
     await db.execute("UPDATE risk_state SET first_floor_crossing = '2026-12-01' WHERE id = 1")
     row = await risk_warning(db)
     assert row is not None
@@ -368,7 +368,7 @@ async def test_risk_keeps_its_floor_wording_when_a_floor_is_set(db, monkeypatch)
         del conn, kwargs
         return _fake_projection(floor_paise=100_000, first_floor_crossing="2026-11-20")
 
-    monkeypatch.setattr("fin_agent.tools.projection.project", fake_project)
+    monkeypatch.setattr("arno.tools.projection.project", fake_project)
     await db.execute("UPDATE risk_state SET first_floor_crossing = '2026-12-01' WHERE id = 1")
     row = await risk_warning(db)
     assert row is not None
@@ -383,5 +383,5 @@ async def test_risk_is_quiet_against_zero_when_the_walks_hold(db, monkeypatch):
         del conn, kwargs
         return _fake_projection(floor_probability=0.95)
 
-    monkeypatch.setattr("fin_agent.tools.projection.project", fake_project)
+    monkeypatch.setattr("arno.tools.projection.project", fake_project)
     assert await risk_warning(db) is None

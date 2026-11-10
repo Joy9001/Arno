@@ -1,6 +1,6 @@
 """Optional smoke checks for locally built release images.
 
-Set FIN_AGENT_API_TEST_IMAGE and FIN_AGENT_BACKUP_TEST_IMAGE to image tags to run them.
+Set ARNO_API_TEST_IMAGE and ARNO_BACKUP_TEST_IMAGE to image tags to run them.
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ def _run_in_image(image_variable: str, script: str) -> None:
 
 def test_api_image_has_writable_workspace_and_restore_tools():
     _run_in_image(
-        "FIN_AGENT_API_TEST_IMAGE",
+        "ARNO_API_TEST_IMAGE",
         "set -eu; test -w /app; test -w /app/README.md; "
-        "test -w /app/pre-migration; fin-agent --help >/dev/null; "
+        "test -w /app/pre-migration; arno --help >/dev/null; "
         "pg_dump --version; pg_restore --version; psql --version; "
         "restic version; rclone version >/dev/null",
     )
@@ -38,7 +38,7 @@ def test_api_image_has_writable_workspace_and_restore_tools():
 
 def test_backup_image_has_backup_tools():
     _run_in_image(
-        "FIN_AGENT_BACKUP_TEST_IMAGE",
+        "ARNO_BACKUP_TEST_IMAGE",
         "set -eu; pg_dump --version; psql --version; "
         "restic version; rclone version >/dev/null; jq --version",
     )

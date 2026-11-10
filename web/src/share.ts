@@ -1,7 +1,7 @@
 /* The service worker stores a shared UPI screenshot in the Cache API, then redirects here.
    The chat screen consumes it once and posts it to the photo endpoint. */
 
-const SHARE_CACHE = "fin-agent-share";
+const SHARE_CACHE = "arno-share";
 const SHARE_KEY = "/share-target/image";
 
 let pending: Promise<File | null> | null = null;

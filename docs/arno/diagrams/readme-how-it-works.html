@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How an Arno answer is made</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · Arno README</p>
+    <h1>How an Arno answer is made</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="readme-how-it-works-title readme-how-it-works-desc">
+        <title id="readme-how-it-works-title">How an Arno answer is made</title>
+        <desc id="readme-how-it-works-desc">Your message goes to the agent, which calls plain-Python tools directly or through Code Mode scripts; the tools read the Postgres ledger and run the projection engine, and every reply passes a number check before it reaches you as an answer with verdict cards and citations.</desc>
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Arrows (drawn before boxes) -->
+        <path d="M 208,208 H 248" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 448,208 H 528" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 400,168 V 88 Q 400,80 408,80 H 528" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 620,112 V 168" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 712,188 H 728 Q 736,188 736,180 V 88 Q 736,80 744,80 H 760" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 712,228 H 760" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 348,248 V 320" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M 248,352 H 208" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+        <!-- Arrow labels -->
+        <rect x="436" y="60" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="468" y="69" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">WHAT-IFS</text>
+        <rect x="456" y="188" width="64" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="488" y="197" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">READ, WRITE</text>
+        <rect x="356" y="280" width="72" height="12" rx="2" fill="#f5f5f5"/>
+        <text x="360" y="289" fill="#5a6580" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">EVERY REPLY</text>
+
+        <!-- You -->
+        <rect x="40" y="168" width="168" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="168" width="168" height="80" rx="6" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="124" y="200" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Your message</text>
+        <text x="124" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">chat, voice, photos,</text>
+        <text x="124" y="228" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">or a statement</text>
+
+        <!-- Agent (focal) -->
+        <rect x="248" y="168" width="200" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="248" y="168" width="200" height="80" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
+        <text x="348" y="200" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">The agent</text>
+        <text x="348" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">decides what to compute;</text>
+        <text x="348" y="228" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">a pinned model + fallback</text>
+
+        <!-- Code Mode -->
+        <rect x="528" y="48" width="184" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="528" y="48" width="184" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="620" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Code Mode</text>
+        <text x="620" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">run_code scripts in a sandbox</text>
+
+        <!-- Tools -->
+        <rect x="528" y="168" width="184" height="80" rx="6" fill="#f5f5f5"/>
+        <rect x="528" y="168" width="184" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="620" y="200" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Plain-Python tools</text>
+        <text x="620" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reads, writes with undo,</text>
+        <text x="620" y="228" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">read-only SQL</text>
+
+        <!-- Projection engine -->
+        <rect x="760" y="48" width="160" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="760" y="48" width="160" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="840" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Projection engine</text>
+        <text x="840" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">1,000 seeded futures</text>
+
+        <!-- Ledger (store) -->
+        <rect x="760" y="176" width="160" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="760" y="176" width="160" height="64" rx="6" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="840" y="204" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Postgres ledger</text>
+        <text x="840" y="220" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">double-entry, in paise</text>
+
+        <!-- Number check -->
+        <rect x="248" y="320" width="200" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="248" y="320" width="200" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="348" y="348" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Number check</text>
+        <text x="348" y="364" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">every figure traced to code</text>
+
+        <!-- Answer -->
+        <rect x="40" y="320" width="168" height="64" rx="6" fill="#f5f5f5"/>
+        <rect x="40" y="320" width="168" height="64" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="124" y="348" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Answer</text>
+        <text x="124" y="364" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">verdict cards, citations</text>
+
+        <!-- Callout -->
+        <text x="40" y="428" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">The model decides what to compute; code computes it, and every number it states is checked.</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="448" x2="920" y2="448" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="476" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="466" width="16" height="10" rx="2" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <text x="144" y="475" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">the agent</text>
+        <rect x="248" y="466" width="16" height="10" rx="2" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <text x="272" y="475" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">code</text>
+        <rect x="344" y="466" width="16" height="10" rx="2" fill="rgba(45,49,66,0.05)" stroke="#4f5d75" stroke-width="1"/>
+        <text x="368" y="475" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">data</text>
+        <rect x="440" y="466" width="16" height="10" rx="2" fill="rgba(79,93,117,0.10)" stroke="#5a6580" stroke-width="1"/>
+        <text x="464" y="475" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">you</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

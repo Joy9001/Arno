@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fin_agent.engine.money import amortize, compound
+from arno.engine.money import amortize, compound
 
 
 def test_amortize_matches_a_known_emi():

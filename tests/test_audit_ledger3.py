@@ -11,23 +11,23 @@ from decimal import Decimal
 
 import pytest
 
-from fin_agent.jobs.reminders import send_reminders
-from fin_agent.ledger.accounts import create_account, get_account, update_account
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from fin_agent.ledger.goals import create_goal, get_goal
-from fin_agent.ledger.movements import (
+from arno.jobs.reminders import send_reminders
+from arno.ledger.accounts import create_account, get_account, update_account
+from arno.ledger.audit import undo_group
+from arno.ledger.common import today
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.ledger.goals import create_goal, get_goal
+from arno.ledger.movements import (
     correct_movement,
     get_movement,
     loan_payment_parts,
     record_expense,
     record_split,
 )
-from fin_agent.ledger.payees import create_payee
-from fin_agent.ledger.schedule_payments import link_payment
-from fin_agent.ledger.schedules import create_schedule, get_occurrence, get_schedule, upcoming
-from fin_agent.tools import write as write_tools
+from arno.ledger.payees import create_payee
+from arno.ledger.schedule_payments import link_payment
+from arno.ledger.schedules import create_schedule, get_occurrence, get_schedule, upcoming
+from arno.tools import write as write_tools
 from tests.invariants import check_ledger
 
 
@@ -160,7 +160,7 @@ async def test_a_known_card_bill_still_carries_its_amount(ledger):
 
 
 async def test_the_briefing_lists_an_unknown_bill_and_keeps_it_out_of_the_total(ledger):
-    from fin_agent.jobs.briefing import compose_briefing
+    from arno.jobs.briefing import compose_briefing
 
     food = await _category(ledger, "Food & Dining")
     unknown = await create_account(

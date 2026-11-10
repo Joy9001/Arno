@@ -21,21 +21,21 @@ from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
 from typer.testing import CliRunner
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.auth.setup import issue_setup_token
-from fin_agent.backup_restore import restore_from_directory
-from fin_agent.cli import app as cli_app
-from fin_agent.config import ConfigurationError, Settings
-from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
-from fin_agent.db.migrate import MigrationError, discover, run_migrations
-from fin_agent.demo.persona import seed_demo
-from fin_agent.jobs.runner import (
+from arno.agent.builder import build_agent
+from arno.auth.setup import issue_setup_token
+from arno.backup_restore import restore_from_directory
+from arno.cli import app as cli_app
+from arno.config import ConfigurationError, Settings
+from arno.db.conn import connect, conninfo_to_dict, make_conninfo
+from arno.db.migrate import MigrationError, discover, run_migrations
+from arno.demo.persona import seed_demo
+from arno.jobs.runner import (
     JobRunner,
     _claim_one,
     recover_interrupted_jobs,
 )
-from fin_agent.jobs.schedules import enqueue_due_schedules
-from fin_agent.ledger.accounts import list_accounts
+from arno.jobs.schedules import enqueue_due_schedules
+from arno.ledger.accounts import list_accounts
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 
@@ -50,7 +50,7 @@ class _SpyStore:
 
 def test_telemetry_is_off_when_no_collector_endpoint_is_configured(monkeypatch, caplog):
     """`register()` with no endpoint targets gRPC localhost:4317 and blocks a host CLI."""
-    import fin_agent.observability as observability
+    import arno.observability as observability
 
     monkeypatch.setattr(observability, "_started", False)
     monkeypatch.setattr(observability, "_provider", None)
@@ -74,8 +74,8 @@ async def test_cli_chat_prints_a_rupee_answer_on_a_cp1252_console(monkeypatch, d
     del demo_ledger
     model = TestModel(call_tools=[], custom_output_text="That costs \u20b91,234.")
     store = _SpyStore()
-    monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: store)
-    monkeypatch.setattr("fin_agent.cli.build_agent", lambda **_kwargs: build_agent(model=model))
+    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: store)
+    monkeypatch.setattr("arno.cli.build_agent", lambda **_kwargs: build_agent(model=model))
 
     runner = CliRunner(charset="cp1252")
     result = await asyncio.to_thread(runner.invoke, cli_app, ["chat", "--message", "hi there"])
@@ -89,8 +89,8 @@ async def test_cli_chat_refuses_an_unknown_thread_instead_of_starting_a_new_one(
     monkeypatch, demo_ledger
 ):
     model = TestModel(call_tools=[], custom_output_text="hello")
-    monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: _SpyStore())
-    monkeypatch.setattr("fin_agent.cli.build_agent", lambda **_kwargs: build_agent(model=model))
+    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: _SpyStore())
+    monkeypatch.setattr("arno.cli.build_agent", lambda **_kwargs: build_agent(model=model))
 
     result = await asyncio.to_thread(
         CliRunner().invoke,
@@ -106,7 +106,7 @@ async def test_cli_chat_refuses_an_unknown_thread_instead_of_starting_a_new_one(
 async def test_export_reports_a_missing_pg_dump_instead_of_a_traceback(monkeypatch, demo_ledger):
     del demo_ledger
     monkeypatch.delenv("PG_DUMP", raising=False)
-    monkeypatch.setattr("fin_agent.ledger.export.shutil.which", lambda _name: None)
+    monkeypatch.setattr("arno.ledger.export.shutil.which", lambda _name: None)
 
     result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["export", "--format", "sql"])
 
@@ -264,7 +264,7 @@ async def test_a_due_schedule_creates_one_job_and_does_not_repeat_it(db):
 
 
 async def test_two_simultaneous_passkey_deletes_cannot_remove_the_last_one(authed_client, db):
-    from fin_agent.auth.sessions import COOKIE_NAME
+    from arno.auth.sessions import COOKIE_NAME
 
     await db.execute(
         """
@@ -364,7 +364,7 @@ async def test_a_failed_migration_leaves_the_database_unchanged(tmp_path):
         "CREATE TABLE audit_bad (id int);\nINSERT INTO audit_missing VALUES (1);\n"
     )
 
-    async with _fresh_database("fin_agent_platform_bad_migration_test") as dsn:
+    async with _fresh_database("arno_platform_bad_migration_test") as dsn:
         async with connect(dsn) as conn:
             with pytest.raises(asyncpg.PostgresError):
                 await run_migrations(conn, migrations)
@@ -387,6 +387,7 @@ async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
     demo_ledger, tmp_path: Path
 ):
     source = os.environ["DATABASE_URL"]
+    # The backup format predates the Arno name; existing archives carry it.
     dump = tmp_path / "fin_agent.dump"
     env = os.environ.copy()
     info = conninfo_to_dict(source)
@@ -412,7 +413,7 @@ async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
 
     movements = await demo_ledger.fetchval("SELECT count(*) FROM movements")
 
-    async with _fresh_database("fin_agent_platform_restore_test") as target:
+    async with _fresh_database("arno_platform_restore_test") as target:
         # The documented major-upgrade path: a manual dump has no manifest.
         report = await restore_from_directory(tmp_path, target, force=True, require_manifest=False)
         assert report.ok, report.as_dict()
@@ -441,7 +442,7 @@ async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
 
 
 async def test_restore_verification_catches_a_broken_ledger_and_changed_content(demo_ledger):
-    from fin_agent.backup_restore import build_manifest, verify_database
+    from arno.backup_restore import build_manifest, verify_database
 
     manifest = await build_manifest(demo_ledger)
     checks, mismatches = await verify_database(demo_ledger, manifest=manifest, dump_sha256=None)
@@ -463,39 +464,39 @@ async def test_restore_verification_catches_a_broken_ledger_and_changed_content(
 
 
 def test_a_bad_number_in_the_environment_names_the_variable(monkeypatch):
-    monkeypatch.setenv("FIN_AGENT_SESSION_TTL_DAYS", "thirty")
+    monkeypatch.setenv("ARNO_SESSION_TTL_DAYS", "thirty")
 
-    with pytest.raises(ConfigurationError, match="FIN_AGENT_SESSION_TTL_DAYS"):
+    with pytest.raises(ConfigurationError, match="ARNO_SESSION_TTL_DAYS"):
         Settings.from_env()
 
 
 def test_a_typo_in_a_boolean_is_an_error_not_silently_false(monkeypatch):
-    monkeypatch.setenv("FIN_AGENT_COOKIE_SECURE", "ture")
+    monkeypatch.setenv("ARNO_COOKIE_SECURE", "ture")
 
-    with pytest.raises(ConfigurationError, match="FIN_AGENT_COOKIE_SECURE"):
+    with pytest.raises(ConfigurationError, match="ARNO_COOKIE_SECURE"):
         Settings.from_env()
 
 
 def test_a_zero_lifetime_is_refused(monkeypatch):
-    monkeypatch.setenv("FIN_AGENT_SETUP_TOKEN_TTL_HOURS", "0")
+    monkeypatch.setenv("ARNO_SETUP_TOKEN_TTL_HOURS", "0")
 
-    with pytest.raises(ConfigurationError, match="FIN_AGENT_SETUP_TOKEN_TTL_HOURS"):
+    with pytest.raises(ConfigurationError, match="ARNO_SETUP_TOKEN_TTL_HOURS"):
         Settings.from_env()
 
 
 def test_an_origin_with_a_path_is_refused(monkeypatch):
     """WebAuthn compares the origin exactly; a path would fail every ceremony later."""
-    monkeypatch.setenv("FIN_AGENT_RP_ORIGIN", "https://box.tailnet.ts.net/app")
+    monkeypatch.setenv("ARNO_RP_ORIGIN", "https://box.tailnet.ts.net/app")
 
-    with pytest.raises(ConfigurationError, match="FIN_AGENT_RP_ORIGIN"):
+    with pytest.raises(ConfigurationError, match="ARNO_RP_ORIGIN"):
         Settings.from_env()
 
 
 def test_a_blank_rp_id_names_its_own_variable(monkeypatch):
-    monkeypatch.setenv("FIN_AGENT_RP_ID", "")
-    monkeypatch.delenv("FIN_AGENT_RP_ORIGIN", raising=False)
+    monkeypatch.setenv("ARNO_RP_ID", "")
+    monkeypatch.delenv("ARNO_RP_ORIGIN", raising=False)
 
-    with pytest.raises(ConfigurationError, match="FIN_AGENT_RP_ID"):
+    with pytest.raises(ConfigurationError, match="ARNO_RP_ID"):
         Settings.from_env()
 
 
@@ -510,7 +511,7 @@ DEMO_ANCHORS = [
 
 
 async def test_a_future_demo_anchor_is_a_clear_error(db):
-    from fin_agent.demo.persona import DemoSeedError
+    from arno.demo.persona import DemoSeedError
 
     with pytest.raises(DemoSeedError, match="in the future"):
         await seed_demo(db, today=date(2999, 1, 1), reset=True)

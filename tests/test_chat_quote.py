@@ -14,12 +14,12 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo
 
-from fin_agent.agent.history import (
+from arno.agent.history import (
     create_thread,
     record_user_message,
     save_records,
 )
-from fin_agent.agent.quote import MAX_QUOTE_CHARS
+from arno.agent.quote import MAX_QUOTE_CHARS
 from tests.agent_helpers import streaming_model
 from tests.import_fixtures import sbi_csv
 

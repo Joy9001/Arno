@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from fin_agent.engine import backtest, hackerrank
+from arno.engine import backtest, hackerrank
 
 
 def test_synthetic_history_is_deterministic_and_has_twelve_month_starts():

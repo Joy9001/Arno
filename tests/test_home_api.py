@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fin_agent.notifications import create_notification, mark_read
+from arno.notifications import create_notification, mark_read
 
 
 async def test_home_composes_one_payload(authed_client):

@@ -11,16 +11,16 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from fin_agent.engine.money import money
-from fin_agent.engine.projection import CardAccount, card_due_date, statement_close
-from fin_agent.ledger import goals
-from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.movements import record_expense, record_transfer
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.scheduled_questions import archive_question, create_question
-from fin_agent.tools import periods
-from fin_agent.tools import read as read_tools
+from arno.engine.money import money
+from arno.engine.projection import CardAccount, card_due_date, statement_close
+from arno.ledger import goals
+from arno.ledger.accounts import create_account, get_account, set_statement_balance
+from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import record_expense, record_transfer
+from arno.ledger.schedules import create_schedule
+from arno.scheduled_questions import archive_question, create_question
+from arno.tools import periods
+from arno.tools import read as read_tools
 
 
 def _context_account(context: dict, account_id: str) -> dict:

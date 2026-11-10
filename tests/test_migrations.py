@@ -5,8 +5,8 @@ import os
 import asyncpg
 import pytest
 
-from fin_agent.db.conn import connect, conninfo_to_dict, make_conninfo
-from fin_agent.db.migrate import applied, current_version, discover, run_migrations
+from arno.db.conn import connect, conninfo_to_dict, make_conninfo
+from arno.db.migrate import applied, current_version, discover, run_migrations
 
 EXPECTED_TABLES = {
     "settings",

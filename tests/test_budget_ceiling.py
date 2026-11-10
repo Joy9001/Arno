@@ -18,9 +18,9 @@ from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness.compaction import compact_now
 from pydantic_ai_harness.spend import SpendEntry, Spent
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import build_parser_agent
+from arno.agent.builder import build_agent
+from arno.agent.deps import AgentDeps
+from arno.agent.parser import build_parser_agent
 
 
 class ExhaustedStore:
@@ -72,7 +72,7 @@ def test_a_parser_run_refuses_at_the_ceiling_and_says_so():
 def test_the_cli_production_path_uses_the_shared_daily_ledger(monkeypatch):
     from pydantic_ai.models.test import TestModel
 
-    monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: ExhaustedStore())
+    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: ExhaustedStore())
     agent = build_agent()
     with agent.override(model=TestModel(call_tools=[], custom_output_text="no")):
         with pytest.raises(Exception) as raised:
@@ -105,7 +105,7 @@ def _summarizer(*, model, store):
         TieredCompaction,
     )
 
-    from fin_agent.agent.capabilities import build_capabilities
+    from arno.agent.capabilities import build_capabilities
 
     capabilities = build_capabilities(primary=model, spend_store=store, context_window=1_000)
     tiered = next(item for item in capabilities if isinstance(item, TieredCompaction))
@@ -159,7 +159,7 @@ def test_the_summary_attempt_is_charged_once_to_the_shared_ledger():
 
 
 async def test_a_scheduled_question_refuses_at_the_ceiling(db):
-    from fin_agent.jobs.questions import answer_question
+    from arno.jobs.questions import answer_question
 
     question = {"id": "sq_ceiling", "prompt": "What did I spend?", "spend_limit_cents": 250}
     agent = build_agent(

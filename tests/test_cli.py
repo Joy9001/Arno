@@ -5,8 +5,8 @@ import re
 
 from typer.testing import CliRunner
 
-from fin_agent.auth.setup import setup_required
-from fin_agent.cli import app as cli_app
+from arno.auth.setup import setup_required
+from arno.cli import app as cli_app
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 

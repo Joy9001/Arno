@@ -14,23 +14,23 @@ from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pywebpush import WebPushException
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.capture.photo import PaymentPhoto
-from fin_agent.jobs.backup import backup_alert
-from fin_agent.jobs.briefing import compose_briefing, send_weekly_briefing
-from fin_agent.jobs.questions import answer_question, run_scheduled_question
-from fin_agent.jobs.schedules import INDIA, builtin_rules, next_occurrence
-from fin_agent.ledger import movements as movements_mod
-from fin_agent.ledger.accounts import create_account
-from fin_agent.notifications import (
+from arno.agent.builder import build_agent
+from arno.capture.photo import PaymentPhoto
+from arno.jobs.backup import backup_alert
+from arno.jobs.briefing import compose_briefing, send_weekly_briefing
+from arno.jobs.questions import answer_question, run_scheduled_question
+from arno.jobs.schedules import INDIA, builtin_rules, next_occurrence
+from arno.ledger import movements as movements_mod
+from arno.ledger.accounts import create_account
+from arno.notifications import (
     create_notification,
     seed_chat_text,
     send_push_for_kind,
     subscribe,
 )
-from fin_agent.scheduled_questions import create_question
-from fin_agent.tools.read import summarize_spending
-from fin_agent.tools.write import ToolInputError, _rupees
+from arno.scheduled_questions import create_question
+from arno.tools.read import summarize_spending
+from arno.tools.write import ToolInputError, _rupees
 from tests.agent_helpers import streaming_model
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"audit-image"
@@ -142,10 +142,8 @@ def test_a_reminder_from_outside_text_marks_its_schedule_name():
 async def test_push_payload_is_contentless_for_every_kind(db, monkeypatch):
     await subscribe(db, endpoint="https://example.invalid/ok", p256dh="p", auth="a")
     sent: list[dict] = []
-    monkeypatch.setattr(
-        "fin_agent.notifications.webpush", lambda **kwargs: sent.append(kwargs) or "ok"
-    )
-    from fin_agent.notifications import PUSH_BODIES
+    monkeypatch.setattr("arno.notifications.webpush", lambda **kwargs: sent.append(kwargs) or "ok")
+    from arno.notifications import PUSH_BODIES
 
     for kind in PUSH_BODIES:
         await send_push_for_kind(db, kind)
@@ -153,7 +151,7 @@ async def test_push_payload_is_contentless_for_every_kind(db, monkeypatch):
     for call, kind in zip(sent, PUSH_BODIES, strict=True):
         payload = json.loads(call["data"])
         assert payload == {
-            "title": "Fin-Agent",
+            "title": "Arno",
             "body": PUSH_BODIES[kind],
             "url": "/",
         }
@@ -168,7 +166,7 @@ async def test_a_slow_push_does_not_block_the_event_loop(db, monkeypatch):
         seen["thread"] = threading.get_ident()
         return "ok"
 
-    monkeypatch.setattr("fin_agent.notifications.webpush", fake_webpush)
+    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
     await send_push_for_kind(db, "weekly_briefing")
     assert seen["thread"] != threading.get_ident()
 
@@ -190,7 +188,7 @@ async def test_a_gone_push_subscription_is_pruned_and_a_server_error_is_kept(db,
             raise WebPushException("broken", response=SimpleNamespace(status=500, text=""))
         return "ok"
 
-    monkeypatch.setattr("fin_agent.notifications.webpush", fake_webpush)
+    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
     assert await send_push_for_kind(db, "weekly_briefing") == 1
     endpoints = {
         row["endpoint"] for row in await db.fetch("SELECT endpoint FROM push_subscriptions")
@@ -341,7 +339,7 @@ async def test_scheduled_question_schedule_is_ist_and_keyed_by_question(db):
         db, prompt="What did I spend?", rule="FREQ=DAILY;BYHOUR=9;BYMINUTE=15"
     )
     await db.execute("DELETE FROM job_schedules WHERE kind = 'scheduled_question'")
-    from fin_agent.jobs.schedules import sync_scheduled_questions
+    from arno.jobs.schedules import sync_scheduled_questions
 
     after = datetime(2026, 11, 3, 0, 0, tzinfo=UTC)
     await sync_scheduled_questions(db, now=after)
@@ -474,7 +472,7 @@ async def test_photo_text_cannot_escape_the_outside_markers(
     async def extraction(*_args, **_kwargs) -> PaymentPhoto:
         return PaymentPhoto(merchant=injected, amount_paise=45_000, method="upi")
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", extraction)
     response = authed_client.post(
         "/api/chat/cnv_audit_inject/photo",
         files={"file": ("receipt.png", PNG, "image/png")},
@@ -500,7 +498,7 @@ async def test_a_photo_without_a_clear_amount_logs_nothing(authed_client, demo_l
         return PaymentPhoto(merchant="Swiggy", amount_paise=None, method="upi")
 
     before = await demo_ledger.fetchval("SELECT count(*) FROM movements")
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", extraction)
     response = authed_client.post(
         "/api/chat/cnv_audit_noamount/photo",
         files={"file": ("receipt.png", PNG, "image/png")},
@@ -519,7 +517,7 @@ async def test_retrying_a_logged_photo_does_not_log_it_twice(
     async def extraction(*_args, **_kwargs) -> PaymentPhoto:
         return PaymentPhoto(merchant="Swiggy", amount_paise=45_000, method="upi")
 
-    monkeypatch.setattr("fin_agent.api.capture.extract_payment_photo", extraction)
+    monkeypatch.setattr("arno.api.capture.extract_payment_photo", extraction)
     first = authed_client.post(
         "/api/chat/cnv_audit_retry/photo",
         files={"file": ("receipt.png", PNG, "image/png")},
@@ -546,7 +544,7 @@ async def test_capture_size_and_media_type_limits(authed_client, monkeypatch):
     )
     assert audio.status_code == 415
 
-    monkeypatch.setattr("fin_agent.api.capture.MAX_CAPTURE_BYTES", 8)
+    monkeypatch.setattr("arno.api.capture.MAX_CAPTURE_BYTES", 8)
     oversized = authed_client.post(
         "/api/chat/cnv_audit_size/photo",
         files={"file": ("receipt.png", PNG + b"x", "image/png")},

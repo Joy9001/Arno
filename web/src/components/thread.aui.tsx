@@ -631,12 +631,12 @@ const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
           <ComposerQuotePreview />
           <ComposerAttachments />
           <ComposerPrimitive.Input
-            placeholder="Message Fin-Agent…"
+            placeholder="Message Arno…"
             className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
             rows={1}
             autoFocus={autoFocus}
             enterKeyHint="send"
-            aria-label="Message Fin-Agent"
+            aria-label="Message Arno"
           />
           <ComposerAction />
           {ComposerStatus && <ComposerStatus />}

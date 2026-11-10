@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from fin_agent.jobs.schedules import (
+from arno.jobs.schedules import (
     BUILTIN_KINDS,
     INDIA,
     builtin_rules,
@@ -14,7 +14,7 @@ from fin_agent.jobs.schedules import (
     period_for,
     sync_scheduled_questions,
 )
-from fin_agent.scheduled_questions import create_question
+from arno.scheduled_questions import create_question
 
 
 async def _job_count(db, kind: str) -> int:
@@ -96,7 +96,7 @@ async def test_a_scheduled_question_is_mirrored_and_keyed_by_the_question(db):
     job = await db.fetchrow("SELECT * FROM jobs WHERE kind = 'scheduled_question'")
     assert job["key"].startswith(f"scheduled_question:{question['id']}:")
 
-    from fin_agent.scheduled_questions import archive_question
+    from arno.scheduled_questions import archive_question
 
     await archive_question(db, question["id"])
     await sync_scheduled_questions(db)

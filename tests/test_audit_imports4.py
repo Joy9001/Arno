@@ -16,16 +16,16 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai_harness.subagents import DelegationTasks, SubAgents
 
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.parser import ParseReport, build_parser_agent, import_state, submit_parser_code
-from fin_agent.agent.turns import UNREAD_STATEMENT_NOTE_PREFIX
-from fin_agent.api.tasks import AnswerIn, task_answer
-from fin_agent.importers.pipeline import _resolve_parsed_account, create_import, import_payload
-from fin_agent.importers.readers import Doc
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id, undo_group
-from fin_agent.ledger.common import today
-from fin_agent.ledger.movements import (
+from arno.agent.deps import AgentDeps
+from arno.agent.parser import ParseReport, build_parser_agent, import_state, submit_parser_code
+from arno.agent.turns import UNREAD_STATEMENT_NOTE_PREFIX
+from arno.api.tasks import AnswerIn, task_answer
+from arno.importers.pipeline import _resolve_parsed_account, create_import, import_payload
+from arno.importers.readers import Doc
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id, undo_group
+from arno.ledger.common import today
+from arno.ledger.movements import (
     _effectively_reversed_ids,  # noqa: PLC2701 - the ledger's own rule
     correct_movement,
     record_expense,

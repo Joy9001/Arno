@@ -21,17 +21,17 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.usage import RunUsage
 
-from fin_agent.agent import categorizer as categorizer_mod
-from fin_agent.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS
-from fin_agent.agent.categorizer import CategorizerDeps
-from fin_agent.importers import rules as rules_mod
-from fin_agent.importers.categorize import collect_batch, run_categorize
-from fin_agent.importers.commit import commit_import
-from fin_agent.importers.reconcile import insert_lines, reconcile
-from fin_agent.importers.seed_rules import ensure_seed_rules
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id, undo_group
-from fin_agent.ledger.categories import upsert_rule
+from arno.agent import categorizer as categorizer_mod
+from arno.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS
+from arno.agent.categorizer import CategorizerDeps
+from arno.importers import rules as rules_mod
+from arno.importers.categorize import collect_batch, run_categorize
+from arno.importers.commit import commit_import
+from arno.importers.reconcile import insert_lines, reconcile
+from arno.importers.seed_rules import ensure_seed_rules
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id, undo_group
+from arno.ledger.categories import upsert_rule
 from tests.agent_helpers import streaming_model
 
 CATEGORY = "Food & Dining"
@@ -281,7 +281,7 @@ async def test_a_refund_takes_the_purchase_category(ledger):
 
 
 async def test_deleting_a_rule_keeps_the_label_it_put_on_a_row(ledger):
-    from fin_agent.ledger import categories
+    from arno.ledger import categories
 
     account = await _account(ledger)
     rule_id = await _matching_rule(ledger, "swiggy", await _category_id(ledger))
@@ -756,13 +756,13 @@ async def test_uncategorized_groups_merchants_and_upi_people(ledger):
 
 
 async def rules_mod_groups(conn):
-    from fin_agent.ledger import uncategorized
+    from arno.ledger import uncategorized
 
     return await uncategorized.groups(conn)
 
 
 async def test_answering_a_group_writes_a_user_rule_and_one_undo_reverts_it(ledger):
-    from fin_agent.ledger import uncategorized
+    from arno.ledger import uncategorized
 
     account = await _account(ledger)
     await _committed(
@@ -960,7 +960,7 @@ async def test_an_agent_failure_reraises_so_the_runner_retries(ledger):
 
 
 async def test_a_spend_ceiling_gives_up_at_once(ledger):
-    from fin_agent.jobs.runner import JobGaveUp
+    from arno.jobs.runner import JobGaveUp
 
     class SpendLimitExceeded(Exception):
         """Named like the harness error `ceiling_name` recognizes."""

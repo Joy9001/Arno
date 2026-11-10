@@ -7,8 +7,8 @@ import asyncio
 from pydantic_ai.models.test import TestModel
 from typer.testing import CliRunner
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.cli import app as cli_app
+from arno.agent.builder import build_agent
+from arno.cli import app as cli_app
 
 
 class _SpyStore:
@@ -22,8 +22,8 @@ class _SpyStore:
 async def test_cli_chat_runs_one_turn_and_saves_it(monkeypatch, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Hello from the CLI.")
     store = _SpyStore()
-    monkeypatch.setattr("fin_agent.agent.spend.SharedSpendStore", lambda: store)
-    monkeypatch.setattr("fin_agent.cli.build_agent", lambda **_kwargs: build_agent(model=model))
+    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: store)
+    monkeypatch.setattr("arno.cli.build_agent", lambda **_kwargs: build_agent(model=model))
     runner = CliRunner()
     result = await asyncio.to_thread(runner.invoke, cli_app, ["chat", "--message", "hi there"])
     assert result.exit_code == 0, result.output

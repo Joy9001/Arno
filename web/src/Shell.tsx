@@ -275,8 +275,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
         go("chats", message ? `${thread}/${message}` : thread);
       });
     };
-    window.addEventListener("fin-agent:open-thread", onOpenThread);
-    return () => window.removeEventListener("fin-agent:open-thread", onOpenThread);
+    window.addEventListener("arno:open-thread", onOpenThread);
+    return () => window.removeEventListener("arno:open-thread", onOpenThread);
   }, [go]);
 
   useEffect(() => {
@@ -416,8 +416,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   // Opening a recap clears its New mark on the page; the rail follows at once.
   useEffect(() => {
     const onSeen = () => void refreshRecaps();
-    window.addEventListener("fin-agent:recaps-seen", onSeen);
-    return () => window.removeEventListener("fin-agent:recaps-seen", onSeen);
+    window.addEventListener("arno:recaps-seen", onSeen);
+    return () => window.removeEventListener("arno:recaps-seen", onSeen);
   }, [refreshRecaps]);
 
   async function signOut() {
@@ -472,7 +472,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           <button
             type="button"
             className="rail-brand"
-            aria-label="Fin-Agent, ask"
+            aria-label="Arno, ask"
             onClick={() => navigate("ask")}
           >
             <Orb size={38} live />

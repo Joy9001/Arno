@@ -10,13 +10,13 @@ from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.cards import cards_from_messages
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.engine.money import Prepay
-from fin_agent.engine.money import amortize as amortize_fn
-from fin_agent.tools import read as read_tools
-from fin_agent.tools import write as write_tools
+from arno.agent.builder import build_agent
+from arno.agent.cards import cards_from_messages
+from arno.agent.deps import AgentDeps
+from arno.engine.money import Prepay
+from arno.engine.money import amortize as amortize_fn
+from arno.tools import read as read_tools
+from arno.tools import write as write_tools
 
 
 async def _thread(conn, thread_id="cnv_test", message_id="msg_test"):
@@ -51,7 +51,7 @@ async def run_agent(agent, prompt, deps):
 
 
 async def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledger):
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     context = await read_tools.get_financial_context(demo_ledger)
     assert context["today"]
@@ -72,9 +72,9 @@ async def test_financial_context_has_ages_sources_and_no_unknown_zero(demo_ledge
 
 
 async def test_a_movement_does_not_make_the_financial_context_balance_known(ledger):
-    from fin_agent.ledger.accounts import create_account, get_account, set_statement_balance
-    from fin_agent.ledger.common import today as ledger_today
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.accounts import create_account, get_account, set_statement_balance
+    from arno.ledger.common import today as ledger_today
+    from arno.ledger.movements import record_expense
 
     account = await create_account(ledger, kind="bank", name="SBI Savings")
     await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
@@ -99,9 +99,9 @@ async def test_a_movement_does_not_make_the_financial_context_balance_known(ledg
 
 
 async def test_financial_context_card_credit_is_unknown_until_a_balance_is_stated(ledger):
-    from fin_agent.ledger.accounts import create_account
-    from fin_agent.ledger.common import today as ledger_today
-    from fin_agent.ledger.movements import record_expense
+    from arno.ledger.accounts import create_account
+    from arno.ledger.common import today as ledger_today
+    from arno.ledger.movements import record_expense
 
     card = await create_account(
         ledger,
@@ -125,7 +125,7 @@ async def test_financial_context_card_credit_is_unknown_until_a_balance_is_state
     assert row["statement_day"] == 5
     assert row["due_day"] == 25
 
-    from fin_agent.ledger.accounts import set_statement_balance
+    from arno.ledger.accounts import set_statement_balance
 
     await set_statement_balance(ledger, card["id"], balance_paise=-3_000_000, as_of=ledger_today())
     context = await read_tools.get_financial_context(ledger)
@@ -136,7 +136,7 @@ async def test_financial_context_card_credit_is_unknown_until_a_balance_is_state
 
 
 async def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
-    from fin_agent.ledger.accounts import create_account
+    from arno.ledger.accounts import create_account
 
     card = await create_account(
         ledger,
@@ -156,7 +156,7 @@ async def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
 
 
 def test_unknown_balance_is_null_not_zero():
-    from fin_agent.engine.money import money
+    from arno.engine.money import money
 
     assert money(None) is None
     assert money(0) == {"paise": 0, "text": "₹0"}
@@ -492,7 +492,7 @@ async def test_counts_leave_out_a_corrected_entry_and_its_reversal(demo_ledger):
 
 
 async def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger):
-    from fin_agent.ledger.accounts import loan_terms
+    from arno.ledger.accounts import loan_terms
 
     terms = await loan_terms(demo_ledger, "Home loan")
     assert terms["emi_paise"] == 3_150_000

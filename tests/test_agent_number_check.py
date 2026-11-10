@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fin_agent.agent.number_check import check
+from arno.agent.number_check import check
 
 BAL = {"balance": {"paise": 12487350, "text": "₹1,24,873.50"}, "as_of": "2026-10-31"}
 SPEND = {
@@ -146,7 +146,7 @@ def test_a_pinned_snapshot_counts_as_a_source():
     from pydantic_ai.messages import ModelRequest
     from pydantic_ai_harness.compaction import pin
 
-    from fin_agent.agent.number_check import check_messages
+    from arno.agent.number_check import check_messages
 
     snapshot = ModelRequest(parts=[pin('{"balance": {"paise": 12487350}}')])
     assert check_messages("Your SBI balance is ₹1,24,873.50.", [snapshot]) == []
@@ -156,7 +156,7 @@ def test_a_pinned_snapshot_traces_but_old_assistant_prose_does_not():
     from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
     from pydantic_ai_harness.compaction import pin
 
-    from fin_agent.agent.number_check import check_messages
+    from arno.agent.number_check import check_messages
 
     history = [
         ModelRequest(parts=[pin('{"credit_limit": {"paise": 10000000, "text": "₹1,00,000"}}')]),
@@ -187,7 +187,7 @@ def test_a_day_range_tied_to_a_month_is_a_date():
 def test_a_number_from_a_tool_inside_run_code_is_traced():
     from pydantic_ai.messages import ModelRequest, ToolReturnPart
 
-    from fin_agent.agent.number_check import check_messages
+    from arno.agent.number_check import check_messages
 
     nested = ToolReturnPart(
         tool_name="summarize_spending",
@@ -265,7 +265,7 @@ def test_a_script_s_negative_and_paise_values_are_traced():
 def test_tool_arguments_are_sources_but_script_code_is_not():
     from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart
 
-    from fin_agent.agent.number_check import check_messages
+    from arno.agent.number_check import check_messages
 
     direct = ModelResponse(
         parts=[ToolCallPart("compound", {"monthly_paise": 500000, "months": 60}, "c1")]
@@ -311,7 +311,7 @@ def test_dates_times_lists_and_labels_are_not_quantities():
 
 
 def test_correct_prose_arithmetic_is_derived_not_invented():
-    from fin_agent.agent.number_check import classify
+    from arno.agent.number_check import classify
 
     goal = {"saved": {"paise": 3_000_000}, "monthly": {"paise": 1_000_000}}
     reply = "Saved ₹30,000; after the next ₹10,000 it becomes ₹40,000."

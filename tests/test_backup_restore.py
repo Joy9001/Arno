@@ -10,9 +10,9 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from fin_agent.config import get_settings
-from fin_agent.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
-from fin_agent.ledger.export import export_pg_dump
+from arno.config import get_settings
+from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
+from arno.ledger.export import export_pg_dump
 
 
 def _backup_dsn() -> str | None:
@@ -97,7 +97,7 @@ async def test_pg_dump_restore_round_trip(ledger):
     settings = get_settings(refresh=True)
     dump = export_pg_dump(settings.database_url)
     source_counts = await _counts(settings.database_url)
-    restore_name = "fin_agent_restore_test"
+    restore_name = "arno_restore_test"
     try:
         await _restore_database(dump, restore_name)
         info = conninfo_to_dict(settings.database_url)
@@ -124,6 +124,7 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
     init = subprocess.run(["restic", "init"], capture_output=True, env=env, check=False)
     assert init.returncode == 0, init.stderr.decode("utf-8", "replace")
     backup = subprocess.run(
+        # The backup format predates the Arno name; existing archives carry it.
         ["restic", "backup", "--stdin", "--stdin-filename", "fin_agent.dump"],
         input=dump,
         capture_output=True,
@@ -139,7 +140,7 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
     )
     assert extracted.returncode == 0, extracted.stderr.decode("utf-8", "replace")
 
-    restore_name = "fin_agent_restic_restore_test"
+    restore_name = "arno_restic_restore_test"
     try:
         await _restore_database(extracted.stdout, restore_name)
         info = conninfo_to_dict(settings.database_url)

@@ -20,8 +20,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
-        name: "Fin-Agent",
-        short_name: "Fin-Agent",
+        name: "Arno",
+        short_name: "Arno",
         description: "Your private finance agent.",
         theme_color: "#0e0f0c",
         background_color: "#0e0f0c",

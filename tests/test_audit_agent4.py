@@ -12,21 +12,21 @@ import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.cards import cards_from_messages
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import join_text, merge_text_parts, save_records
-from fin_agent.agent.instructions import render_instructions
-from fin_agent.agent.presentation import keep_last_answer
-from fin_agent.agent.redaction import redact_text
-from fin_agent.agent.toolset import build_read_toolset
-from fin_agent.agent.turns import (
+from arno.agent.builder import build_agent
+from arno.agent.cards import cards_from_messages
+from arno.agent.deps import AgentDeps
+from arno.agent.history import join_text, merge_text_parts, save_records
+from arno.agent.instructions import render_instructions
+from arno.agent.presentation import keep_last_answer
+from arno.agent.redaction import redact_text
+from arno.agent.toolset import build_read_toolset
+from arno.agent.turns import (
     approval_sentence,
     approval_text,
     encode_saved_turn,
     pending_approvals,
 )
-from fin_agent.db.conn import connect
+from arno.db.conn import connect
 from tests.agent_helpers import streaming_model
 from tests.import_fixtures import sbi_csv
 
@@ -422,7 +422,7 @@ async def test_the_saved_reply_and_replay_separate_text_parts(demo_ledger):
 
 async def test_the_retry_turn_names_the_file_it_carries(authed_client):
     """r3 R1: the retry turn had the file in deps but the block never named it."""
-    from fin_agent.agent.turns import UNREAD_STATEMENT_NOTE_PREFIX
+    from arno.agent.turns import UNREAD_STATEMENT_NOTE_PREFIX
 
     upload = authed_client.post(
         "/api/attachments",
@@ -499,7 +499,7 @@ async def test_the_tool_descriptions_name_their_shapes():
     from pydantic_ai.models.test import TestModel
     from pydantic_ai.usage import RunUsage
 
-    from fin_agent.agent.toolset import build_write_toolset
+    from arno.agent.toolset import build_write_toolset
 
     ctx = RunContext(
         deps=AgentDeps(conversation_id="cnv_desc"), model=TestModel(), usage=RunUsage()

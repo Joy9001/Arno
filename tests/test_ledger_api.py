@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from fin_agent.ledger.common import today as ledger_today
+from arno.ledger.common import today as ledger_today
 
 
 def _category(client, name: str) -> dict:
@@ -262,7 +262,7 @@ async def test_backup_status_and_exports(authed_client, db):
     assert exported.status_code == 200
     assert "attachment" in exported.headers["content-disposition"]
     payload = exported.json()
-    assert payload["format"] == "fin-agent-export"
+    assert payload["format"] == "arno-export"
     assert "accounts" in payload["tables"]
 
     csv_export = authed_client.get("/api/export/csv")

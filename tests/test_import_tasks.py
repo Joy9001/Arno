@@ -15,8 +15,8 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from pydantic_ai_harness.planning import PlanItem, PostgresPlanStore, TaskStatus
 from pydantic_ai_harness.subagents import DelegationTask, DelegationTasks
 
-from fin_agent.agent.parser import ImportReport, ParseReport
-from fin_agent.api.tasks import (
+from arno.agent.parser import ImportReport, ParseReport
+from arno.api.tasks import (
     AnswerIn,
     RollbackIn,
     layout_rollback,
@@ -25,8 +25,8 @@ from fin_agent.api.tasks import (
     task_detail,
     task_payload,
 )
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import new_id
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import new_id
 
 
 async def _attachment(conn, payload: bytes = b"x", name: str = "sbi.csv") -> str:
@@ -394,7 +394,7 @@ async def test_import_rows_carry_their_task_and_progress(ledger):
     assert row["task_id"] == "2" * 32
     assert row["progress"] == "checking the parser"
 
-    from fin_agent.importers.pipeline import _set_status
+    from arno.importers.pipeline import _set_status
 
     await _set_status(ledger, import_id, "review")
     assert await ledger.fetchval("SELECT progress FROM imports WHERE id = $1", import_id) is None

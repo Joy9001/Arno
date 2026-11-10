@@ -223,7 +223,7 @@ export function PasskeysCard() {
               marginSize={2}
               bgColor="#ffffff"
               fgColor="#0b0f14"
-              title="Add a device to Fin-Agent"
+              title="Add a device to Arno"
             />
           </div>
           <div className="enrollment-details">

@@ -12,11 +12,11 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness.compaction import SlidingWindowCompaction
 
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import create_thread, title_for
-from fin_agent.agent.redaction import redact_text
-from fin_agent.cli import _run_cli_turn
-from fin_agent.db.conn import conninfo_to_dict
+from arno.agent.deps import AgentDeps
+from arno.agent.history import create_thread, title_for
+from arno.agent.redaction import redact_text
+from arno.cli import _run_cli_turn
+from arno.db.conn import conninfo_to_dict
 
 # --- A secret typed next to the word that names it --------------------------------------------
 
@@ -163,8 +163,8 @@ def test_the_eval_test_template_is_named_for_this_run_s_database():
     database = str(conninfo_to_dict(os.environ["DATABASE_URL"])["dbname"])
     assert eval_tests.TEMPLATE.startswith(database)
     assert eval_tests.PREFIX.startswith(database)
-    # `fin-agent eval` keeps its documented default; only the test's names are per-run.
-    assert DEFAULT_TEMPLATE == "fin_agent_eval_template"
+    # `arno eval` keeps its documented default; only the test's names are per-run.
+    assert DEFAULT_TEMPLATE == "arno_eval_template"
 
 
 @pytest.mark.parametrize(
@@ -188,7 +188,7 @@ def test_a_six_digit_pin_number_is_a_postal_code_and_stays():
 def test_the_model_sees_a_named_pin_redacted_like_storage_does():
     """The input guardrail uses the same detectors as `redact_text`, so a PIN never reaches the
     model or the stored model history."""
-    from fin_agent.agent.builder import build_agent
+    from arno.agent.builder import build_agent
 
     seen: list[str] = []
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.movements import correct_movement, list_movements, record_expense
-from fin_agent.ledger.payees import create_payee
+from arno.ledger.accounts import create_account
+from arno.ledger.audit import undo_group
+from arno.ledger.movements import correct_movement, list_movements, record_expense
+from arno.ledger.payees import create_payee
 
 
 async def _bank(conn, name: str = "Pagination bank"):

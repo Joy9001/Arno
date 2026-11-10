@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from fin_agent.api.capture import MAX_CAPTURE_BYTES
-from fin_agent.api.imports import MAX_UPLOAD_BYTES
-from fin_agent.api.middleware import CONTENT_SECURITY_POLICY
-from fin_agent.backup_restore import build_manifest, restore_from_restic
-from fin_agent.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
-from fin_agent.db.migrate import Migration
-from fin_agent.db.pre_migration import dump_before_migrating
+from arno.api.capture import MAX_CAPTURE_BYTES
+from arno.api.imports import MAX_UPLOAD_BYTES
+from arno.api.middleware import CONTENT_SECURITY_POLICY
+from arno.backup_restore import build_manifest, restore_from_restic
+from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
+from arno.db.migrate import Migration
+from arno.db.pre_migration import dump_before_migrating
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 
@@ -64,7 +64,7 @@ async def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_tok
 
     blocked = client.get("/api/export/json")
     assert blocked.status_code == 403
-    assert blocked.headers["x-fin-agent-step-up"] == "passkey"
+    assert blocked.headers["x-arno-step-up"] == "passkey"
 
     begin = client.post("/api/auth/reverify/begin")
     assert begin.status_code == 200, begin.text
@@ -91,6 +91,7 @@ async def test_backup_manifest_changes_when_a_table_changes(demo_ledger):
         "INSERT INTO preferences (body, created_by) VALUES ('Loves UPI', 'user')"
     )
     before = await build_manifest(demo_ledger)
+    # The backup format predates the Arno name; existing archives carry it.
     assert before["format"] == "fin-agent-backup-manifest"
     assert before["tables"]["preferences"]["rows"] >= 1
     assert before["tables"]["accounts"]["rows"] > 0
@@ -105,7 +106,7 @@ async def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, sett
 
     assert await dump_before_migrating(db, replace(settings, pre_migration_dir=tmp_path)) is None
 
-    import fin_agent.db.pre_migration as pre_migration
+    import arno.db.pre_migration as pre_migration
 
     original_pending = pre_migration.pending
     original_dump = pre_migration.export_pg_dump
@@ -131,7 +132,7 @@ async def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, sett
 
 
 def _binary(env_name: str, name: str) -> str | None:
-    # Same lookup as fin_agent.backup_restore: CI pins the PostgreSQL 18 client by env var.
+    # Same lookup as arno.backup_restore: CI pins the PostgreSQL 18 client by env var.
     return os.environ.get(env_name) or shutil.which(name)
 
 
@@ -183,6 +184,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
 
     manifest = await build_manifest(db)
     source = os.environ["DATABASE_URL"]
+    # The backup format predates the Arno name; existing archives carry it.
     dump = tmp_path / "fin_agent.dump"
     env = os.environ.copy()
     info = conninfo_to_dict(source)
@@ -218,7 +220,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
     }
     assert subprocess.run(["restic", "init"], env=restic_env, check=False).returncode == 0
     backup = subprocess.run(
-        ["restic", "backup", "--tag", "fin-agent", str(dump), str(manifest_path)],
+        ["restic", "backup", "--tag", "arno", str(dump), str(manifest_path)],
         env=restic_env,
         capture_output=True,
         check=False,
@@ -226,7 +228,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
     assert backup.returncode == 0, backup.stderr.decode("utf-8", "replace")
 
     target_info = dict(info)
-    target_info["dbname"] = "fin_agent_l8_restore_test"
+    target_info["dbname"] = "arno_l8_restore_test"
     target = make_conninfo(**target_info)
     try:
         report = await restore_from_restic(
@@ -266,7 +268,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
             )
     finally:
         async with _admin_conn() as admin:
-            await admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_restore_test" WITH (FORCE)')
+            await admin.execute('DROP DATABASE IF EXISTS "arno_l8_restore_test" WITH (FORCE)')
 
 
 BACKUP_SCRIPT = Path(__file__).resolve().parents[1] / "backup" / "backup.sh"
@@ -352,7 +354,7 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
     assert ran.returncode == 0, ran.stderr.decode("utf-8", "replace")[-3000:]
 
     target_info = dict(info)
-    target_info["dbname"] = "fin_agent_l8_snapshot_test"
+    target_info["dbname"] = "arno_l8_snapshot_test"
     target = make_conninfo(**target_info)
     try:
         report = await restore_from_restic(
@@ -379,7 +381,7 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
         assert raced == 0
     finally:
         async with _admin_conn() as admin:
-            await admin.execute('DROP DATABASE IF EXISTS "fin_agent_l8_snapshot_test" WITH (FORCE)')
+            await admin.execute('DROP DATABASE IF EXISTS "arno_l8_snapshot_test" WITH (FORCE)')
 
 
 @pytest.mark.skipif(

@@ -61,7 +61,7 @@ completion update.
   - "Cash on hand" (liquid balances) must never be labelled "spendable" or "free to spend".
   - A missing floor suppresses the probability ("No floor set").
   - No third-party fetches: fonts are self-hosted in `web/public/fonts/`. CSP is
-    `default-src 'self'` (see `src/fin_agent/api/middleware.py`).
+    `default-src 'self'` (see `src/arno/api/middleware.py`).
   - Never put real data in tracked files. The dev DB holds the owner's **real** statement data
     (a real payee name, a real statement row count, a real bank balance). Mocks and fixtures use
     invented demo data only.
@@ -81,7 +81,7 @@ Owner's picks:
 5. `r5-story` → daily/weekly/monthly **Recaps**.
 
 Visual system (also in `.impeccable/surfaces/web.md` direction contract and
-`docs/fin-agent/web-interface-design.md`):
+`docs/arno/web-interface-design.md`):
 - Ground `#0e0f0c`, surfaces `#171814` / `#22241e` / `#2c2f27`, text `#f6f7f0`, sub `#a3a79a`.
 - **Lime `#d4ff3a` = actions and verdicts. Cobalt `#2b59ff` = the user's own voice** (bubbles).
   Orange `#ff6a2b` = due, green `#3ee07f` = positive, red `#ff5a4f` = negative, sun `#ffd23a`.
@@ -132,7 +132,7 @@ Visual system (also in `.impeccable/surfaces/web.md` direction contract and
   Wires are CSS pseudo-elements.
 - `panels/Planner.tsx` — Purchase planner on the canvas: price/date sliders, method segmented,
   EMI tenures; debounced `GET /api/projection?amount_paise&date&method&emi_months` (route already
-  exists in `src/fin_agent/api/ledger.py`). Gauge, verdict, facts, chart. Opened by the
+  exists in `src/arno/api/ledger.py`). Gauge, verdict, facts, chart. Opened by the
   **Planner** button on any non-gated projection receipt (`projection.tsx` `ProjectionCard`).
 - `panels/Timeline.tsx` — Money's timeline: last 30 days of expense bars (from `spending.ts`),
   today line, projection median + P10–P90 band, floor line (or dashed zero line if no floor),
@@ -201,9 +201,9 @@ All helpers live in the session scratchpad
 - API runs in Docker on `127.0.0.1:8000`; Vite dev server already running on `localhost:5173`
   (if not: `pnpm --dir web dev`).
 - Login is passkey-only, so I minted a session cookie directly in the DB: a Python script using
-  `fin_agent.auth.sessions.new_token/hash_token`, inserting into `sessions` with
+  `arno.auth.sessions.new_token/hash_token`, inserting into `sessions` with
   `user_agent='design-review-headless'`, run with `set -a && . ./.env && set +a && uv run python
-  script.py`. Then Playwright adds cookie `fin_agent_session=<token>` for domain `localhost`.
+  script.py`. Then Playwright adds cookie `arno_session=<token>` for domain `localhost`.
 - Playwright: installed in `scratchpad/pw` (`npm i playwright@1.58`); launch with
   `executablePath: "C:/Users/joymr/AppData/Local/ms-playwright/chromium-1248/chrome-win64/chrome.exe"`
   (the bundled headless shell version is missing). `shot.mjs` loops routes at 1440×900 and

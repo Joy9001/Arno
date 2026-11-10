@@ -3,7 +3,7 @@ import {
   type ResumableClientStorage,
 } from "@assistant-ui/ai-sdk";
 
-const STREAM_KEY = "fin-agent-stream:";
+const STREAM_KEY = "arno-stream:";
 
 type ThreadIdentity = { remoteId?: string | null; id?: string | null };
 

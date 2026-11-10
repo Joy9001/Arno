@@ -16,22 +16,22 @@ from pydantic_evals.evaluators.context import EvaluatorContext
 from pydantic_evals.lifecycle import CaseLifecycle
 
 from evals.models import EvalInput, EvalMeta, EvalOutput, InjectionSpec
-from fin_agent.db.bootstrap import set_agent_ro_password, set_backup_password
-from fin_agent.db.conn import connect, reset_database_url, use_database_url
-from fin_agent.db.migrate import run_migrations
-from fin_agent.demo.persona import seed_demo
-from fin_agent.demo.template import (
+from arno.db.bootstrap import set_agent_ro_password, set_backup_password
+from arno.db.conn import connect, reset_database_url, use_database_url
+from arno.db.migrate import run_migrations
+from arno.demo.persona import seed_demo
+from arno.demo.template import (
     clone_database,
     create_database,
     database_dsn,
     drop_database,
 )
-from fin_agent.importers.synthetic import seed_injection_statement
-from fin_agent.ledger.movements import record_lending
-from fin_agent.ledger.payees import create_payee
+from arno.importers.synthetic import seed_injection_statement
+from arno.ledger.movements import record_lending
+from arno.ledger.payees import create_payee
 
-DEFAULT_TEMPLATE = "fin_agent_eval_template"
-TRIAL_PREFIX = "fin_agent_eval_trial"
+DEFAULT_TEMPLATE = "arno_eval_template"
+TRIAL_PREFIX = "arno_eval_trial"
 
 
 async def build_eval_template(

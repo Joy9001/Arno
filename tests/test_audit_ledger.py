@@ -11,16 +11,16 @@ from decimal import Decimal
 
 import pytest
 
-from fin_agent.ledger.accounts import (
+from arno.ledger.accounts import (
     archive_account,
     create_account,
     get_account,
 )
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from fin_agent.ledger.goals import create_goal, get_goal
-from fin_agent.ledger.movements import (
+from arno.ledger.audit import undo_group
+from arno.ledger.common import today
+from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
+from arno.ledger.goals import create_goal, get_goal
+from arno.ledger.movements import (
     correct_movement,
     get_movement,
     list_movements,
@@ -33,10 +33,10 @@ from fin_agent.ledger.movements import (
     record_split,
     record_transfer,
 )
-from fin_agent.ledger.payees import create_payee
-from fin_agent.ledger.schedule_payments import link_payment
-from fin_agent.ledger.schedules import create_schedule, get_occurrence
-from fin_agent.tools import write as write_tools
+from arno.ledger.payees import create_payee
+from arno.ledger.schedule_payments import link_payment
+from arno.ledger.schedules import create_schedule, get_occurrence
+from arno.tools import write as write_tools
 
 
 async def _category(conn, name: str) -> str:
@@ -714,7 +714,7 @@ async def test_a_genuinely_distinct_same_amount_purchase_is_recordable(ledger):
 async def test_concurrent_retries_with_the_same_key_write_one_movement(ledger):
     import asyncio
 
-    from fin_agent.db.conn import connect
+    from arno.db.conn import connect
 
     bank = await _bank(ledger)
     food = await _category(ledger, "Food & Dining")
@@ -894,7 +894,7 @@ async def test_card_day_31_works_in_february_without_crashing(ledger):
         opening_balance_paise=-50_000,
     )
 
-    from fin_agent.ledger.schedules import upcoming
+    from arno.ledger.schedules import upcoming
 
     events = (await upcoming(ledger, days=28, start=date(2026, 2, 1)))["events"]
     due = [event for event in events if event["kind"] == "card_due"]
@@ -1034,7 +1034,7 @@ async def test_goal_setup_add_update_archive_and_undo(ledger):
 
 
 async def test_a_goal_contribution_is_savings_not_consumption(ledger):
-    from fin_agent.ledger.movements import record_goal_contribution
+    from arno.ledger.movements import record_goal_contribution
 
     bank = await _bank(ledger)
     goal = await create_goal(ledger, name="Audit trip", target_paise=1_000_000)
@@ -1402,9 +1402,9 @@ async def test_undoing_an_added_scheduled_question_archives_it(ledger):
 
 
 async def test_undo_latest_never_reverts_the_system_bootstrap(db):
-    from fin_agent.ledger.accounts import ensure_system_accounts
-    from fin_agent.ledger.audit import undo_latest
-    from fin_agent.ledger.errors import NotFoundLedgerError
+    from arno.ledger.accounts import ensure_system_accounts
+    from arno.ledger.audit import undo_latest
+    from arno.ledger.errors import NotFoundLedgerError
 
     await ensure_system_accounts(db)
     with pytest.raises(NotFoundLedgerError):

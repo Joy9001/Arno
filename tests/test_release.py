@@ -61,8 +61,8 @@ def test_compose_pins_a_versioned_image_and_rotates_logs():
     version = project["version"]
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
-    assert f"ghcr.io/joy9001/fin-agent:${{FIN_AGENT_VERSION:-{version}}}" in compose
-    assert f"ghcr.io/joy9001/fin-agent-backup:${{FIN_AGENT_VERSION:-{version}}}" in compose
+    assert f"ghcr.io/joy9001/arno:${{ARNO_VERSION:-{version}}}" in compose
+    assert f"ghcr.io/joy9001/arno-backup:${{ARNO_VERSION:-{version}}}" in compose
     assert 'max-size: "10m"' in compose
     assert "pre-migration-data:/app/pre-migration" in compose
 
@@ -70,8 +70,8 @@ def test_compose_pins_a_versioned_image_and_rotates_logs():
 def test_release_workflow_pushes_the_pinned_images():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    assert "ghcr.io/joy9001/fin-agent" in workflow
-    assert "ghcr.io/joy9001/fin-agent-backup" in workflow
+    assert "ghcr.io/joy9001/arno" in workflow
+    assert "ghcr.io/joy9001/arno-backup" in workflow
     assert "docker/build-push-action" in workflow
 
 
@@ -99,7 +99,7 @@ def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
                 "POSTGRES_PASSWORD": "dummy-postgres-password",
                 "BACKUP_PASSWORD": "dummy-backup-password",
                 "RESTIC_PASSWORD": "dummy-restic-password",
-                "FIN_AGENT_ENV_FILE": str(env_file),
+                "ARNO_ENV_FILE": str(env_file),
                 **overrides,
             }
         )

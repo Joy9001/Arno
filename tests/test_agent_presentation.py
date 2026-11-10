@@ -9,11 +9,11 @@ from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from fin_agent.agent.builder import build_agent
-from fin_agent.agent.cards import cards_from_messages
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.agent.history import create_thread, ensure_history, record_user_message, save_records
-from fin_agent.agent.presentation import (
+from arno.agent.builder import build_agent
+from arno.agent.cards import cards_from_messages
+from arno.agent.deps import AgentDeps
+from arno.agent.history import create_thread, ensure_history, record_user_message, save_records
+from arno.agent.presentation import (
     PresentationError,
     Registration,
     ResultRegistry,
@@ -21,7 +21,7 @@ from fin_agent.agent.presentation import (
     TableInput,
     build_answer,
 )
-from fin_agent.agent.turns import encode_saved_turn
+from arno.agent.turns import encode_saved_turn
 
 
 def _id(registration: Registration) -> str:

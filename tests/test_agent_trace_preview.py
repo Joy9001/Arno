@@ -25,8 +25,8 @@ from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel, S
 from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai_harness.compaction import pin
 
-from fin_agent.agent.capabilities import RootSpanIO, redaction_guardrail
-from fin_agent.agent.deps import AgentDeps
+from arno.agent.capabilities import RootSpanIO, redaction_guardrail
+from arno.agent.deps import AgentDeps
 
 
 @pytest.fixture(autouse=True)

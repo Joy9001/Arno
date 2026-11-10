@@ -21,7 +21,7 @@ self-hosters are equal users of their own copies; no second country is supported
 
 ## Product Purpose
 
-Fin-Agent holds the whole financial picture — accounts, cards, obligations, goals, and people you
+Arno holds the whole financial picture — accounts, cards, obligations, goals, and people you
 owe — and answers any question the data supports, including whether you can afford something and
 what it would cost you.
 
@@ -47,7 +47,7 @@ probability, and every figure is cited back to ledger rows.
 - Passkey login; one user; sessions in secure cookies. Admin commands run on the host, not over
   HTTP.
 - PostgreSQL holds the ledger, plan, people, categorization, settings, and conversation records.
-  Backups run in a restic sidecar and are restorable with `fin-agent restore`.
+  Backups run in a restic sidecar and are restorable with `arno restore`.
 - Daily capture is chat, voice notes, and photos (receipts, UPI screenshots); monthly statement
   imports reconcile what daily capture missed.
 - The web app is agent-first, with read-only ledger, accounts, schedules, goals, people, timeline,
@@ -82,11 +82,11 @@ Durable constraints:
 - Explicitly undecided or parked: native Android app, public-internet access, multicurrency,
   multiuser, editable panels, locale-pack interface, net worth from investment statements, broker
   APIs, tax engine, budgets, SMS/email autocapture, OCR for scanned statements, arm64 images. Each
-  has a revisit trigger in `docs/fin-agent/parked.md`.
+  has a revisit trigger in `docs/arno/parked.md`.
 
 ## Brand Commitments
 
-- Name: **Fin-Agent**. License: **MIT**, open source.
+- Name: **Arno**. License: **MIT**, open source.
 - The interface is agent-first and expressive (owner's decision, November 8, 2026, replacing the
   earlier Apple-quiet canon): the agent is a living iridescent orb, answers land as bold verdict
   cards, and money is what the agent works on. Dark, lime for actions and verdicts, cobalt for the
@@ -102,7 +102,7 @@ Durable constraints:
 - `README.md` carries a real model eval scorecard for `deepseek-v4.1-flash`, a synthetic-history
   backtest with its calibration result, and the L4 gate result. These are measurements, not
   marketing claims; the full-run table and the targeted reruns are labelled separately.
-- `fin-agent demo seed` builds a deterministic synthetic persona for demos and evals.
+- `arno demo seed` builds a deterministic synthetic persona for demos and evals.
 - `evals/` holds the pydantic_evals suite and the demo-persona dataset.
 
 Absences future work must not fabricate:

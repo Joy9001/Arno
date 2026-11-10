@@ -8,8 +8,8 @@ from typing import cast
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
-from fin_agent.agent import turns
-from fin_agent.agent.deps import AgentDeps
+from arno.agent import turns
+from arno.agent.deps import AgentDeps
 
 
 class _FinishAdapter:  # a test double for VercelAIAdapter: only `encode_stream` is called

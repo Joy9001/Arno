@@ -7,13 +7,13 @@ from datetime import date, timedelta
 
 import pytest
 
-from fin_agent.engine.affordability import (
+from arno.engine.affordability import (
     Hypothetical,
     _cut_category_tradeoff,
     _delay_goal_tradeoff,
     afford,
 )
-from fin_agent.engine.projection import (
+from arno.engine.projection import (
     CardAccount,
     CashEvent,
     GoalPlan,

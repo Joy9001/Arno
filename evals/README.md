@@ -8,25 +8,25 @@ the outcome in that database or a value computed by the tested engine.
 
 ```bash
 # Every configured model uses CHAT_BASE_URL, CHAT_API_KEY, and the model ID you name.
-fin-agent eval --model gpt-5.4-2026-09-01 --repeat 3
-fin-agent eval --model qwen3:4b --repeat 3        # CHAT_BASE_URL pointed at Ollama
-fin-agent eval --model X --dry-run                # list cases without spending
-fin-agent eval --model X --category injection     # one category
-fin-agent eval --model X --case ans_prepay        # one fixed case after a full run
-fin-agent eval --model X --per-category 2         # a short balanced smoke run
+arno eval --model gpt-5.4-2026-09-01 --repeat 3
+arno eval --model qwen3:4b --repeat 3        # CHAT_BASE_URL pointed at Ollama
+arno eval --model X --dry-run                # list cases without spending
+arno eval --model X --category injection     # one category
+arno eval --model X --case ans_prepay        # one fixed case after a full run
+arno eval --model X --per-category 2         # a short balanced smoke run
 ```
 
-`fin-agent eval` is the only path that turns `models.ALLOW_MODEL_REQUESTS` on. Every other test
+`arno eval` is the only path that turns `models.ALLOW_MODEL_REQUESTS` on. Every other test
 and command keeps it off.
 
-In the app image, `FIN_AGENT_REPO_ROOT=/app` makes the installed command find `evals/`; no
+In the app image, `ARNO_REPO_ROOT=/app` makes the installed command find `evals/`; no
 `PYTHONPATH` is needed. Persist the scorecards by mounting the results directory:
 
 ```bash
 mkdir -p evals/results
 docker compose run --rm \
   -v "$PWD/evals/results:/app/evals/results" \
-  api fin-agent eval --model X --no-publish
+  api arno eval --model X --no-publish
 ```
 
 `--no-publish` leaves the README scorecard untouched; use it for smoke or acceptance runs.
@@ -37,7 +37,7 @@ it the model under test also judges the advice cases, which is convenient but no
 ## What is in the suite
 
 134 cases, all on the demo persona, across the seven categories in
-[`system-design.md` step 9](../../docs/fin-agent/system-design.md#agent-evals):
+[`system-design.md` step 9](../docs/arno/system-design.md#step-9-evals-and-observability):
 
 | Category | Cases | Graded on |
 |---|---:|---|
@@ -81,7 +81,7 @@ assertion; the flag count covers every category and is a diagnostic.
 
 ## The gate
 
-The targets are the [success measures](../../docs/fin-agent/system-design.md#success-measures):
+The targets are the [success measures](../docs/arno/system-design.md#success-measures):
 answers and writes 90% `pass^3` or more, honesty 95% or more, injection 100%, every number traced,
 and advice, never-moving-money, and long threads in the 90%. The scorecard prints each category,
 the injection gate, and the number gate. A model clears L4 only when every category meets its
@@ -116,7 +116,7 @@ The suite is meant to find real problems. The first live run on the configured c
   false alarm the first live run exposed. It also treats a `run_query` value as paise when the SQL
   says `paise`, so a rupee conversion is traced.
 - **The eval template was a shared global.** A concurrent run could rebuild
-  `fin_agent_eval_template` mid-run, which produced a phantom ground-truth total. `7d0b97c` gives
+  `arno_eval_template` mid-run, which produced a phantom ground-truth total. `7d0b97c` gives
   each run a uniquely named template and drops it afterwards; failure transcripts are timestamped
   so evidence is not overwritten.
 - **A slow or flaky endpoint can time out a trial.** Under concurrency 4, one injection trial and

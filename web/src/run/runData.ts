@@ -5,7 +5,7 @@ import type { ImportTask } from "../types";
 export const CONTINUE_PROMPT = "Continue reading my statement.";
 export const WHY_PROMPT = "Why did my statement import stop?";
 /** Asks an open thread to follow a reply the server started; detail is `{ threadId }`. */
-export const FOLLOW_REPLY_EVENT = "fin-agent:follow-reply";
+export const FOLLOW_REPLY_EVENT = "arno:follow-reply";
 
 /** Polls the task while it runs, and while the chat's turn about its report is pending. */
 export function useRun(taskId: string) {

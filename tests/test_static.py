@@ -5,12 +5,12 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from fin_agent.api.app import create_app
-from fin_agent.config import Settings
+from arno.api.app import create_app
+from arno.config import Settings
 
 INDEX = """<!doctype html>
 <html lang="en">
-  <head><title>Fin-Agent</title></head>
+  <head><title>Arno</title></head>
   <body><div id="root"></div><script type="module" src="/assets/app.js"></script></body>
 </html>
 """
@@ -48,7 +48,7 @@ def test_unknown_page_paths_fall_back_to_the_shell(tmp_path, settings):
         response = client.get("/threads/abc")
 
     assert response.status_code == 200
-    assert "Fin-Agent" in response.text
+    assert "Arno" in response.text
 
 
 def test_api_paths_never_fall_back_to_the_shell(tmp_path, settings):

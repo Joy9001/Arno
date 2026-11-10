@@ -16,16 +16,16 @@ from decimal import Decimal
 
 import pytest
 
-from fin_agent.ledger.accounts import create_account, set_statement_balance
-from fin_agent.ledger.audit import undo_group
-from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import InvalidLedgerError
-from fin_agent.ledger.export import export_csv_zip, export_json, table_names
-from fin_agent.ledger.movements import correct_movement, record_split, record_transfer
-from fin_agent.ledger.payees import create_payee, ensure_person_account
-from fin_agent.ledger.schedule_payments import link_payment
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.tools import write as write_tools
+from arno.ledger.accounts import create_account, set_statement_balance
+from arno.ledger.audit import undo_group
+from arno.ledger.common import today
+from arno.ledger.errors import InvalidLedgerError
+from arno.ledger.export import export_csv_zip, export_json, table_names
+from arno.ledger.movements import correct_movement, record_split, record_transfer
+from arno.ledger.payees import create_payee, ensure_person_account
+from arno.ledger.schedule_payments import link_payment
+from arno.ledger.schedules import create_schedule
+from arno.tools import write as write_tools
 from tests.invariants import check_ledger
 
 SECRET_TABLES = {

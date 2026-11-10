@@ -12,11 +12,11 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from fin_agent.agent.builder import _instructions
-from fin_agent.agent.deps import AgentDeps
-from fin_agent.api.run_view import build_run
-from fin_agent.importers.task_status import PAUSED_REASON, reconcile, settle_imports
-from fin_agent.ledger.audit import new_id
+from arno.agent.builder import _instructions
+from arno.agent.deps import AgentDeps
+from arno.api.run_view import build_run
+from arno.importers.task_status import PAUSED_REASON, reconcile, settle_imports
+from arno.ledger.audit import new_id
 
 
 def _event(seq, kind, name="", call="", *, run="run_a", error=None, at=None):
@@ -233,7 +233,7 @@ async def test_the_chat_agent_is_told_which_parser_task_it_can_continue():
 
 
 def test_a_normal_host_outcome_is_not_a_failure():
-    from fin_agent.api.run_view import _script_error
+    from arno.api.run_view import _script_error
 
     for status in ("unlocked", "VERIFIED", "suggested", "parser_submitted", "needs_input"):
         assert _script_error({"status": status}) is None, status

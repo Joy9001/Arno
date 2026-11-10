@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What the model sees each turn, from unchanging to changing</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Noto+Serif:ital@0;1&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f5f5f5;
+      --color-ink:     #2d3142;
+      --color-muted:   #4f5d75;
+      --color-accent:  #bf4520;
+      --font-sans:     'Geist', system-ui, sans-serif;
+      --font-serif:    'Instrument Serif', 'Noto Serif', serif;
+      --font-mono:     'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 960px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · Arno system design, step 6</p>
+    <h1>What the model sees each turn, from unchanging to changing</h1>
+
+    <div class="diagram-container">
+      <svg viewBox="0 0 960 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-context-stack-title sd-context-stack-desc">
+        <title id="sd-context-stack-title">What the model sees each turn, from unchanging to changing</title>
+        <desc id="sd-context-stack-desc">Six blocks in order. Tool definitions, instructions, the pinned financial snapshot, and the thread's history are cached. The reminder and your turn come after the cache and are new each turn.</desc>
+
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Column heads -->
+        <text x="168" y="44" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">BLOCK</text>
+        <text x="904" y="44" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em" text-anchor="end">CHANGES</text>
+
+        <!-- Margin brackets -->
+        <line x1="108" y1="56" x2="108" y2="312" stroke="#4f5d75" stroke-width="1"/>
+        <text x="100" y="187" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em" text-anchor="end">CACHED</text>
+        <line x1="108" y1="344" x2="108" y2="472" stroke="#4f5d75" stroke-width="1"/>
+        <text x="100" y="411" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em" text-anchor="end">NOT CACHED</text>
+
+        <!-- Cached block -->
+        <rect x="120" y="56" width="800" height="256" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <line x1="120" y1="120" x2="920" y2="120" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <line x1="120" y1="248" x2="920" y2="248" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <rect x="120" y="184" width="800" height="64" fill="#fdf1ec" stroke="#bf4520" stroke-width="1.2"/>
+
+        <text x="136" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">01</text>
+        <text x="168" y="84" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Tool definitions</text>
+        <text x="168" y="102" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">7 tools; run_code lists the 8 read functions</text>
+        <text x="904" y="92" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">on a release</text>
+
+        <text x="136" y="156" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">02</text>
+        <text x="168" y="148" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Instructions</text>
+        <text x="168" y="166" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">rules, India notes, your category list</text>
+        <text x="904" y="156" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">rarely; reach old threads at once</text>
+
+        <text x="136" y="220" fill="#bf4520" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">03</text>
+        <text x="168" y="212" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Financial snapshot</text>
+        <text x="168" y="230" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">get_financial_context result, pinned through compaction</text>
+        <text x="904" y="220" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">when you return and data changed</text>
+
+        <text x="136" y="284" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">04</text>
+        <text x="168" y="276" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Thread history</text>
+        <text x="168" y="294" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">messages, tool calls and returns, after compaction</text>
+        <text x="904" y="284" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">appended; compaction can rewrite</text>
+
+        <!-- Cache boundary -->
+        <text x="120" y="328" fill="#bf4520" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">CACHE ENDS HERE · ABOVE IS REUSED · BELOW IS NEW EACH TURN</text>
+        <line x1="120" y1="336" x2="920" y2="336" stroke="#bf4520" stroke-width="1.2" stroke-dasharray="5,4"/>
+
+        <!-- Uncached block -->
+        <rect x="120" y="344" width="800" height="128" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
+        <line x1="120" y1="408" x2="920" y2="408" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+        <text x="136" y="380" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">05</text>
+        <text x="168" y="372" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Reminder</text>
+        <text x="168" y="390" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">today's date, writes since the snapshot</text>
+        <text x="904" y="380" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">each turn; only the newest is sent</text>
+
+        <text x="136" y="444" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">06</text>
+        <text x="168" y="436" fill="#2d3142" font-size="14" font-weight="600" font-family="'Geist', system-ui, sans-serif">Your turn</text>
+        <text x="168" y="454" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace">your message, a transcript, or photo fields</text>
+        <text x="904" y="444" fill="#4f5d75" font-size="10" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="end">each turn</text>
+
+        <!-- Legend -->
+        <line x1="40" y1="492" x2="920" y2="492" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>
+        <text x="40" y="520" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" letter-spacing="0.14em">LEGEND</text>
+        <rect x="120" y="510" width="16" height="10" rx="2" fill="#fdf1ec" stroke="#bf4520" stroke-width="1"/>
+        <text x="144" y="519" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">loads itself, so the model always has your data and preferences</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

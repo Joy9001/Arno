@@ -37,8 +37,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/joy9001/fin-agent:${{ env.VERSION }}
-            ghcr.io/joy9001/fin-agent:${{ github.ref_name }}
+            ghcr.io/joy9001/arno:${{ env.VERSION }}
+            ghcr.io/joy9001/arno:${{ github.ref_name }}
 
       - name: Build and push the backup image
         uses: docker/build-push-action@v6
@@ -47,8 +47,8 @@ jobs:
           file: backup/Dockerfile
           push: true
           tags: |
-            ghcr.io/joy9001/fin-agent-backup:${{ env.VERSION }}
-            ghcr.io/joy9001/fin-agent-backup:${{ github.ref_name }}
+            ghcr.io/joy9001/arno-backup:${{ env.VERSION }}
+            ghcr.io/joy9001/arno-backup:${{ github.ref_name }}
 
       - name: Publish the GitHub Release
         env:

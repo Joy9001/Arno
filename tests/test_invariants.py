@@ -13,13 +13,13 @@ import uuid
 from datetime import date, timedelta
 from typing import Any
 
-from fin_agent.ledger.accounts import create_account
-from fin_agent.ledger.common import today as ledger_today
-from fin_agent.ledger.errors import LedgerError
-from fin_agent.ledger.movements import record_expense
-from fin_agent.ledger.payees import create_payee
-from fin_agent.ledger.schedules import create_schedule
-from fin_agent.tools import write as write_tools
+from arno.ledger.accounts import create_account
+from arno.ledger.common import today as ledger_today
+from arno.ledger.errors import LedgerError
+from arno.ledger.movements import record_expense
+from arno.ledger.payees import create_payee
+from arno.ledger.schedules import create_schedule
+from arno.tools import write as write_tools
 from tests.invariants import Violation, check_ledger
 
 CATEGORIES = ("Food & Dining", "Groceries", "Transport", "Shopping")

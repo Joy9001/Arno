@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fin_agent.api.middleware import CONTENT_SECURITY_POLICY
-from fin_agent.db.migrate import discover
+from arno.api.middleware import CONTENT_SECURITY_POLICY
+from arno.db.migrate import discover
 
 
 def test_health_reports_database_and_schema_version(client):

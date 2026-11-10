@@ -8,16 +8,16 @@ from fastapi.testclient import TestClient
 from starlette.applications import Starlette
 from typer.testing import CliRunner
 
-from fin_agent.api.app import create_app
-from fin_agent.auth.enrollment import enrollment_link, enrollment_message
-from fin_agent.auth.setup import (
+from arno.api.app import create_app
+from arno.auth.enrollment import enrollment_link, enrollment_message
+from arno.auth.setup import (
     ensure_setup_token,
     issue_add_device_token,
     issue_setup_token,
     resolve_setup_token,
 )
-from fin_agent.cli import app as cli_app
-from fin_agent.db.conn import connect
+from arno.cli import app as cli_app
+from arno.db.conn import connect
 from tests.software_authenticator import SoftwareAuthenticator
 from tests.test_auth import _complete_setup
 

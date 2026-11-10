@@ -7,17 +7,17 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from fin_agent.engine.affordability import Hypothetical, afford
-from fin_agent.engine.money import amortize
-from fin_agent.engine.patterns import Charge, KnownSchedule, detect_recurring
-from fin_agent.engine.projection import (
+from arno.engine.affordability import Hypothetical, afford
+from arno.engine.money import amortize
+from arno.engine.patterns import Charge, KnownSchedule, detect_recurring
+from arno.engine.projection import (
     CardAccount,
     CashEvent,
     LiquidAccount,
     ProjectionInput,
 )
-from fin_agent.jobs.schedules import enqueue_due_schedules, sync_scheduled_questions
-from fin_agent.tools import projection as projection_tools
+from arno.jobs.schedules import enqueue_due_schedules, sync_scheduled_questions
+from arno.tools import projection as projection_tools
 
 INDIA = ZoneInfo("Asia/Kolkata")
 DEMO_DAY = date(2026, 11, 1)
@@ -65,7 +65,7 @@ def test_no_prepayment_option_ever_reports_a_negative_saving_or_a_longer_loan():
 
 
 async def test_a_named_loan_prepayment_uses_its_real_remaining_emis(demo_ledger):
-    from fin_agent.ledger.accounts import loan_terms
+    from arno.ledger.accounts import loan_terms
 
     terms = await loan_terms(demo_ledger, "Home loan")
     base = amortize(
@@ -286,7 +286,7 @@ async def test_the_projection_names_its_goal_remaining_apart_from_a_goal_card(de
     assert "remaining" not in card_goal
 
     # The goal card's own figure still means target minus saved.
-    from fin_agent.ledger.goals import list_goals
+    from arno.ledger.goals import list_goals
 
     listed = next(row for row in await list_goals(demo_ledger) if row["name"] == "Goa trip")
     assert listed["remaining_paise"] == 9_000_000
@@ -340,7 +340,7 @@ def test_a_different_cadence_is_still_a_new_recurring_charge():
 
 
 async def test_the_demo_personas_rent_is_not_proposed_as_a_new_charge(demo_ledger):
-    from fin_agent.engine import patterns
+    from arno.engine import patterns
 
     proposals = await patterns.detect(demo_ledger, as_of=DEMO_DAY)
     assert not any(
