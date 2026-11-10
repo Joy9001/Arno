@@ -10,7 +10,7 @@ deleted.
 from __future__ import annotations
 
 import base64
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -64,7 +64,8 @@ def jsonable(value: Any) -> Any:
 
 
 async def new_id(conn: Connection, prefix: str) -> str:
-    row = await conn.fetchrow("SELECT pgledger_generate_id($1) AS id", prefix)
+    # pgledger_generate_id is a scalar function: it always returns one id.
+    row = await conn.fetchrow_required("SELECT pgledger_generate_id($1) AS id", prefix)
     return str(row["id"])
 
 
@@ -128,7 +129,7 @@ async def write_group(
     actor: Actor = "user",
     message_id: str | None = None,
     group_id: str | None = None,
-) -> AsyncIterator[WriteGroup]:
+) -> AsyncGenerator[WriteGroup]:
     """One transaction whose audit rows share a group and can be undone together.
 
     The group owns its transaction. `asyncpg` turns a transaction opened inside another one into
@@ -267,6 +268,10 @@ async def _update_row(
         *params,
         row_id,
     )
+    if after is None:
+        # A concurrent change deleted the row between the read and the write. Nothing left to
+        # update, and the callers already treat a missing row as nothing to restore.
+        return None
     group.record_updated(table, row_id, before, after)
     return after
 
@@ -280,7 +285,7 @@ async def _insert_row(
     columns = list(values)
     names = ", ".join(quote_ident(column) for column in columns)
     placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
-    after = await conn.fetchrow(
+    after = await conn.fetchrow_required(
         f"INSERT INTO {quote_ident(table)} ({names}) VALUES ({placeholders}) RETURNING *",
         *[values[column] for column in columns],
     )
@@ -368,7 +373,7 @@ async def _restore_movement(
             )
         await reverse_movement(group, movement_id, note="Undo")
         return
-    values = await conn.fetchrow(
+    values: dict[str, Any] = await conn.fetchrow_required(
         """
         SELECT date, description, kind, reverses_id
         FROM jsonb_populate_record(NULL::movements, $1)
@@ -380,7 +385,6 @@ async def _restore_movement(
             "reverses_id": before.get("reverses_id"),
         },
     )
-    values = dict(values)
     # A categorizer changes these too, so restoring them is part of the same undo. An audit row
     # written before they existed has no value to put back.
     for column in ("category_rule_id", "category_hint"):

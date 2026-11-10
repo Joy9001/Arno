@@ -31,6 +31,9 @@ async def update_preference_body(conn: Connection, preference_id: str, body: str
             text,
             preference_id,
         )
+        if after is None:
+            # Settings can delete a preference for good while this edit runs.
+            raise NotFoundLedgerError("That preference does not exist.")
         group.record_updated("preferences", preference_id, row, after)
     return dict(after)
 

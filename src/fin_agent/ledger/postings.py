@@ -126,6 +126,8 @@ async def create_movement_in_group(
     )
     if movement is None:
         # A concurrent call with the same key committed first: return its movement, not a second.
+        if idempotency_key is None:  # pragma: no cover - only a keyed insert can conflict
+            raise InvalidLedgerError("An insert without an idempotency key returned no movement")
         existing = await _existing_by_key(conn, idempotency_key)
         if existing is None:  # pragma: no cover - the unique index guarantees the row exists
             raise InvalidLedgerError("An idempotency key conflict left no movement")
@@ -183,7 +185,7 @@ async def create_movement_in_group(
         row = unused.pop(match_index)
         ordered_ids.append(str(row["id"]))
         if transfer.has_label():
-            label = await conn.fetchrow(
+            label = await conn.fetchrow_required(
                 """
                 INSERT INTO transfer_labels
                     (transfer_id, movement_id, category_id, payee_id, expected_date, note)
@@ -200,7 +202,7 @@ async def create_movement_in_group(
             group.record_created("transfer_labels", label)
 
     if capture is not None:
-        capture_row = await conn.fetchrow(
+        capture_row = await conn.fetchrow_required(
             """
             INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
             VALUES ($1, $2, $3, $4, $5) RETURNING *

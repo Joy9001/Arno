@@ -194,7 +194,7 @@ async def answer(
                 )
                 if transfer is None:  # pragma: no cover - uncategorized_rows only returns spend
                     continue
-                created = await conn.fetchrow(
+                created = await conn.fetchrow_required(
                     """
                     INSERT INTO transfer_labels (transfer_id, movement_id, category_id)
                     VALUES ($1, $2, $3) RETURNING *
@@ -219,10 +219,14 @@ async def answer(
                 after = await conn.fetchrow(
                     "SELECT * FROM transfer_labels WHERE transfer_id = $1", label["transfer_id"]
                 )
+                if after is None:  # pragma: no cover - the label was updated just above
+                    raise InvalidLedgerError("The label disappeared mid-correction")
                 group.record_updated(
                     "transfer_labels", str(label["transfer_id"]), dict(label), dict(after)
                 )
-            before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
+            before = await conn.fetchrow_required(
+                "SELECT * FROM movements WHERE id = $1", movement_id
+            )
             await conn.execute(
                 """
                 UPDATE movements SET category_rule_id = $1, category_hint = NULL
@@ -231,7 +235,9 @@ async def answer(
                 rule["id"],
                 movement_id,
             )
-            after = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
+            after = await conn.fetchrow_required(
+                "SELECT * FROM movements WHERE id = $1", movement_id
+            )
             group.record_updated("movements", movement_id, dict(before), dict(after))
 
     return {

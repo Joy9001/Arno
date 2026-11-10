@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import shlex
 from contextvars import ContextVar, Token
-from typing import Any, Literal
+from typing import Any, Literal, override
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import asyncpg
@@ -119,6 +119,7 @@ class Connection(asyncpg.Connection):
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self.close()
 
+    @override
     async def fetch(
         self,
         query: str,
@@ -129,6 +130,7 @@ class Connection(asyncpg.Connection):
         records = await super().fetch(query, *args, timeout=timeout, record_class=record_class)
         return [dict(record) for record in records]
 
+    @override
     async def fetchrow(
         self,
         query: str,
@@ -138,6 +140,17 @@ class Connection(asyncpg.Connection):
     ) -> dict[str, Any] | None:
         record = await super().fetchrow(query, *args, timeout=timeout, record_class=record_class)
         return dict(record) if record is not None else None
+
+    async def fetchrow_required(
+        self, query: str, *args: Any, timeout: float | None = None
+    ) -> dict[str, Any]:
+        """`fetchrow` for SQL that always yields a row: `INSERT ... RETURNING`, an aggregate with
+        no `GROUP BY`, or a row this transaction already locked. A row the caller's input may not
+        match is a user-facing case; use `fetchrow` and handle `None` there instead."""
+        row = await self.fetchrow(query, *args, timeout=timeout)
+        if row is None:
+            raise LookupError("query that always returns a row returned none")
+        return row
 
 
 def role_dsn(base_dsn: str, role: Role, settings: Settings | None = None) -> str:
@@ -155,6 +168,11 @@ def role_dsn(base_dsn: str, role: Role, settings: Settings | None = None) -> str
     return make_conninfo(**info)
 
 
+def _encode_json(value: Any) -> str:
+    """Encode a JSON/JSONB value, leaving one already serialized alone."""
+    return value if isinstance(value, str) else json.dumps(value)
+
+
 async def _open_connection(
     dsn: str | None = None,
     *,
@@ -169,14 +187,14 @@ async def _open_connection(
     )
     await conn.set_type_codec(
         "jsonb",
-        encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+        encoder=_encode_json,
         decoder=json.loads,
         schema="pg_catalog",
         format="text",
     )
     await conn.set_type_codec(
         "json",
-        encoder=lambda v: v if isinstance(v, str) else json.dumps(v),
+        encoder=_encode_json,
         decoder=json.loads,
         schema="pg_catalog",
         format="text",

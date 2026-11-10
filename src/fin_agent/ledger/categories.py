@@ -13,7 +13,7 @@ from fin_agent.importers.rules import load_rules, match_rule, normalize_pattern
 from fin_agent.india.categories import DEFAULT_CATEGORIES
 from fin_agent.ledger.audit import WriteGroup, write_group
 from fin_agent.ledger.common import today
-from fin_agent.ledger.errors import InvalidLedgerError, NotFoundLedgerError
+from fin_agent.ledger.errors import ConflictLedgerError, InvalidLedgerError, NotFoundLedgerError
 
 RuleSource = str
 MATCH_TYPES = ("equals", "contains", "regex")
@@ -46,7 +46,9 @@ async def ensure_default_categories(conn: Connection) -> list[dict[str, Any]]:
     return await list_categories(conn)
 
 
-async def list_categories(conn: Connection, *, include_inactive: bool = False) -> list[dict]:
+async def list_categories(
+    conn: Connection, *, include_inactive: bool = False
+) -> list[dict[str, Any]]:
     where = "" if include_inactive else "WHERE active"
     return await conn.fetch(f"SELECT * FROM categories {where} ORDER BY name")
 
@@ -115,7 +117,7 @@ async def update_category(
             else:
                 params.append(value)
                 assignments.append(f"{quote_ident(column)} = ${len(params)}")
-        after = await conn.fetchrow(
+        after = await conn.fetchrow_required(
             f"UPDATE categories SET {', '.join(assignments)} "
             f"WHERE id = ${len(params) + 1} RETURNING *",
             *params,
@@ -259,6 +261,11 @@ async def upsert_rule_in_group(
         priority,
     )
     if after is None:
+        # ON CONFLICT DO UPDATE ... WHERE kept the existing row: this source may not replace it.
+        if before is None:
+            raise ConflictLedgerError(
+                "A rule for that pattern was saved by another change; try again"
+            )
         after = before
     if before is None:
         group.record_created("category_rules", after)
@@ -382,7 +389,7 @@ async def _apply_payee_correction_in_group(
     if scope not in {"future", "all"}:
         raise InvalidLedgerError("scope must be future or all")
 
-    after = await conn.fetchrow(
+    after = await conn.fetchrow_required(
         """
         UPDATE payees
         SET default_category_id = $1, updated_at = now()

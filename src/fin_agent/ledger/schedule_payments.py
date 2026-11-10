@@ -46,7 +46,7 @@ async def _occurrence(
     )
     if due_date not in dates:
         raise InvalidLedgerError("That date is not an occurrence of this schedule")
-    row = await conn.fetchrow(
+    row = await conn.fetchrow_required(
         """INSERT INTO schedule_occurrences
            (schedule_id, due_date, name, kind, amount_paise, account_id, category_id,
             subtype, outside_text)
@@ -157,17 +157,19 @@ async def link_payment(
                 )
             return {"status": "already_linked", "payment_id": previous["id"], "undo_id": None}
         capacity = await _capacity(conn, occurrence, movement)
-        allocated = await conn.fetchval(
-            "SELECT coalesce(sum(amount_paise), 0) FROM schedule_payments WHERE movement_id = $1",
+        # An aggregate with no GROUP BY always yields its one row.
+        allocated_row = await conn.fetchrow_required(
+            "SELECT coalesce(sum(amount_paise), 0)::bigint AS assigned "
+            "FROM schedule_payments WHERE movement_id = $1",
             movement_id,
         )
-        available = capacity - int(allocated)
+        available = capacity - int(allocated_row["assigned"])
         amount = amount_paise if amount_paise is not None else available
         if amount <= 0 or amount > available:
             raise InvalidLedgerError(
                 "The allocation exceeds the movement’s unassigned payment amount"
             )
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """INSERT INTO schedule_payments (occurrence_id, movement_id, amount_paise)
                VALUES ($1, $2, $3) RETURNING *""",
             occurrence["id"],
@@ -217,15 +219,22 @@ async def validate_restored_payment(conn: Connection, payment: dict[str, Any]) -
     occurrence = await conn.fetchrow(
         "SELECT * FROM schedule_occurrences WHERE id = $1", payment["occurrence_id"]
     )
+    if occurrence is None:
+        raise ConflictLedgerError(
+            "The occurrence that payment covered was removed; undo that change first"
+        )
     movement = await conn.fetchrow(
         "SELECT * FROM movements WHERE id = $1 FOR UPDATE", payment["movement_id"]
     )
+    if movement is None:
+        raise NotFoundLedgerError(f"No movement {payment['movement_id']}")
     capacity = await _capacity(conn, occurrence, movement)
-    assigned = await conn.fetchval(
-        "SELECT coalesce(sum(amount_paise), 0) FROM schedule_payments WHERE movement_id = $1",
+    assigned_row = await conn.fetchrow_required(
+        "SELECT coalesce(sum(amount_paise), 0)::bigint AS assigned "
+        "FROM schedule_payments WHERE movement_id = $1",
         payment["movement_id"],
     )
-    if int(assigned) + int(payment["amount_paise"]) > capacity:
+    if int(assigned_row["assigned"]) + int(payment["amount_paise"]) > capacity:
         raise ConflictLedgerError("Unlink the later payment match before undoing this change")
 
 

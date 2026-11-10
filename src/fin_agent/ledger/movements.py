@@ -944,7 +944,7 @@ async def _update_labels(
         )
         if transfer is None:
             raise InvalidLedgerError("That movement has no transfer to label")
-        row = await conn.fetchrow(
+        row = await conn.fetchrow_required(
             """
             INSERT INTO transfer_labels
                 (transfer_id, movement_id, category_id, payee_id, expected_date, note)
@@ -975,6 +975,8 @@ async def _update_labels(
             *[updates[column] for column in columns],
             label["transfer_id"],
         )
+        if after is None:  # pragma: no cover - the label was read in this transaction
+            raise InvalidLedgerError("The label disappeared mid-correction")
         group.record_updated("transfer_labels", label["transfer_id"], label, after)
         changed += 1
     return changed
@@ -1033,7 +1035,7 @@ async def _loan_interest_category(
 ) -> str | None:
     """The category a loan's interest lands in, as `record_loan_payment` picks it."""
     if interest_row is not None and interest_row["category_id"]:
-        return interest_row["category_id"]
+        return str(interest_row["category_id"])
     row = await conn.fetchrow("SELECT id FROM categories WHERE name = 'Loan Interest' AND active")
     return row["id"] if row else None
 
@@ -1272,7 +1274,7 @@ async def correct_movement(
         if label_only:
             if changes.get("date") is not None:
                 before = movement
-                after = await conn.fetchrow(
+                after = await conn.fetchrow_required(
                     "UPDATE movements SET date = $1 WHERE id = $2 RETURNING *",
                     changes["date"],
                     movement_id,
@@ -1343,7 +1345,8 @@ async def ledger_span(conn: Connection) -> dict[str, Any]:
     """
     # ponytail: counts include movements a later reversal cancelled; the screens only ask
     # "anything yet?" and "since when?", where that is close enough.
-    row = await conn.fetchrow(
+    # An aggregate with no GROUP BY always yields its one row.
+    row = await conn.fetchrow_required(
         """
         SELECT count(*) FILTER (WHERE kind <> 'reversal') AS movements,
                count(*) FILTER (WHERE kind = 'expense') AS spending,
