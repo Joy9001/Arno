@@ -261,19 +261,14 @@ class Driver:
         return self.send(thread_id, [{"id": _new_id("msg"), "role": "user", "parts": parts}])
 
     def approve(
-        self,
-        thread_id: str,
-        tool_call_id: str,
-        *,
-        approved: bool,
-        tool_name: str,
-        tool_input: Any,
+        self, thread_id: str, cards: list[dict[str, Any]], *, approved: bool
     ) -> dict[str, Any]:
-        """Answer a confirm card the way the AI SDK does: the tool part, responded."""
-        message = approval_message(
-            tool_call_id, approved=approved, tool_name=tool_name, tool_input=tool_input
-        )
-        return self.send(thread_id, [message])
+        """Answer confirm cards the way the AI SDK does: one message, a responded part per card.
+
+        The web submits only once every card of a turn is answered, and the server refuses a
+        partial answer, so a two-card turn needs both ids here.
+        """
+        return self.send(thread_id, [approval_message(cards, approved=approved)])
 
     def send(self, thread_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
         body = chat_body(thread_id, messages)
@@ -305,8 +300,11 @@ class Driver:
         response = self.http.patch(f"/api/imports/{import_id}/lines/{line_id}", json=payload)
         return self._check(response).json()
 
-    def commit(self, import_id: str) -> dict[str, Any]:
-        return self.post(f"/api/imports/{import_id}/commit")
+    def commit(self, import_id: str, *, confirm_adjustment: bool = False) -> dict[str, Any]:
+        """The body carries the user's confirmation of a closing adjustment, and nothing else."""
+        if not confirm_adjustment:
+            return self.post(f"/api/imports/{import_id}/commit")
+        return self.post(f"/api/imports/{import_id}/commit", json={"adjustment_confirmed": True})
 
     def reject(self, import_id: str, reason: str | None = None) -> dict[str, Any]:
         return self.post(
@@ -358,21 +356,20 @@ def chat_body(thread_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def approval_message(
-    tool_call_id: str, *, approved: bool, tool_name: str, tool_input: Any
-) -> dict[str, Any]:
-    """The assistant message the AI SDK sends back when a confirm card is answered."""
+def approval_message(cards: list[dict[str, Any]], *, approved: bool) -> dict[str, Any]:
+    """The assistant message the AI SDK sends back when confirm cards are answered."""
     return {
         "id": _new_id("msg"),
         "role": "assistant",
         "parts": [
             {
-                "type": f"tool-{tool_name}",
-                "toolCallId": tool_call_id,
+                "type": f"tool-{card['tool_name']}",
+                "toolCallId": card["tool_call_id"],
                 "state": "approval-responded",
-                "input": tool_input,
-                "approval": {"id": tool_call_id, "approved": approved},
+                "input": card.get("input"),
+                "approval": {"id": card["tool_call_id"], "approved": approved},
             }
+            for card in cards
         ],
     }
 
@@ -816,6 +813,15 @@ def _render_import(payload: dict[str, Any]) -> str:
         f"closing: {_rupees(payload.get('closing_paise'))}",
         f"counts: {json.dumps(payload.get('counts') or {}, default=str)}",
     ]
+    adjustment = int(payload.get("closing_adjustment_paise") or 0)
+    lines.append(
+        f"closing adjustment: {_rupees(adjustment)}"
+        + (
+            f" — {payload['closing_adjustment_reason']}"
+            if payload.get("closing_adjustment_reason")
+            else ""
+        )
+    )
     if payload.get("reason"):
         lines.append(f"reason: {payload['reason']}")
     if payload.get("categorize"):
@@ -856,7 +862,9 @@ def _render_import(payload: dict[str, Any]) -> str:
     if payload["status"] in ("needs_input", "failed") and not blockers:
         blockers.append(f"status {payload['status']}: see the reason above")
     if not blockers and payload["status"] == "review":
-        blockers.append(f"ready: driver commit {import_id}")
+        blockers.append(
+            f"ready: driver commit {import_id}" + (" --confirm-adjustment" if adjustment else "")
+        )
     lines += ["", "next:" if blockers else "nothing to do"]
     lines += [f"  {blocker}" for blocker in blockers]
     return "\n".join(lines)
@@ -971,21 +979,18 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if not thread_id:
         raise SystemExit("no thread yet; run `driver chat` first")
     approvals = {item["tool_call_id"]: item for item in state.get("approvals") or []}
-    approval = approvals.get(args.tool_call_id)
-    if approval is None:
-        known = ", ".join(approvals) or "(none)"
-        raise SystemExit(f"{args.tool_call_id} is not a confirm card from the last turn; {known}")
-    if not approval.get("tool_name"):
-        raise SystemExit(f"the driver did not record the tool name for {args.tool_call_id}")
+    cards: list[dict[str, Any]] = []
+    for tool_call_id in args.tool_call_ids:
+        approval = approvals.get(tool_call_id)
+        if approval is None:
+            known = ", ".join(approvals) or "(none)"
+            raise SystemExit(f"{tool_call_id} is not a confirm card from the last turn; {known}")
+        if not approval.get("tool_name"):
+            raise SystemExit(f"the driver did not record the tool name for {tool_call_id}")
+        cards.append(approval)
     driver = _driver(args)
     try:
-        turn = driver.approve(
-            thread_id,
-            args.tool_call_id,
-            approved=args.answer == "yes",
-            tool_name=str(approval["tool_name"]),
-            tool_input=approval.get("input"),
-        )
+        turn = driver.approve(thread_id, cards, approved=args.answer == "yes")
     finally:
         driver.close()
     save_state({**state, "approvals": turn["approvals"], "thread_id": turn["thread_id"]})
@@ -1178,8 +1183,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="a statement to upload and attach (repeatable)",
     )
 
-    approve = command("approve", "answer a confirm card")
-    approve.add_argument("tool_call_id")
+    approve = command("approve", "answer the last turn's confirm cards (every one it offered)")
+    approve.add_argument("tool_call_ids", nargs="+", metavar="tool_call_id")
     approve.add_argument("answer", choices=["yes", "no"])
     approve.add_argument("--thread")
 
@@ -1223,8 +1228,15 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--source-account-id")
     resolve.add_argument("--credit-kind", choices=["refund", "transfer", "income"])
 
+    commit = command("commit", "commit an import that is ready")
+    commit.add_argument("import_id")
+    commit.add_argument(
+        "--confirm-adjustment",
+        action="store_true",
+        help="confirm the closing balance adjustment the review states",
+    )
+
     for name, help_text in (
-        ("commit", "commit an import that is ready"),
         ("reject", "reject an import"),
         ("undo-import", "undo a committed import"),
     ):
@@ -1276,7 +1288,9 @@ def main(argv: list[str] | None = None) -> int:
             source_account_id=a.source_account_id,
             credit_kind=a.credit_kind,
         ),
-        "commit": lambda a: _simple(a, "commit", a.import_id),
+        "commit": lambda a: _simple(
+            a, "commit", a.import_id, confirm_adjustment=a.confirm_adjustment
+        ),
         "reject": lambda a: _simple(a, "reject", a.import_id),
         "undo-import": lambda a: _simple(a, "undo_import", a.import_id),
         "tasks": cmd_tasks,

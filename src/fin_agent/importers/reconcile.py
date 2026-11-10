@@ -363,6 +363,60 @@ async def reconcile(
     return review
 
 
+async def rematch_new_lines(conn: Connection, import_id: str) -> dict[str, int]:
+    """Re-run the match for lines still `new`, so a row logged after the review merges.
+
+    The review is a snapshot. A movement logged in chat, by voice, or from a photo while the
+    review sat there is money the statement also prints, so booking the line as new would count
+    it twice and the closing adjustment would hide the gap. The rules are the review's own. A
+    line the user resolved themselves keeps their answer, and a line that now matches two
+    candidates goes back to review.
+    """
+    counts = {"certain": 0, "ambiguous": 0, "ignored": 0}
+    async with conn.transaction():
+        row = await conn.fetchrow(
+            "SELECT status, account_id FROM imports WHERE id = $1 FOR UPDATE", import_id
+        )
+        if row is None or row["status"] != "review" or row["account_id"] is None:
+            return counts
+        account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
+        lines = await conn.fetch(
+            """
+            SELECT * FROM statement_lines
+            WHERE import_id = $1 AND match_state = 'new' AND movement_id IS NULL
+            ORDER BY date, id
+            """,
+            import_id,
+        )
+        if not lines or account is None:
+            return counts
+        from fin_agent.ledger.movements import _effectively_reversed_ids
+
+        hidden = set(await _effectively_reversed_ids(conn))
+        used = {
+            str(found["movement_id"])
+            for found in await conn.fetch(
+                "SELECT movement_id FROM statement_lines "
+                "WHERE import_id = $1 AND movement_id IS NOT NULL",
+                import_id,
+            )
+        }
+        for line in lines:
+            if (line["match_detail"] or {}).get("resolved_by") == "user":
+                continue
+            settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+            state = settled["state"]
+            if state == "new":
+                continue
+            if settled["movement_id"]:
+                used.add(settled["movement_id"])
+            await _set_match(conn, line["id"], state, settled["movement_id"], settled["detail"])
+            counts[state] += 1
+    if any(counts.values()):
+        await _refresh_counts(conn, import_id)
+    return counts
+
+
 async def release_suppressed_duplicates(conn: Connection, *, account_id: str | None) -> list[str]:
     """Re-match rows another import's duplicate rule hid, now that the import is gone.
 

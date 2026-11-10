@@ -7,6 +7,7 @@ task's outcome. Every reason is host-made text.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -15,6 +16,7 @@ from fin_agent.db.conn import Connection
 logger = logging.getLogger(__name__)
 
 PAUSED_REASON = "The parser ran out of steps. Continue to give it another 120."
+NOT_A_STATEMENT_REASON = "This file isn't a statement, so nothing was imported."
 REASONS = {
     "timeout": "The parser took too long and was stopped.",
     "cancelled": "The parser was stopped before it finished.",
@@ -28,13 +30,30 @@ def _reason(outcome: str | None, output: str) -> str:
     return f"The parser stopped with an error: {last[:200]}" if last else "The parser stopped."
 
 
+def _report_status(output: str) -> str | None:
+    """The report's own status, read from the task's JSON output; None when it isn't one."""
+    try:
+        parsed = json.loads(output or "")
+    except TypeError, ValueError:
+        return None
+    return parsed.get("status") if isinstance(parsed, dict) else None
+
+
 async def settle_imports(
     conn: Connection, *, task_id: str, outcome: str | None, output: str
 ) -> int:
     """Move this task's still-parsing imports to `paused` or `failed`. Returns rows changed."""
+    keep_reason = outcome == "ok"
     if outcome == "ok":
-        # A finished parse already set each import's state; one left `parsing` was never reached.
-        status, reason = "failed", "The parser finished without reading this file."
+        if _report_status(output) == "not_a_statement":
+            # A parser that read the file and found a payslip or a letter finishes without
+            # submitting anything. The card says so plainly instead of blaming the run.
+            status, reason = "not_a_statement", NOT_A_STATEMENT_REASON
+            keep_reason = False
+        else:
+            # A finished parse already set each import's state; one left `parsing` was never
+            # reached.
+            status, reason = "failed", "The parser finished without reading this file."
     elif outcome == "budget":
         status, reason = "paused", PAUSED_REASON
     else:
@@ -51,7 +70,7 @@ async def settle_imports(
         task_id,
         status,
         reason,
-        outcome == "ok",
+        keep_reason,
     )
     return int(result.split()[-1])
 
@@ -86,4 +105,4 @@ async def reconcile(conn: Connection, records: dict[str, Any]) -> int:
     return changed
 
 
-__all__ = ["PAUSED_REASON", "reconcile", "settle_imports"]
+__all__ = ["NOT_A_STATEMENT_REASON", "PAUSED_REASON", "reconcile", "settle_imports"]

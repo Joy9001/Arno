@@ -277,6 +277,8 @@ export type ImportLine = {
   upi_ref: string | null;
   match_state: "new" | "certain" | "ambiguous" | "merged" | "ignored";
   movement_id: string | null;
+  /** The matched ledger row's own date, when this line's date will replace it. */
+  ledger_date: string | null;
   counterparty: string | null;
   suggested_transfer_account_id: string | null;
   transfer_confirmed: boolean;
@@ -314,6 +316,9 @@ export type ImportRecord = {
   opening_source: "manual" | "ledger" | "printed" | "parser-zero" | null;
   opening_evidenced: boolean;
   opening_required: boolean;
+  /** The difference a commit would book as a balance adjustment, and the host's reason. */
+  closing_adjustment_paise: number;
+  closing_adjustment_reason: string | null;
   counts: ImportCounts | null;
   review: {
     counts?: ImportCounts;

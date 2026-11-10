@@ -212,7 +212,17 @@ function LineTable({ detail }: { detail: ImportRecord }) {
               <tbody>
                 {rows.map((line) => (
                   <tr key={line.id}>
-                    <td>{formatDate(line.date)}</td>
+                    <td>
+                      {formatDate(line.date)}
+                      {line.ledger_date && (
+                        <>
+                          <br />
+                          <span className="fine">
+                            this date replaces your logged {formatDate(line.ledger_date)}
+                          </span>
+                        </>
+                      )}
+                    </td>
                     <td className="narration act-line-narration">{line.description}</td>
                     <td className={line.amount_paise < 0 ? "negative" : ""}>
                       {formatPaise(line.amount_paise)}
@@ -1044,6 +1054,8 @@ export function ImportsPanel({
   );
   const [selected, setSelected] = useState<ImportRecord | null>(null);
   const [password, setPassword] = useState("");
+  // A non-zero closing difference is booked only after the user confirms this dialog.
+  const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1066,6 +1078,7 @@ export function ImportsPanel({
     selected?.counts?.ambiguous ??
     selectedLines.filter((line) => line.match_state === "ambiguous").length;
   const decisions = ambiguousCount + pendingTransferCount + pendingCreditCount;
+  const closingAdjustment = selected?.closing_adjustment_paise ?? 0;
   const categorizePolling = Boolean(
     selected?.categorize &&
       ["queued", "running", "retrying"].includes(selected.categorize.state),
@@ -1112,6 +1125,7 @@ export function ImportsPanel({
     setError(null);
     setPollError(null);
     setPassword("");
+    setAdjustmentOpen(false);
     try {
       const next = await api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`);
       if (seq !== writeSeq.current) return;
@@ -1139,6 +1153,7 @@ export function ImportsPanel({
     setPollError(null);
     setDeepLinkError(null);
     setPassword("");
+    setAdjustmentOpen(false);
     loadedImport.current = null;
     setSelected(null);
     api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`)
@@ -1180,6 +1195,8 @@ export function ImportsPanel({
       if (path === "commit") kickActivity();
     } catch (caught) {
       setError(errorMessage(caught));
+      // A refused commit states the amount it would book now: show it before it can be answered.
+      if (path === "commit") void refreshSelected();
     } finally {
       setBusy(null);
     }
@@ -1616,6 +1633,25 @@ export function ImportsPanel({
                   <LoggedElsewhere rows={selected.review.logged_not_on_statement} />
                 )}
 
+              {selected.status === "review" && closingAdjustment !== 0 && (
+                <section className="subcard">
+                  <div className="section-head">
+                    <h3>Closing balance adjustment</h3>
+                    <span className="fine">{formatPaise(closingAdjustment)}</span>
+                  </div>
+                  <p className="muted">
+                    {selected.closing_adjustment_reason ??
+                      `Committing this statement books the ${formatPaise(
+                        closingAdjustment,
+                      )} difference from your ledger as a visible balance adjustment.`}
+                  </p>
+                  <p className="fine">
+                    A balance adjustment is not spending. Commit asks you to confirm this amount
+                    first.
+                  </p>
+                </section>
+              )}
+
               {(selected.status === "review" || selected.status === "failed") && (
                 <>
                   <div className="row-actions">
@@ -1623,7 +1659,11 @@ export function ImportsPanel({
                       <button
                         type="button"
                         disabled={busy !== null || blockers.length > 0}
-                        onClick={() => void act("commit")}
+                        onClick={() =>
+                          closingAdjustment === 0
+                            ? void act("commit")
+                            : setAdjustmentOpen(true)
+                        }
                       >
                         {busy === "commit" ? (
                           <>
@@ -1656,6 +1696,51 @@ export function ImportsPanel({
                       Resolve {blockers.join(" and ")} before committing.
                     </p>
                   )}
+
+                  <Dialog.Root open={adjustmentOpen} onOpenChange={setAdjustmentOpen}>
+                    <Dialog.Portal>
+                      <Dialog.Overlay className="dialog-overlay" />
+                      <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
+                        <Dialog.Title>
+                          Book a {formatPaise(closingAdjustment)} balance adjustment?
+                        </Dialog.Title>
+                        <p className="muted">
+                          {selected.closing_adjustment_reason ??
+                            `The statement's closing balance differs from your ledger by ${formatPaise(
+                              closingAdjustment,
+                            )}.`}
+                        </p>
+                        <p className="fine">
+                          Committing books that difference as a visible balance adjustment, never
+                          as spending.
+                        </p>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            disabled={busy !== null}
+                            onClick={() => {
+                              setAdjustmentOpen(false);
+                              void act("commit", { adjustment_confirmed: true });
+                            }}
+                          >
+                            {busy === "commit" ? (
+                              <>
+                                <Busy />
+                                Committing…
+                              </>
+                            ) : (
+                              "Book adjustment and commit"
+                            )}
+                          </button>
+                          <Dialog.Close asChild>
+                            <button type="button" className="ghost" disabled={busy !== null}>
+                              Cancel
+                            </button>
+                          </Dialog.Close>
+                        </div>
+                      </Dialog.Content>
+                    </Dialog.Portal>
+                  </Dialog.Root>
                 </>
               )}
 

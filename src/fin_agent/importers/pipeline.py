@@ -18,6 +18,7 @@ from fin_agent.importers.checks import (
     opening_is_evidenced,
     stated_opening_to_ledger,
 )
+from fin_agent.importers.commit import closing_adjustment_reason, review_closing_adjustment
 from fin_agent.importers.identifiers import scrub_account_number
 from fin_agent.importers.passwords import PASSWORDS
 from fin_agent.importers.readers import Doc
@@ -446,7 +447,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     if row["account_id"]:
         fetched = await conn.fetchrow(
             """
-            SELECT id, name, kind, institution, last4,
+            SELECT id, name, kind, institution, last4, ledger_account_id,
                    statement_balance_paise, statement_balance_as_of
             FROM accounts WHERE id = $1
             """,
@@ -481,6 +482,15 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         account=account_row,
         period_start=row["period_start"],
     )
+    # A merge edits a logged movement to the statement's own date. The review shows the date it
+    # is about to replace, so a one-day mismatch is evidence, not a silent edit.
+    movement_dates = {
+        str(found["id"]): found["date"]
+        for found in await conn.fetch(
+            "SELECT id, date FROM movements WHERE id = ANY($1::text[])",
+            [str(line["movement_id"]) for line in lines if line["movement_id"]],
+        )
+    }
     opening_required = (
         row["status"] in ("review", "needs_input", "failed")
         and not opening_evidenced
@@ -489,6 +499,25 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     categorize = None
     if row["status"] == "committed":
         categorize = await categorize_state(conn, import_id)
+    closing_adjustment = 0
+    closing_adjustment_note = None
+    if (
+        row["status"] in ("review", "needs_input")
+        and account_row is not None
+        and check.get("status") == "VERIFIED"
+    ):
+        closing_adjustment = await review_closing_adjustment(
+            conn,
+            import_id=import_id,
+            account=account_row,
+            check=check,
+            period_start=row["period_start"],
+            period_end=row["period_end"],
+        )
+        if closing_adjustment:
+            closing_adjustment_note = closing_adjustment_reason(
+                closing_adjustment, row["period_end"]
+            )
     return {
         "import_id": row["id"],
         "status": row["status"],
@@ -504,6 +533,8 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         "closing_paise": row["closing_balance_paise"],
         "check": check.get("status") if check else None,
         "check_detail": check or None,
+        "closing_adjustment_paise": closing_adjustment,
+        "closing_adjustment_reason": closing_adjustment_note,
         "opening_source": check.get("opening_source"),
         "opening_evidenced": opening_evidenced,
         "opening_required": opening_required,
@@ -528,6 +559,12 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
                 "upi_ref": line["upi_ref"],
                 "match_state": line["match_state"],
                 "movement_id": line["movement_id"],
+                "ledger_date": (
+                    movement_dates[str(line["movement_id"])].isoformat()
+                    if str(line["movement_id"]) in movement_dates
+                    and movement_dates[str(line["movement_id"])] != line["date"]
+                    else None
+                ),
                 "counterparty": (line["match_detail"] or {}).get("counterparty"),
                 "suggested_transfer_account_id": (line["match_detail"] or {}).get(
                     "suggested_transfer_account_id"

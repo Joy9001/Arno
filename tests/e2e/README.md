@@ -45,15 +45,15 @@ uv run python -m tests.e2e.driver up --port 8125 --keep
 | `up --port N [--seed demo] [--empty] [--keep]` | migrate, start the server, enroll a passkey |
 | `down` | stop the server it started |
 | `chat "text" [--file PATH]... [--thread ID] [--new] [--json]` | one user turn, as the composer sends it |
-| `approve TOOL_CALL_ID yes\|no [--thread ID]` | answer a confirm card |
+| `approve TOOL_CALL_ID... yes\|no [--thread ID]` | answer the last turn's confirm cards; a two-card turn needs both ids (the server refuses a partial answer; the web never sends one) |
 | `undo UNDO_ID` | undo a card's write |
 | `imports [--limit N]` | list imports |
-| `import ID` | one import's review state, lines, and the command that clears each blocker |
+| `import ID` | one import's review state, lines, the closing adjustment it would book, and the command that clears each blocker |
 | `password ID PASSWORD` | the import card's password path, never through chat |
 | `opening ID RUPEES` | the opening the import card asks for, as printed |
 | `confirm-transfer ID LINE_ID` | confirm a line is a transfer between your own accounts |
 | `resolve ID LINE_ID RESOLUTION [--movement-id M] [--credit-kind K] [--category-id C]` | any other line resolution |
-| `commit ID` / `reject ID` / `undo-import ID` | finish an import |
+| `commit ID [--confirm-adjustment]` / `reject ID` / `undo-import ID` | finish an import; the flag confirms the closing adjustment the review states |
 | `tasks [--limit N]` | imports with their parser task ids |
 | `task ID` | a parser task: state, report, transcript, imports |
 | `wait-task ID [--timeout S]` | poll a parser task until it finishes |

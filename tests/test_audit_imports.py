@@ -20,6 +20,7 @@ from fin_agent.importers.commit import commit_import, reject_import, undo_import
 from fin_agent.importers.gate import run_gate
 from fin_agent.importers.layout import detect_fingerprint
 from fin_agent.importers.monty import ScriptContext
+from fin_agent.importers.periods import ledger_opening as opening_balance
 from fin_agent.importers.readers import Doc
 from fin_agent.importers.reconcile import insert_lines, reconcile, resolve_line
 from fin_agent.importers.task_status import reconcile as reconcile_task_imports
@@ -86,9 +87,14 @@ async def _review_import(
     rows: list[dict],
     *,
     closing: int | None = None,
-    opening: int = 0,
+    opening: int | None = None,
 ) -> str:
-    """One import in `review`, verified with a manual opening, lines already reconciled."""
+    """One import in `review`, verified against the ledger's own opening, lines reconciled."""
+    if opening is None:
+        # A statement for this account prints the balance the ledger held before its period, which
+        # is the opening the pipeline would check the file against.
+        previous = await opening_balance(conn, account["id"], PERIOD[0])
+        opening = int(previous["paise"]) if previous else 0
     import_id = await new_id(conn, "imp")
     await conn.execute(
         """
@@ -253,7 +259,8 @@ async def test_a_closing_adjustment_is_visible_and_never_consumption(ledger):
         closing=45000,
     )
 
-    result = await commit_import(ledger, import_id)
+    # The difference is an adjustment the review screen states and the user confirms.
+    result = await commit_import(ledger, import_id, adjustment_confirmed=True)
 
     assert result["adjustment_paise"] == -5000
     assert await ledger_balance(ledger, account["ledger_account_id"]) == 45000

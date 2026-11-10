@@ -89,9 +89,15 @@ Each stage works as follows:
    arrive after commit. The user commits, edits, or rejects.
 9. **Commit.** Write the movements through pgledger, link each statement line as a capture, and
    record the closing balance on the account. A suggested own-account line is written as a
-   transfer only after the user confirms it on the review screen. If the closing disagrees with
-   the ledger, the difference is a visible adjustment. Then recompute baselines, and save the
-   parser as a new version.
+   transfer only after the user confirms it on the review screen. The statement's printed opening
+   is booked at its first day, so every date the statement covers reads as the printed running
+   balance; a balance adjustment dated inside its period is the old answer to a question the
+   statement now answers row by row, so it is reversed, and a stated balance dated after the
+   statement keeps its figure. If the closing disagrees with the ledger, the difference is a
+   visible adjustment, stated on the review screen (amount and reason) and booked only when you
+   confirm it there. Before any of that, rows still unmatched are reconciled once more against the
+   ledger as it stands, so a movement logged by chat while the import waited in review merges
+   instead of being booked twice. Then recompute baselines, and save the parser as a new version.
 10. **Categorize, after commit.** The commit queues the categorizer agent, which labels the new
     rows in the background (described later).
 
@@ -268,6 +274,7 @@ often has no running balance, so only its total is checked. So the following che
 | The normalized column headers match a known variant of the bank's layout; otherwise the subagent repairs the parser for the new variant | A new column dirtying the narrations |
 | A new parser version reproduces the saved rows of every stored statement from that bank | A script that fits only this month |
 | At least one row, unless the statement says there were none | A parser that drops every row when opening equals closing |
+| The period ends on or before today, Asia/Kolkata | A corrupt export, or a mistyped year, claims days that have not happened and pins a balance and an age for them |
 | The opening is evidenced by a user manual entry, a trusted prior/ledger balance, or the statement's printed opening. A parser fallback zero is never labeled printed. On a first card import with no prior or manual opening, the review card asks before commit | A missing opening silently defaulted to zero, or a gap between statements |
 
 No check covers the text of a narration. A misread payee shows up on the review screen, which stays
@@ -293,7 +300,10 @@ statement that prints none. That box asks for the amount owed, and the server co
 ledger sign once, by account kind (`stated_opening_to_ledger` in `importers/checks.py`), before it
 is stored in the review or checked. A negative amount owed is a card in credit, which is how an
 overpaid card is entered. The closing adjustment then measures only what the ledger is missing: it
-is zero on a statement whose rows balance against an opening the ledger already holds.
+is zero on a statement whose rows balance against an opening the ledger already holds. When it is
+not zero, the review screen states the amount and why, and the commit books it only after you
+confirm that adjustment; a second statement over an already-covered period therefore shows its
+difference instead of leaving it as unexplained money.
 
 ---
 
@@ -313,9 +323,17 @@ The following table shows the three match outcomes for a statement row:
 On a merge, the statement line becomes a capture of the logged movement, and the _statement wins on
 amount, date, and account_: a different date edits the movement's date, and a different amount or
 account appends a reversal and the corrected transfers. The movement keeps its labels, notes,
-money owed by people, photo, and link to the conversation. Logged rows still unmatched
-after a statement covering their date appear on the review screen as "logged but not on the
-statement"—wrong account, cash, or a mistake.
+money owed by people, photo, and link to the conversation. The review screen shows the date the
+merge will replace, so a refund the statement dates a day earlier is visible before it moves.
+Logged rows still unmatched after a statement covering their date appear on the review screen as
+"logged but not on the statement"—wrong account, cash, or a mistake.
+
+The review is a snapshot, and you keep logging after it. Commit therefore reconciles every line
+still unmatched once more against the movements in the ledger at that moment, by the same rules:
+one certain match merges into the movement you logged (never a second row for the same money), and
+one with several candidates sends the line back to review, with those candidates, instead of
+committing. A line you answered yourself on the review screen keeps your answer. A non-zero closing
+adjustment is never booked while such a candidate is still unreviewed.
 
 ---
 

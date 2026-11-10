@@ -50,6 +50,12 @@ class ResolveLine(ApiModel):
     source_account_id: str | None = None
 
 
+class CommitIn(ApiModel):
+    """The review screen's answer to the closing adjustment the payload stated."""
+
+    adjustment_confirmed: bool = False
+
+
 @router.post("/attachments", status_code=status.HTTP_201_CREATED)
 async def upload_attachment(
     conn: Database,
@@ -168,9 +174,15 @@ async def import_opening(import_id: str, body: OpeningIn, conn: Database) -> dic
 
 
 @router.post("/imports/{import_id}/commit")
-async def import_commit(import_id: str, conn: Database) -> dict[str, Any]:
+async def import_commit(
+    import_id: str, conn: Database, body: CommitIn | None = None
+) -> dict[str, Any]:
     try:
-        result = await commit_import(conn, import_id)
+        result = await commit_import(
+            conn,
+            import_id,
+            adjustment_confirmed=bool(body and body.adjustment_confirmed),
+        )
     except ConflictLedgerError as exc:
         raise HTTPException(status_code=409, detail=exc.message) from exc
     except InvalidLedgerError as exc:

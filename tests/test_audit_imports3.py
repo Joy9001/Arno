@@ -205,13 +205,14 @@ async def test_the_second_months_statement_commits_and_keeps_its_own_variant(led
     assert first["status"] == "parser_submitted", first
     await commit_import(ledger, october)
 
-    # The next cycle, in period order, with one header normalised differently.
+    # The next cycle, in period order, with one header normalised differently. It has ended:
+    # a statement that claims days after today is refused by the checks.
     november = await _upload(
         ledger,
         _statement(
-            period=("01/11/2026", "30/11/2026"),
+            period=("01/11/2026", "09/11/2026"),
             opening_paise=380000,
-            rows=[("10/11/2026", "UPI/DR/661122/AUTO RICKSHAW", 15000, 0)],
+            rows=[("08/11/2026", "UPI/DR/661122/AUTO RICKSHAW", 15000, 0)],
             ref_header="Ref No",
         ),
         account_id=wallet["id"],

@@ -16,7 +16,9 @@ from pydantic_ai.ui.vercel_ai.request_types import RequestData
 from tests.e2e.driver import (
     Driver,
     _paise,
+    _render_import,
     approval_message,
+    build_parser,
     chat_body,
     issue_setup_token,
     ledger_summary,
@@ -108,18 +110,31 @@ def test_the_chat_body_and_the_approval_part_match_the_server_schema():
         "thread-1",
         [
             approval_message(
-                "call_1", approved=True, tool_name="preference", tool_input={"action": "remember"}
+                [
+                    {
+                        "tool_call_id": "call_1",
+                        "tool_name": "preference",
+                        "input": {"action": "remember"},
+                    },
+                    {"tool_call_id": "call_2", "tool_name": "update_setup", "input": {}},
+                ],
+                approved=True,
             )
         ],
     )
-    part = REQUEST_DATA.validate_python(approval).messages[0].parts[0]
-    assert part.state == "approval-responded"
-    assert part.tool_call_id == "call_1"
-    assert part.approval.approved is True
+    parts = REQUEST_DATA.validate_python(approval).messages[0].parts
+    assert [part.tool_call_id for part in parts] == ["call_1", "call_2"]
+    assert all(part.state == "approval-responded" for part in parts)
+    assert all(part.approval.approved is True for part in parts)
 
     denied = chat_body(
         "thread-1",
-        [approval_message("call_1", approved=False, tool_name="preference", tool_input={})],
+        [
+            approval_message(
+                [{"tool_call_id": "call_1", "tool_name": "preference", "input": {}}],
+                approved=False,
+            )
+        ],
     )
     assert REQUEST_DATA.validate_python(denied).messages[0].parts[0].approval.approved is False
 
@@ -152,3 +167,58 @@ def test_rupees_become_integer_paise():
     assert _paise("-2,450.00") == -245000
     with pytest.raises(SystemExit):
         _paise("1.005")
+
+
+def test_the_driver_commit_sends_the_adjustment_confirmation_only_when_asked():
+    """The server refuses a non-zero closing adjustment unless the body confirms it."""
+    calls: list[tuple[str, dict]] = []
+
+    def post(path: str, **kwargs: object) -> dict:
+        calls.append((path, dict(kwargs)))
+        return {"status": "committed"}
+
+    driver = Driver("http://testserver")
+    try:
+        driver.post = post  # type: ignore[method-assign]
+        assert driver.commit("imp_1") == {"status": "committed"}
+        driver.commit("imp_1", confirm_adjustment=True)
+    finally:
+        driver.close()
+
+    assert calls == [
+        ("/api/imports/imp_1/commit", {}),
+        ("/api/imports/imp_1/commit", {"json": {"adjustment_confirmed": True}}),
+    ]
+
+
+def test_the_commit_command_takes_the_adjustment_flag():
+    parser = build_parser()
+    assert parser.parse_args(["commit", "imp_1"]).confirm_adjustment is False
+    assert parser.parse_args(["commit", "imp_1", "--confirm-adjustment"]).confirm_adjustment is True
+
+
+REVIEW = {"import_id": "imp_1", "status": "review", "lines": []}
+
+
+def test_an_import_review_states_the_closing_adjustment_it_would_book():
+    rendered = _render_import(
+        {
+            **REVIEW,
+            "closing_adjustment_paise": 12000,
+            "closing_adjustment_reason": (
+                "The statement's closing balance is ₹120.00 above the ledger."
+            ),
+        }
+    )
+    assert "closing adjustment: ₹120.00" in rendered
+    assert "above the ledger." in rendered
+    assert "ready: driver commit imp_1 --confirm-adjustment" in rendered
+
+
+def test_a_zero_closing_adjustment_needs_no_confirmation():
+    rendered = _render_import(
+        {**REVIEW, "closing_adjustment_paise": 0, "closing_adjustment_reason": None}
+    )
+    assert "closing adjustment: ₹0.00" in rendered
+    assert "ready: driver commit imp_1" in rendered
+    assert "--confirm-adjustment" not in rendered

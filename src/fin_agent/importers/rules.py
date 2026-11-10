@@ -172,8 +172,39 @@ async def _label(
     movement_id: str,
     category_id: str,
     rule_id: str | None,
-) -> None:
+) -> bool:
     labels = await conn.fetch("SELECT * FROM transfer_labels WHERE movement_id = $1", movement_id)
+    if not labels:
+        # A plain expense with no payee, note, or category has no label row at all. Without
+        # creating one the rule fires, records itself, and leaves the row uncategorized — how a
+        # card's annual fee, whose narration names nobody, used to stay uncategorized.
+        transfer = await conn.fetchrow(
+            """
+            SELECT t.id
+            FROM pgledger_transfers t
+            JOIN accounts sp ON sp.kind = 'spending'
+            WHERE t.metadata ->> 'movement_id' = $1
+              AND (t.from_account_id = sp.ledger_account_id
+                   OR t.to_account_id = sp.ledger_account_id)
+            ORDER BY t.id
+            LIMIT 1
+            """,
+            movement_id,
+        )
+        if transfer is None:
+            return False
+        labels = [
+            await conn.fetchrow(
+                """
+                INSERT INTO transfer_labels (transfer_id, movement_id, category_id)
+                VALUES ($1, $2, $3) RETURNING *
+                """,
+                transfer["id"],
+                movement_id,
+                category_id,
+            )
+        ]
+        group.record_created("transfer_labels", labels[0])
     for label in labels:
         if label["category_id"] == category_id:
             continue
@@ -195,7 +226,7 @@ async def _label(
             )
     before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
     if before is None:
-        return
+        return False
     await conn.execute(
         """
         UPDATE movements
@@ -208,6 +239,7 @@ async def _label(
     after = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
     if after is not None and dict(after) != dict(before):
         group.record_updated("movements", movement_id, dict(before), dict(after))
+    return True
 
 
 async def _refund_source(
@@ -268,9 +300,10 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
             rule = match_rule(key, rules)
             if rule is None:
                 continue
-            await _label(
+            if not await _label(
                 conn, group, str(row["movement_id"]), str(rule["category_id"]), str(rule["id"])
-            )
+            ):
+                continue
             await conn.execute(
                 "UPDATE category_rules SET hits = hits + 1 WHERE id = $1", rule["id"]
             )
@@ -286,13 +319,14 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
             source = await _refund_source(conn, row=row, key=key, amount=int(row["amount_paise"]))
             if source is None:
                 continue
-            await _label(
+            if not await _label(
                 conn,
                 group,
                 str(row["movement_id"]),
                 str(source["category_id"]),
                 str(source["category_rule_id"]) if source["category_rule_id"] else None,
-            )
+            ):
+                continue
             labeled += 1
         if group.entries:
             await record_categorize_group(conn, import_id=import_id, group_id=group.group_id)

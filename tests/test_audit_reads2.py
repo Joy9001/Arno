@@ -35,7 +35,8 @@ async def _bank(conn, name: str) -> str:
             kind="bank",
             name=name,
             opening_balance_paise=1_000_000,
-            opening_balance_as_of=date(2026, 9, 1),
+            # The day before the first statement period, so the synthetic printed opening agrees.
+            opening_balance_as_of=date(2026, 8, 31),
         )
     )["id"]
 

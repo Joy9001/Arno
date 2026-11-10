@@ -141,7 +141,9 @@ async def seed_committed_statement(
 
     day = day or ledger_today() - timedelta(days=1)
     period_start = period_start or day.replace(day=1)
-    period_end = period_end or _month_end(day)
+    # A synthetic statement never covers a day that has not happened: the checks refuse a
+    # period that has not ended, and a fixture is not an excuse to claim one.
+    period_end = min(period_end or _month_end(day), ledger_today())
     if not period_start <= day <= period_end:
         raise ValueError("The statement day must fall inside its period")
 

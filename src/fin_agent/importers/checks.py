@@ -13,12 +13,20 @@ from datetime import date
 from typing import Any
 
 from fin_agent.importers.layout import normalize_headers
+from fin_agent.ledger.common import today
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 OPENING_MISSING = "opening balance not found in the file or the ledger"
 CLOSING_MISSING = "closing balance not found in the file"
 INPUT_REASONS = (OPENING_MISSING, CLOSING_MISSING)
+
+
+def _period_end(period: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(period[1]))
+    except IndexError, TypeError, ValueError:
+        return None
 
 
 def _is_int(value: Any) -> bool:
@@ -191,6 +199,16 @@ def check_statement(
         if period and not result.get("dates_in_period"):
             ok = False
             result["reason"] = "dates outside the statement period"
+        # A period that has not ended yet cannot be checked against a ledger that is still
+        # moving, and committing it would pin a balance for days that have not happened. A
+        # corrupt export (or a mistyped year) is the usual cause.
+        end = _period_end(period) if period else None
+        if end is not None and end > today():
+            ok = False
+            result["reason"] = (
+                f"This statement's period ends on {end.isoformat()}, after today "
+                f"({today().isoformat()}). A statement that has not ended yet is not imported."
+            )
         if expected_fingerprint and result.get("header_match") is False:
             ok = False
             result["reason"] = "column headers do not match the saved layout"
