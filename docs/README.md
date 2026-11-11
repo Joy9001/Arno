@@ -52,6 +52,7 @@ holds the following surveys:
 | [`agent-toolkit-2026/`](research/agent-toolkit-2026/) | Let's Code's catalog of 404 open source agent tools, shortlisted for each design step. _Filtered by this project's requirements on purpose_ |
 | [`monty-document-parsing/`](research/monty-document-parsing/) | A test of Monty as the sandbox for model-written statement parsers, on every document type, with its scripts. _Applied to this project on purpose, unlike the rest of this tree_ |
 | [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
+| [`personal-finance-agent-2026/`](research/personal-finance-agent-2026/) | Consumer finance products, India-specific data access, research tools, and a sourced capability assessment. _Applied recommendations; not approved product decisions_ |
 
 ## Superseded work in the `archive/` directory
 
