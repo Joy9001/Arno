@@ -49,6 +49,40 @@ The table records the principal evidence and its limits.
 | [NIST Measure](https://airc.nist.gov/airmf-resources/playbook/measure/) | NIST, voluntary AI risk guidance | Fit-for-purpose testing, limits, ongoing measurement, external-input monitoring | Does not prescribe Arno's exact budgets, schema, or alert deduplication | Parent checked |
 | [Personalized financial adviser study](https://arxiv.org/abs/2504.05862) | Authors, SIGIR 2025 paper | Preference elicitation and divergence between trust and quality in a lab study | 64 participants and investment-advice tasks; no generalized Arno result | Parent checked |
 
+## Capability catalog verification
+
+The November 12 catalog pass checked the installed Pydantic AI 2.64.0 and Harness 0.64.0 source,
+the repository at `9181891`, and additional primary documentation before drafting the catalog.
+The three evidence notes record [framework enablement](verification-framework.md),
+[current application coverage](verification-arno-coverage.md), and
+[finance-tool constraints](verification-finance-tools.md). The parent reviewed all three and
+corrected overbroad transport, AA-coverage, XIRR-root, insurance-rule, and spreadsheet claims.
+
+The following sources support the additional tool mappings and boundaries.
+
+| Source | Owner and evidence type | What it supports | Confidence and limit |
+|---|---|---|---|
+| [Pydantic MCP](https://pydantic.dev/docs/ai/capabilities/mcp/), [native tools](https://pydantic.dev/docs/ai/tools-toolsets/native-tools/) | Pydantic, official framework docs and installed source | Client versus provider execution, MCP toolsets, transport/profile constraints | High for the checked versions; no live provider or MCP connection |
+| [Code Mode](https://pydantic.dev/docs/ai/harness/code-mode/), [on-demand capabilities](https://pydantic.dev/docs/ai/capabilities/on-demand/) | Pydantic, official framework docs | Constrained execution and deferred tools/instructions | High for documented mechanism; neither supplies new financial models or state |
+| [You.com harness](https://pydantic.dev/docs/ai/harness/youdotcom/), [Researcher](https://pydantic.dev/docs/ai/harness/researcher/) | Pydantic, official integration docs and installed capability source | Exact candidate capability classes, finance research, workspace defaults | High for source contract; SDKs, keys, data rights, and database-compatible persistence are untested |
+| [Parallel source policy](https://docs.parallel.ai/resources/source-policy), [MCP quickstart](https://docs.parallel.ai/integrations/mcp/quickstart) | Parallel, vendor API/integration docs | Source restrictions and documented current MCP route | High for documentation; no finance-quality benchmark, account, or retention verification |
+| [Alpha Vantage MCP](https://github.com/alphavantage/alpha_vantage_mcp) | Alpha Vantage, official server repository | Remote MCP, OAuth configuration, market-data tool route | High for documented interface; exact Indian instruments, auth, quotas, and data rights remain gates |
+| [PyXIRR source](https://github.com/Anexen/pyxirr), [functions](https://anexen.github.io/pyxirr/functions.html) | Maintainer repository and reference | Unlicense, dated return functions, invalid flows, day counts, solver behavior | High for documented contract; not installed or numerically benchmarked here; root search does not prove uniqueness |
+| [Docling](https://github.com/docling-project/docling), [installation](https://docling-project.github.io/docling/getting_started/installation/) | Maintainer repository and docs | Document conversion, MIT code, separate model/dependency requirements | High for package facts; no layout, OCR, resource, or comparative extraction test |
+| [Frankfurter](https://frankfurter.dev/), [ECB reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) | API maintainer and central bank | Reference rates, dates/provider attribution, informational use | High for documented role; not executed FX rates, real-time quotes, or blanket provider-data rights |
+| [IRDAI life-insurance material](https://irdai.gov.in/document-detail?documentId=5032913) | IRDAI, official 2024 master-circular page and linked PDF text | Policy information, customer information, benefits/exclusions as extraction evidence | High for the text read; PDF screenshots failed; no certified exhaustive field checklist or adequacy model |
+| [XlsxWriter formulas](https://xlsxwriter.readthedocs.io/working_with_formulas.html), [openpyxl tutorial](https://openpyxl.readthedocs.io/en/stable/tutorial.html) | Maintainers, library docs | Formula writing, cached results, absence of formula evaluation | High for library contract; no workbook build/render test was performed |
+| [Sheets values](https://developers.google.com/workspace/sheets/api/guides/values), [Graph Excel](https://learn.microsoft.com/en-us/graph/api/resources/excel?view=graph-rest-1.0) | Google and Microsoft, official API docs | Range access and supported cloud storage; Graph excludes OneDrive Consumer | High for documented storage/access scope; no permission grant, account test, or local Excel capability |
+| [Razorpay reconciliation](https://razorpay.com/docs/api/settlements/fetch-recon/), [webhooks](https://razorpay.com/docs/webhooks/best-practices/), [signature validation](https://razorpay.com/docs/webhooks/validate-test/) | Razorpay, API reference and delivery guidance | Gross/fee/tax/net fields, repeat delivery, event identity, raw-body HMAC validation | High for protocol contract; no merchant-account prerequisites or actual settlement verified; not tax accounting rules |
+| [Stripe webhooks](https://docs.stripe.com/webhooks) | Stripe, official integration docs | Public HTTPS delivery requirements for registered endpoints | High for documented route; does not authorize exposing a private Arno deployment |
+| [Plaid Enrich](https://plaid.com/docs/enrich/) | Plaid, official product docs | Enrichment fields and US/Canada availability | High for documented geography; no evidence of Indian UPI coverage or identity accuracy |
+| [Telegram Bot API](https://core.telegram.org/bots/api) | Telegram, protocol/API reference | Delivery, callbacks, polling/webhooks, secret-token mechanism | High for API contract; no destination binding or application authorization implemented |
+| [Tally XML integration](https://help.tallysolutions.com/xml-integration/) | Tally, official integration docs | XML over HTTP route | High for documented route; no approved accounting mapping or live product adapter |
+| [GST taxpayer search](https://tutorial.gst.gov.in/userguide/taxpayersdashboard/Search_Taxpayer_manual.htm), [GLEIF API](https://www.gleif.org/en/lei-data/gleif-api) | GST portal and GLEIF, official registry guidance | Distinct taxpayer and LEI lookup workflows | High for documented lookup; not an unrestricted GST API, invoice entitlement, universal company coverage, or counterparty-safety verdict |
+
+No endpoint was exercised with credentials or personal records. Integration quality, software/model
+licenses at a selected version, data-use permission, and production behavior remain separate checks.
+
 ## Unresolved checks before adoption
 
 - Search provider comparison requires an Indian-question benchmark and current privacy/retention
@@ -62,6 +96,15 @@ The table records the principal evidence and its limits.
   rule source for production.
 - Verify the selected framework capability against Arno's locked dependencies and actual model
   transport before implementation. This research did not change dependencies or run external APIs.
+- The catalog pass verified locked symbols and current transport behavior from source, but did not
+  measure live execution. Local fetch dependencies and Exa/You.com SDKs are absent; MCP authentication,
+  secret storage, tool allowlists, budgets, and untrusted-content controls still need implementation.
+- The KFS circular's HTML scope was verified. Its annex PDF returned a captcha; the full proposed
+  contract schema must not be presented as an RBI-certified exhaustive mandatory-field list.
+- AA loan/card coverage remains unverified for any selected partner. An ecosystem FAQ is not a
+  universal legal prohibition or a guarantee of liability coverage. Verify actual account types.
+- XIRR failure/multiple-root cases, holdings reconciliation, OCR quality, reference-rate dates, and
+  formula cached values need meaningful fixture or provider-sandbox evidence after tool selection.
 
 ## Repository evidence
 

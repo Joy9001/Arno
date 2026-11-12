@@ -4,6 +4,11 @@ Research and applied assessment, November 11–12, 2026. This report describes w
 before calling Arno a leading personal finance agent. It is a recommendation, not an amendment
 to [the product plan](../../arno/plan.md). No application behavior changed during this research.
 
+For the detailed specification, read the [capability catalog](capability-catalog.md). It documents
+27 capabilities with descriptions, user benefits, agent actions, exact internal/framework/external
+tool mappings, current coverage, and completion checklists. This assessment explains the judgment;
+the catalog makes each proposed outcome and its evidence requirements inspectable.
+
 ## Judgment
 
 Arno has a substantial foundation: a ledger, imports with review, financial calculations,
@@ -38,6 +43,9 @@ from the current [tool registration](../../../src/arno/agent/toolset.py),
 
 The supporting investigations cover [consumer products](market.md),
 [India data and planning](india.md), and [tools and trust](tools-and-trust.md).
+The catalog adds verified notes on [current Arno coverage](verification-arno-coverage.md),
+[Pydantic and MCP enablement](verification-framework.md), and
+[finance-tool constraints](verification-finance-tools.md).
 [The source ledger](sources.md) records confidence and
 limits. Vendor documentation establishes advertised or documented functionality, not independent
 product quality. Prices and provider support are point-in-time observations, not selection results.
