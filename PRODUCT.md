@@ -109,7 +109,8 @@ Absences future work must not fabricate:
 
 - No real 12-month statement backfill exists on this machine; the published backtest is synthetic
   and says so.
-- The HackerRank "Buy or Wait" dataset is not present and has no license; no score is published.
+- The HackerRank "Buy or Wait" dataset has no license, so it stays in gitignored `private/`; the
+  score measured on its 25 labeled samples is 88.8% and is published in the README.
 - No customer testimonials, logos, press, case studies, or usage benchmarks exist.
 - No pricing or hosted-service claims apply: the product is self-hosted and MIT licensed.
 

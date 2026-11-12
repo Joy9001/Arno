@@ -476,7 +476,7 @@ each kind of item has.
 | Fresh install from the docs alone (milestone 40) | Simulated | Same owner, same Windows host, `127.0.0.1`, software passkey, no tailnet and no phone |
 | Restore into a fresh cluster (milestone 37) | Simulated | A second Compose project with new volumes; restic password plus the OAuth client |
 | Backtest (milestone 29) | Blocked on the owner | The live ledger has no income schedule, so the backtest correctly refuses to publish; add one, then `arno backtest --publish` |
-| HackerRank score (milestone 30) | Blocked on the owner | The dataset is not in the repository and was not available locally; `arno hackerrank --dataset <folder>` |
+| HackerRank score (milestone 30) | Done | `arno hackerrank` scored 88.8% on the 25 labeled samples (status 23/25, amount within 5% 21/25, earliest within 3 days 22/25); the dataset stays in gitignored `private/`, and the README block is published |
 | Union Bank statements | Blocked on the owner | No statement has been provided, so no format decision exists |
 | Statement passwords | Impossible here | The owner types them on the import card; they never enter chat, a test, or this record |
 | Corrected Slice exports | Blocked on the owner | Several repayments are missing from the PDFs, so the remaining cycles wait on corrected exports or manual rows |

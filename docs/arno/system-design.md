@@ -66,7 +66,7 @@ means a task passes in all three trials, not just once.
 | Numbers | Every number in a reply traces back to a tool return | 100% in evals; in real use, an untraced amount [gets a note](#the-number-check) |
 | Forecast honesty | In the backtest, the real balance 30 days later lands inside the P10-P90 band | About 8 months in 10 |
 | Forecast accuracy | Median 30-day error in the backtest | Published; a target once the first backtest shows what's realistic |
-| Affordability engine | The 25 labeled HackerRank "Buy or Wait" samples | Published; a target after the first run |
+| Affordability engine | The 25 labeled HackerRank "Buy or Wait" samples | 88.8% measured (23/25 status, 21/25 amount, 22/25 earliest); target 90% or more |
 | Categorizer | Share of its answers you don't correct | 90% or more |
 | Daily use | Four weeks without falling back to a spreadsheet or mental math | Already in "Done is" (`plan.md` §1) |
 
@@ -1272,7 +1272,7 @@ Settings shows only those, plus the last model error, and links to Phoenix for t
 |---|---|---|
 | Answers and writes, honesty, injection | Agent evals | L4 (the injection gate also has a test from L2) |
 | Numbers | The check in traces, then evals | L2, then L4 |
-| Forecast honesty and accuracy, affordability engine | Backtest and HackerRank samples | L5 |
+| Forecast honesty and accuracy, affordability engine | Backtest and HackerRank samples | L5; the HackerRank score is 88.8% |
 | Categorizer | Corrections to LLM-assigned categories, from `audit_log` | L3 onward |
 | Latency, real token counts | Traces | L2 |
 | Tap rate on confirm cards | Traces | L2 |

@@ -449,8 +449,9 @@ local code rather than the review screen, and those two import gaps remain. Deta
 28. Affordability: verdict plus the four tradeoffs, all computed in code.
 29. **Backtest:** the `project()` function run as of past dates over the backfill; median 30-day
     error and band calibration published.
-30. **HackerRank "Buy or Wait":** the engine scored on the 25 labeled samples, score published
-    (the data stays local).
+30. **HackerRank "Buy or Wait":** the engine scored 88.8% on the 25 labeled samples (status 23/25,
+    amount within 5% 21/25, earliest within 3 days 22/25), published in the README. The data stays
+    local and is never committed.
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
 **L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
@@ -458,9 +459,9 @@ they forced: a reduce-EMI prepayment no longer stretches the loan, a month-end r
 month's last day, an unknown card bill stays unknown, and loan interest is booked once a calendar
 month. A backtest was run against a copy of the live ledger. With no income schedule in that ledger
 every month is unusable as a measurement, so `arno backtest --publish` refused to write and
-milestone 29 stays open until the owner adds a salary schedule. The HackerRank score (milestone 30)
-is blocked on its dataset, which is not in the repository. Detail:
-[release-hardening.md](release-hardening.md).
+milestone 29 stays open until the owner adds a salary schedule. Milestone 30 is done as of November
+12: `arno hackerrank` scores the engine at 88.8% on the 25 externally labeled samples, and the
+README carries the block. Detail: [release-hardening.md](release-hardening.md).
 
 ### L6: Watch
 

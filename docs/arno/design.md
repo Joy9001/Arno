@@ -465,7 +465,7 @@ results are published in the README:
 | Measure | How |
 |---|---|
 | Backtest | For each month in the 12-month backfill, run `project()` as of its first day using only the rows that existed then—an account, schedule, or goal created later is excluded, though a later edit to one that already existed is read in its current form—and compare with the real statement balance 30 days later. Report the median error, and how often the real balance landed inside the P10-P90 band—close to 80% means the band is honest |
-| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Used locally, never committed—its source repository has no license |
+| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Each sample's flows become `CashEvent`s on a `project()` input with no sampled spend categories, so the score is the engine's own `safe_amount_today`, `first_full_payment_date`, and floor probability, and one run is exact. Used locally, never committed—its source repository has no license. The current run scores 88.8% (23/25 status, 21/25 amount, 22/25 earliest) |
 
 ### Why it's built, not bought
 

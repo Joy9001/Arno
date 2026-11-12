@@ -498,9 +498,14 @@ def hackerrank_command(
     dataset: Path | None = typer.Option(  # noqa: B008
         None, "--dataset", help="The local dataset folder. It is never committed."
     ),
-    runs: int = typer.Option(1_000, help="Seeded walks for each sample."),
     publish: bool = typer.Option(
         True, "--publish/--no-publish", help="Replace the README HackerRank section."
+    ),
+    runs: int = typer.Option(
+        1,
+        "--runs",
+        min=1,
+        help="Runs of the seeded walk. The sample has no spend pools, so every run is the same.",
     ),
 ) -> None:
     """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""

@@ -117,7 +117,12 @@ The scorer replays the challenge's 25 labeled samples through the engine. The da
 license, so it is never committed.
 
 <!-- hackerrank:start -->
-HackerRank sample score: not run. the HackerRank sample dataset is not on this machine; set ARNO_HACKERRANK_DATASET to the dataset folder (it has no license and is never committed).
+HackerRank 'Buy or Wait' samples: 25
+Combined score: 88.80%
+Affordability status: 92%
+amount_safe_to_pay within 5% of requested: 84%
+Earliest full-payment date within 3 days: 88%
+source: private/hackerrank-orchestrate-september26/dataset (local, not committed)
 <!-- hackerrank:end -->
 
 ## Install

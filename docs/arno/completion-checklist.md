@@ -194,8 +194,10 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
       `engine/backtest.py:413`.
 - [ ] Set the forecast-accuracy target in `system-design.md`. The success measures said to set it
       after the first real backtest.
-- [ ] **Milestone 30:** run `arno hackerrank --dataset <folder>` on the 25 samples and
-      publish the score. Set its target, and remove the TODO at `engine/hackerrank.py:420`.
+- [x] **Milestone 30:** `arno hackerrank --dataset <folder>` scored 88.8% on the 25 samples:
+      status 23/25, amount within 5% 21/25, earliest within 3 days 22/25. The README block is
+      published, the target is set in `system-design.md`, and the TODO is gone. The dataset stays
+      in gitignored `private/`.
 
 ### Evals and models (L2, L4)
 
@@ -339,9 +341,6 @@ it could not; the groups above keep their original detail.
       schedule in the ledger, every month is unusable as a measurement. Add the salary schedule in
       chat (or setup), then `uv run arno backtest --publish`, and set the accuracy target in
       `system-design.md` from the result.
-- [ ] **Milestone 30, the HackerRank score.** The dataset is not in the repository and was not
-      available on this machine. Put the 25 samples in a folder, then
-      `uv run arno hackerrank --dataset <folder>`.
 - [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
       months under `private/statements/union-bank/` and run `arno import-spike`.
 - [ ] **Milestone 24 and the remaining Slice cycles.** Several repayments are missing from the

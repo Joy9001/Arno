@@ -470,10 +470,10 @@ def test_a_month_end_recurrence_keeps_its_day_of_month():
         [settled("2025-11-30"), settled("2025-12-30"), settled("2026-01-30")],
         date(2026, 2, 1),
     )
+    # Projected occurrences stop short of the horizon's last days; confirmed ones would not.
     assert [event.date.isoformat() for event in events] == [
         "2026-02-28",
         "2026-03-30",
-        "2026-04-30",
     ]
     assert all(event.amount_paise == -64_900 for event in events)
 
