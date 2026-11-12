@@ -19,6 +19,7 @@ from arno.ledger.errors import UnavailableLedgerError
 # complete: it is the backup and restore source.
 SECRET_TABLES = frozenset(
     {
+        "model_credentials",
         "push_subscriptions",
         "sessions",
         "setup_tokens",

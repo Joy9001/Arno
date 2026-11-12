@@ -274,6 +274,12 @@ normal turn never reaches them:
 | Spend | $5 | $1 |
 | Daily spend, across everything | $20 (shared) | |
 
+- **The ceilings share one strict ledger.** Every model path uses the same pricing callback and
+  Postgres counter, so a database failure refuses paid inference instead of running uncapped. The
+  day never expires and a replay token lasts seven days. Metered requests default to an 8192-token
+  output cap unless the caller sets its own; native ChatGPT does not support that cap. The
+  counters check before a request and record after its response, so they are runaway brakes, not
+  an invoice hard cap. Concurrent calls can still cross the line.
 - **Hitting a ceiling hands control back.** The agent says what it found so far and which ceiling
   stopped it, and the trace records it. A ceiling never looks like a finished answer. A scheduled
   question can't speak mid-run, so it writes one plain answer naming its ceiling and marks the inbox
@@ -1220,7 +1226,7 @@ Phoenix and MLflow, tested with our agent:
 | | Phoenix | MLflow |
 |---|---|---|
 | Full trace of a turn, including a script's nested read | Yes | Yes |
-| Model calls shown as a conversation, with tokens and cost | Yes | Yes, as raw YAML |
+| Model calls shown as a conversation, with tokens and supplied cost | Yes, on Arno's pinned build | Yes, as raw YAML |
 | Input and reply on the trace itself | Yes; Phoenix converts native `gen_ai.*` attributes on ingestion | Blank over OTLP |
 | Outside connections, with privacy switches on | **None**, with `PHOENIX_ALLOW_EXTERNAL_RESOURCES=false` | **2 to GitHub hosts** with telemetry off, not identified |
 | Retention | An environment variable, not seen deleting yet | Run `mlflow gc` yourself |
@@ -1239,15 +1245,29 @@ How it fits in:
 - **Opt-in.** Tracing needs `PHOENIX_COLLECTOR_ENDPOINT`; with it unset, nothing is registered and
   nothing is instrumented, so a host CLI or eval exports nothing. `OTEL_SDK_DISABLED=true` is the
   standard kill switch when it is set.
-- **Native spans only.** Pydantic AI emits the agent run, model requests, and tool calls. Arno
-  adds no parent span, business metric, or custom end-to-end trace.
+- **Native spans, with cost-only additions.** Pydantic AI emits the agent run, model requests, and
+  tool calls. `MeteredModel` adds a child attempt span and a matching cost-journal row. Arno adds
+  no parent span, business metric, or custom end-to-end trace. Outside that attempt, the only
+  custom span is a cost-only replay that reuses the original trace and span IDs through the
+  standard exporter.
+- **Supplied cost.** The Compose image is built from `deploy/phoenix-cost` on Phoenix 21.0.0. It
+  prefers a supplied `llm.cost.*`, including zero, labels partial and unknown, and counts
+  unresolved calls beside aggregate totals. Stock Phoenix recalculates from its own catalog and
+  draws an unknown as `$0`, so the patch stays pinned until upstream passes the same contract.
+- **Recovery.** A cost row is written before dispatch and finalized after the response. The
+  `cost_replay` job re-exports pending rows every five minutes with their original IDs, and
+  `arno cost-replay --finalize-interrupted` is the manual path after inference stops. Replay is
+  metadata only: lost prompts cannot be reconstructed, and an unknown is not turned into an exact
+  charge.
 - **Storage.** Traces get their own database on our Postgres and stay out of backups. Retention uses
   Phoenix's built-in default (0, infinite) unless the operator sets a policy. Pydantic AI's default
   instrumentation includes prompts, replies, and tool content.
 - **Privacy.** Phoenix listens on the host's loopback only, and reaching it over the tailnet needs
   its login on. It gets its own role, which owns only its database, and `agent_ro` can't connect to
   that database. Phoenix authentication is unchanged.
-- **Evals.** Trials export to the one configured Phoenix project, like the app.
+- **Evals.** Trials export to the one configured Phoenix project, like the app. Trial and judge
+  budgets stay isolated in memory; their cost-journal rows go to the installation database before
+  the disposable financial clone is dropped, and ChatGPT credentials come from that database.
 
 **What stays in Postgres,** because the app itself reads it:
 
@@ -1255,6 +1275,8 @@ How it fits in:
   default store didn't. It needs an asyncpg pool, so asyncpg is a second driver, used only for this.
   That pool recovered as soon as Postgres came back, so it doesn't reopen
   [step 8's rule](#what-still-works-when-something-is-down) for everything else.
+- The cost journal (`llm_calls`): cost and identity only, no prompt or credential, no `agent_ro`
+  grant, and no budget authority.
 - `audit_log`, and job and backup status.
 - A flagged reply. Historical `messages.trace_id` values remain; new rows do not write one.
 
@@ -1425,8 +1447,9 @@ The test found four things the build must handle:
 - **Updates:** `docker compose pull`, then `up -d`. The API runs `pg_dump` before any migration, and
   migrations run in a transaction.
 - **Postgres major upgrades:** a documented dump and restore, the same path as the restore drill.
-- **Secrets and logs:** API keys stay in `.env`, never in the database or dumps. Logs rotate at 10 MB, so
-  they can't fill the disk.
+- **Secrets and logs:** API keys stay in `.env`; ChatGPT sign-in credentials live in the protected
+  database table and encrypted whole-database backups. They are excluded from ledger JSON/CSV
+  exports and `agent_ro`. Logs rotate at 10 MB, so they cannot fill the disk.
 
 **Deployment, checked October 31, 2026: Docker Compose stays, on its merits.** Its original reason was
 only that traditional backends deploy this way, so the options were explored. Most sources are vendor
@@ -1448,8 +1471,10 @@ isn't its packaging: durable runs, code isolation, spend, and traces are handled
 - **Latency:** the 2 s, 5 s, and 15 s targets stay, and traces measure them at L2. The server added under
   7 ms before the first chunk in the spike, with no capabilities on, so the provider will set the real
   number.
-- **Cost:** a rough guess is $0.02 a turn, from assumed token counts at GPT-5.4 prices with caching. 30
-  turns a day would be about $18 a month, far below the $20 daily ceiling.
+- **Cost:** the earlier $0.02/turn (about $18/month at 30 turns/day) was an undocumented design
+  estimate, not a benchmark. Phoenix now records each call's usage value, source, and completeness;
+  an estimated list value is not an invoice charge. Hosting and fixed subscription fees stay
+  separate. The [acceptance log](cost-tracking-acceptance.md) labels synthetic evidence explicitly.
 
 ### The interface tests, November 1, 2026
 

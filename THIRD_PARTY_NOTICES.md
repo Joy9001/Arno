@@ -113,6 +113,8 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `fastapi` | MIT |
 | `holidays` | MIT |
 | `httpx` | BSD-3-Clause |
+| `httpx2` | BSD-3-Clause |
+| `genai-prices` | MIT |
 | `msoffcrypto-tool` | MIT |
 | `olefile` | BSD |
 | `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | Apache-2.0 |
@@ -187,7 +189,7 @@ identifier below was checked against the official `LICENSE` file for the pinned 
 | Image | License |
 |---|---|
 | `postgres:18.6` (database, Phoenix init, API tools) | PostgreSQL License |
-| `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2) |
+| `arno-phoenix-cost:21.0.0`, based on pinned `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2); source, patch, and license stay in the separate service image |
 | `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
 | `ghcr.io/speaches-ai/speaches:0.8.3-cpu` (optional `local-stt` profile) | MIT |
 | `ghcr.io/joy9001/arno` (this repository) | MIT for Arno code; bundled dependencies as listed above |

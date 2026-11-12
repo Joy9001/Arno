@@ -24,6 +24,7 @@ from pydantic_ai_harness.subagents import DelegationTasks
 
 from arno.agent.capabilities import (
     MODEL_SETTINGS,
+    InferenceContext,
     ToolErrorsToModel,
     spend_limits,
 )
@@ -1077,6 +1078,10 @@ def build_parser_agent(
     spend_store: Any = None,
 ) -> Agent[AgentDeps, ParseReport]:
     """The parser subagent. It is never the main agent, and it never writes."""
+    if spend_store is None and model is None:
+        from arno.agent.spend import SharedSpendStore
+
+        spend_store = SharedSpendStore()
     toolset = FunctionToolset(
         tools=[
             open_imports,
@@ -1105,6 +1110,8 @@ def build_parser_agent(
             return PostgresPlanStore(plan_pool, session=session)
 
     capabilities: list[Any] = [
+        # Delegations can outlive the watching turn, including automatic backgrounding.
+        InferenceContext(background=True),
         CodeMode(tools={"code_mode": True}),
         Planning(store_resolver=resolver),
         ToolErrorsToModel(),

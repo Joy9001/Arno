@@ -191,6 +191,7 @@ The loop works as follows:
 
 - **A due schedule creates one job and moves on from now.** A run missed while the machine slept or
   restarted fires once when it's back, however many were missed. Times are computed in India time.
+  A `cost_replay` job runs every five minutes for cost-only tracing recovery.
 - **Each job carries a key for its job and period,** such as one week's briefing, so a restart can't
   send it twice.
 - **At boot, anything marked `running` goes back to `pending`.** There's one process, so it was
@@ -258,9 +259,9 @@ A deployment works as follows:
 - Access is through Tailscale on the host: `tailscale serve --bg` proxies HTTPS on the tailnet to the
   API, which Compose publishes on loopback only. A sidecar stays an option for a VPS
   ([step 10](system-design.md#running-it)).
-- Updating is `docker compose pull`, then `up -d`. `compose.yaml` pins
+- Updating is `docker compose pull`, `up -d`, then `up -d --build phoenix`. `compose.yaml` pins
   `ghcr.io/joy9001/arno:$ARNO_VERSION` (and the matching backup image), and the release
-  workflow pushes the version tag. The API runs `pg_dump` before any migration and writes it to the
+  workflow pushes the version tag. Phoenix is built locally from its pinned context. The API runs `pg_dump` before any migration and writes it to the
   `pre-migration-data` volume, and migrations run in a transaction. After upgrading an instance that
   imported statements before this release, run `arno repair-openings --dry-run` and then
   `arno repair-openings --yes` once: it books each import's printed opening at the statement's
@@ -281,14 +282,21 @@ A deployment works as follows:
   Pydantic AI spans export directly over OTLP/HTTP; there is no Collector, Loki, Prometheus,
   Grafana, custom metric, or log shipper. Standard Python/Uvicorn logs stay on Docker stdout.
   Phoenix uses its own database on the same Postgres server, requires authentication, and publishes
-  only on loopback. Its retention stays at the Phoenix default (0, infinite) unless the operator sets a
-  policy. The app has no telemetry health dependency and keeps serving when Phoenix is down. Tracing
-  is opt-in: with `PHOENIX_COLLECTOR_ENDPOINT` unset, nothing is registered or instrumented. The
-  standard `OTEL_SDK_DISABLED` kill switch and operator journey are in
+  only on loopback. Compose builds `arno-phoenix-cost:21.0.0` from `deploy/phoenix-cost` so a
+  supplied cost, including an explicit zero, is shown rather than recalculated from Phoenix's
+  catalog, and an unknown stays an unpriced count instead of `$0`. Its retention stays at the
+  Phoenix default (0, infinite) unless the operator sets a policy. The app has no telemetry health
+  dependency and keeps serving when Phoenix is down. Tracing is opt-in: with
+  `PHOENIX_COLLECTOR_ENDPOINT` unset, nothing is registered or instrumented. The standard
+  `OTEL_SDK_DISABLED` kill switch, cost journal, replay, and operator journey are in
   [`observability.md`](observability.md).
+- Each model role reads `*_PROVIDER` and `*_BILLING_MODE`. The modes are `metered`, `local`, and
+  `reported`; there is no subscription mode. Every paid path shares one strict store and pricing
+  callback, so a database failure refuses paid inference instead of running uncapped.
 - The API opens one database connection per use rather than a pool, so a Postgres restart leaves
-  nothing to recover. The one exception is a small asyncpg pool for the harness's spend store. While Postgres is down, the API answers with a plain "database unreachable" and
-  spends nothing on the LLM.
+  nothing to recover. The two exceptions are a small asyncpg pool for the spend store and
+  per-operation journal connections. While Postgres is down, the API answers with a plain
+  "database unreachable" and refuses paid inference.
 
 ---
 

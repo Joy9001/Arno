@@ -29,12 +29,14 @@ WEBM = b"\x1aE\xdf\xa3" + b"test-audio"
 class _SttHandler(BaseHTTPRequestHandler):
     calls: list[dict] = []
     response_text = "Swiggy par 450 rupaye"
+    response_usage: dict | None = None
 
     def do_POST(self) -> None:  # noqa: N802 - the stdlib name
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(length)
         type(self).calls.append({"path": self.path, "headers": dict(self.headers), "body": body})
-        payload = json.dumps({"text": type(self).response_text}).encode()
+        body_json = {"text": type(self).response_text, "usage": type(self).response_usage}
+        payload = json.dumps(body_json).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(payload)))
@@ -89,6 +91,7 @@ async def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
 ):
     monkeypatch.setenv("STT_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("STT_MODEL", "blocked-in-tests")
+    monkeypatch.setenv("STT_BILLING_MODE", "local")
     response = authed_client.post(
         "/api/transcribe",
         files={"file": ("voice.webm", WEBM, "audio/webm")},
@@ -134,6 +137,8 @@ async def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_
     monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
     monkeypatch.setenv("STT_MODEL", "stub-whisper")
     monkeypatch.setenv("STT_API_KEY", "secret")
+    # A loopback stub is an explicit local endpoint, not a priced cloud provider.
+    monkeypatch.setenv("STT_BILLING_MODE", "local")
 
     response = authed_client.post(
         "/api/transcribe",
@@ -175,6 +180,53 @@ async def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_
     )
     assert pinned.status_code == 200
     assert b'name="language"' in calls[2]["body"]
+
+
+async def test_a_paid_stt_endpoint_without_a_price_is_refused_before_the_request(
+    authed_client, stt_stub, monkeypatch
+):
+    calls, port = stt_stub
+    monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    monkeypatch.setenv("STT_MODEL", "stub-whisper")
+    monkeypatch.delenv("STT_BILLING_MODE", raising=False)
+
+    response = authed_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_voice_unpriced"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert "pricing is not configured" in payload["note"]
+    assert calls == []
+
+
+async def test_paid_stt_without_reported_usage_records_unknown_and_stops(
+    authed_client, ledger, stt_stub, monkeypatch
+):
+    calls, port = stt_stub
+    monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    monkeypatch.setenv("STT_MODEL", "whisper-1")
+    monkeypatch.setenv("STT_BILLING_MODE", "metered")
+    monkeypatch.setattr("arno.capture.transcribe._preflight", lambda config: None)
+
+    response = authed_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_voice_unknown"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "no usage" in response.json()["note"]
+    assert len(calls) == 1
+    row = await ledger.fetchrow("SELECT usd, complete, source FROM llm_calls WHERE role = 'stt'")
+    assert row is not None
+    assert row["usd"] is None
+    assert row["complete"] is False
+    assert row["source"] == "unknown"
 
 
 async def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(
@@ -394,3 +446,30 @@ async def test_photo_upload_rejects_a_file_that_is_not_an_image(authed_client):
         files={"file": ("notes.txt", b"hello", "text/plain")},
     )
     assert response.status_code == 415
+
+
+@pytest.mark.parametrize("text", ["synthetic transcript", ""])
+async def test_reported_stt_posts_the_charge_even_when_the_transcript_is_empty(
+    authed_client, ledger, stt_stub, monkeypatch, text
+):
+    from decimal import Decimal
+
+    calls, port = stt_stub
+    monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    monkeypatch.setenv("STT_MODEL", "custom-stt")
+    monkeypatch.setenv("STT_PROVIDER", "custom")
+    monkeypatch.setenv("STT_BILLING_MODE", "reported")
+    monkeypatch.setattr(_SttHandler, "response_text", text)
+    monkeypatch.setattr(_SttHandler, "response_usage", {"cost": 0.006})
+    response = authed_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_stt_cost"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == ("transcribed" if text else "failed")
+    assert len(calls) == 1
+    call = await ledger.fetchrow_required("SELECT * FROM llm_calls WHERE role='stt'")
+    assert call["usd"] == Decimal("0.006")
+    assert call["source"] == "provider_reported"
+    assert await ledger.fetchval("SELECT sum(usd_nanos) FROM spend_counters") == 6_000_000

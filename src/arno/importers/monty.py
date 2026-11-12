@@ -22,6 +22,7 @@ from pydantic_monty import (
     OSPolicy,
 )
 
+from arno.agent.spend import COST_STOP_ERRORS
 from arno.importers.checks import check_statement as check_rows
 from arno.importers.helpers import PRELUDE
 from arno.importers.readers import Doc, DocError
@@ -93,6 +94,7 @@ async def run_script(
     context = context or ScriptContext()
     stats: dict[str, Any] = {"calls": {}, "bytes": 0}
     started = time.perf_counter()
+    cost_stop: Exception | None = None
     # The gate passes the import it checks on the context; a replay leaves it None and accepts any.
     expected_import = import_id or context.import_id
 
@@ -157,10 +159,19 @@ async def run_script(
         )
 
     async def transcribe_page(page: Any = 0, *, import_id: Any = None) -> dict[str, Any]:
+        nonlocal cost_stop
         accept_import(import_id)
         if not context.allow_vision:
             raise ValueError("vision is not available in this replay")
-        return await vision_transcribe(doc, int(page))
+        if cost_stop is not None:
+            raise cost_stop
+        try:
+            return await vision_transcribe(doc, int(page))
+        except COST_STOP_ERRORS as exc:
+            # Monty transports host exceptions as script errors. Preserve this stop outside
+            # the sandbox, including when the script catches it and tries another page.
+            cost_stop = exc
+            raise
 
     functions = {
         "doc_info": _counted("doc_info", doc_info, stats),
@@ -189,6 +200,9 @@ async def run_script(
         return _failed(stage, f"Crashed: {str(exc)[:300]}", started, stats)
     except Exception as exc:  # noqa: BLE001 - a sandbox fault is a readable parse failure
         return _failed(stage, f"{type(exc).__name__}: {str(exc)[:300]}", started, stats)
+    finally:
+        if cost_stop is not None:
+            raise cost_stop
 
 
 def _failed(

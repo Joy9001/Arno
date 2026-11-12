@@ -16,6 +16,7 @@ from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai.ui.vercel_ai.request_types import SubmitMessage
 
 from arno.agent import history as history_mod
+from arno.agent.chatgpt_auth import background_inference
 from arno.agent.deps import AgentDeps
 from arno.agent.turns import PreparationBusy, TurnBusy
 from arno.agent.wake import WakePolicy, may_retry, waiting_reports
@@ -91,17 +92,18 @@ async def wake(app: Any, thread_id: str) -> bool:
             sdk_version=7,
             server_message_id=reply_id,
         )
-        await turns.start(
-            adapter=adapter,
-            thread_id=thread_id,
-            message_id=f"wake_{uuid.uuid4().hex}",
-            history=history,
-            deps=deps,
-            title=thread.get("title"),
-            run_id=run_id,
-            reply_id=reply_id,
-            wake=WakePolicy(may_retry=retry),
-        )
+        with background_inference():
+            await turns.start(
+                adapter=adapter,
+                thread_id=thread_id,
+                message_id=f"wake_{uuid.uuid4().hex}",
+                history=history,
+                deps=deps,
+                title=thread.get("title"),
+                run_id=run_id,
+                reply_id=reply_id,
+                wake=WakePolicy(may_retry=retry),
+            )
     except Exception as exc:  # noqa: BLE001 - a failed wake leaves the report for the next message
         if not isinstance(exc, TurnBusy):
             logger.exception("could not start a turn for the waiting report in %s", thread_id)

@@ -157,6 +157,13 @@ def build_agent(
     primary = model or primary_model()
     if backup is None and model is None:
         backup = backup_model()
+    if backup is not None and getattr(primary, "provider_name", None) in {
+        "chatgpt",
+        "openai-chatgpt",
+    }:
+        from pydantic_ai.exceptions import UserError
+
+        raise UserError("ChatGPT plan use cannot fall back automatically. Remove CHAT_FALLBACK_*.")
     if spend_store is None and model is None:
         # A production caller (CLI chat, a host command) gets the same daily ledger as the API
         # instead of a private, absent cap. Tests and evals pass their own model and store.

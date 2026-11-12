@@ -43,7 +43,7 @@ INSTRUCTIONS = (
 async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -> dict[str, Any]:
     """No tools, no history, no ledger access. Returns plain JSON-native data."""
     from arno.agent.capabilities import spend_limits
-    from arno.agent.spend import spend_store_scope
+    from arno.agent.spend import COST_STOP_ERRORS, spend_store_scope
 
     async with spend_store_scope(spend_store) as store:
         limits = spend_limits(store)
@@ -68,6 +68,8 @@ async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -
                 ]
             )
             return result.output.model_dump()
+        except COST_STOP_ERRORS:
+            raise
         except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
             logger.warning("vision transcription failed: %s", type(exc).__name__)
             return {

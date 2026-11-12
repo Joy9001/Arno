@@ -14,11 +14,13 @@ from typing import Any
 
 import pytest
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models import Model
 from pydantic_ai.models.function import FunctionModel
 from pydantic_evals import Case, Dataset
 from pydantic_evals.reporting import EvaluationReport
 from typer.testing import CliRunner
 
+from arno.agent.metering import MeteredModel
 from arno.cli import app
 from arno.db.conn import connect, conninfo_to_dict
 from arno.demo.template import database_dsn, drop_database
@@ -447,7 +449,7 @@ async def test_advice_grader_uses_the_pinned_rubric_judge():
 
 async def _run_case(
     *,
-    model: FunctionModel,
+    model: Model,
     metadata: EvalMeta,
     repeat: int,
 ) -> EvaluationReport[EvalInput, EvalOutput, EvalMeta]:
@@ -473,16 +475,21 @@ async def _run_case(
 
 
 @pytest.mark.xdist_group("cluster")
-async def test_case_lifecycle_clones_a_fresh_database_and_drops_it(eval_template: str):
+async def test_case_lifecycle_clones_a_fresh_database_and_drops_it(eval_template: str, db):
     def script(messages, info):
         return ModelResponse(parts=[TextPart("No data for that period.")])
 
     metadata = EvalMeta(category="honesty", expected={"must_say": ["no data"]})
-    report = await _run_case(model=FunctionModel(script), metadata=metadata, repeat=1)
+    model = MeteredModel(FunctionModel(script), provider="test", billing_mode="local", role="eval")
+    report = await _run_case(model=model, metadata=metadata, repeat=1)
     assert len(report.cases) == 1
     assert all(bool(result.value) for result in report.cases[0].assertions.values())
     assert report.cases[0].output.trial_db
     assert await _admin_count(PREFIX) == 0
+    call = await db.fetchrow_required("SELECT * FROM llm_calls")
+    assert call["status"] == "finalized"
+    assert call["usd"] == 0
+    assert call["session_id"]
 
 
 @pytest.mark.xdist_group("cluster")

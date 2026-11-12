@@ -105,6 +105,8 @@ from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 models.ALLOW_MODEL_REQUESTS = False  # pyrefly: ignore[bad-assignment]
 
 RESET_TABLES = (
+    "model_credentials",
+    "llm_calls",
     "schedule_payments",
     "schedule_occurrences",
     "users",
@@ -153,6 +155,8 @@ SNAPSHOT_SCHEMA = "demo_seed"
 async def _reset(conn: Connection) -> None:
     """Empty every table's rows and put the single-row defaults back."""
     await conn.execute(_TRUNCATE)
+    if await conn.fetchval("SELECT to_regclass('public.spend_counters')"):
+        await conn.execute("TRUNCATE spend_counters, spend_dedup")
     await conn.execute(
         """
         UPDATE settings

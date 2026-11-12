@@ -156,32 +156,83 @@ with different ports. The optional Ollama and speech-to-text ports are fixed at 
 
 ## 3. Configure models
 
-Each role takes an OpenAI-compatible base URL, API key, and model ID. The same code path runs a
-local Ollama/speaches endpoint and a cloud API. Model IDs must be exact, dated versions, never
-floating `latest` aliases; re-run `arno eval --model X` after changing one.
+Each role takes a provider, billing mode, base URL, API key, and model ID. The same code path runs
+a local Ollama/speaches endpoint and a cloud API. `*_BILLING_MODE` is `metered` (default), `local`,
+or `reported`; there is no subscription mode. An unknown price stops paid inference instead of
+running free, so a paid role must name a provider whose price is verified. Model IDs must be
+exact, dated versions, never floating `latest` aliases; re-run `arno eval --model X` after
+changing one.
 
 | Role | Variables | Used for |
 |---|---|---|
-| Chat | `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL` | The agent loop, scheduled questions, the categorizer agent, and briefing prose |
-| Batch | `BATCH_PROVIDER`, `BATCH_API_KEY`, `BATCH_MODEL` | Optional, cloud-only. A model with a batch API—Anthropic, OpenAI, or Gemini—for categorizing a big backfill at about half the price. Leave it unset for a fully local setup |
-| Parse | `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional. The parser subagent; unset, it uses Chat |
-| Vision | `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Photos and scanned statement pages with no text |
-| Speech-to-text | `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL` | Voice notes |
-| Chat fallback | `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL` | Optional backup when the main chat endpoint fails |
+| Chat | `CHAT_PROVIDER`, `CHAT_BILLING_MODE`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL` | The agent loop, scheduled questions, the categorizer agent, and briefing prose |
+| Batch | `BATCH_PROVIDER`, `BATCH_BILLING_MODE`, `BATCH_API_KEY`, `BATCH_MODEL` | Optional, cloud-only. A model with a batch API—Anthropic, OpenAI, or Gemini—for categorizing a big backfill at about half the price. Leave it unset for a fully local setup |
+| Parse | `PARSE_PROVIDER`, `PARSE_BILLING_MODE`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional. The parser subagent; unset, it uses Chat |
+| Vision | `VISION_PROVIDER`, `VISION_BILLING_MODE`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Photos and scanned statement pages with no text |
+| Speech-to-text | `STT_PROVIDER`, `STT_BILLING_MODE`, `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL` | Voice notes |
+| Chat fallback | `CHAT_FALLBACK_PROVIDER`, `CHAT_FALLBACK_BILLING_MODE`, `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL` | Optional backup when the main chat endpoint fails |
+
+Every paid path shares a $20 UTC-day ceiling and a $5 interactive-run ceiling; a scheduled
+question has its own $1 limit. These are runaway brakes, not an invoice cap.
 
 ### 3.1 Cloud chat
 
 ```dotenv
+CHAT_PROVIDER=openai
+CHAT_BILLING_MODE=metered
 CHAT_BASE_URL=https://api.<provider>.com/v1
 CHAT_API_KEY=<key>
 CHAT_MODEL=<exact, dated model id>
 LLM_CONTEXT_WINDOW=<the window the server really uses>
 ```
 
+Anthropic uses its native Messages adapter. Leave `CHAT_BASE_URL` unset for the default endpoint.
+A Console API key works normally; eligible plan credits fund the same API route.
+
+```dotenv
+CHAT_PROVIDER=anthropic
+CHAT_BILLING_MODE=metered
+CHAT_API_KEY=<Console API key>
+CHAT_MODEL=<exact Claude model id>
+LLM_CONTEXT_WINDOW=200000
+```
+
 The default profile needs a cloud key. A free tier may train on or keep prompts: do not use one
 for real statements.
 
-### 3.2 Local chat with Ollama
+### 3.2 ChatGPT plan sign-in
+
+The eligible-plan route uses the native `openai-chatgpt` provider and a sign-in instead of an API
+key. It records an API-equivalent estimate, not a remaining-quota counter, and it cannot fall
+back automatically to a paid API key.
+
+Run the normal flow on the host, where the browser's callback reaches port 1455:
+
+```bash
+uv run arno chatgpt-login --allow-background
+```
+
+In the container, no port 1455 is published, so paste the full callback URL instead:
+
+```bash
+docker compose exec api arno chatgpt-login --manual --no-browser --allow-background
+```
+
+The manual flow prompts with hidden input and checks the callback's scheme, host, path, code, and
+state. It never logs or echoes the code. `--allow-background` is the owner's consent for jobs,
+wake turns, and delegated work; without it, background inference refuses the request.
+`arno chatgpt-logout` deletes the stored sign-in.
+
+```dotenv
+CHAT_PROVIDER=openai-chatgpt
+CHAT_BILLING_MODE=metered
+CHAT_MODEL=gpt-5.4
+LLM_CONTEXT_WINDOW=<the window the model allows>
+```
+
+Use the model your plan allows. Quota failure stays a refusal; there is no hidden paid fallback.
+
+### 3.3 Local chat with Ollama
 
 ```bash
 docker compose --profile local-llm up -d
@@ -189,6 +240,8 @@ docker compose exec ollama ollama pull qwen3:4b
 ```
 
 ```dotenv
+CHAT_PROVIDER=ollama
+CHAT_BILLING_MODE=local
 CHAT_BASE_URL=http://ollama:11434/v1
 CHAT_API_KEY=ollama
 CHAT_MODEL=qwen3:4b
@@ -200,13 +253,15 @@ LLM_CONTEXT_WINDOW=128000
 history silently. Local models are supported, but the eval scorecard records what each one
 handles; the product is designed for a frontier model.
 
-### 3.3 Local speech-to-text
+### 3.4 Local speech-to-text
 
 ```bash
 docker compose --profile local-stt up -d
 ```
 
 ```dotenv
+STT_PROVIDER=openai
+STT_BILLING_MODE=local
 STT_BASE_URL=http://speaches:8000/v1
 STT_MODEL=Systran/faster-whisper-small
 STT_API_KEY=not-needed
@@ -218,9 +273,11 @@ first start (speaches returns 404 until a model is installed). A cloud
 OpenAI-compatible transcription endpoint works too; with a cloud endpoint, the optional payee-name
 prompt sends those names out as well. Set `STT_PAYEE_CONTEXT=0` to keep them local.
 
-### 3.4 Vision
+### 3.5 Vision
 
 ```dotenv
+VISION_PROVIDER=openai
+VISION_BILLING_MODE=metered
 VISION_BASE_URL=https://api.<provider>.com/v1
 VISION_API_KEY=<key>
 VISION_MODEL=<exact, dated model id>
@@ -229,9 +286,11 @@ VISION_MODEL=<exact, dated model id>
 Vision sees a receipt or UPI screenshot. If no vision endpoint is set, statement pages with no
 text and photos fail with a retry card; the rest of the app keeps working.
 
-### 3.5 Fallback
+### 3.6 Fallback
 
 ```dotenv
+CHAT_FALLBACK_PROVIDER=ollama
+CHAT_FALLBACK_BILLING_MODE=local
 CHAT_FALLBACK_BASE_URL=http://ollama:11434/v1
 CHAT_FALLBACK_API_KEY=ollama
 CHAT_FALLBACK_MODEL=qwen3:4b
@@ -240,6 +299,8 @@ CHAT_FALLBACK_CONTEXT_WINDOW=128000
 
 `CHAT_FALLBACK_CONTEXT_WINDOW` must match the backup server's real window. A backup that cannot fit
 the thread refuses the request instead of truncating it. Replies the backup wrote carry a badge.
+A ChatGPT plan primary refuses a configured fallback, because quota failure must not silently
+spend on a paid API key.
 
 ---
 
@@ -426,13 +487,15 @@ docker compose cp api:/app/pre-migration/. ./pre-migration/
 ```
 
 A fresh database has nothing to dump, so the first start skips it. The dump is a fallback, not a
-replacement for the restic backup.
+replacement for the restic backup. It includes stored ChatGPT credentials, so keep that directory
+and its volume private. Restic archives are encrypted; pre-migration SQL dumps are plaintext.
 
 ### 6.4 Update
 
 ```bash
 docker compose pull
 docker compose up -d
+docker compose up -d --build phoenix   # build the pinned supplied-cost image
 ```
 
 The API dumps before any pending migration and runs each migration in a transaction. If an update
@@ -606,6 +669,11 @@ stdout, capped at three 10 MB files per service. Phoenix publishes only on loopb
 <http://127.0.0.1:6006> and requires authentication; its own database and role stay separate from
 the ledger.
 
+Compose builds `arno-phoenix-cost:21.0.0` from `deploy/phoenix-cost`, which accepts Arno's
+supplied `llm.cost.*` and shows unresolved counts instead of drawing an unknown as `$0`. A pull
+does not fetch it: run `docker compose up -d --build phoenix` after upgrading. The build's license
+and patch notes are in that directory.
+
 Compose sets `PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces` and
 `PHOENIX_PROJECT_NAME=arno`. It also maps `PHOENIX_API_KEY` to
 `PHOENIX_ADMIN_SECRET` by default, so the normal start exports with no key creation and no second
@@ -621,9 +689,12 @@ tracing switch. Keep the volumes and never use `docker compose down -v` or `dock
 during rollback.
 
 Phoenix keeps its built-in retention default of **0 days (infinite)** unless the operator sets a
-policy in Phoenix or through `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS`. The app database is backed up;
-Phoenix data is not, and a ledger restore leaves it untouched. Pydantic AI's default instrumentation
-records prompts, replies, and tool data, so Phoenix stays local and loopback-only.
+policy in Phoenix or through `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS`. The app database is backed up,
+including the cost journal in `llm_calls`; Phoenix data is not, and a ledger restore leaves it
+untouched. The `cost_replay` job re-exports pending cost rows every five minutes.
+`docker compose exec api arno cost-replay --finalize-interrupted` is the manual recovery after
+stopping inference; it never rebills. Pydantic AI's default instrumentation records prompts,
+replies, and tool data, so Phoenix stays local and loopback-only.
 
 The operator journey, settings, recovery, and owner commands are in
 [`observability.md`](observability.md).
@@ -641,7 +712,9 @@ The operator journey, settings, recovery, and owner commands are in
 | Backups stopped | Settings → Backup status; `docker compose logs backup`; test `restic snapshots` |
 | A restore refuses | The target has tables; use a fresh database, or `--force` if replacement is intended |
 | The UI is blank | Check the CSP console; the supported build has no inline scripts. Rebuild with `docker compose build api` |
-| Telemetry is missing or degraded | `docker compose ps`; `docker compose logs api` for an exporter error; confirm `PHOENIX_COLLECTOR_ENDPOINT` and `PHOENIX_PROJECT_NAME`; a 401 fails export only; the default bearer credential is `PHOENIX_ADMIN_SECRET`, and `PHOENIX_API_KEY` overrides it; Phoenix is loopback-only |
+| Telemetry is missing or degraded | `docker compose ps`; `docker compose logs api` for an exporter error; confirm `PHOENIX_COLLECTOR_ENDPOINT` and `PHOENIX_PROJECT_NAME`; a 401 fails export only; the default bearer credential is `PHOENIX_ADMIN_SECRET`, and `PHOENIX_API_KEY` overrides it; Phoenix is loopback-only; `arno cost-replay` recovers journaled costs |
+| Paid inference says the price is unknown | Set the role's `*_PROVIDER` to a verified provider, or `*_BILLING_MODE=reported` when the endpoint returns its own charge; `local` is only for a local server |
+| ChatGPT says background use needs consent | Sign in again with `arno chatgpt-login --allow-background`; without it, jobs, wake turns, and delegated work are refused |
 
 Admin commands run on the host, never over HTTP:
 

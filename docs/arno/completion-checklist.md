@@ -1,5 +1,13 @@
 # Completion checklist
 
+- [ ] **Inference accounting and budgets, November 12 scope.** The
+      [feature definition of done](cost-tracking.md#completion-checklist) is implemented but not
+      owner deployed. Pricing/budget/recovery tests, Ruff, Pyrefly, financial invariants, scratch
+      restore, both image builds, app smoke, and rendered Phoenix checks pass. The full suite has
+      1,408 passes and 4 skips. Paid-provider parity, a real ChatGPT sign-in, and owner acceptance
+      remain. The [acceptance log](cost-tracking-acceptance.md) separates synthetic proof from those
+      live checks.
+
 Audit on November 3, 2026, at `109c7ea`. It checks [`plan.md`](plan.md) §5 and "What 'shipped'
 means" against the code, CI, the live instance, and the TODOs in the source.
 
@@ -258,9 +266,9 @@ These start only after group B's durability and import work is done.
 
 Reconciled November 5, 2026. Arno uses Pydantic AI's native OpenTelemetry instrumentation
 and the standard Phoenix SDK, exporting directly to Phoenix. Standard Python/Uvicorn logs stay on
-Docker stdout. There is no Collector, Loki, Prometheus, Grafana, custom metric, manual span, log
-bridge, dashboard, or alert pipeline. The operator path is
-[`observability.md`](observability.md).
+Docker stdout. There is no Collector, Loki, Prometheus, Grafana, custom metric, log bridge,
+dashboard, or alert pipeline. The later cost attempt and cost-only replay spans are the
+exceptions. The operator path is [`observability.md`](observability.md).
 
 - [x] **Source and Compose.** One `phoenix.otel.register()` and `Agent.instrument_all()` per
       process; Phoenix is the only telemetry service. Its authentication, loopback UI, and own
@@ -277,7 +285,8 @@ bridge, dashboard, or alert pipeline. The operator path is
       10 MB files per service; no central log store.
 - [ ] **Owner deployment update.** Rebuild and recreate the API and Phoenix on the host with the
       commands in [`observability.md`](observability.md#owner-commands), without deleting volumes.
-      Defaults are not claimed as deployed until the owner does this.
+      Phoenix now builds Arno's pinned supplied-cost image. Defaults are not claimed as deployed
+      until the owner does this.
 - [x] **Trace authentication.** Compose maps `PHOENIX_API_KEY` to the local
       `PHOENIX_ADMIN_SECRET` by default, so the normal start exports with no API-key creation or
       second restart. An explicit `PHOENIX_API_KEY` overrides the fallback.

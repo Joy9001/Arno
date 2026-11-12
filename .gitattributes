@@ -1,2 +1,5 @@
 # Shell scripts run inside Linux images; a CRLF checkout on Windows breaks their shebang.
 *.sh text eol=lf
+
+# Preserve upstream patch bytes; a blank context line is a required single space.
+deploy/phoenix-cost/patches/*.patch text eol=lf whitespace=-blank-at-eol

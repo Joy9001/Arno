@@ -1,8 +1,15 @@
 # Observability
 
+This guide describes the working tree, which is not yet deployed to the owner instance. The
+[cost tracking and budgets feature](cost-tracking.md) adds supplied costs to the pinned Phoenix
+build (`arno-phoenix-cost:21.0.0`), a small cost journal, and same-ID recovery export. The
+[acceptance log](cost-tracking-acceptance.md) separates the synthetic checks from the pending
+paid-provider and owner-deployment checks.
+
 Arno uses the native tracing of Pydantic AI and the standard Phoenix OpenTelemetry SDK.
-There is no custom span, metric, log bridge, sampler, redaction layer, Collector, Loki,
-Prometheus, Grafana, dashboard, or alerting pipeline. Python and Uvicorn logs stay standard on
+Apart from the cost attempt span and its cost-only replay, there is no custom span, metric, log
+bridge, sampler, redaction layer, Collector, Loki, Prometheus, Grafana, dashboard, or alerting
+pipeline. Python and Uvicorn logs stay standard on
 Docker stdout.
 
 ## What runs
@@ -12,7 +19,7 @@ Docker stdout.
 | `api` | FastAPI, agent, jobs; exports native spans to Phoenix | `127.0.0.1:8000` |
 | `db` | Postgres, including Phoenix's own database and role | `127.0.0.1:5433` |
 | `backup` | pg_dump + restic sidecar | none |
-| `phoenix` | Trace backend and agent UI | `127.0.0.1:6006` |
+| `phoenix` | Trace backend and agent UI; Arno's pinned supplied-cost build | `127.0.0.1:6006` |
 
 Phoenix has authentication on because its container binds `::`; the host publish is
 loopback-only. It keeps its own Postgres database and role and does not use the ledger tables.
@@ -44,8 +51,11 @@ those native attributes to OpenInference on ingestion.
 - Status is Pydantic AI's native status. A successful run stays `UNSET`; a failed or cancelled
   run is `ERROR`. Arno adds no status writer, so it cannot turn an SDK-recorded error into
   success. The trace list shows the same `UNSET`/`ERROR` values Phoenix receives.
-- Tokens and estimated cost appear when Pydantic AI can price the model. No price is invented;
-  an unpriced model has no cost. The Postgres spend ledger remains the budget authority.
+- Cost comes from one observation, never from Phoenix's own catalog. `MeteredModel` writes the
+  `llm.cost.total` and `arno.cost.*` attributes on a child attempt span; a logical request
+  parent is marked and excluded from totals. A measured zero stays zero, a partial subtotal is
+  labeled partial, and an unknown has no amount and appears in the unpriced count. No price is
+  invented. The Postgres spend ledger remains the only budget authority.
 - HTTP requests, database statements, jobs, imports, notifications, and business functions have
   no custom spans or metrics. Their real errors and guardrails are unchanged.
 - A Phoenix outage or bad key fails export only; the app still answers.
@@ -63,6 +73,33 @@ with `/v1/traces` selects OTLP/HTTP. Compose points the API at
 `http://127.0.0.1:6006/v1/traces` if it should export. With no endpoint set, tracing is off:
 nothing is registered or instrumented, so a host command never waits on an exporter that has
 nowhere to send.
+
+## Cost journal and replay
+
+Every real dispatch writes a cost-and-identity-only row to `llm_calls` before the network call and
+finalizes it once the response or failure is known. The row holds no prompt, answer, document,
+credential, or raw provider body, has no `agent_ro` grant, and is not a budget authority. It is
+included in Arno's backups; Phoenix's own database is not.
+
+The `cost_replay` job runs every five minutes. It re-exports finalized rows older than five
+minutes whose recovery export has not been accepted, using the original project, trace, and span
+IDs. Normal batched export has no per-span acknowledgement, so the first recovery pass also
+re-exports observations whose full span may already be present. Phoenix ignores duplicate span
+IDs and retains that full span; replay does not overwrite it. A recovered span is labeled
+`arno.trace.content_unavailable` because prompt and tool content cannot be reconstructed. An
+exporter failure leaves the rows for the next pass. `OTEL_SDK_DISABLED=true` or no endpoint makes
+replay a no-op.
+
+After stopping API and CLI inference, `docker compose exec api arno cost-replay
+--finalize-interrupted` marks interrupted ordinary calls unknown, then replays after the normal
+grace. Provider batches remain pending for collection, even while the API is stopped. The CLI's
+`pending` count includes unfinished and not-yet-exported rows; it does not imply they are safe to
+finalize. Recovery never rebills a call or changes a budget counter.
+
+For uncertain OTLP acceptance, `arno cost-replay --attempt <attempt-id>` retries one immutable
+observation even if its earlier export was accepted. Find the opaque ID in the span's
+`arno.cost.attempt_id` attribute. The same five-minute grace and duplicate-ID protection apply.
+The normal processor remains the standard batch processor; no custom delivery service is involved.
 
 ## Settings
 
@@ -144,7 +181,9 @@ link is printed to that local stdout and should be read from the trusted console
    API key, then recreate the API after changing its environment.
 3. Send one chat message. Open the newest trace. The root is Pydantic AI's `invoke_agent` span,
    with model-request and `execute_tool` children. Its input and output columns show the message
-   you sent and the reply, so the trace list is readable before opening the span.
+   you sent and the reply, so the trace list is readable before opening the span. The model
+   attempt's cost tooltip shows the source, rate revision, and completeness; a partial or
+   unknown count sits beside aggregate cost totals.
 4. If no trace arrives, check `docker compose logs api` for an exporter error, confirm
    `PHOENIX_COLLECTOR_ENDPOINT` is reachable from the API container, confirm
    `OTEL_SDK_DISABLED` is not `true`, and confirm the bearer credential if Phoenix returns 401.
@@ -159,9 +198,10 @@ docker compose config --quiet          # validate the source change
 # Stop the removed services in the existing default arno project; retain their data.
 docker stop arno-otel-collector-1 arno-loki-1 arno-prometheus-1 arno-grafana-1
 docker compose up -d --build api       # rebuild and recreate the API with the new tracing
-docker compose up -d phoenix           # recreate Phoenix only if its env changed
+docker compose up -d --build phoenix   # build the pinned supplied-cost image
 docker compose ps                      # verify api, db, backup, and phoenix
 docker compose logs api                # standard app and Uvicorn logs
+docker compose exec api arno cost-replay   # manual cost-only recovery, if needed
 ```
 
 Do not run `docker compose down -v`, `docker volume rm`, or `docker rm -v`. Source changes remove

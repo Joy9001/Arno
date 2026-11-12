@@ -22,6 +22,7 @@ logger = logging.getLogger("arno.jobs.schedules")
 
 INDIA = ZoneInfo("Asia/Kolkata")
 BUILTIN_KINDS = (
+    "cost_replay",
     "weekly_briefing",
     "reminders",
     "risk_check",
@@ -66,6 +67,7 @@ def builtin_rules(settings: dict[str, Any]) -> dict[str, str]:
     notification = _time_value(settings.get("notification_time"), time(8, 0))
     briefing_day = int(settings.get("weekly_briefing_dow") or 0)
     rules = {
+        "cost_replay": "FREQ=MINUTELY;INTERVAL=5",
         "weekly_briefing": (
             f"FREQ=WEEKLY;BYDAY={WEEKDAYS[briefing_day]};"
             f"BYHOUR={notification.hour};BYMINUTE={notification.minute}"
@@ -134,7 +136,7 @@ def period_for(kind: str, occurrence: datetime, payload: dict[str, Any] | None =
     local = occurrence.astimezone(INDIA)
     if kind == "weekly_briefing":
         return local.strftime("%G-W%V")
-    if kind == "scheduled_question":
+    if kind in {"scheduled_question", "cost_replay"}:
         return local.strftime("%Y-%m-%dT%H:%M")
     return local.strftime("%Y-%m-%d")
 

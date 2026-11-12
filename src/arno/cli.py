@@ -8,11 +8,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import sys
 import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import typer
 import uvicorn
@@ -56,6 +58,114 @@ app.add_typer(passkeys_app, name="passkeys")
 app.add_typer(demo_app, name="demo")
 
 logger = logging.getLogger("arno")
+
+
+@app.command("cost-replay")
+def cost_replay(
+    limit: int = typer.Option(100, min=1, max=1000, help="Maximum finalized calls to replay."),
+    finalize_interrupted: bool = typer.Option(
+        False,
+        help="Mark interrupted calls unknown. Pause inference first; batch items stay pending.",
+    ),
+    attempt: str | None = typer.Option(
+        None, help="Retry one immutable cost export, accepted or pending."
+    ),
+) -> None:
+    """Recover cost-only Phoenix spans; does not rerun models or change budgets."""
+    from arno.agent.cost_journal import finalize_interrupted_calls, replay_costs
+
+    _settings()
+    if finalize_interrupted:
+        count = asyncio.run(finalize_interrupted_calls())
+        typer.echo(f"Marked {count} interrupted calls unknown; replay follows the normal grace.")
+    result = asyncio.run(
+        replay_costs(limit, attempt_id=attempt) if attempt else replay_costs(limit)
+    )
+    typer.echo(
+        f"exported {result['exported']}; failed {result['failed']}; pending {result['pending']}"
+    )
+
+
+@app.command("chatgpt-login")
+def chatgpt_login(
+    allow_background: bool = typer.Option(
+        False, help="Allow jobs, wake turns, and delegated work."
+    ),
+    browser: bool = typer.Option(True, "--browser/--no-browser", help="Open the sign-in URL."),
+    manual: bool = typer.Option(False, help="Paste the callback URL privately for container use."),
+) -> None:
+    """Sign in locally using the native ChatGPT consent and loopback callback flow."""
+    _settings()
+    try:
+        asyncio.run(
+            _chatgpt_login(allow_background=allow_background, browser=browser, manual=manual)
+        )
+    except Exception as exc:
+        typer.echo(f"ChatGPT sign-in failed ({type(exc).__name__}).", err=True)
+        raise typer.Exit(1) from exc
+
+
+async def _chatgpt_login(*, allow_background: bool, browser: bool, manual: bool) -> None:
+    import webbrowser
+
+    from pydantic_ai.exceptions import UserError
+
+    from arno.agent.chatgpt_auth import DatabaseChatGPTCredentialSource, chatgpt_sign_in
+
+    source = DatabaseChatGPTCredentialSource()
+    try:
+        previous = await source.load()
+    except UserError:
+        previous = None
+    url, flow = chatgpt_sign_in(client_id=previous.client_id if previous else None)
+    typer.echo("Open this sign-in URL in your browser:")
+    typer.echo(url)
+    if browser:
+        webbrowser.open(url)
+    if manual:
+        # The browser's loopback redirect need not reach the container. Paste it through the
+        # terminal, never a command argument, and bind it to this flow before exchanging the code.
+        callback = typer.prompt("Paste the full callback URL (input hidden)", hide_input=True)
+        parsed = urlsplit(callback)
+        expected = urlsplit(flow.redirect_uri)
+        params = parse_qs(parsed.query)
+        state = params.get("state", [""])
+        codes = params.get("code", [])
+        if (
+            (parsed.scheme, parsed.netloc, parsed.path)
+            != (expected.scheme, expected.netloc, expected.path)
+            or len(state) != 1
+            or not secrets.compare_digest(state[0], flow.state)
+            or len(codes) != 1
+            or not codes[0]
+            or "error" in params
+        ):
+            raise UserError("The callback does not match this sign-in flow.")
+        credentials = await flow.exchange_code(
+            codes[0], client_id=params.get("client_id", [None])[0]
+        )
+    else:
+        typer.echo("Waiting up to five minutes on 127.0.0.1:1455.")
+        credentials = await asyncio.wait_for(flow.exchange_code_from_callback(), timeout=300)
+    await source.save(credentials)
+    async with connect() as conn:
+        await conn.execute(
+            "UPDATE model_credentials SET allow_background = $1 WHERE provider = 'openai-chatgpt'",
+            allow_background,
+        )
+    if not credentials.plan_usage_granted:
+        raise UserError("Sign-in saved without plan consent. Sign in again and grant plan usage.")
+    typer.echo("ChatGPT sign-in saved. Restart the agent if it was already running.")
+
+
+@app.command("chatgpt-logout")
+def chatgpt_logout() -> None:
+    """Disconnect Arno's stored ChatGPT sign-in, without revoking other apps' grants."""
+    from arno.agent.chatgpt_auth import revoke_chatgpt_sign_in
+
+    _settings()
+    removed = asyncio.run(revoke_chatgpt_sign_in())
+    typer.echo("ChatGPT disconnected." if removed else "ChatGPT was already disconnected.")
 
 
 def _settings() -> Settings:

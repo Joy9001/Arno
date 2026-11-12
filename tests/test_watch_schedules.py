@@ -109,3 +109,15 @@ def test_builtin_rules_are_valid_rrules():
     now = datetime.now(INDIA)
     for rule in rules.values():
         assert next_occurrence(rule, after=now) is not None
+
+
+async def test_cost_replay_gets_a_distinct_job_for_each_five_minute_occurrence(db):
+    await ensure_builtin_schedules(db)
+    first = datetime(2026, 11, 12, 8, 0, tzinfo=INDIA)
+    for offset in (0, 5):
+        at = first + timedelta(minutes=offset)
+        await db.execute("UPDATE job_schedules SET next_run_at=$1 WHERE kind='cost_replay'", at)
+        await enqueue_due_schedules(db, now=at + timedelta(seconds=1))
+    jobs = await db.fetch("SELECT key FROM jobs WHERE kind='cost_replay'")
+    assert len(jobs) == 2
+    assert len({job["key"] for job in jobs}) == 2

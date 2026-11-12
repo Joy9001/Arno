@@ -17,6 +17,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from typing import Any
 
+from arno.agent.chatgpt_auth import background_inference
+from arno.agent.cost_journal import cost_identity
+from arno.agent.spend import COST_STOP_ERRORS
 from arno.db.conn import Connection, connect
 
 logger = logging.getLogger("arno.jobs")
@@ -43,6 +46,7 @@ def default_handlers() -> dict[str, Handler]:
     from arno.importers.categorize import handle_categorize_import, handle_collect_batch
     from arno.jobs.backup import handle_backup_check
     from arno.jobs.briefing import handle_weekly_briefing
+    from arno.jobs.costs import handle_cost_replay
     from arno.jobs.patterns import handle_pattern_detection
     from arno.jobs.questions import handle_scheduled_question
     from arno.jobs.recaps import handle_recaps
@@ -50,6 +54,7 @@ def default_handlers() -> dict[str, Handler]:
     from arno.jobs.risk import handle_risk_check
 
     return {
+        "cost_replay": handle_cost_replay,
         "recompute_baselines": handle_recompute_baselines,
         "weekly_briefing": handle_weekly_briefing,
         "reminders": handle_reminders,
@@ -373,12 +378,13 @@ class JobRunner:
         timeout = self.timeouts.get(kind, 120)
         try:
             payload = dict(job.get("payload") or {})
-            if inspect.iscoroutinefunction(handler):
-                result = await asyncio.wait_for(handler(payload), timeout=timeout)
-            else:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(handler, payload), timeout=timeout
-                )
+            with background_inference(), cost_identity(workload=f"job:{job_id}"):
+                if inspect.iscoroutinefunction(handler):
+                    result = await asyncio.wait_for(handler(payload), timeout=timeout)
+                else:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(handler, payload), timeout=timeout
+                    )
             async with connect() as conn:
                 await _finish(conn, job_id, status="done", result=result)
         except asyncio.CancelledError:
@@ -387,6 +393,12 @@ class JobRunner:
             logger.warning("job %s gave up: %s", job["key"], exc)
             async with connect() as conn:
                 await _fail(conn, job, str(exc), timed_out=False, final=True)
+        except COST_STOP_ERRORS as exc:
+            logger.warning(
+                "job %s stopped by inference accounting (%s)", job["key"], type(exc).__name__
+            )
+            async with connect() as conn:
+                await _fail(conn, job, type(exc).__name__, timed_out=False, final=True)
         except TimeoutError:
             after = f" after {float(timeout):.0f}s" if timeout is not None else ""
             logger.warning("job %s timed out%s", job["key"], after)

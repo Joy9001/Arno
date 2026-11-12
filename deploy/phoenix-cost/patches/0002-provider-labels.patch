@@ -1,0 +1,46 @@
+diff --git a/js/app/src/pages/project/metrics/TopModelsByCost.tsx b/js/app/src/pages/project/metrics/TopModelsByCost.tsx
+--- a/js/app/src/pages/project/metrics/TopModelsByCost.tsx
++++ b/js/app/src/pages/project/metrics/TopModelsByCost.tsx
+@@ -51,6 +51,7 @@
+             }
+             topModelsByCost(timeRange: $timeRange) {
+               name
++              provider
+               costSummary(projectId: $projectId, timeRange: $timeRange) {
+                 prompt {
+                   cost
+@@ -87,7 +88,10 @@
+     useMetricQueryFetchOptions()
+   );
+ 
+-  const models = data.project.topModelsByCost ?? [];
++  const models = (data.project.topModelsByCost ?? []).map((model) => ({
++    ...model,
++    name: `${model.provider ?? "unknown"} / ${model.name}`,
++  }));
+   const { chartData, series } = buildModelTokenDetailChartData({
+     metric: "cost",
+     models,
+diff --git a/js/app/src/pages/project/metrics/TopModelsByToken.tsx b/js/app/src/pages/project/metrics/TopModelsByToken.tsx
+--- a/js/app/src/pages/project/metrics/TopModelsByToken.tsx
++++ b/js/app/src/pages/project/metrics/TopModelsByToken.tsx
+@@ -42,6 +42,7 @@
+           ... on Project {
+             topModelsByTokenCount(timeRange: $timeRange) {
+               name
++              provider
+               costSummary(projectId: $projectId, timeRange: $timeRange) {
+                 prompt {
+                   tokens
+@@ -80,7 +81,10 @@
+ 
+   const { chartData, series } = buildModelTokenDetailChartData({
+     metric: "tokens",
+-    models: data.project.topModelsByTokenCount ?? [],
++    models: (data.project.topModelsByTokenCount ?? []).map((model) => ({
++      ...model,
++      name: `${model.provider ?? "unknown"} / ${model.name}`,
++    })),
+   });
+   const colorByDataKey = getModelTokenDetailColors({ colors, series });
+   // A model with no measured usage contributes no series, and a chart with no

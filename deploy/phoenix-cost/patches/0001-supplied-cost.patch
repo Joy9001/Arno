@@ -1,0 +1,2030 @@
+diff --git a/js/app/schema.graphql b/js/app/schema.graphql
+index ba35b58..0ef6b0d 100644
+--- a/js/app/schema.graphql
++++ b/js/app/schema.graphql
+@@ -4585,6 +4585,22 @@ type SpanCostSummary {
+   prompt: CostBreakdown!
+   completion: CostBreakdown!
+   total: CostBreakdown!
++  """
++  Calls whose cost is unknown. A dollar total beside a count above zero is a subtotal, not a measured zero.
++  """
++  unpricedCount: Int!
++  """Calls priced from a partial observation, so the total omits part of the usage."""
++  partialCount: Int!
++  """Calls with a known amount, including measured zeros and partial subtotals."""
++  costedCount: Int!
++  """Where a supplied cost came from, e.g. reported, estimated, or local_zero."""
++  source: String
++  """The effective rate revision a supplied estimate used."""
++  priceRevision: String
++  """The billing arrangement a supplied cost describes, e.g. balance or go."""
++  billingSource: String
++  """known, partial, or unknown. Unknown means no call had a known amount."""
++  completeness: String!
+ }
+ 
+ type SpanCountTimeSeries {
+@@ -5039,6 +5055,14 @@ type TraceTokenCostTimeSeriesDataPoint {
+   promptCost: Float
+   completionCost: Float
+   totalCost: Float
++  """
++  Calls in this bin whose cost is unknown. A bin with only these has no total, and its cost is not zero.
++  """
++  unpricedCount: Int!
++  """Calls in this bin priced from a partial observation, so its total omits part of the usage."""
++  partialCount: Int!
++  """Calls in this bin with a known amount, including measured zeros and partial subtotals."""
++  costedCount: Int!
+ }
+ 
+ type TraceTokenCountDetailsTimeSeriesEntry {
+diff --git a/js/app/src/components/trace/SessionTokenCosts.tsx b/js/app/src/components/trace/SessionTokenCosts.tsx
+index fa7ef01..5f23c9b 100644
+--- a/js/app/src/components/trace/SessionTokenCosts.tsx
++++ b/js/app/src/components/trace/SessionTokenCosts.tsx
+@@ -7,12 +7,18 @@ import { RichTooltip, TooltipArrow, TooltipTrigger } from "@phoenix/components";
+ import { SessionTokenCostsDetails } from "./SessionTokenCostsDetails";
+ import { TokenCosts } from "./TokenCosts";
+ import { TokenDetailsBreakdownSkeleton } from "./TokenDetailsBreakdown";
++import type { CostStatusCounts } from "./costStatus";
++import { getCostStatus } from "./costStatus";
+ 
+ type SessionTokenCostsProps = {
+   /**
+    * The total cost of the session
+    */
+   totalCost: number;
++  /**
++   * Counts that qualify the total, from the same summary it came from.
++   */
++  counts?: CostStatusCounts;
+   /**
+    * The id of the session node
+    */
+@@ -30,7 +36,12 @@ export function SessionTokenCosts(props: SessionTokenCostsProps) {
+   return (
+     <TooltipTrigger>
+       <Pressable>
+-        <TokenCosts size={props.size} role="button" tabIndex={0}>
++        <TokenCosts
++          size={props.size}
++          role="button"
++          tabIndex={0}
++          status={props.counts ? getCostStatus(props.counts) : undefined}
++        >
+           {props.totalCost}
+         </TokenCosts>
+       </Pressable>
+diff --git a/js/app/src/components/trace/SessionTokenCostsDetails.tsx b/js/app/src/components/trace/SessionTokenCostsDetails.tsx
+index ec2a8cc..77b2e0e 100644
+--- a/js/app/src/components/trace/SessionTokenCostsDetails.tsx
++++ b/js/app/src/components/trace/SessionTokenCostsDetails.tsx
+@@ -3,6 +3,7 @@ import { graphql, useLazyLoadQuery } from "react-relay";
+ 
+ import type { SessionTokenCostsDetailsQuery } from "./__generated__/SessionTokenCostsDetailsQuery.graphql";
+ import { TokenCostsDetails } from "./TokenCostsDetails";
++import { getCostStatus } from "./costStatus";
+ 
+ export function SessionTokenCostsDetails(props: { sessionNodeId: string }) {
+   const data = useLazyLoadQuery<SessionTokenCostsDetailsQuery>(
+@@ -11,6 +12,20 @@ export function SessionTokenCostsDetails(props: { sessionNodeId: string }) {
+         node(id: $nodeId) {
+           __typename
+           ... on ProjectSession {
++            costSummary {
++              total {
++                cost
++              }
++              prompt {
++                cost
++              }
++              completion {
++                cost
++              }
++              unpricedCount
++              partialCount
++              costedCount
++            }
+             costDetailSummaryEntries {
+               tokenType
+               isPrompt
+@@ -66,9 +81,13 @@ export function SessionTokenCostsDetails(props: { sessionNodeId: string }) {
+       });
+ 
+       return {
+-        total: promptTotal + completionTotal,
+-        prompt: promptTotal > 0 ? promptTotal : null,
+-        completion: completionTotal > 0 ? completionTotal : null,
++        total: data.node.costSummary?.total?.cost ?? promptTotal + completionTotal,
++        prompt:
++          data.node.costSummary?.prompt?.cost ??
++          (promptTotal > 0 ? promptTotal : null),
++        completion:
++          data.node.costSummary?.completion?.cost ??
++          (completionTotal > 0 ? completionTotal : null),
+         promptDetails:
+           Object.keys(promptDetails).length > 0 ? promptDetails : null,
+         completionDetails:
+@@ -85,5 +104,12 @@ export function SessionTokenCostsDetails(props: { sessionNodeId: string }) {
+     };
+   }, [data.node]);
+ 
+-  return <TokenCostsDetails {...costData} />;
++  const summary =
++    data.node.__typename === "ProjectSession" ? data.node.costSummary : null;
++  return (
++    <TokenCostsDetails
++      {...costData}
++      status={summary ? getCostStatus(summary) : undefined}
++    />
++  );
+ }
+diff --git a/js/app/src/components/trace/SpanTokenCosts.tsx b/js/app/src/components/trace/SpanTokenCosts.tsx
+index 006487c..7195d2f 100644
+--- a/js/app/src/components/trace/SpanTokenCosts.tsx
++++ b/js/app/src/components/trace/SpanTokenCosts.tsx
+@@ -7,12 +7,18 @@ import { RichTooltip, TooltipArrow, TooltipTrigger } from "@phoenix/components";
+ import { SpanTokenCostsDetails } from "./SpanTokenCostsDetails";
+ import { TokenCosts } from "./TokenCosts";
+ import { TokenDetailsBreakdownSkeleton } from "./TokenDetailsBreakdown";
++import type { CostStatusCounts } from "./costStatus";
++import { getCostStatus } from "./costStatus";
+ 
+ type SpanTokenCostsProps = {
+   /**
+    * The total cost of the span
+    */
+   totalCost: number;
++  /**
++   * Counts that qualify the total, from the same summary it came from.
++   */
++  counts?: CostStatusCounts;
+   /**
+    * The id of the span node
+    */
+@@ -39,6 +45,7 @@ export function SpanTokenCosts(props: SpanTokenCostsProps) {
+           color={props.color}
+           role="button"
+           tabIndex={0}
++          status={props.counts ? getCostStatus(props.counts) : undefined}
+         >
+           {props.totalCost}
+         </TokenCosts>
+diff --git a/js/app/src/components/trace/SpanTokenCostsDetails.tsx b/js/app/src/components/trace/SpanTokenCostsDetails.tsx
+index 2b2f979..2b92679 100644
+--- a/js/app/src/components/trace/SpanTokenCostsDetails.tsx
++++ b/js/app/src/components/trace/SpanTokenCostsDetails.tsx
+@@ -3,6 +3,7 @@ import { graphql, useLazyLoadQuery } from "react-relay";
+ 
+ import type { SpanTokenCostsDetailsQuery } from "./__generated__/SpanTokenCostsDetailsQuery.graphql";
+ import { TokenCostsDetails } from "./TokenCostsDetails";
++import { getCostProvenance, getCostStatus } from "./costStatus";
+ 
+ export function SpanTokenCostsDetails(props: { spanNodeId: string }) {
+   const data = useLazyLoadQuery<SpanTokenCostsDetailsQuery>(
+@@ -21,6 +22,12 @@ export function SpanTokenCostsDetails(props: { spanNodeId: string }) {
+               completion {
+                 cost
+               }
++              unpricedCount
++              partialCount
++              costedCount
++              source
++              priceRevision
++              billingSource
+             }
+             costDetailSummaryEntries {
+               tokenType
+@@ -91,5 +98,13 @@ export function SpanTokenCostsDetails(props: { spanNodeId: string }) {
+     };
+   }, [data.node]);
+ 
+-  return <TokenCostsDetails {...costData} />;
++  const summary =
++    data.node.__typename === "Span" ? data.node.costSummary : null;
++  return (
++    <TokenCostsDetails
++      {...costData}
++      status={summary ? getCostStatus(summary) : undefined}
++      provenance={summary ? getCostProvenance(summary) : null}
++    />
++  );
+ }
+diff --git a/js/app/src/components/trace/TokenCosts.tsx b/js/app/src/components/trace/TokenCosts.tsx
+index 08d2bf5..a242d03 100644
+--- a/js/app/src/components/trace/TokenCosts.tsx
++++ b/js/app/src/components/trace/TokenCosts.tsx
+@@ -6,6 +6,8 @@ import { Text } from "@phoenix/components";
+ import { quietHoverCSS } from "@phoenix/components/core/styles";
+ import { costFormatter } from "@phoenix/utils/numberFormatUtils";
+ 
++import type { CostStatus } from "./costStatus";
++
+ const tokenCostsItemCSS = css`
+   display: flex;
+   flex-direction: row;
+@@ -27,15 +29,30 @@ interface TokenCostsProps extends HTMLAttributes<HTMLDivElement> {
+   children: number | null | undefined;
+   size?: TextProps["size"];
+   color?: TextProps["color"];
++  /**
++   * How complete the total is. An unknown total draws as "unknown" rather
++   * than as a measured zero.
++   */
++  status?: CostStatus;
+ }
+ 
+ function TokenCosts({
+   ref,
+   ...props
+ }: TokenCostsProps & { ref?: Ref<HTMLDivElement> }) {
+-  const { children, size = "M", color = "text-900", ...otherProps } = props;
++  const {
++    children,
++    size = "M",
++    color = "text-900",
++    status,
++    ...otherProps
++  } = props;
+ 
+-  const text = typeof children === "number" ? costFormatter(children) : "--";
++  const isUnknown = status?.kind === "unknown";
++  const text =
++    !isUnknown && typeof children === "number"
++      ? costFormatter(children)
++      : "--";
+   return (
+     <div
+       className="token-costs-item"
+@@ -47,6 +64,11 @@ function TokenCosts({
+       <Text size={props.size} color={color} fontFamily="mono">
+         {text}
+       </Text>
++      {status?.label ? (
++        <Text size="XS" color="text-500" title={status.description}>
++          {status.label}
++        </Text>
++      ) : null}
+     </div>
+   );
+ }
+diff --git a/js/app/src/components/trace/TokenCostsDetails.tsx b/js/app/src/components/trace/TokenCostsDetails.tsx
+index 9c3b74f..b96452c 100644
+--- a/js/app/src/components/trace/TokenCostsDetails.tsx
++++ b/js/app/src/components/trace/TokenCostsDetails.tsx
+@@ -3,12 +3,17 @@ import {
+   getTokenDetails,
+   TokenDetailsBreakdown,
+ } from "./TokenDetailsBreakdown";
++import type { CostStatus } from "./costStatus";
+ 
+ export type TokenCostsDetailsProps = TokenDetailTotals & {
+   /**
+    * Qualifies the cost in the heading, e.g. "Average". Omit for a plain total.
+    */
+   label?: string;
++  /** How complete the cost total is; omitted for a plain total. */
++  status?: CostStatus;
++  /** A supplied cost's provenance, when this is one call's observation. */
++  provenance?: string | null;
+ };
+ 
+ type CostDetailSummaryEntry = {
+@@ -44,6 +49,18 @@ export function getTokenCostDetailsFromCostDetails(
+  * The cost side of {@link TokenDetailsBreakdown} on its own, for surfaces
+  * that show a cost without its token count.
+  */
+-export function TokenCostsDetails({ label, ...costs }: TokenCostsDetailsProps) {
+-  return <TokenDetailsBreakdown costs={costs} totalLabel={label} />;
++export function TokenCostsDetails({
++  label,
++  status,
++  provenance,
++  ...costs
++}: TokenCostsDetailsProps) {
++  return (
++    <TokenDetailsBreakdown
++      costs={costs}
++      totalLabel={label}
++      status={status}
++      provenance={provenance}
++    />
++  );
+ }
+diff --git a/js/app/src/components/trace/TokenDetailsBreakdown.tsx b/js/app/src/components/trace/TokenDetailsBreakdown.tsx
+index bb51e45..04d4426 100644
+--- a/js/app/src/components/trace/TokenDetailsBreakdown.tsx
++++ b/js/app/src/components/trace/TokenDetailsBreakdown.tsx
+@@ -27,6 +27,8 @@ import {
+   getTokenKindLabel,
+ } from "@phoenix/utils/tokenDetailUtils";
+ 
++import type { CostStatus } from "./costStatus";
++
+ /**
+  * Values keyed by token type, e.g. `{ input: 12, cache_read: 4 }`.
+  */
+@@ -93,6 +95,10 @@ export interface TokenDetailsBreakdownProps {
+    * mean per run. Omit for plain totals.
+    */
+   totalLabel?: string;
++  /** How complete the cost total is; omitted for a plain total. */
++  status?: CostStatus;
++  /** A supplied cost's provenance, e.g. "estimated list price · rates 2026.11". */
++  provenance?: string | null;
+ }
+ 
+ /**
+@@ -370,6 +376,8 @@ export function TokenDetailsBreakdown({
+   tokens,
+   costs,
+   totalLabel,
++  status,
++  provenance,
+ }: TokenDetailsBreakdownProps) {
+   const colors = useCategoryChartColors();
+   const { measures, segments, dimensions } = buildTokenBreakdown({
+@@ -398,6 +406,7 @@ export function TokenDetailsBreakdown({
+           </Text>
+         ) : null}
+       </header>
++      <CostStatusNote status={status} provenance={provenance} />
+       <BreakdownBars segments={segments} dimensions={dimensions} />
+       {segments.length > 0 ? (
+         <>
+@@ -409,6 +418,41 @@ export function TokenDetailsBreakdown({
+   );
+ }
+ 
++/**
++ * What the cost total does not cover, and where a supplied amount came from.
++ *
++ * The counts live on the summary, so they are shown here beside the total
++ * rather than as another badge with no room for "why".
++ */
++function CostStatusNote({
++  status,
++  provenance,
++}: Pick<TokenDetailsBreakdownProps, "status" | "provenance">) {
++  if (!status?.description && !provenance) {
++    return null;
++  }
++  return (
++    <div css={costStatusNoteCSS}>
++      {status?.description ? (
++        <Text size="XS" color="text-700">
++          {status.description}
++        </Text>
++      ) : null}
++      {provenance ? (
++        <Text size="XS" color="text-500">
++          {provenance}
++        </Text>
++      ) : null}
++    </div>
++  );
++}
++
++const costStatusNoteCSS = css`
++  display: flex;
++  flex-direction: column;
++  gap: var(--global-dimension-size-25);
++`;
++
+ export interface TokenDetailsBreakdownSkeletonProps extends TokenDetailsBreakdownProps {
+   /**
+    * How many token-type rows to leave room for in the table. The default
+diff --git a/js/app/src/components/trace/TraceTokenCosts.tsx b/js/app/src/components/trace/TraceTokenCosts.tsx
+index 6d57a15..209c5e0 100644
+--- a/js/app/src/components/trace/TraceTokenCosts.tsx
++++ b/js/app/src/components/trace/TraceTokenCosts.tsx
+@@ -7,12 +7,18 @@ import { RichTooltip, TooltipArrow, TooltipTrigger } from "@phoenix/components";
+ import { TokenCosts } from "./TokenCosts";
+ import { TokenDetailsBreakdownSkeleton } from "./TokenDetailsBreakdown";
+ import { TraceTokenCostsDetails } from "./TraceTokenCostsDetails";
++import type { CostStatusCounts } from "./costStatus";
++import { getCostStatus } from "./costStatus";
+ 
+ type TraceTokenCostsProps = {
+   /**
+    * The total cost of the trace
+    */
+   totalCost: number;
++  /**
++   * Counts that qualify the total, from the same summary it came from.
++   */
++  counts?: CostStatusCounts;
+   /**
+    * The id of the trace node
+    */
+@@ -30,7 +36,12 @@ export function TraceTokenCosts(props: TraceTokenCostsProps) {
+   return (
+     <TooltipTrigger>
+       <Pressable>
+-        <TokenCosts size={props.size} role="button" tabIndex={0}>
++        <TokenCosts
++          size={props.size}
++          role="button"
++          tabIndex={0}
++          status={props.counts ? getCostStatus(props.counts) : undefined}
++        >
+           {props.totalCost}
+         </TokenCosts>
+       </Pressable>
+diff --git a/js/app/src/components/trace/TraceTokenCostsDetails.tsx b/js/app/src/components/trace/TraceTokenCostsDetails.tsx
+index ddf1cf5..33080e6 100644
+--- a/js/app/src/components/trace/TraceTokenCostsDetails.tsx
++++ b/js/app/src/components/trace/TraceTokenCostsDetails.tsx
+@@ -3,6 +3,7 @@ import { graphql, useLazyLoadQuery } from "react-relay";
+ 
+ import type { TraceTokenCostsDetailsQuery } from "./__generated__/TraceTokenCostsDetailsQuery.graphql";
+ import { TokenCostsDetails } from "./TokenCostsDetails";
++import { getCostStatus } from "./costStatus";
+ 
+ export function TraceTokenCostsDetails(props: { traceNodeId: string }) {
+   const data = useLazyLoadQuery<TraceTokenCostsDetailsQuery>(
+@@ -21,6 +22,9 @@ export function TraceTokenCostsDetails(props: { traceNodeId: string }) {
+               completion {
+                 cost
+               }
++              unpricedCount
++              partialCount
++              costedCount
+             }
+             costDetailSummaryEntries {
+               tokenType
+@@ -91,5 +95,12 @@ export function TraceTokenCostsDetails(props: { traceNodeId: string }) {
+     };
+   }, [data.node]);
+ 
+-  return <TokenCostsDetails {...costData} />;
++  const summary =
++    data.node.__typename === "Trace" ? data.node.costSummary : null;
++  return (
++    <TokenCostsDetails
++      {...costData}
++      status={summary ? getCostStatus(summary) : undefined}
++    />
++  );
+ }
+diff --git a/js/app/src/components/trace/costStatus.ts b/js/app/src/components/trace/costStatus.ts
+new file mode 100644
+index 0000000..c5281e3
+--- /dev/null
++++ b/js/app/src/components/trace/costStatus.ts
+@@ -0,0 +1,124 @@
++/**
++ * How complete a cost total is, and what to say beside it.
++ *
++ * A dollar total alone cannot tell a measured zero from an unknown price or a
++ * complete total from a subtotal. The cost summary counts the calls in each
++ * state; this turns them into one label for the inline total and one sentence
++ * for its tooltip.
++ */
++
++export type CostStatusKind = "known" | "partial" | "unknown";
++
++export interface CostStatusCounts {
++  /** Calls with a known amount, including measured zeros and subtotals. */
++  costedCount?: number | null;
++  /** Calls with no usable price. */
++  unpricedCount?: number | null;
++  /** Calls priced from a partial observation. */
++  partialCount?: number | null;
++}
++
++export interface CostStatus {
++  kind: CostStatusKind;
++  /** Short text beside the total; empty when the total needs no qualifier. */
++  label: string;
++  /** Full sentence for a tooltip; empty when the total needs no qualifier. */
++  description: string;
++  costedCount: number;
++  unpricedCount: number;
++  partialCount: number;
++}
++
++function plural(count: number, noun: string) {
++  return `${count} ${noun}${count === 1 ? "" : "s"}`;
++}
++
++/**
++ * Classifies a cost summary.
++ *
++ * Unknown means no call had a known amount, so the zero in the summary is an
++ * absence of data rather than a measured zero. Partial covers both an unpriced
++ * call beside priced ones and a subtotal that omits part of its own usage.
++ *
++ * @param counts - The summary's call counts; omitted for instrumentations that
++ *   supply neither, which read as a plain known total.
++ * @returns The kind, its short label, and a description of what is missing.
++ */
++export function getCostStatus(counts: CostStatusCounts): CostStatus {
++  const costedCount = counts.costedCount ?? 0;
++  const unpricedCount = counts.unpricedCount ?? 0;
++  const partialCount = counts.partialCount ?? 0;
++  const missing = [
++    unpricedCount > 0 ? `${plural(unpricedCount, "call")} unpriced` : null,
++    partialCount > 0
++      ? `${plural(partialCount, "call")} priced from a partial observation`
++      : null,
++  ].filter((part): part is string => part !== null);
++  if (costedCount === 0 && unpricedCount > 0) {
++    return {
++      kind: "unknown",
++      label: "unknown",
++      description: `Cost unknown: ${missing.join("; ")}.`,
++      costedCount,
++      unpricedCount,
++      partialCount,
++    };
++  }
++  if (missing.length > 0) {
++    return {
++      kind: "partial",
++      label: "partial",
++      description: `Cost is a subtotal: ${missing.join("; ")}.`,
++      costedCount,
++      unpricedCount,
++      partialCount,
++    };
++  }
++  return {
++    kind: "known",
++    label: "",
++    description: "",
++    costedCount,
++    unpricedCount,
++    partialCount,
++  };
++}
++
++/**
++ * A supplied observation's provenance for a tooltip, e.g.
++ * "reported charge · genai-prices 2.58.0 · go".
++ *
++ * An estimate is labeled as one: the amount is a list-price equivalent, not a
++ * charge the provider made. Sources are the pricing sources an attempt span
++ * declares; an unfamiliar value is shown as-is rather than guessed at.
++ */
++export function getCostProvenance({
++  source,
++  priceRevision,
++  billingSource,
++}: {
++  source?: string | null;
++  priceRevision?: string | null;
++  billingSource?: string | null;
++}): string | null {
++  const sourceLabel =
++    source === "provider_reported"
++      ? "reported charge"
++      : source === "opencode_reported"
++        ? "reported charge (OpenCode)"
++        : source === "genai-prices"
++          ? "estimated list price (genai-prices)"
++          : source === "opencode_estimated"
++            ? "estimated list price (OpenCode)"
++            : source === "published_rate"
++              ? "estimated published rate"
++              : source === "local_zero"
++                ? "local model, no provider fee"
++                : source === "unknown"
++                  ? null
++                  : source;
++  const parts = [sourceLabel, priceRevision, billingSource].filter(
++    (part): part is string => !!part && part.trim().length > 0
++  );
++  return parts.length > 0 ? parts.join(" · ") : null;
++}
+diff --git a/js/app/src/pages/project/ProjectStats.tsx b/js/app/src/pages/project/ProjectStats.tsx
+index 76a968e..9afa254 100644
+--- a/js/app/src/pages/project/ProjectStats.tsx
++++ b/js/app/src/pages/project/ProjectStats.tsx
+@@ -13,9 +13,11 @@ import {
+   View,
+ } from "@phoenix/components";
+ import { LatencyText } from "@phoenix/components/trace/LatencyText";
++import { TokenCosts } from "@phoenix/components/trace/TokenCosts";
+ import { TokenCostsDetails } from "@phoenix/components/trace/TokenCostsDetails";
++import { getCostStatus } from "@phoenix/components/trace/costStatus";
+ import { useStreamState } from "@phoenix/contexts/StreamStateContext";
+-import { costFormatter, intFormatter } from "@phoenix/utils/numberFormatUtils";
++import { intFormatter } from "@phoenix/utils/numberFormatUtils";
+ 
+ import type {
+   ProjectStats_project$data,
+@@ -32,6 +34,7 @@ function getProjectStatsValues(
+   const costSummary = data?.costSummary;
+   return {
+     completionCost: costSummary?.completion?.cost ?? 0,
++    costStatus: getCostStatus(costSummary ?? {}),
+     documentEvaluationNames: data?.documentEvaluationNames ?? [],
+     latencyMsP50: data?.latencyMsP50,
+     latencyMsP99: data?.latencyMsP99,
+@@ -65,6 +68,9 @@ export function ProjectStats(props: { project: ProjectStats_project$key }) {
+           completion {
+             cost
+           }
++          unpricedCount
++          partialCount
++          costedCount
+         }
+         latencyMsP50: latencyMsQuantile(
+           probability: 0.50
+@@ -93,6 +99,7 @@ export function ProjectStats(props: { project: ProjectStats_project$key }) {
+ 
+   const {
+     completionCost,
++    costStatus,
+     documentEvaluationNames,
+     latencyMsP50,
+     latencyMsP99,
+@@ -118,9 +125,13 @@ export function ProjectStats(props: { project: ProjectStats_project$key }) {
+         </Text>
+         <TooltipTrigger delay={0} isDisabled={totalCost === 0}>
+           <Focusable>
+-            <Text size="L" role="button" fontFamily="mono">
+-              {costFormatter(totalCost)}
+-            </Text>
++            <TokenCosts
++              size="L"
++              role="button"
++              status={costStatus}
++            >
++              {totalCost}
++            </TokenCosts>
+           </Focusable>
+           <RichTooltip placement="bottom">
+             <TooltipArrow />
+@@ -129,6 +140,7 @@ export function ProjectStats(props: { project: ProjectStats_project$key }) {
+                 total={totalCost}
+                 prompt={promptCost}
+                 completion={completionCost}
++                status={costStatus}
+               />
+             </View>
+           </RichTooltip>
+diff --git a/js/app/src/pages/project/SessionsTable.tsx b/js/app/src/pages/project/SessionsTable.tsx
+index 5356fd6..d726e01 100644
+--- a/js/app/src/pages/project/SessionsTable.tsx
++++ b/js/app/src/pages/project/SessionsTable.tsx
+@@ -255,6 +255,9 @@ export function SessionsTable(props: SessionsTableProps) {
+                   total {
+                     cost
+                   }
++                  unpricedCount
++                  partialCount
++                  costedCount
+                 }
+                 ...SessionAnnotationSummaryGroup
+               }
+@@ -463,7 +466,12 @@ export function SessionsTable(props: SessionsTableProps) {
+         }
+         const session = row.original;
+         return (
+-          <SessionTokenCosts totalCost={value} nodeId={session.id} size="S" />
++          <SessionTokenCosts
++            totalCost={value}
++            counts={session.costSummary}
++            nodeId={session.id}
++            size="S"
++          />
+         );
+       },
+     },
+diff --git a/js/app/src/pages/project/SpansTable.tsx b/js/app/src/pages/project/SpansTable.tsx
+index f79e738..c229fcc 100644
+--- a/js/app/src/pages/project/SpansTable.tsx
++++ b/js/app/src/pages/project/SpansTable.tsx
+@@ -361,6 +361,9 @@ export function SpansTable(props: SpansTableProps) {
+                     total {
+                       cost
+                     }
++                    unpricedCount
++                    partialCount
++                    costedCount
+                   }
+                   traceAnnotationSummaries {
+                     count
+@@ -392,6 +395,9 @@ export function SpansTable(props: SpansTableProps) {
+                   total {
+                     cost
+                   }
++                  unpricedCount
++                  partialCount
++                  costedCount
+                 }
+                 ...AnnotationSummaryGroup
+               }
+@@ -809,9 +815,19 @@ export function SpansTable(props: SpansTableProps) {
+         }
+         const span = row.original;
+         return rootSpansOnly ? (
+-          <TraceTokenCosts totalCost={value} nodeId={span.trace.id} size="S" />
++          <TraceTokenCosts
++            totalCost={value}
++            counts={span.trace?.costSummary ?? undefined}
++            nodeId={span.trace.id}
++            size="S"
++          />
+         ) : (
+-          <SpanTokenCosts totalCost={value} spanNodeId={span.id} size="S" />
++          <SpanTokenCosts
++            totalCost={value}
++            counts={span.costSummary ?? undefined}
++            spanNodeId={span.id}
++            size="S"
++          />
+         );
+       },
+     },
+diff --git a/js/app/src/pages/project/SpansTableAside.tsx b/js/app/src/pages/project/SpansTableAside.tsx
+index f182362..82d85a8 100644
+--- a/js/app/src/pages/project/SpansTableAside.tsx
++++ b/js/app/src/pages/project/SpansTableAside.tsx
+@@ -14,10 +14,12 @@ import {
+ } from "@phoenix/components";
+ import { useTimeRange } from "@phoenix/components/datetime";
+ import { TitledPanel } from "@phoenix/components/react-resizable-panels";
++import { TokenCosts } from "@phoenix/components/trace/TokenCosts";
+ import { TokenCostsDetails } from "@phoenix/components/trace/TokenCostsDetails";
++import { getCostStatus } from "@phoenix/components/trace/costStatus";
+ import { useStreamState } from "@phoenix/contexts/StreamStateContext";
+ import { useTracingContext } from "@phoenix/contexts/TracingContext";
+-import { costFormatter, intFormatter } from "@phoenix/utils/numberFormatUtils";
++import { intFormatter } from "@phoenix/utils/numberFormatUtils";
+ 
+ import type { SpansTableAsideQuery } from "./__generated__/SpansTableAsideQuery.graphql";
+ import { AnnotationSummary } from "./AnnotationSummary";
+@@ -37,6 +39,7 @@ function getSpansAsideCosts(project: SpansAsideProject) {
+   const costSummary = project?.costSummary;
+   return {
+     completionCost: costSummary?.completion?.cost ?? 0,
++    costStatus: getCostStatus(costSummary ?? {}),
+     promptCost: costSummary?.prompt?.cost ?? 0,
+     totalCost: costSummary?.total?.cost ?? 0,
+   };
+@@ -93,6 +96,9 @@ export function SpansTableAside(props: { filterCondition?: string | null }) {
+               completion {
+                 cost
+               }
++              unpricedCount
++              partialCount
++              costedCount
+             }
+             latencyMsP50: latencyMsQuantile(
+               probability: 0.5
+@@ -122,6 +128,7 @@ export function SpansTableAside(props: { filterCondition?: string | null }) {
+   const project = data?.project;
+   const {
+     completionCost,
++    costStatus,
+     description,
+     documentEvaluationNames,
+     latencyMsP50,
+@@ -153,9 +160,9 @@ export function SpansTableAside(props: { filterCondition?: string | null }) {
+               <StatItem label="Total Cost">
+                 <TooltipTrigger delay={0} isDisabled={totalCost === 0}>
+                   <Focusable>
+-                    <Text size="L" role="button" fontFamily="mono">
+-                      {costFormatter(totalCost)}
+-                    </Text>
++                    <TokenCosts size="L" role="button" status={costStatus}>
++                      {totalCost}
++                    </TokenCosts>
+                   </Focusable>
+                   <RichTooltip placement="bottom">
+                     <TooltipArrow />
+@@ -164,6 +171,7 @@ export function SpansTableAside(props: { filterCondition?: string | null }) {
+                         total={totalCost}
+                         prompt={promptCost}
+                         completion={completionCost}
++                        status={costStatus}
+                       />
+                     </View>
+                   </RichTooltip>
+diff --git a/js/app/src/pages/project/TracesTable.tsx b/js/app/src/pages/project/TracesTable.tsx
+index e55b4f9..b2822da 100644
+--- a/js/app/src/pages/project/TracesTable.tsx
++++ b/js/app/src/pages/project/TracesTable.tsx
+@@ -367,6 +367,9 @@ export function TracesTable(props: TracesTableProps) {
+                     total {
+                       cost
+                     }
++                    unpricedCount
++                    partialCount
++                    costedCount
+                   }
+                   ...TraceAnnotationSummaryGroup
+                 }
+@@ -918,6 +921,11 @@ export function TracesTable(props: TracesTableProps) {
+           return (
+             <TraceTokenCosts
+               totalCost={value}
++              counts={
++                "costSummary" in span.trace
++                  ? (span.trace as RootSpanTrace).costSummary
++                  : undefined
++              }
+               nodeId={span.trace.id}
+               size="S"
+             />
+diff --git a/js/app/src/pages/project/metrics/TraceTokenCostTimeSeries.tsx b/js/app/src/pages/project/metrics/TraceTokenCostTimeSeries.tsx
+index 17f7fe8..91db33b 100644
+--- a/js/app/src/pages/project/metrics/TraceTokenCostTimeSeries.tsx
++++ b/js/app/src/pages/project/metrics/TraceTokenCostTimeSeries.tsx
+@@ -20,6 +20,8 @@ import {
+   useCategoryChartColors,
+   useInteractiveLegend,
+ } from "@phoenix/components/chart";
++import type { CostStatus } from "@phoenix/components/trace/costStatus";
++import { getCostStatus } from "@phoenix/components/trace/costStatus";
+ import { useTimeBinScale } from "@phoenix/hooks/useTimeBin";
+ import { useTimeFormatters } from "@phoenix/hooks/useTimeFormatters";
+ import { useUTCOffsetMinutes } from "@phoenix/hooks/useUTCOffsetMinutes";
+@@ -38,6 +40,7 @@ import type { TraceTokenCostTimeSeriesQuery } from "./__generated__/TraceTokenCo
+ function TooltipContent({ active, payload, label }: TooltipContentProps) {
+   const { fullTimeFormatter } = useTimeFormatters();
+   if (active && payload && payload.length) {
++    const status: CostStatus | undefined = payload[0]?.payload?.status;
+     return (
+       <ChartTooltip>
+         {label && (
+@@ -46,7 +49,7 @@ function TooltipContent({ active, payload, label }: TooltipContentProps) {
+           )}`}</Text>
+         )}
+         {payload.map((entry) => {
+-          const name = String(entry.dataKey ?? entry.name ?? "unknown");
++          const name = String(entry.name ?? entry.dataKey ?? "unknown");
+           return (
+             <ChartTooltipItem
+               color={entry.color ?? "transparent"}
+@@ -57,6 +60,11 @@ function TooltipContent({ active, payload, label }: TooltipContentProps) {
+             />
+           );
+         })}
++        {status?.description ? (
++          <Text size="XS" color="text-500">
++            {status.description}
++          </Text>
++        ) : null}
+       </ChartTooltip>
+     );
+   }
+@@ -90,6 +98,9 @@ export function TraceTokenCostTimeSeries({
+                 promptCost
+                 completionCost
+                 totalCost
++                unpricedCount
++                partialCount
++                costedCount
+               }
+             }
+           }
+@@ -116,14 +127,32 @@ export function TraceTokenCostTimeSeries({
+       promptCost: number | null;
+       completionCost: number | null;
+       totalCost: number | null;
+-    }) => ({
+-      timestamp: new Date(datum.timestamp).getTime(),
+-      prompt: datum.promptCost,
+-      completion: datum.completionCost,
+-      total: datum.totalCost,
+-    })
++      unpricedCount: number;
++      partialCount: number;
++      costedCount: number;
++    }) => {
++      const split = (datum.promptCost ?? 0) + (datum.completionCost ?? 0);
++      const unsplit =
++        typeof datum.totalCost === "number" ? datum.totalCost - split : null;
++      return {
++        timestamp: new Date(datum.timestamp).getTime(),
++        prompt: datum.promptCost,
++        completion: datum.completionCost,
++        // A supplied total without components is a total, not a split.
++        unsplit: unsplit != null && unsplit > 0 ? unsplit : null,
++        total: datum.totalCost,
++        status: getCostStatus(datum),
++      };
++    }
+   );
+   const hasData = chartData.some((datum) => typeof datum.total === "number");
++  const hasUnsplit = chartData.some((datum) => typeof datum.unsplit === "number");
++  // A bin with only unpriced calls has no total, so it draws no bar. Say the
++  // cost is unknown rather than calling the range empty and therefore free.
++  const unpricedCalls = chartData.reduce(
++    (total, datum) => total + datum.status.unpricedCount,
++    0
++  );
+ 
+   const timeTickFormatter = useBinTimeTickFormatter({ scale });
+ 
+@@ -138,7 +167,13 @@ export function TraceTokenCostTimeSeries({
+       {({ chartProps }) => (
+         <ChartEmptyStateOverlay
+           isEmpty={!hasData}
+-          message="No data in this time range"
++          message={
++            !hasData && unpricedCalls > 0
++              ? `Cost unknown for ${unpricedCalls} call${
++                  unpricedCalls === 1 ? "" : "s"
++                } in this range`
++              : "No data in this time range"
++          }
+           chartType="bar"
+         >
+           <ChartResponsiveContainer>
+@@ -166,15 +201,25 @@ export function TraceTokenCostTimeSeries({
+               />
+               <Bar
+                 dataKey="prompt"
++                name="Prompt"
+                 stackId="a"
+                 fill={colors.category1}
+                 hide={isDataKeyHidden("prompt")}
+               />
+               <Bar
+                 dataKey="completion"
++                name="Completion"
+                 stackId="a"
+                 fill={colors.category2}
+                 hide={isDataKeyHidden("completion")}
++                radius={hasUnsplit ? undefined : [2, 2, 0, 0]}
++              />
++              <Bar
++                dataKey="unsplit"
++                name="Total (unsplit)"
++                stackId="a"
++                fill={colors.category3}
++                hide={isDataKeyHidden("unsplit")}
+                 radius={[2, 2, 0, 0]}
+               />
+ 
+diff --git a/js/app/src/pages/project/metrics/tokenDetails.ts b/js/app/src/pages/project/metrics/tokenDetails.ts
+index 2d32919..c2ce900 100644
+--- a/js/app/src/pages/project/metrics/tokenDetails.ts
++++ b/js/app/src/pages/project/metrics/tokenDetails.ts
+@@ -15,6 +15,8 @@ import {
+ 
+ const TOKEN_DETAIL_DATA_KEY_PREFIX = "tokenDetail:";
+ const TOKEN_DETAIL_BAR_RADIUS = 2;
++/** The series for a total that supplied no prompt/completion split. */
++export const UNSPLIT_TOTAL_TOKEN_TYPE = "total";
+ 
+ /** Numeric field projected from each token-detail cost breakdown. */
+ export type TokenDetailMetric = "tokens" | "cost";
+@@ -114,6 +116,9 @@ export function getModelTokenDetailLabel({
+   allSeries: ReadonlyArray<ModelTokenDetailSeries>;
+   series: ModelTokenDetailSeries;
+ }) {
++  if (series.tokenType === UNSPLIT_TOTAL_TOKEN_TYPE) {
++    return "Total (unsplit)";
++  }
+   return getTokenDetailLabelForKind({
+     ...series,
+     isUsedByBothKinds: allSeries.some(
+@@ -235,6 +240,11 @@ function compareTokenDetailSeries(
+   left: ModelTokenDetailSeries,
+   right: ModelTokenDetailSeries
+ ) {
++  const leftIsTotal = left.tokenType === UNSPLIT_TOTAL_TOKEN_TYPE;
++  const rightIsTotal = right.tokenType === UNSPLIT_TOTAL_TOKEN_TYPE;
++  if (leftIsTotal !== rightIsTotal) {
++    return leftIsTotal ? 1 : -1;
++  }
+   if (left.isPrompt !== right.isPrompt) {
+     return Number(right.isPrompt) - Number(left.isPrompt);
+   }
+@@ -300,6 +310,7 @@ export function buildModelTokenDetailChartData({
+       model: model.name,
+       total: model.costSummary.total[metric] ?? 0,
+     };
++    let allocated = 0;
+     ([true, false] as const).forEach((isPrompt) => {
+       const values = getTokenDetailValuesWithRemainder({
+         details: Object.fromEntries(
+@@ -311,6 +322,7 @@ export function buildModelTokenDetailChartData({
+         isPrompt,
+       });
+       Object.entries(values).forEach(([tokenType, value]) => {
++        allocated += value;
+         recordTokenDetailValue({
+           chartDatum,
+           isPrompt,
+@@ -321,6 +333,20 @@ export function buildModelTokenDetailChartData({
+       });
+     });
+ 
++    // A supplied total with no prompt/completion components is still a
++    // measured amount; draw the part the split does not account for rather
++    // than dividing it between the two sides.
++    const unsplit = chartDatum.total - allocated;
++    if (unsplit > TOKEN_DETAIL_EPSILON) {
++      recordTokenDetailValue({
++        chartDatum,
++        isPrompt: false,
++        seriesByDataKey,
++        tokenType: UNSPLIT_TOTAL_TOKEN_TYPE,
++        value: unsplit,
++      });
++    }
++
+     return chartDatum;
+   });
+ 
+@@ -337,12 +363,10 @@ export function buildModelTokenDetailChartData({
+  * them is the user's to fix by widening the range:
+  *
+  * - Nothing ran in the range at all.
+- * - Models ran and recorded tokens, but no cost came back. Costs are only
+- *   attributed to a model when its pricing is configured (`SpanCost.model_id`
+- *   is null otherwise, and the top-models queries skip those rows), so an
+- *   unpriced project reports usage through `tokenCount` while `models` comes
+- *   back empty. Pointing at the time range there sends people to widen a range
+- *   that was never the problem.
++ * - Models ran and recorded tokens, but no cost came back. An unpriced model
++ *   still reports its usage through `tokenCount` and may appear in the
++ *   breakdown with a zero amount, so pointing at the time range sends people
++ *   to widen a range that was never the problem.
+  */
+ export function getCostChartEmptyStateMessage({
+   modelCount,
+diff --git a/src/phoenix/db/insertion/helpers.py b/src/phoenix/db/insertion/helpers.py
+index e3b3111..9c3ffeb 100644
+--- a/src/phoenix/db/insertion/helpers.py
++++ b/src/phoenix/db/insertion/helpers.py
+@@ -15,6 +15,10 @@ from typing_extensions import TypeAlias, assert_never
+ from phoenix.db import models
+ from phoenix.db.helpers import SupportedSQLDialect, truncate_name
+ from phoenix.db.models import Base
++from phoenix.server.cost_tracking.supplied_cost import (
++    is_cost_attempt,
++    read_supplied_cost,
++)
+ from phoenix.trace.attributes import get_attribute_value
+ 
+ 
+@@ -118,6 +122,12 @@ def as_kv(obj: models.Base) -> Iterator[tuple[str, Any]]:
+ def should_calculate_span_cost(
+     attributes: Optional[Mapping[str, Any]],
+ ) -> bool:
++    if not attributes or not is_cost_attempt(attributes):
++        return False
++    # A supplied observation is priced even without an LLM model name: a
++    # transcription span has a real audio cost and no language model.
++    if read_supplied_cost(attributes).declared:
++        return True
+     return bool(
+         (span_kind := get_attribute_value(attributes, SpanAttributes.OPENINFERENCE_SPAN_KIND))
+         and isinstance(span_kind, str)
+diff --git a/src/phoenix/server/api/dataloaders/cost_status.py b/src/phoenix/server/api/dataloaders/cost_status.py
+new file mode 100644
+index 0000000..3b38511
+--- /dev/null
++++ b/src/phoenix/server/api/dataloaders/cost_status.py
+@@ -0,0 +1,27 @@
++"""Counts of unpriced and partially priced calls, beside their cost totals.
++
++The cost columns coalesce a missing amount to zero for arithmetic, so a summary
++needs these counts to tell a measured zero from an unknown cost and a complete
++total from a subtotal. Both are read from storage that already exists: an
++unpriced call is a ``span_costs`` row with a null total, and a partial one
++declares ``arno.cost.completeness = partial`` on its span.
++"""
++
++from typing import Any
++
++from sqlalchemy import func
++from sqlalchemy.sql.elements import ColumnElement
++
++from phoenix.db import models
++
++COMPLETENESS_PATH = ["arno", "cost", "completeness"]
++
++
++def cost_status_columns() -> tuple[ColumnElement[Any], ...]:
++    """The unpriced, costed, and partial counts for a cost aggregate."""
++    completeness = models.Span.attributes[COMPLETENESS_PATH].as_string()
++    return (
++        func.count().filter(models.SpanCost.total_cost.is_(None)).label("unpriced_count"),
++        func.count().filter(models.SpanCost.total_cost.isnot(None)).label("costed_count"),
++        func.count().filter(completeness == "partial").label("partial_count"),
++    )
+diff --git a/src/phoenix/server/api/dataloaders/span_cost_summary_by_project.py b/src/phoenix/server/api/dataloaders/span_cost_summary_by_project.py
+index fe9a5ad..c47bcbb 100644
+--- a/src/phoenix/server/api/dataloaders/span_cost_summary_by_project.py
++++ b/src/phoenix/server/api/dataloaders/span_cost_summary_by_project.py
+@@ -10,6 +10,7 @@ from typing_extensions import TypeAlias
+ 
+ from phoenix.db import models
+ from phoenix.server.api.dataloaders.cache import TwoTierCache
++from phoenix.server.api.dataloaders.cost_status import cost_status_columns
+ from phoenix.server.api.dataloaders.types import CostBreakdown, SpanCostSummary
+ from phoenix.server.api.input_types.TimeRange import TimeRange
+ from phoenix.server.session_filters import get_filtered_session_rowids_subquery
+@@ -105,9 +106,69 @@ class SpanCostSummaryByProjectDataLoader(DataLoader[Key, Result]):
+                     )
+                     for position in params.get(id_, []):
+                         results[position] = summary
++                counts = await session.stream(_get_counts_stmt(segment, *params.keys()))
++                async for (
++                    id_,
++                    unpriced_count,
++                    costed_count,
++                    partial_count,
++                ) in counts:
++                    for position in params.get(id_, []):
++                        summary = results[position]
++                        results[position] = SpanCostSummary(
++                            prompt=summary.prompt,
++                            completion=summary.completion,
++                            total=summary.total,
++                            unpriced_count=unpriced_count,
++                            costed_count=costed_count,
++                            partial_count=partial_count,
++                        )
+         return results
+ 
+ 
++def _get_counts_stmt(
++    segment: Segment,
++    *params: Param,
++) -> Select[*tuple[Any, ...]]:
++    """Unpriced, costed, and partial call counts for the same scope.
++
++    Kept separate from the totals statement because the counts read the span's
++    ``arno.cost.completeness`` attribute, which needs the span relation that the
++    unfiltered totals query does not join.
++    """
++    project_rowids = params
++    (start_time, end_time), filter_condition, session_filter_condition = segment
++
++    stmt: Select[*tuple[Any, ...]] = (
++        select(
++            models.Trace.project_rowid,
++            *cost_status_columns(),
++        )
++        .select_from(models.SpanCost)
++        .join(models.Span, models.Span.id == models.SpanCost.span_rowid)
++        .join(models.Trace, models.Trace.id == models.SpanCost.trace_rowid)
++        .where(models.Trace.project_rowid.in_(project_rowids))
++        .group_by(models.Trace.project_rowid)
++    )
++
++    if start_time:
++        stmt = stmt.where(start_time <= models.Trace.start_time)
++    if end_time:
++        stmt = stmt.where(models.Trace.start_time < end_time)
++    if filter_condition:
++        stmt = SpanFilter(filter_condition)(stmt)
++    if session_filter_condition:
++        filtered_session_rowids = get_filtered_session_rowids_subquery(
++            session_filter_condition=session_filter_condition,
++            project_rowids=project_rowids,
++            start_time=start_time,
++            end_time=end_time,
++        )
++        stmt = stmt.where(models.Trace.project_session_rowid.in_(filtered_session_rowids))
++
++    return stmt
++
++
+ def _get_stmt(
+     segment: Segment,
+     *params: Param,
+diff --git a/src/phoenix/server/api/dataloaders/span_cost_summary_by_project_session.py b/src/phoenix/server/api/dataloaders/span_cost_summary_by_project_session.py
+index ad693c7..8d59517 100644
+--- a/src/phoenix/server/api/dataloaders/span_cost_summary_by_project_session.py
++++ b/src/phoenix/server/api/dataloaders/span_cost_summary_by_project_session.py
+@@ -1,9 +1,12 @@
+ from collections import defaultdict
+ 
++from sqlalchemy import select
+ from strawberry.dataloader import DataLoader
+ from typing_extensions import TypeAlias
+ 
++from phoenix.db import models
+ from phoenix.db.session_aggregates import cost_summary_by_session
++from phoenix.server.api.dataloaders.cost_status import cost_status_columns
+ from phoenix.server.api.dataloaders.types import CostBreakdown, SpanCostSummary
+ from phoenix.server.types import DbSessionFactory
+ 
+@@ -19,6 +22,19 @@ class SpanCostSummaryByProjectSessionDataLoader(DataLoader[Key, Result]):
+ 
+     async def _load_fn(self, keys: list[Key]) -> list[Result]:
+         stmt = cost_summary_by_session().as_grouped_subquery(keys)
++        # The session aggregate joins only the trace; the completeness counts
++        # also read the span's attributes, so they run as their own small query.
++        counts_stmt = (
++            select(
++                models.Trace.project_session_rowid,
++                *cost_status_columns(),
++            )
++            .select_from(models.SpanCost)
++            .join(models.Span, models.Span.id == models.SpanCost.span_rowid)
++            .join(models.Trace, models.Trace.id == models.SpanCost.trace_rowid)
++            .where(models.Trace.project_session_rowid.in_(keys))
++            .group_by(models.Trace.project_session_rowid)
++        )
+         results: defaultdict[Key, Result] = defaultdict(SpanCostSummary)
+         async with self._db.read() as session:
+             data = await session.stream(stmt)
+@@ -31,10 +47,35 @@ class SpanCostSummaryByProjectSessionDataLoader(DataLoader[Key, Result]):
+                 completion_tokens,
+                 total_tokens,
+             ) in data:
+-                summary = SpanCostSummary(
++                results[id_] = SpanCostSummary(
+                     prompt=CostBreakdown(tokens=prompt_tokens, cost=prompt_cost),
+                     completion=CostBreakdown(tokens=completion_tokens, cost=completion_cost),
+                     total=CostBreakdown(tokens=total_tokens, cost=total_cost),
+                 )
+-                results[id_] = summary
++            counts = await session.stream(counts_stmt)
++            async for (
++                id_,
++                unpriced_count,
++                costed_count,
++                partial_count,
++            ) in counts:
++                results[id_] = _with_counts(
++                    results[id_], unpriced_count, costed_count, partial_count
++                )
+         return list(map(results.__getitem__, keys))
++
++
++def _with_counts(
++    summary: SpanCostSummary,
++    unpriced_count: int,
++    costed_count: int,
++    partial_count: int,
++) -> SpanCostSummary:
++    return SpanCostSummary(
++        prompt=summary.prompt,
++        completion=summary.completion,
++        total=summary.total,
++        unpriced_count=unpriced_count,
++        costed_count=costed_count,
++        partial_count=partial_count,
++    )
+diff --git a/src/phoenix/server/api/dataloaders/span_cost_summary_by_trace.py b/src/phoenix/server/api/dataloaders/span_cost_summary_by_trace.py
+index 87f0144..05526ad 100644
+--- a/src/phoenix/server/api/dataloaders/span_cost_summary_by_trace.py
++++ b/src/phoenix/server/api/dataloaders/span_cost_summary_by_trace.py
+@@ -6,6 +6,7 @@ from strawberry.dataloader import DataLoader
+ from typing_extensions import TypeAlias
+ 
+ from phoenix.db import models
++from phoenix.server.api.dataloaders.cost_status import cost_status_columns
+ from phoenix.server.api.dataloaders.types import CostBreakdown, SpanCostSummary
+ from phoenix.server.types import DbSessionFactory
+ 
+@@ -30,7 +31,10 @@ class SpanCostSummaryByTraceDataLoader(DataLoader[Key, Result]):
+                 coalesce(func.sum(models.SpanCost.prompt_tokens), 0).label("prompt_tokens"),
+                 coalesce(func.sum(models.SpanCost.completion_tokens), 0).label("completion_tokens"),
+                 coalesce(func.sum(models.SpanCost.total_tokens), 0).label("total_tokens"),
++                *cost_status_columns(),
+             )
++            .select_from(models.SpanCost)
++            .join(models.Span, models.Span.id == models.SpanCost.span_rowid)
+             .where(pk.in_(keys))
+             .group_by(pk)
+         )
+@@ -45,11 +49,17 @@ class SpanCostSummaryByTraceDataLoader(DataLoader[Key, Result]):
+                 prompt_tokens,
+                 completion_tokens,
+                 total_tokens,
++                unpriced_count,
++                costed_count,
++                partial_count,
+             ) in data:
+                 summary = SpanCostSummary(
+                     prompt=CostBreakdown(tokens=prompt_tokens, cost=prompt_cost),
+                     completion=CostBreakdown(tokens=completion_tokens, cost=completion_cost),
+                     total=CostBreakdown(tokens=total_tokens, cost=total_cost),
++                    unpriced_count=unpriced_count,
++                    costed_count=costed_count,
++                    partial_count=partial_count,
+                 )
+                 results[id_] = summary
+         return list(map(results.__getitem__, keys))
+diff --git a/src/phoenix/server/api/dataloaders/types.py b/src/phoenix/server/api/dataloaders/types.py
+index 067f3a4..ee5d61a 100644
+--- a/src/phoenix/server/api/dataloaders/types.py
++++ b/src/phoenix/server/api/dataloaders/types.py
+@@ -20,6 +20,15 @@ class SpanCostSummary:
+     prompt: CostBreakdown = field(default_factory=CostBreakdown)
+     completion: CostBreakdown = field(default_factory=CostBreakdown)
+     total: CostBreakdown = field(default_factory=CostBreakdown)
++    # Calls whose cost is unknown, and calls priced with a known subtotal.
++    # Both are zero for a trace from an instrumentation that supplies neither.
++    unpriced_count: int = 0
++    partial_count: int = 0
++    costed_count: int = 0
++    # Provenance of a single supplied observation; aggregates leave these unset.
++    source: Optional[str] = None
++    price_revision: Optional[str] = None
++    billing_source: Optional[str] = None
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/src/phoenix/server/api/types/Project.py b/src/phoenix/server/api/types/Project.py
+index 961cde8..7c34bb0 100644
+--- a/src/phoenix/server/api/types/Project.py
++++ b/src/phoenix/server/api/types/Project.py
+@@ -1,7 +1,9 @@
+ import ast
++import hashlib
+ import json
+ import logging
+ import operator
++import re
+ from collections.abc import Iterable, Mapping, Sequence
+ from datetime import datetime, timezone
+ from difflib import get_close_matches
+@@ -13,6 +15,7 @@ from openinference.semconv.trace import SpanAttributes
+ from pandas import DataFrame
+ from sqlalchemy import Select, case, desc, distinct, func, or_, select
+ from sqlalchemy.dialects import postgresql, sqlite
++from sqlalchemy.ext.asyncio import AsyncSession
+ from sqlalchemy.orm import InstrumentedAttribute
+ from sqlalchemy.sql.expression import tuple_
+ from sqlalchemy.sql.functions import percentile_cont
+@@ -34,6 +37,7 @@ from phoenix.db.trace_aggregates import (
+ )
+ from phoenix.server.api.annotation_metrics import build_entity_weighted_annotation_metrics_stmt
+ from phoenix.server.api.context import Context
++from phoenix.server.api.dataloaders.cost_status import cost_status_columns
+ from phoenix.server.api.exceptions import BadRequest
+ from phoenix.server.api.extensions import RequireForwardPaginationExtension
+ from phoenix.server.api.input_types.ProjectSessionSort import (
+@@ -528,6 +532,9 @@ class Project(Node):
+                 tokens=summary.total.tokens,
+                 cost=summary.total.cost,
+             ),
++            unpriced_count=summary.unpriced_count,
++            partial_count=summary.partial_count,
++            costed_count=summary.costed_count,
+         )
+ 
+     @strawberry.field(
+@@ -2140,12 +2147,14 @@ class Project(Node):
+                 func.sum(models.SpanCost.total_cost),
+                 func.sum(models.SpanCost.prompt_cost),
+                 func.sum(models.SpanCost.completion_cost),
++                *cost_status_columns(),
+             )
+             .join_from(
+                 models.Trace,
+                 models.SpanCost,
+                 onclause=models.SpanCost.trace_rowid == models.Trace.id,
+             )
++            .join(models.Span, models.Span.id == models.SpanCost.span_rowid)
+             .where(models.Trace.project_rowid == self.id)
+             .group_by(bucket)
+             .order_by(bucket)
+@@ -2162,6 +2171,9 @@ class Project(Node):
+                 total_cost,
+                 prompt_cost,
+                 completion_cost,
++                unpriced_count,
++                costed_count,
++                partial_count,
+             ) in await session.stream(stmt):
+                 timestamp = _as_datetime(t)
+                 data[timestamp] = TraceTokenCostTimeSeriesDataPoint(
+@@ -2169,6 +2181,9 @@ class Project(Node):
+                     prompt_cost=prompt_cost,
+                     completion_cost=completion_cost,
+                     total_cost=total_cost,
++                    unpriced_count=unpriced_count,
++                    costed_count=costed_count,
++                    partial_count=partial_count,
+                 )
+ 
+         data_timestamps: list[datetime] = [data_point.timestamp for data_point in data.values()]
+@@ -2451,57 +2466,13 @@ class Project(Node):
+     ) -> list[GenerativeModel]:
+         if time_range.start is None:
+             raise BadRequest("Start time is required")
+-
+         async with info.context.db.read() as session:
+-            stmt = (
+-                select(
+-                    models.GenerativeModel,
+-                    func.sum(models.SpanCost.total_tokens).label("total_tokens"),
+-                    func.sum(models.SpanCost.prompt_tokens).label("prompt_tokens"),
+-                    func.sum(models.SpanCost.completion_tokens).label("completion_tokens"),
+-                    func.sum(models.SpanCost.total_cost).label("total_cost"),
+-                    func.sum(models.SpanCost.prompt_cost).label("prompt_cost"),
+-                    func.sum(models.SpanCost.completion_cost).label("completion_cost"),
+-                )
+-                .join(
+-                    models.SpanCost,
+-                    models.SpanCost.model_id == models.GenerativeModel.id,
+-                )
+-                .join(
+-                    models.Trace,
+-                    models.SpanCost.trace_rowid == models.Trace.id,
+-                )
+-                .where(models.Trace.project_rowid == self.id)
+-                .where(models.SpanCost.model_id.isnot(None))
+-                .where(models.SpanCost.span_start_time >= time_range.start)
+-                .group_by(models.GenerativeModel.id)
+-                .order_by(func.sum(models.SpanCost.total_cost).desc())
++            return await _top_models_by_project(
++                session,
++                project_rowid=self.id,
++                time_range=time_range,
++                by_cost=True,
+             )
+-            if time_range.end:
+-                stmt = stmt.where(models.SpanCost.span_start_time < time_range.end)
+-            results: list[GenerativeModel] = []
+-            async for (
+-                model,
+-                total_tokens,
+-                prompt_tokens,
+-                completion_tokens,
+-                total_cost,
+-                prompt_cost,
+-                completion_cost,
+-            ) in await session.stream(stmt):
+-                cost_summary = SpanCostSummary(
+-                    prompt=CostBreakdown(tokens=prompt_tokens, cost=prompt_cost),
+-                    completion=CostBreakdown(tokens=completion_tokens, cost=completion_cost),
+-                    total=CostBreakdown(tokens=total_tokens, cost=total_cost),
+-                )
+-                cache_time_range = TimeRange(
+-                    start=time_range.start,
+-                    end=time_range.end,
+-                )
+-                gql_model = GenerativeModel(id=model.id, db_record=model)
+-                gql_model.add_cached_cost_summary(self.id, cache_time_range, cost_summary)
+-                results.append(gql_model)
+-            return results
+ 
+     @strawberry.field
+     async def top_models_by_token_count(
+@@ -2511,57 +2482,177 @@ class Project(Node):
+     ) -> list[GenerativeModel]:
+         if time_range.start is None:
+             raise BadRequest("Start time is required")
+-
+         async with info.context.db.read() as session:
+-            stmt = (
+-                select(
+-                    models.GenerativeModel,
+-                    func.sum(models.SpanCost.total_tokens).label("total_tokens"),
+-                    func.sum(models.SpanCost.prompt_tokens).label("prompt_tokens"),
+-                    func.sum(models.SpanCost.completion_tokens).label("completion_tokens"),
+-                    func.sum(models.SpanCost.total_cost).label("total_cost"),
+-                    func.sum(models.SpanCost.prompt_cost).label("prompt_cost"),
+-                    func.sum(models.SpanCost.completion_cost).label("completion_cost"),
+-                )
+-                .join(
+-                    models.SpanCost,
+-                    models.SpanCost.model_id == models.GenerativeModel.id,
+-                )
+-                .join(
+-                    models.Trace,
+-                    models.SpanCost.trace_rowid == models.Trace.id,
+-                )
+-                .where(models.Trace.project_rowid == self.id)
+-                .where(models.SpanCost.model_id.isnot(None))
+-                .where(models.SpanCost.span_start_time >= time_range.start)
+-                .group_by(models.GenerativeModel.id)
+-                .order_by(func.sum(models.SpanCost.total_tokens).desc())
+-            )
+-            if time_range.end:
+-                stmt = stmt.where(models.SpanCost.span_start_time < time_range.end)
+-            results: list[GenerativeModel] = []
+-            async for (
+-                model,
+-                total_tokens,
+-                prompt_tokens,
+-                completion_tokens,
+-                total_cost,
+-                prompt_cost,
+-                completion_cost,
+-            ) in await session.stream(stmt):
+-                cost_summary = SpanCostSummary(
+-                    prompt=CostBreakdown(tokens=prompt_tokens, cost=prompt_cost),
+-                    completion=CostBreakdown(tokens=completion_tokens, cost=completion_cost),
+-                    total=CostBreakdown(tokens=total_tokens, cost=total_cost),
+-                )
+-                cache_time_range = TimeRange(
+-                    start=time_range.start,
+-                    end=time_range.end,
+-                )
+-                gql_model = GenerativeModel(id=model.id, db_record=model)
+-                gql_model.add_cached_cost_summary(self.id, cache_time_range, cost_summary)
+-                results.append(gql_model)
+-            return results
++            return await _top_models_by_project(
++                session,
++                project_rowid=self.id,
++                time_range=time_range,
++                by_cost=False,
++            )
++
++
++_SPAN_MODEL_NAME = models.Span.attributes[["llm", "model_name"]].as_string()
++_SPAN_MODEL_PROVIDER = models.Span.attributes[["llm", "provider"]].as_string()
++_MODEL_SUM_KEYS = (
++    "total_tokens",
++    "prompt_tokens",
++    "completion_tokens",
++    "total_cost",
++    "prompt_cost",
++    "completion_cost",
++)
++
++
++def _model_sums() -> tuple[Any, ...]:
++    return (
++        func.sum(models.SpanCost.total_tokens).label("total_tokens"),
++        func.sum(models.SpanCost.prompt_tokens).label("prompt_tokens"),
++        func.sum(models.SpanCost.completion_tokens).label("completion_tokens"),
++        func.sum(models.SpanCost.total_cost).label("total_cost"),
++        func.sum(models.SpanCost.prompt_cost).label("prompt_cost"),
++        func.sum(models.SpanCost.completion_cost).label("completion_cost"),
++    )
++
++
++def _catalog_models_stmt(
++    project_rowid: int,
++    time_range: TimeRange,
++) -> Select[*tuple[Any, ...]]:
++    stmt = (
++        select(models.GenerativeModel, *_model_sums())
++        .join(
++            models.SpanCost,
++            models.SpanCost.model_id == models.GenerativeModel.id,
++        )
++        .join(
++            models.Trace,
++            models.SpanCost.trace_rowid == models.Trace.id,
++        )
++        .where(models.Trace.project_rowid == project_rowid)
++        .where(models.SpanCost.span_start_time >= time_range.start)
++        .group_by(models.GenerativeModel.id)
++    )
++    if time_range.end:
++        stmt = stmt.where(models.SpanCost.span_start_time < time_range.end)
++    return stmt
++
++
++def _supplied_models_stmt(
++    project_rowid: int,
++    time_range: TimeRange,
++) -> Select[*tuple[Any, ...]]:
++    """Cost rows with no catalog model, grouped by the model they served.
++
++    A supplied observation carries no ``model_id`` because its amount did not
++    come from Phoenix's catalog. The model name and provider on the span are
++    the real served identity, so the chart groups on those instead of dropping
++    the row. A catalog-priced row keeps its catalog model id and detail rates.
++    """
++    stmt = (
++        select(
++            _SPAN_MODEL_NAME.label("name"),
++            _SPAN_MODEL_PROVIDER.label("provider"),
++            *_model_sums(),
++        )
++        .select_from(models.SpanCost)
++        .join(models.Span, models.Span.id == models.SpanCost.span_rowid)
++        .join(models.Trace, models.Trace.id == models.SpanCost.trace_rowid)
++        .where(models.Trace.project_rowid == project_rowid)
++        .where(models.SpanCost.model_id.is_(None))
++        .where(models.SpanCost.span_start_time >= time_range.start)
++        .group_by(_SPAN_MODEL_NAME, _SPAN_MODEL_PROVIDER)
++    )
++    if time_range.end:
++        stmt = stmt.where(models.SpanCost.span_start_time < time_range.end)
++    return stmt
++
++
++def _virtual_model_id(name: str, provider: Optional[str]) -> int:
++    """A stable negative node id for a model seen only on spans.
++
++    The in-memory record exists for the duration of one GraphQL response and is
++    never written to ``generative_models``; the negative id keeps it distinct
++    from catalog rows and makes the break-down node addressable.
++    """
++    digest = hashlib.sha256(f"{provider or ''}\0{name}".encode()).digest()
++    # ``span_costs.model_id`` is a 32-bit integer; stay inside it.
++    return -(int.from_bytes(digest[:8], "big") % (2**31 - 1) + 1)
++
++
++async def _top_models_by_project(
++    session: AsyncSession,
++    *,
++    project_rowid: int,
++    time_range: TimeRange,
++    by_cost: bool,
++) -> list[GenerativeModel]:
++    """Top models by cost or tokens, including application-supplied costs."""
++    groups: dict[tuple[str, str], dict[str, Any]] = {}
++
++    def add(
++        name: Optional[str],
++        provider: Optional[str],
++        catalog_model: Optional[models.GenerativeModel],
++        sums: tuple[Any, ...],
++    ) -> None:
++        # The served model is the name and provider together: the same name on
++        # two providers is two models with two rates, never one merged row.
++        key = (name or "unknown", provider or "")
++        group = groups.get(key)
++        if group is None:
++            group = {"catalog_model": catalog_model, "provider": provider}
++            group.update({key: 0.0 for key in _MODEL_SUM_KEYS})
++            groups[key] = group
++        elif group["catalog_model"] is None and catalog_model is not None:
++            group["catalog_model"] = catalog_model
++        for key, value in zip(_MODEL_SUM_KEYS, sums):
++            group[key] += float(value or 0)
++
++    async for row in await session.stream(_catalog_models_stmt(project_rowid, time_range)):
++        catalog_model, *sums = row
++        add(catalog_model.name, catalog_model.provider, catalog_model, tuple(sums))
++
++    async for row in await session.stream(_supplied_models_stmt(project_rowid, time_range)):
++        name, provider, *sums = row
++        add(name, provider, None, tuple(sums))
++
++    ordered = sorted(
++        groups.items(),
++        key=lambda item: (
++            item[1]["total_cost"] if by_cost else item[1]["total_tokens"],
++            item[0],
++        ),
++        reverse=True,
++    )
++    results: list[GenerativeModel] = []
++    for (name, _provider), group in ordered:
++        record = group["catalog_model"]
++        if record is None:
++            record = models.GenerativeModel(
++                id=_virtual_model_id(name, group["provider"]),
++                name=name,
++                provider=group["provider"] or "",
++                name_pattern=re.compile(re.escape(name)),
++                is_built_in=False,
++            )
++        summary = SpanCostSummary(
++            prompt=CostBreakdown(
++                tokens=group["prompt_tokens"],
++                cost=group["prompt_cost"],
++            ),
++            completion=CostBreakdown(
++                tokens=group["completion_tokens"],
++                cost=group["completion_cost"],
++            ),
++            total=CostBreakdown(
++                tokens=group["total_tokens"],
++                cost=group["total_cost"],
++            ),
++        )
++        gql_model = GenerativeModel(id=record.id, db_record=record)
++        gql_model.add_cached_cost_summary(project_rowid, time_range, summary)
++        results.append(gql_model)
++    return results
+ 
+ 
+ @strawberry.type
+@@ -2644,6 +2735,9 @@ class TraceTokenCostTimeSeriesDataPoint:
+     prompt_cost: Optional[float] = None
+     completion_cost: Optional[float] = None
+     total_cost: Optional[float] = None
++    unpriced_count: int = 0
++    costed_count: int = 0
++    partial_count: int = 0
+ 
+ 
+ @strawberry.type
+diff --git a/src/phoenix/server/api/types/ProjectSession.py b/src/phoenix/server/api/types/ProjectSession.py
+index c0f5519..ce7eec5 100644
+--- a/src/phoenix/server/api/types/ProjectSession.py
++++ b/src/phoenix/server/api/types/ProjectSession.py
+@@ -246,6 +246,9 @@ class ProjectSession(Node):
+                 tokens=summary.total.tokens,
+                 cost=summary.total.cost,
+             ),
++            unpriced_count=summary.unpriced_count,
++            partial_count=summary.partial_count,
++            costed_count=summary.costed_count,
+         )
+ 
+     @strawberry.field
+diff --git a/src/phoenix/server/api/types/Span.py b/src/phoenix/server/api/types/Span.py
+index ee7117f..7e1e547 100644
+--- a/src/phoenix/server/api/types/Span.py
++++ b/src/phoenix/server/api/types/Span.py
+@@ -24,6 +24,7 @@ from phoenix.server.api.helpers.dataset_helpers import (
+     get_dataset_example_input,
+     get_dataset_example_output,
+ )
++from phoenix.server.cost_tracking.supplied_cost import PARTIAL, read_supplied_cost
+ from phoenix.server.api.input_types.AnnotationFilter import (
+     AnnotationFilter,
+     satisfies_filter,
+@@ -804,6 +805,15 @@ class Span(Node):
+         span_cost = await info.context.data_loaders.span_cost_by_span.load(self.id)
+         if span_cost is None:
+             return None
++        attributes = (
++            self.db_record.attributes
++            if self.db_record
++            else await info.context.data_loaders.span_fields.load(
++                (self.id, models.Span.attributes),
++            )
++        )
++        supplied = read_supplied_cost(attributes or {})
++        costed = 0 if span_cost.total_cost is None else 1
+         return SpanCostSummary(
+             prompt=CostBreakdown(
+                 tokens=span_cost.prompt_tokens,
+@@ -817,6 +827,12 @@ class Span(Node):
+                 tokens=span_cost.total_tokens,
+                 cost=span_cost.total_cost,
+             ),
++            unpriced_count=1 - costed,
++            costed_count=costed,
++            partial_count=1 if supplied.completeness == PARTIAL else 0,
++            source=supplied.source,
++            price_revision=supplied.price_revision,
++            billing_source=supplied.billing_source,
+         )
+ 
+     @strawberry.field
+diff --git a/src/phoenix/server/api/types/SpanCostSummary.py b/src/phoenix/server/api/types/SpanCostSummary.py
+index 731591b..892f99c 100644
+--- a/src/phoenix/server/api/types/SpanCostSummary.py
++++ b/src/phoenix/server/api/types/SpanCostSummary.py
+@@ -1,3 +1,5 @@
++from typing import Optional
++
+ import strawberry
+ 
+ from phoenix.server.api.types.CostBreakdown import CostBreakdown
+@@ -8,3 +10,38 @@ class SpanCostSummary:
+     prompt: CostBreakdown = strawberry.field(default_factory=CostBreakdown)
+     completion: CostBreakdown = strawberry.field(default_factory=CostBreakdown)
+     total: CostBreakdown = strawberry.field(default_factory=CostBreakdown)
++    unpriced_count: int = strawberry.field(
++        default=0,
++        description="Calls whose cost is unknown. A dollar total beside a count above zero "
++        "is a subtotal, not a measured zero.",
++    )
++    partial_count: int = strawberry.field(
++        default=0,
++        description="Calls priced from a partial observation, so the total omits part of the usage.",
++    )
++    costed_count: int = strawberry.field(
++        default=0,
++        description="Calls with a known amount, including measured zeros and partial subtotals.",
++    )
++    source: Optional[str] = strawberry.field(
++        default=None,
++        description="Where a supplied cost came from, e.g. reported, estimated, or local_zero.",
++    )
++    price_revision: Optional[str] = strawberry.field(
++        default=None,
++        description="The effective rate revision a supplied estimate used.",
++    )
++    billing_source: Optional[str] = strawberry.field(
++        default=None,
++        description="The billing arrangement a supplied cost describes, e.g. balance or go.",
++    )
++
++    @strawberry.field(
++        description="known, partial, or unknown. Unknown means no call had a known amount.",
++    )
++    def completeness(self) -> str:
++        if self.costed_count == 0 and self.unpriced_count > 0:
++            return "unknown"
++        if self.unpriced_count > 0 or self.partial_count > 0:
++            return "partial"
++        return "known"
+diff --git a/src/phoenix/server/api/types/Trace.py b/src/phoenix/server/api/types/Trace.py
+index 2b090e1..b8e9caf 100644
+--- a/src/phoenix/server/api/types/Trace.py
++++ b/src/phoenix/server/api/types/Trace.py
+@@ -427,6 +427,9 @@ class Trace(Node):
+                 tokens=summary.total.tokens,
+                 cost=summary.total.cost,
+             ),
++            unpriced_count=summary.unpriced_count,
++            partial_count=summary.partial_count,
++            costed_count=summary.costed_count,
+         )
+ 
+     @strawberry.field
+diff --git a/src/phoenix/server/cost_tracking/span_cost_calculator.py b/src/phoenix/server/cost_tracking/span_cost_calculator.py
+index e39c499..729e550 100644
+--- a/src/phoenix/server/cost_tracking/span_cost_calculator.py
++++ b/src/phoenix/server/cost_tracking/span_cost_calculator.py
+@@ -1,4 +1,4 @@
+-"""Calculate span costs from token usage and the current model prices."""
++"""Calculate span costs from supplied observations, then the model catalog."""
+ 
+ from __future__ import annotations
+ 
+@@ -7,6 +7,12 @@ from typing import Any, Mapping, Optional
+ 
+ from phoenix.db import models
+ from phoenix.server.cost_tracking.cost_details_calculator import SpanCostDetailsCalculator
++from phoenix.server.cost_tracking.helpers import get_aggregated_tokens
++from phoenix.server.cost_tracking.supplied_cost import (
++    UNKNOWN,
++    SuppliedCost,
++    read_supplied_cost,
++)
+ from phoenix.server.daemons.generative_model_store import GenerativeModelStore
+ 
+ 
+@@ -24,6 +30,11 @@ class SpanCostCalculator:
+     ) -> Optional[models.SpanCost]:
+         if not attributes:
+             return None
++        supplied = read_supplied_cost(attributes)
++        if supplied.declared:
++            return _supplied_span_cost(start_time, attributes, supplied)
++        # Nothing supplied: fall back to the model catalog exactly as stock
++        # Phoenix does, so traces from other instrumentations keep their cost.
+         cost_model = self._model_store.find_model(
+             start_time=start_time,
+             attributes=attributes,
+@@ -40,3 +51,55 @@ class SpanCostCalculator:
+         for detail in details:
+             cost.append_detail(detail)
+         return cost
++
++
++def _supplied_span_cost(
++    start_time: datetime,
++    attributes: Mapping[str, Any],
++    supplied: SuppliedCost,
++) -> models.SpanCost:
++    """The cost row for one supplied observation.
++
++    Precedence is explicit: a valid supplied amount is the cost, an invalid or
++    explicitly unknown one stays unknown (never a catalog estimate), and a
++    missing breakdown does not invent prompt or completion components.
++    """
++    cost = models.SpanCost(model_id=None, span_start_time=start_time)
++    prompt_tokens, completion_tokens, total_tokens = get_aggregated_tokens(attributes)
++    if prompt_tokens:
++        cost.prompt_tokens = prompt_tokens
++    if completion_tokens:
++        cost.completion_tokens = completion_tokens
++    if total_tokens:
++        cost.total_tokens = total_tokens
++
++    if supplied.completeness == UNKNOWN or (
++        supplied.total is None and supplied.prompt is None and supplied.completion is None
++    ):
++        # An unresolved call still gets a row, with no amount: that row is what
++        # the summary loaders count as unpriced.
++        return cost
++
++    for is_prompt, token_type, amount, tokens in (
++        (True, "input", supplied.prompt, prompt_tokens),
++        (False, "output", supplied.completion, completion_tokens),
++    ):
++        if amount is None:
++            continue
++        cost.append_detail(
++            models.SpanCostDetail(
++                token_type=token_type,
++                is_prompt=is_prompt,
++                tokens=tokens or None,
++                cost=amount,
++                cost_per_token=amount / tokens if tokens else None,
++            )
++        )
++
++    total = supplied.total
++    if total is None:
++        # Only the components that were actually supplied; a lone component is
++        # a known subtotal, not a complete total.
++        total = (supplied.prompt or 0.0) + (supplied.completion or 0.0)
++    cost.total_cost = total
++    return cost
+diff --git a/src/phoenix/server/cost_tracking/supplied_cost.py b/src/phoenix/server/cost_tracking/supplied_cost.py
+new file mode 100644
+index 0000000..3071f73
+--- /dev/null
++++ b/src/phoenix/server/cost_tracking/supplied_cost.py
+@@ -0,0 +1,105 @@
++"""Cost metadata supplied on a span by the instrumented application.
++
++Stock Phoenix prices every LLM span from its own model catalog, so an
++application's own observation is ignored and an unknown price reads as a
++catalog estimate or as zero. The calculator reads this module first: one
++immutable observation per billable attempt, with an explicit completeness and
++source, and a supplied zero kept as a measured zero.
++"""
++
++from __future__ import annotations
++
++import math
++from dataclasses import dataclass
++from typing import Any, Mapping, Optional
++
++from phoenix.trace.attributes import get_attribute_value
++
++COST_TOTAL = "llm.cost.total"
++COST_PROMPT = "llm.cost.prompt"
++COST_COMPLETION = "llm.cost.completion"
++SOURCE = "arno.cost.source"
++COMPLETENESS = "arno.cost.completeness"
++PRICE_REVISION = "arno.cost.price_revision"
++BILLING_SOURCE = "arno.cost.billing_source"
++ROLE = "arno.cost.role"
++
++KNOWN = "known"
++PARTIAL = "partial"
++UNKNOWN = "unknown"
++
++# A native model span can enclose several attempts. Only the attempt spans
++# carry cost; the logical request around them and any collect/decode span are
++# excluded from cost and from the unresolved count they would otherwise add.
++ATTEMPT = "attempt"
++
++
++@dataclass(frozen=True)
++class SuppliedCost:
++    """One application-supplied observation, validated for display."""
++
++    declared: bool = False
++    total: Optional[float] = None
++    prompt: Optional[float] = None
++    completion: Optional[float] = None
++    completeness: Optional[str] = None
++    source: Optional[str] = None
++    billing_source: Optional[str] = None
++    price_revision: Optional[str] = None
++
++
++def _amount(attributes: Mapping[str, Any], key: str) -> Optional[float]:
++    """A finite, nonnegative amount; anything else is not a usable price."""
++    value = get_attribute_value(attributes, key)
++    if isinstance(value, bool) or not isinstance(value, (int, float)):
++        return None
++    amount = float(value)
++    if not math.isfinite(amount) or amount < 0:
++        return None
++    return amount
++
++
++def _label(attributes: Mapping[str, Any], key: str) -> Optional[str]:
++    value = get_attribute_value(attributes, key)
++    if not isinstance(value, str) or not value.strip():
++        return None
++    return value.strip()
++
++
++def is_cost_attempt(attributes: Optional[Mapping[str, Any]]) -> bool:
++    """Whether this span is the billable attempt rather than a wrapper.
++
++    A span without a role is a plain span and may carry cost; a span whose role
++    is anything other than ``attempt`` (a logical request, a collect, a decode)
++    is never priced or counted as unpriced.
++    """
++    if not attributes:
++        return True
++    role = _label(attributes, ROLE)
++    return role is None or role == ATTEMPT
++
++
++def read_supplied_cost(attributes: Mapping[str, Any]) -> SuppliedCost:
++    """Read the supplied observation, keeping presence separate from validity."""
++    total_value = get_attribute_value(attributes, COST_TOTAL)
++    prompt_value = get_attribute_value(attributes, COST_PROMPT)
++    completion_value = get_attribute_value(attributes, COST_COMPLETION)
++    completeness = _label(attributes, COMPLETENESS)
++    if completeness not in (KNOWN, PARTIAL, UNKNOWN):
++        completeness = None
++    declared = (
++        total_value is not None
++        or prompt_value is not None
++        or completion_value is not None
++        or completeness is not None
++    )
++    return SuppliedCost(
++        declared=declared,
++        total=_amount(attributes, COST_TOTAL),
++        prompt=_amount(attributes, COST_PROMPT),
++        completion=_amount(attributes, COST_COMPLETION),
++        completeness=completeness,
++        source=_label(attributes, SOURCE),
++        billing_source=_label(attributes, BILLING_SOURCE),
++        price_revision=_label(attributes, PRICE_REVISION),
++    )

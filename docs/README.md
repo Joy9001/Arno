@@ -27,6 +27,7 @@ plan wins. The project has the following docs:
 | [`system-design.md`](arno/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 | [`typing.md`](arno/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
 | [`observability.md`](arno/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
+| [`cost-tracking.md`](arno/cost-tracking.md) | Inference accounting, native budgets, subscription adapters, Phoenix contract, and definition of done |
 | [`recaps.md`](arno/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
 | [`web-interface-design.md`](arno/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
 | [`completion-checklist.md`](arno/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
@@ -53,6 +54,7 @@ holds the following surveys:
 | [`monty-document-parsing/`](research/monty-document-parsing/) | A test of Monty as the sandbox for model-written statement parsers, on every document type, with its scripts. _Applied to this project on purpose, unlike the rest of this tree_ |
 | [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
 | [`personal-finance-agent-2026/`](research/personal-finance-agent-2026/) | Consumer finance products, India-specific data access, research tools, and a sourced capability assessment. _Applied recommendations; not approved product decisions_ |
+| [`model-cost-and-gateways-2026/`](research/model-cost-and-gateways-2026/) | Model-cost accounting, spending controls, LiteLLM, Phoenix, subscription access, and gateway alternatives. _Applied recommendations; not approved product decisions_ |
 
 ## Superseded work in the `archive/` directory
 

@@ -167,6 +167,17 @@ covers the common case.
 
 ## Platform
 
+### Dedicated AI gateway
+
+**Why parked:** native Pydantic AI providers and genai-prices cover the initial provider set;
+OpenCode needs a narrow accounting adapter. A gateway does not remove billing-unit, missing-usage,
+or Phoenix display problems. See the [cost tracking plan](cost-tracking.md).
+
+**Trigger:** a demonstrated need for shared credentials, routing, or centralized admission across
+multiple applications, or a tested gateway that materially simplifies the supported provider
+boundary. More independently self-hosted users alone does not require a shared gateway. Recheck
+the complete selected image's license, persistence, cost parity, and failure semantics then.
+
 ### Public-internet access
 
 **Why parked:** Tailscale keeps the instance off the internet, which removes the password + TOTP
@@ -238,6 +249,17 @@ handlers stay, because they're already safe to rerun.
 ---
 
 ## Agent
+
+### Direct Claude Agent SDK subscription runtime
+
+**Why parked:** official Agent SDK subscription use exists, but it runs its own agent loop,
+authentication, tools, and sessions. Integrating that runtime is a separate architecture decision.
+Eligible plan-funded Console API credits already fit the native Anthropic adapter. See the
+[subscription findings](cost-tracking.md#supported-providers-and-subscriptions).
+
+**Trigger:** API-credit access fails a concrete owner need and an official SDK integration can
+preserve Arno's tool permissions, persistent state, tracing, and budget contract without token
+extraction or client impersonation. Evaluate that runtime as a complete integration then.
 
 ### Hidden memory extraction and semantic search (mem0-style)
 

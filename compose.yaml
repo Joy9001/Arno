@@ -152,7 +152,14 @@ services:
       - "127.0.0.1:8001:8000"
 
   phoenix:
-    image: arizephoenix/phoenix:21.0
+    # Arno builds this one from deploy/phoenix-cost: stock Phoenix 21.0 ignores
+    # a supplied llm.cost.*, prices from its own catalog, and reports an
+    # unknown cost as $0. The patch keeps the supplied observation, its source
+    # and revision, and an unresolved count beside every total. Phoenix is
+    # Elastic License 2.0 and is not part of the Arno image.
+    build:
+      context: ./deploy/phoenix-cost
+    image: arno-phoenix-cost:21.0.0
     restart: unless-stopped
     logging: *default-logging
     environment:

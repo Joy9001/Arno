@@ -185,7 +185,7 @@ The following table states what each requirement demands:
 | Latency | Backend traces measure first streamed output and turn completion: targets are about 2 s to first output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if on a cloud model. Browser render timing is deferred. Local models may be slower |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
 | Durability | Do not lose the ledger. A daily `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
-| Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest, encrypted off-site backups, secrets only in environment variables |
+| Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest and encrypted off-site backups. Deployment secrets use environment variables; native ChatGPT sign-in credentials use an access-restricted database table |
 | Privacy | Inference provider is switchable for each role; nothing else leaves the box except encrypted backups and contentless push pings |
 | Honesty | Tools distinguish _zero_ from _unknown_, and every number carries its age and source |
 | Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` for each model) are measured and published, not claimed. Targets: [success measures](system-design.md#success-measures) |
@@ -250,16 +250,31 @@ The following table records the choice for each layer:
 | Type checking | Pyrefly, `strict` preset, any warning fails | Chosen Nov 10, 2026, over basedpyright: it understands Pydantic models without a plugin and sets strictness for each path. The pure money core is strictest. Policy and the tightening plan: [`typing.md`](typing.md) |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
-| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP. The agent container retains its separate filesystem boundary |
+| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP, and the pinned Phoenix build accepts Arno's supplied costs. The agent container retains its separate filesystem boundary |
 | License | Application code: MIT | Runtime dependencies and standalone service images have their own licenses, recorded in `THIRD_PARTY_NOTICES.md`. Phoenix is included in normal startup and can be disabled with the standard `OTEL_SDK_DISABLED` |
 
 ### Provider switch
+
+Cost accounting, November 12, 2026: Arno uses native Pydantic AI and genai-prices for known
+providers, narrow reported billing for OpenCode, and an explicit zero for local inference. The
+existing free Cohere fallback has a verified published zero tariff while its exact model is absent
+from the catalog; unknown models never inherit that rate. Each
+role takes `*_PROVIDER` and `*_BILLING_MODE` (`metered`, `local`, or `reported`; no subscription
+mode). Phoenix is the only cost dashboard; a dedicated gateway stays
+[parked](parked.md#dedicated-ai-gateway). The
+[cost tracking and budgets implementation](cost-tracking.md) is built but not owner deployed: it
+prices every inference path, uses the native runaway budgets, and runs a pinned Phoenix
+supplied-cost build. Scratch restore, image, and invariant checks passed. Paid-provider, real
+sign-in, and owner-deployment acceptance remain pending, as the
+[acceptance log](cost-tracking-acceptance.md) records.
 
 Each role uses one code path for local and cloud:
 
 ```
 CHAT_BASE_URL=http://ollama:11434/v1      # or https://api.<provider>.com/v1
 CHAT_MODEL=qwen3:4b                       # or a cloud model id
+CHAT_PROVIDER=ollama                      # or openai, anthropic, openai-chatgpt, opencode, openrouter
+CHAT_BILLING_MODE=local                   # or metered, reported
 VISION_BASE_URL=...  VISION_MODEL=...     # photos, statement pages with no text
 STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
 CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails

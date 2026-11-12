@@ -1,5 +1,10 @@
 # The harness layer
 
+The [cost tracking and budgets feature](cost-tracking.md) keeps native Spend Limits and Postgres
+counters, adds shared pricing/direct-call accounting, and removes uncapped fallbacks. It is built
+but not owner deployed; the [acceptance log](cost-tracking-acceptance.md) separates synthetic
+results from paid-provider and deployment checks.
+
 This file holds the detail behind [`plan.md`](plan.md) §3: why PydanticAI, which harness
 capabilities to adopt and when, and the agent-behavior disciplines that aren't code.
 
@@ -78,12 +83,12 @@ The following capabilities are on from the start:
 | Capability | Why now |
 |---|---|
 | Core agent + tools + structured output | The product |
-| Spend Limits, as circuit breakers | A runaway loop costing real money is the one failure that bites immediately. The ceilings sit well above any real turn, so they stop runaways without shaping normal answers ([system design, step 3](system-design.md#the-loop-context-is-managed-runaways-are-stopped)). The counters live in Postgres, so a restart can't reset the daily ceiling ([step 9](system-design.md#traces-phoenix)) |
+| Spend Limits, as circuit breakers | A runaway loop costing real money is the one failure that bites immediately. Every path reaches one strict `spend_limits` factory with a shared price callback and an `on_unpriced="raise"` policy: $5 per run, $20 per shared UTC day, and a scheduled-question limit. The shared day never expires and replay tokens last seven days. The counters live in Postgres, so a restart can't reset the daily ceiling ([system design, step 3](system-design.md#the-loop-context-is-managed-runaways-are-stopped), [step 9](system-design.md#traces-phoenix)) |
 | Compaction | Keeps a long thread inside the context window. It only shrinks what's sent; it doesn't stop loops or cap spend. See [Context and memory](#context-and-memory) |
 | Tool Output Limits | Trims a big `run_code` return—most likely a wide `run_query` result—so it isn't re-sent with every later request. See [Context and memory](#context-and-memory) |
 | System Reminders | Today's date and what changed since the snapshot, after the cache, so they can't break it. See [Context and memory](#context-and-memory) |
 | Caching and Warn On Cache Busts | Prompt caching is the main cost lever, and the warning shows when it stops working. The warning only observes |
-| Automatic instrumentation, exported to Phoenix by default | Every run's model, tokens, cost, tool calls, and results, in a local tool rather than one Arno builds. The process bootstrap calls `Agent.instrument_all()`; `OTEL_SDK_DISABLED=true` disables export ([system design, step 9](system-design.md#traces-phoenix)). See [Traces](#traces) and [Tests and evals](#tests-and-evals) |
+| Automatic instrumentation, exported to Phoenix by default | Every run's model, tokens, supplied cost, tool calls, and results, in a local tool rather than one Arno builds. The process bootstrap calls `Agent.instrument_all()`; `OTEL_SDK_DISABLED=true` disables export ([system design, step 9](system-design.md#traces-phoenix)). See [Traces](#traces) and [Tests and evals](#tests-and-evals) |
 | Tool approval, conditional | Lasting or wide writes ask first in a conversation that has read outside text—a cancellable card where it matters, not on everyday writes ([`design.md`](design.md#untrusted-text-and-write-tiers)). Core `ApprovalRequired`, rendered by the Vercel AI adapter |
 | Input Guardrail, redaction only | Card numbers, PAN, spaced Aadhaar, API keys, and a secret written next to its name (OTP, PIN, CVV, password, in English, Hinglish, or Devanagari) typed in chat are removed before they reach the model or storage. One detector list in `agent/redaction.py` serves the guardrail and every stored copy ([system design, step 7](system-design.md#decisions)). See [Context and memory](#context-and-memory) |
 | Model Fallback and timeouts | The main model can fail or hang, and the backup takes over ([system design, step 8](system-design.md#when-a-model-fails)). See [Context and memory](#context-and-memory) |
@@ -287,12 +292,19 @@ agent = Agent(
         ),
         ToolErrorsToModel(),   # Arno's: a tool that throws becomes a failed result
         ModelFallback(backup), # sticky=False: the next request tries the main model again
-        SpendLimits(budgets=[Budget(usd=Decimal("5"), window="run"), Budget(usd=Decimal("20"), window="day")],
-                    store=PostgresSpendStore(asyncpg_pool)),
+        # One factory for every path: strict store, shared price callback, on_unpriced="raise".
+        # The daily budget keeps retain="forever"; replay tokens last seven days.
+        spend_limits(spend_store, budgets=[
+            Budget(usd=Decimal("5"), window="run", name="turn"),
+            shared_daily_budget(),
+        ]),
     ],
 )
 # Instrumentation is process-wide: arno.observability.bootstrap_observability()
 # calls Agent.instrument_all(...), so this agent and every lazy agent share one trace.
+# Each real dispatch is wrapped by MeteredModel: a journal intent, one child attempt span,
+# one CostObservation. Metered requests default to an 8192-token output cap unless the
+# caller sets max_tokens; the native ChatGPT provider does not support that cap.
 
 # A new thread's history. The snapshot is its own exchange, so redaction can replace your message.
 history = [ModelRequest(parts=[pin(snapshot)]), ModelResponse(parts=[TextPart("Snapshot read.")])]
@@ -433,11 +445,14 @@ prompt-injection notes, a fresh cloned database for each trial, and the scorecar
 ### Traces
 
 [`arno/observability.py`](../../src/arno/observability.py) makes one
-`phoenix.otel.register()` call per process, then calls `Agent.instrument_all()`. Pydantic AI emits
-its own agent, model-request, and tool spans; Phoenix receives them directly over OTLP/HTTP and
-converts the native `gen_ai.*` attributes on ingestion. There is no custom span processor, meter
-provider, framework instrumentation, or log bridge. A Phoenix outage fails export only, and the
-app still serves. The operator journey and settings are in [`observability.md`](observability.md).
+`phoenix.otel.register(batch=True)` call per process, then calls `Agent.instrument_all()`.
+Pydantic AI emits its own agent, model-request, and tool spans; Phoenix receives them directly
+over OTLP/HTTP and converts the native `gen_ai.*` attributes on ingestion. `MeteredModel` adds one
+child attempt span per real dispatch and a matching `llm_calls` journal row. Outside that attempt,
+the only custom span is the cost-only replay, which reuses the original trace and span IDs through
+the standard exporter. There is no custom span processor, meter provider, framework instrumentation, or log
+bridge. A Phoenix outage fails export only, and the app still serves. The operator journey and
+settings are in [`observability.md`](observability.md).
 
 ```python
 from arno.observability import bootstrap_observability, shutdown_observability

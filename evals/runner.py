@@ -64,6 +64,7 @@ from arno.config import REPO_ROOT, get_settings
 from arno.db.conn import connect, current_database_url
 from arno.demo.template import drop_database
 from arno.observability import bootstrap_observability
+from arno.agent.cost_journal import cost_identity
 
 RESULTS_DIR = REPO_ROOT / "evals" / "results"
 README_PATH = REPO_ROOT / "README.md"
@@ -158,15 +159,16 @@ async def run_turn(
 ) -> EvalOutput:
     """One eval trial. Native Pydantic AI spans come from the process bootstrap."""
     del project_name
-    return await _run_turn(
-        inp,
-        meta=meta,
-        model=model,
-        model_factory=model_factory,
-        model_name=model_name,
-        judge=judge,
-        run_budget_usd=run_budget_usd,
-    )
+    with cost_identity(workload=f"eval:{inp.case_id}"):
+        return await _run_turn(
+            inp,
+            meta=meta,
+            model=model,
+            model_factory=model_factory,
+            model_name=model_name,
+            judge=judge,
+            run_budget_usd=run_budget_usd,
+        )
 
 
 async def _run_turn(

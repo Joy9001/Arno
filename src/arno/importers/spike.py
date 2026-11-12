@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from arno.agent.spend import COST_STOP_ERRORS, spend_store_scope
 from arno.importers.checks import account_check
 from arno.importers.helpers import HELPER_VERSION
 from arno.importers.monty import ScriptContext, normalize_accounts, run_script
@@ -178,6 +179,9 @@ def _files_for(root: Path, bank: str) -> list[Path]:
     return sorted(path for path in root.glob(f"*{bank}*") if path.is_file())
 
 
+SPEND_STOPS = COST_STOP_ERRORS
+
+
 def run_real(
     root: Path,
     *,
@@ -186,7 +190,9 @@ def run_real(
     bank: str | None = None,
     max_files: int = 12,
     ledger_opening_paise: int | None = None,
+    spend_store: Any = None,
 ) -> tuple[list[BankRun], list[str]]:
+    """Run real parser spikes behind the same shared budget as every other paid path."""
     import asyncio
 
     notes: list[str] = []
@@ -210,14 +216,28 @@ def run_real(
         except Exception as exc:  # noqa: BLE001 - the spike reports, it does not crash
             runs.append(BankRun(bank=name, status="host error", files=1, note=type(exc).__name__))
             continue
-        parsed = asyncio.run(
-            _parse_first(
-                files[0].read_bytes(),
-                model=model,
-                password=password,
-                opening=ledger_opening_paise,
+        try:
+            parsed = asyncio.run(
+                _parse_first(
+                    files[0].read_bytes(),
+                    model=model,
+                    password=password,
+                    opening=ledger_opening_paise,
+                    spend_store=spend_store,
+                )
             )
-        )
+        except SPEND_STOPS as exc:
+            runs.append(
+                BankRun(
+                    bank=name,
+                    status="spend stop",
+                    files=len(files),
+                    seconds=time.perf_counter() - started,
+                    note=type(exc).__name__,
+                )
+            )
+            notes.append("Stopped at the shared spend ceiling; no further paid spike runs.")
+            break
         if parsed is None or not parsed["script"]:
             runs.append(
                 BankRun(
@@ -283,6 +303,7 @@ async def _parse_first(
     model: Any,
     password: str | None,
     opening: int | None,
+    spend_store: Any = None,
 ) -> dict[str, Any] | None:
     """Run one fresh parser task through the real parser subagent and read its import."""
     import hashlib
@@ -313,14 +334,17 @@ async def _parse_first(
                 opening,
                 row["id"],
             )
-    agent = build_parser_agent(model)
-    try:
-        await agent.run(
-            f"Parse the attached statement. Attachment IDs: {attachment_id}",
-            deps=AgentDeps(conversation_id="spike"),
-        )
-    except Exception:  # noqa: BLE001 - the spike reports, it does not crash
-        pass
+    async with spend_store_scope(spend_store) as store:
+        agent = build_parser_agent(model, spend_store=store)
+        try:
+            await agent.run(
+                f"Parse the attached statement. Attachment IDs: {attachment_id}",
+                deps=AgentDeps(conversation_id="spike"),
+            )
+        except SPEND_STOPS:
+            raise
+        except Exception:  # noqa: BLE001 - the spike reports, it does not crash
+            pass
     async with connect() as conn:
         current = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", row["id"])
         lines = await conn.fetchval(

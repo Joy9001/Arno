@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterable
+from contextlib import nullcontext
 from dataclasses import replace
 from decimal import Decimal
 from typing import Any, override
@@ -20,7 +21,7 @@ from pydantic_ai.capabilities import (
     WrapRunHandler,
 )
 from pydantic_ai.messages import AgentStreamEvent, ModelRequest, UserPromptPart
-from pydantic_ai.models import Model
+from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai_harness.code_mode import CodeMode
 from pydantic_ai_harness.compaction import (
@@ -32,7 +33,7 @@ from pydantic_ai_harness.compaction import (
     is_pinned,
 )
 from pydantic_ai_harness.guardrails import InputGuardrail
-from pydantic_ai_harness.spend import Budget, SpendLimits
+from pydantic_ai_harness.spend import Budget
 from pydantic_ai_harness.subagents import is_task_report
 from pydantic_ai_harness.system_reminders import SystemReminders
 from pydantic_ai_harness.tool_output_limits import (
@@ -43,17 +44,24 @@ from pydantic_ai_harness.tool_output_limits import (
 )
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
+from arno.agent.chatgpt_auth import background_inference
+from arno.agent.cost_journal import cost_identity, current_cost_identity
 from arno.agent.deps import AgentDeps
 from arno.agent.models import DEFAULT_CONTEXT_WINDOW
 from arno.agent.redaction import redact_text, redaction_detectors
+from arno.agent.spend import (
+    COST_STOP_ERRORS,
+    DAILY_CEILING_USD,
+    SHARED_DAILY_BUDGET,
+    shared_daily_budget,
+    spend_limits,
+)
 from arno.db.conn import connect
 from arno.ledger.common import today as ledger_today
 from arno.tools.mark import flag_outside_text
 
 logger = logging.getLogger("arno.agent")
 
-DAILY_CEILING_USD = Decimal("20")
-SHARED_DAILY_BUDGET = "shared daily"
 RUN_CODE_TOOL = "run_code"
 
 WRITE_TOOLS = frozenset(
@@ -142,8 +150,66 @@ class RootSpanIO(AbstractCapability[Any]):
         return result
 
 
+class InferenceContext(AbstractCapability[Any]):
+    """Carry conversation attribution and consent through summaries and delegated work."""
+
+    def __init__(self, *, background: bool = False) -> None:
+        self.background = background
+
+    @override
+    async def wrap_run(self, ctx: RunContext[Any], *, handler: WrapRunHandler) -> Any:
+        session_id = getattr(ctx.deps, "conversation_id", None) or ctx.conversation_id
+        consent = background_inference() if self.background else nullcontext()
+        with consent, cost_identity(session_id=session_id):
+            from opentelemetry.trace import get_current_span
+
+            session_id, workload = current_cost_identity()
+            span = get_current_span()
+            if session_id:
+                span.set_attribute("session.id", session_id)
+                span.set_attribute("gen_ai.conversation.id", session_id)
+            if workload:
+                span.set_attribute("arno.cost.workload", workload)
+            return await handler()
+
+
 class ToolErrorsToModel(AbstractCapability[AgentDeps]):
     """A tool that throws something unexpected becomes a failed result the model can explain."""
+
+    def __init__(self) -> None:
+        self._cost_stop: Exception | None = None
+
+    @override
+    async def for_run(self, ctx: RunContext[AgentDeps]) -> ToolErrorsToModel:
+        return ToolErrorsToModel()
+
+    @override
+    async def wrap_run(self, ctx: RunContext[AgentDeps], *, handler: WrapRunHandler) -> Any:
+        try:
+            result = await handler()
+        except Exception:
+            if self._cost_stop is not None:
+                raise self._cost_stop from None
+            raise
+        if self._cost_stop is not None:
+            raise self._cost_stop
+        return result
+
+    @override
+    async def before_model_request(
+        self, ctx: RunContext[AgentDeps], request_context: ModelRequestContext
+    ) -> ModelRequestContext:
+        if self._cost_stop is not None:
+            raise self._cost_stop
+        return request_context
+
+    @override
+    async def before_tool_execute(
+        self, ctx: RunContext[AgentDeps], *, call: Any, tool_def: Any, args: Any
+    ) -> Any:
+        if self._cost_stop is not None:
+            raise self._cost_stop
+        return args
 
     @override
     async def on_tool_execute_error(
@@ -155,6 +221,15 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
         args: Any,
         error: Exception,
     ) -> Any:
+        # A budget or accounting stop is not a tool hiccup: retrying it or describing it back to
+        # the model would spend again on a call that already failed, so it ends the run.
+        from arno.jobs.runner import JobGaveUp
+
+        if isinstance(error, (JobGaveUp, *COST_STOP_ERRORS)):
+            # Code Mode transports nested exceptions through Monty. Even a snippet that catches
+            # one must not dispatch another tool/model or finish this run as successful.
+            self._cost_stop = error
+            raise error
         logger.error("tool %s failed (%s)", call.tool_name, type(error).__name__)
         return {
             "status": "error",
@@ -283,22 +358,6 @@ class TaskTextIsOutside(AbstractCapability[AgentDeps]):
         return request_context
 
 
-def shared_daily_budget() -> Budget:
-    """The `$20/day` ceiling promised across chat, schedules, parse, vision, and briefing.
-
-    All paths use this name and window, so they read and write one Postgres counter instead of
-    each keeping a private ceiling.
-    """
-    return Budget(usd=DAILY_CEILING_USD, window="day", name=SHARED_DAILY_BUDGET)
-
-
-def spend_limits(store: Any, *, budgets: list[Budget] | None = None) -> SpendLimits | None:
-    """`SpendLimits` for a domain agent, or `None` when no store is available."""
-    if store is None:
-        return None
-    return SpendLimits(budgets=budgets or [shared_daily_budget()], store=store)
-
-
 async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
     """Today's date and how many writes landed since the pinned snapshot."""
     day = ledger_today().isoformat()
@@ -375,14 +434,14 @@ def build_capabilities(
     # the day or the conversation share the outer ledger; a `run` window would key a fresh
     # summarizer run and charge a second budget instead of the outer one.
     summary_budgets = [budget for budget in budgets or [] if budget.window != "run"]
-    summarization_capabilities = (
-        [SpendLimits(budgets=summary_budgets, store=spend_store)]
-        if summary_budgets and spend_store is not None
-        else []
-    )
+    summary_limits = spend_limits(spend_store, budgets=summary_budgets)
+    summarization_capabilities: list[AbstractCapability[Any]] = [InferenceContext()]
+    if summary_limits is not None:
+        summarization_capabilities.append(summary_limits)
 
     summary_model: Model = FallbackModel(primary, backup) if backup is not None else primary
     capabilities: list[AbstractCapability[Any]] = [
+        InferenceContext(),
         RootSpanIO(),
         redaction_guardrail(),
         CodeMode(tools={"code_mode": True}),
@@ -427,8 +486,9 @@ def build_capabilities(
         capabilities.append(subagents)
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
-    if budgets is not None:
-        capabilities.append(SpendLimits(budgets=budgets, store=spend_store))
+    main_limits = spend_limits(spend_store, budgets=budgets)
+    if main_limits is not None:
+        capabilities.append(main_limits)
     return capabilities
 
 

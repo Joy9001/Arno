@@ -29,6 +29,7 @@ from arno.tools import write as write_tools
 from tests.invariants import check_ledger
 
 SECRET_TABLES = {
+    "model_credentials",
     "users",
     "sessions",
     "webauthn_credentials",

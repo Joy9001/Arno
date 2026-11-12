@@ -309,7 +309,11 @@ async def send_weekly_briefing(
             )
         else:
             body = prose
-    except Exception as exc:  # noqa: BLE001 - the numbers still go out
+    except Exception as exc:  # noqa: BLE001 - ordinary prose failures use computed numbers
+        from arno.agent.spend import COST_STOP_ERRORS
+
+        if isinstance(exc, COST_STOP_ERRORS):
+            raise
         prose_error = type(exc).__name__
         logger.info("weekly briefing prose failed (%s); using the template", prose_error)
     if prose_error is not None:
