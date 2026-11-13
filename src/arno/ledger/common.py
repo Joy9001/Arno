@@ -33,16 +33,22 @@ def today() -> date:
 
 
 async def get_account_row(conn: Connection, account_id: str) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
+    row = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", account_id)
     if row is None:
         raise NotFoundLedgerError(f"No account {account_id}")
     return row
 
 
 async def require_active_account(conn: Connection, account_id: str) -> dict[str, Any]:
-    row = await get_account_row(conn, account_id)
+    row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
+    if row is None:
+        raise NotFoundLedgerError(f"No account {account_id}")
     if not row["active"]:
-        raise InvalidLedgerError(f"Account {row['name']} is archived")
+        name = row["name"]
+        if name is None:
+            resolved = await get_account_row(conn, account_id)
+            name = resolved["name"]
+        raise InvalidLedgerError(f"Account {name} is archived")
     return row
 
 
@@ -64,26 +70,50 @@ async def system_account(conn: Connection, kind: str) -> dict[str, Any]:
     return row
 
 
-async def ledger_balance(conn: Connection, ledger_account_id: str) -> int:
-    row = await conn.fetchrow(
-        "SELECT coalesce(balance, 0)::bigint AS balance FROM pgledger_accounts WHERE id = $1",
-        ledger_account_id,
+async def ledger_balances(conn: Connection, ledger_account_ids: list[str]) -> dict[str, int]:
+    if not ledger_account_ids:
+        return {}
+    # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
+    # generic plan while still using the primary-key index.
+    rows = await conn.fetch(
+        """
+        SELECT id, coalesce(balance, 0)::bigint AS balance
+        FROM pgledger_accounts
+        WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
+        """,
+        ledger_account_ids,
     )
-    return int(row["balance"]) if row else 0
+    by_id = {str(row["id"]): int(row["balance"]) for row in rows}
+    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
+
+
+async def ledger_balance(conn: Connection, ledger_account_id: str) -> int:
+    return (await ledger_balances(conn, [ledger_account_id]))[ledger_account_id]
+
+
+async def balance_as_of_many(
+    conn: Connection, ledger_account_ids: list[str]
+) -> dict[str, date | None]:
+    if not ledger_account_ids:
+        return {}
+    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `ledger_balances`.
+    rows = await conn.fetch(
+        """
+        SELECT e.account_id, max(m.date) AS as_of
+        FROM pgledger_entries e
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+        GROUP BY e.account_id
+        """,
+        ledger_account_ids,
+    )
+    by_id = {str(row["account_id"]): row["as_of"] for row in rows}
+    return {account_id: by_id.get(account_id) for account_id in ledger_account_ids}
 
 
 async def balance_as_of(conn: Connection, ledger_account_id: str) -> date | None:
-    row = await conn.fetchrow(
-        """
-        SELECT max(m.date) AS as_of
-        FROM pgledger_transfers t
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE t.from_account_id = $1 OR t.to_account_id = $2
-        """,
-        ledger_account_id,
-        ledger_account_id,
-    )
-    return row["as_of"] if row else None
+    return (await balance_as_of_many(conn, [ledger_account_id]))[ledger_account_id]
 
 
 def has_known_balance(account: dict[str, Any]) -> bool:
@@ -121,9 +151,9 @@ def balance_anchor(account: dict[str, Any], last_movement: date | None) -> date 
     return max(evidence) if evidence else None
 
 
-async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
-    balance = await ledger_balance(conn, row["ledger_account_id"])
-    as_of = await balance_as_of(conn, row["ledger_account_id"])
+def _assemble_account_payload(
+    row: dict[str, Any], *, balance: int, as_of: date | None, today_date: date
+) -> dict[str, Any]:
     statement_as_of = row["statement_balance_as_of"]
     anchor = balance_anchor(row, as_of)
     payload: dict[str, Any] = {
@@ -138,9 +168,9 @@ async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, An
         "balance_as_of": as_of.isoformat() if as_of else None,
         "statement_balance_paise": row["statement_balance_paise"],
         "statement_balance_as_of": statement_as_of.isoformat() if statement_as_of else None,
-        "balance_age_days": (today() - anchor).days if anchor else None,
+        "balance_age_days": (today_date - anchor).days if anchor else None,
         "statement_age_days": (
-            (today() - statement_as_of).days if statement_as_of is not None else None
+            (today_date - statement_as_of).days if statement_as_of is not None else None
         ),
         "credit_limit_paise": row["credit_limit_paise"],
         "statement_day": row["statement_day"],
@@ -166,6 +196,37 @@ async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, An
     return payload
 
 
+async def account_payloads(conn: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    missing_balance_ids = [
+        str(row["ledger_account_id"]) for row in rows if "balance_paise" not in row
+    ]
+    fetched_balances = (
+        await ledger_balances(conn, missing_balance_ids) if missing_balance_ids else {}
+    )
+    as_of_by_id = await balance_as_of_many(conn, ledger_ids)
+    today_date = today()
+    return [
+        _assemble_account_payload(
+            row,
+            balance=(
+                int(row["balance_paise"])
+                if "balance_paise" in row
+                else fetched_balances[str(row["ledger_account_id"])]
+            ),
+            as_of=as_of_by_id[str(row["ledger_account_id"])],
+            today_date=today_date,
+        )
+        for row in rows
+    ]
+
+
+async def account_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
+    return (await account_payloads(conn, [row]))[0]
+
+
 async def list_account_rows(
     conn: Connection, *, include_system: bool = False, include_inactive: bool = False
 ) -> list[dict[str, Any]]:
@@ -175,4 +236,4 @@ async def list_account_rows(
     if not include_inactive:
         clauses.append("active")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return await conn.fetch(f"SELECT * FROM accounts {where} ORDER BY kind, name, created_at")
+    return await conn.fetch(f"SELECT * FROM v_accounts {where} ORDER BY kind, name, created_at")

@@ -62,8 +62,8 @@ those native attributes to OpenInference on ingestion.
 - `OTEL_SDK_DISABLED=true` is the standard SDK kill switch. The process registers no exporter and
   instruments no agent. There is no other switch.
 - The API exposes no `X-Trace-Id` header and does not write new trace IDs to `messages.trace_id`.
-  Historical rows keep their old values. `jobs.trace_context` remains nullable for the same
-  reason and is no longer read or written.
+  Historical rows keep their old values. Jobs carry no trace context column; the runner always
+  left it empty.
 
 ### Project and endpoint
 

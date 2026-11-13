@@ -28,15 +28,17 @@ async def _category_row(conn: Connection, category_id: str) -> dict[str, Any]:
 
 async def ensure_default_categories(conn: Connection) -> list[dict[str, Any]]:
     """Insert any missing Indian defaults. Existing categories (and user edits) stay put."""
-    existing = {row["name"] for row in await conn.fetch("SELECT name FROM categories")}
-    missing = [(name, reducible) for name, reducible in DEFAULT_CATEGORIES if name not in existing]
+    existing = {row["name"].lower() for row in await conn.fetch("SELECT name FROM categories")}
+    missing = [
+        (name, reducible) for name, reducible in DEFAULT_CATEGORIES if name.lower() not in existing
+    ]
     if missing:
         async with write_group(conn, actor="system") as group:
             for name, reducible in missing:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO categories (name, reducible) VALUES ($1, $2)
-                    ON CONFLICT (name) DO NOTHING RETURNING *
+                    ON CONFLICT (lower(name)) DO NOTHING RETURNING *
                     """,
                     name,
                     reducible,
@@ -68,7 +70,7 @@ async def create_category(
         row = await conn.fetchrow(
             """
             INSERT INTO categories (name, reducible) VALUES ($1, $2)
-            ON CONFLICT (name) DO NOTHING RETURNING *
+            ON CONFLICT (lower(name)) DO NOTHING RETURNING *
             """,
             name,
             reducible,
@@ -96,7 +98,9 @@ async def update_category(
         if not trimmed:
             raise InvalidLedgerError("A category needs a name")
         clash = await conn.fetchrow(
-            "SELECT 1 FROM categories WHERE name = $1 AND id <> $2", trimmed, category_id
+            "SELECT 1 FROM categories WHERE lower(name) = lower($1) AND id <> $2",
+            trimmed,
+            category_id,
         )
         if clash is not None:
             raise InvalidLedgerError(f"Category {trimmed} already exists")
@@ -157,6 +161,7 @@ async def resolve_category(
     category_id: str | None = None,
     display_name: str | None = None,
     upi_id: str | None = None,
+    payee_row: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve a category, returning where it came from.
 
@@ -172,11 +177,12 @@ async def resolve_category(
             "rule_id": None,
         }
 
-    payee = None
+    payee = payee_row
     if payee_id:
-        payee = await conn.fetchrow("SELECT * FROM payees WHERE id = $1", payee_id)
         if payee is None:
-            raise NotFoundLedgerError(f"No payee {payee_id}")
+            payee = await conn.fetchrow("SELECT * FROM payees WHERE id = $1", payee_id)
+            if payee is None:
+                raise NotFoundLedgerError(f"No payee {payee_id}")
         display_name = display_name or payee["display_name"]
         upi_id = upi_id or payee["upi_id"]
 
@@ -346,32 +352,32 @@ async def relabel_payee_history(
 ) -> int:
     """Apply a payee's category to every past label for that payee, auditing each change."""
     await _category_row(conn, category_id)
-    labels = await conn.fetch(
+    legs = await conn.fetch(
         """
-        SELECT * FROM transfer_labels
+        SELECT * FROM movement_legs
         WHERE payee_id = $1 AND category_id IS DISTINCT FROM $2
         """,
         payee_id,
         category_id,
     )
-    for label in labels:
+    for leg in legs:
         await conn.execute(
             """
-            UPDATE transfer_labels
+            UPDATE movement_legs
             SET category_id = $1, updated_at = now()
             WHERE transfer_id = $2
             """,
             category_id,
-            label["transfer_id"],
+            leg["transfer_id"],
         )
         updated = await conn.fetchrow(
-            "SELECT * FROM transfer_labels WHERE transfer_id = $1", label["transfer_id"]
+            "SELECT * FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
         )
         if updated is not None:
-            group.record_updated("transfer_labels", label["transfer_id"], label, updated)
+            group.record_updated("movement_legs", leg["transfer_id"], leg, updated)
         else:  # pragma: no cover - the row cannot disappear in this transaction
-            raise InvalidLedgerError("The label disappeared mid-correction")
-    return len(labels)
+            raise InvalidLedgerError("The leg disappeared mid-correction")
+    return len(legs)
 
 
 async def _apply_payee_correction_in_group(

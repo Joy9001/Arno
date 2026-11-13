@@ -128,7 +128,6 @@ async def _candidates(
     line: dict[str, Any],
     account: dict[str, Any],
     used: set[str],
-    hidden: set[str],
 ) -> list[dict[str, Any]]:
     day = line["date"]
     if not isinstance(day, date):
@@ -149,9 +148,10 @@ async def _candidates(
                 END
             )::bigint AS net_paise
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
-        WHERE m.kind <> 'reversal'
-          AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE ms.is_effective
           AND m.date BETWEEN $3 AND $4
           AND (t.from_account_id = $5 OR t.to_account_id = $6)
           AND NOT EXISTS (
@@ -176,7 +176,7 @@ async def _candidates(
     )
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        if str(row["id"]) in used or str(row["id"]) in hidden:
+        if str(row["id"]) in used:
             continue
         captures = await conn.fetch(
             "SELECT upi_ref FROM captures WHERE movement_id = $1 AND upi_ref IS NOT NULL",
@@ -188,9 +188,9 @@ async def _candidates(
             for payee in await conn.fetch(
                 """
                 SELECT DISTINCT p.match_hash
-                FROM transfer_labels tl
-                JOIN payees p ON p.id = tl.payee_id
-                WHERE tl.movement_id = $1 AND p.match_hash IS NOT NULL
+                FROM movement_legs ml
+                JOIN payees p ON p.id = ml.payee_id
+                WHERE ml.movement_id = $1 AND p.match_hash IS NOT NULL
                 """,
                 row["id"],
             )
@@ -217,7 +217,6 @@ async def _settle_line(
     line: dict[str, Any],
     account: dict[str, Any],
     used: set[str],
-    hidden: set[str],
 ) -> dict[str, Any]:
     """One line's match state: its detail, and the movement it matched, if any."""
     if await _duplicate_exists(conn, line, account["id"]):
@@ -226,7 +225,7 @@ async def _settle_line(
             "movement_id": None,
             "detail": {"reason": DUPLICATE_REASON},
         }
-    candidates = await _candidates(conn, line=line, account=account, used=used, hidden=hidden)
+    candidates = await _candidates(conn, line=line, account=account, used=used)
     want_debit = int(line["amount_paise"]) < 0
     line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
     exact = [
@@ -293,17 +292,12 @@ async def reconcile(
         "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
         import_id,
     )
-    # An undone movement is not money the statement can match: merging into it would hide the
-    # row behind a reversal and let the closing adjustment absorb the difference.
-    from arno.ledger.movements import _effectively_reversed_ids
-
-    hidden = set(await _effectively_reversed_ids(conn))
     used: set[str] = set()
     counts = {"new": 0, "certain": 0, "ambiguous": 0, "ignored": 0}
     ambiguous: list[dict[str, Any]] = []
 
     for line in lines:
-        settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+        settled = await _settle_line(conn, line=line, account=account, used=used)
         state = settled["state"]
         await _set_match(conn, line["id"], state, settled["movement_id"], settled["detail"])
         if state == "certain":
@@ -339,11 +333,9 @@ async def reconcile(
         account=account,
         period=period,
         matched=matched_ids,
-        hidden=hidden,
     )
     counts["logged_not_on_statement"] = len(logged_not_on_statement)
     review = {
-        "counts": counts,
         "ambiguous": ambiguous,
         "logged_not_on_statement": logged_not_on_statement,
         "period": [period[0].isoformat(), period[1].isoformat()] if period else None,
@@ -390,9 +382,6 @@ async def rematch_new_lines(conn: Connection, import_id: str) -> dict[str, int]:
         )
         if not lines or account is None:
             return counts
-        from arno.ledger.movements import _effectively_reversed_ids
-
-        hidden = set(await _effectively_reversed_ids(conn))
         used = {
             str(found["movement_id"])
             for found in await conn.fetch(
@@ -404,7 +393,7 @@ async def rematch_new_lines(conn: Connection, import_id: str) -> dict[str, int]:
         for line in lines:
             if (line["match_detail"] or {}).get("resolved_by") == "user":
                 continue
-            settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+            settled = await _settle_line(conn, line=line, account=account, used=used)
             state = settled["state"]
             if state == "new":
                 continue
@@ -446,9 +435,6 @@ async def release_suppressed_duplicates(conn: Connection, *, account_id: str | N
     )
     if not rows:
         return []
-    from arno.ledger.movements import _effectively_reversed_ids
-
-    hidden = set(await _effectively_reversed_ids(conn))
     released: list[str] = []
     for row in rows:
         import_id = str(row["id"])
@@ -464,7 +450,7 @@ async def release_suppressed_duplicates(conn: Connection, *, account_id: str | N
             detail = line.get("match_detail") or {}
             if detail.get("resolved_by") or detail.get("reason") != DUPLICATE_REASON:
                 continue
-            settled = await _settle_line(conn, line=line, account=account, used=used, hidden=hidden)
+            settled = await _settle_line(conn, line=line, account=account, used=used)
             if settled["state"] == "ignored":
                 continue
             changed = True
@@ -484,7 +470,7 @@ async def release_suppressed_duplicates(conn: Connection, *, account_id: str | N
 
 
 async def _refresh_counts(conn: Connection, import_id: str) -> None:
-    """Recount an import's lines after a release, keeping its other review facts."""
+    """Recount an import's lines after a release."""
     current = await conn.fetchrow_required("SELECT counts FROM imports WHERE id = $1", import_id)
     counts = {
         key: 0 for key in ("new", "certain", "ambiguous", "ignored", "logged_not_on_statement")
@@ -502,8 +488,7 @@ async def _refresh_counts(conn: Connection, import_id: str) -> None:
     await conn.execute(
         """
         UPDATE imports
-        SET counts = $1,
-            review = coalesce(review, '{}'::jsonb) || jsonb_build_object('counts', $1::jsonb)
+        SET counts = $1
         WHERE id = $2
         """,
         counts,
@@ -539,11 +524,9 @@ async def _logged_not_on_statement(
     account: dict[str, Any],
     period: tuple[date, date] | None,
     matched: set[str],
-    hidden: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     if period is None:
         return []
-    skip = hidden or set()
     ledger_id = account["ledger_account_id"]
     rows = await conn.fetch(
         """
@@ -559,9 +542,10 @@ async def _logged_not_on_statement(
                 END
             ))::bigint AS amount_paise
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
-        WHERE m.kind <> 'reversal'
-          AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE ms.is_effective
           AND m.date BETWEEN $3 AND $4
           AND (t.from_account_id = $5 OR t.to_account_id = $6)
           AND EXISTS (
@@ -590,7 +574,7 @@ async def _logged_not_on_statement(
             "amount_paise": int(row["amount_paise"]),
         }
         for row in rows
-        if str(row["id"]) not in matched and str(row["id"]) not in skip
+        if str(row["id"]) not in matched
     ]
 
 

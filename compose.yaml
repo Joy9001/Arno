@@ -11,6 +11,8 @@ services:
     image: postgres:18.6
     restart: unless-stopped
     logging: *default-logging
+    # Assumes SSD/NVMe storage; use 4 on spinning disks.
+    command: ["postgres", "-c", "random_page_cost=1.1"]
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}

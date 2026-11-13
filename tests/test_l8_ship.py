@@ -258,6 +258,9 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
             # The dump carries the migrations' table grants, so a restored instance can answer and
             # back up again. `agent_ro` still cannot read the auth tables.
             assert await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'v_accounts', 'SELECT')"
+            )
+            assert not await restored.fetchval(
                 "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
             )
             assert not await restored.fetchval(
@@ -275,6 +278,8 @@ BACKUP_SCRIPT = Path(__file__).resolve().parents[1] / "backup" / "backup.sh"
 
 
 def _backup_script_skip_reason() -> str | None:
+    if sys.platform == "win32":
+        return "backup.sh uses a FIFO that native Windows psql cannot read"
     missing = [name for name in ("sh", "jq", "restic") if shutil.which(name) is None]
     for env_name, name in (("PSQL", "psql"), ("PG_DUMP", "pg_dump")):
         if _binary(env_name, name) is None:
@@ -373,6 +378,9 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
             )["n"]
             # The sidecar's own dump must carry the grants, or a restored instance cannot answer.
             assert await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'v_accounts', 'SELECT')"
+            )
+            assert not await restored.fetchval(
                 "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
             )
             assert not await restored.fetchval(

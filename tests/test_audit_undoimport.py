@@ -64,15 +64,15 @@ async def _review(conn, account: dict, rows: list[dict]) -> str:
     await conn.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
-                             check_result, review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, '[]'::jsonb)
+                             check_result, check_status, review, commit_groups)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, 'VERIFIED', $7, '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
         account["id"],
         PERIOD[0],
         PERIOD[1],
-        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": opening},
+        {"opening_source": "manual", "opening_paise": opening},
         {"manual_opening_paise": opening},
     )
     await insert_lines(
@@ -171,7 +171,7 @@ async def _state(conn) -> dict[str, Any]:
             """
             SELECT m.description, c.name AS category
             FROM movements m
-            JOIN transfer_labels tl ON tl.movement_id = m.id
+            JOIN movement_legs tl ON tl.movement_id = m.id
             JOIN categories c ON c.id = tl.category_id
             WHERE m.reverses_id IS NULL
             ORDER BY m.description, c.name
@@ -361,7 +361,7 @@ async def test_undoing_one_import_leaves_the_other_imports_categorization(ledger
         await ledger.fetchval(
             """
             SELECT c.name FROM movements m
-            JOIN transfer_labels tl ON tl.movement_id = m.id
+            JOIN movement_legs tl ON tl.movement_id = m.id
             JOIN categories c ON c.id = tl.category_id
             WHERE m.reverses_id IS NULL AND m.description LIKE '%BETA%'
             """
@@ -372,7 +372,7 @@ async def test_undoing_one_import_leaves_the_other_imports_categorization(ledger
         await ledger.fetchval(
             """
             SELECT count(*) FROM movements m
-            JOIN transfer_labels tl ON tl.movement_id = m.id
+            JOIN movement_legs tl ON tl.movement_id = m.id
             WHERE m.reverses_id IS NULL AND m.description LIKE '%ALPHA%'
               AND tl.category_id IS NOT NULL
             """

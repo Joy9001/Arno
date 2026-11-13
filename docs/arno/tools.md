@@ -186,10 +186,10 @@ UI: row IDs for citations.
 ```
 period = resolve_period(filters.period, today)     # on the host, which has a clock
 names  = resolve() to IDs
-rows   = movements + transfers (by movement_id in metadata) + labels + captures,
+rows   = movements + movement_legs + transfers + captures,
          filtered, newest first, paged
-hide reversed pairs unless include_reversed, in SQL, so total_count, the page, and
-  next_cursor agree
+hide non-effective movements (via v_movement_state) unless include_reversed, in SQL,
+  so total_count, the page, and next_cursor agree
 mark() the description and payee on outside rows
 return rows, total_count, next_cursor, coverage(account, period)
 ```
@@ -251,8 +251,9 @@ UI: breakdown card and source row IDs.
 period = resolve_period(period, today)
 cov    = coverage(filters.account, period)
 if nothing logged and no statement covers the period: return total = null with the gaps
-groups = SELECT key, SUM(amount), COUNT(effective movements) FROM v_spending ... GROUP BY key
-         # the sum nets a reversal against its original; the count leaves the pair out
+groups = SELECT key, SUM(amount), COUNT(*) FILTER (WHERE ms.is_effective)
+         FROM v_spending JOIN v_movement_state ms ... GROUP BY key
+         # the sum nets a reversal against its original; the count leaves non-effective rows out
 if group_by == payee: mark() outside names         # grouping by category flags nothing
 return groups, total, cov                          # complete = false when part of the period has
                                                    # no statement for every statement account
@@ -334,9 +335,14 @@ and no goal-slip clause. This section changes as each step lands.
 
 ### `run_query`
 
-**Description:** "Read-only SQL for questions the typed tools can't answer, including conversation
-search. Try query_movements and summarize_spending first. Prefer the views v_spending, v_cashflow,
-v_balances, and v_owed. Schema: …"
+**Description:** lists every object `agent_ro` can read in four groups (`Ledger`: `v_legs`,
+`v_accounts`, `v_movement_state`, `v_spending`, `v_balances`, `v_owed`, `movements`, `captures`;
+`Planning`: `schedules`, `schedule_occurrences`, `schedule_payments`, `goals`,
+`scheduled_questions`; `Import`: `imports`, `statement_lines`; `Other`: `payees`, `categories`,
+`category_rules`, `baselines`, `preferences`, `conversations`, `messages`, `settings`) along with
+`acc_*` account IDs, integer paise, sign conventions (`v_accounts` carries each account's current
+`balance_paise`, while `v_balances` holds the per-day balance history), and reversal flags. See
+`src/arno/agent/toolset.py`.
 
 **Input:** `run_query(sql: str)`
 
@@ -742,10 +748,10 @@ date-only correction reports `rows_changed: 1` rather than 0.
 **Logic**
 
 ```
-m = load(id), else ModelRetry
-if m is already reversed: ModelRetry
+m = load(id) FOR UPDATE (in write_group for reversals), else ModelRetry
+if m is already reversed (movement_reversal_state): ModelRetry
 write_group:
-    category, payee, note, expected date → edit transfer_labels   # ledger untouched
+    category, payee, note, expected date → edit movement_legs     # ledger untouched
     date → edit movements.date                                    # ledger untouched
     amount or account → new movement, reverses_id = m:
                         opposite transfers + corrected transfers, one batch

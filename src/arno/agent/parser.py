@@ -303,9 +303,9 @@ async def _row(conn: Connection, import_id: str) -> dict[str, Any]:
 async def _data(conn: Connection, import_id: str) -> tuple[str, bytes]:
     row = await conn.fetchrow(
         """
-        SELECT id, data FROM attachments
-        WHERE import_id = $1 AND data IS NOT NULL AND purged_at IS NULL
-        ORDER BY created_at DESC LIMIT 1
+        SELECT a.id, a.data FROM imports i
+        JOIN attachments a ON a.id = i.attachment_id
+        WHERE i.id = $1 AND a.data IS NOT NULL AND a.purged_at IS NULL
         """,
         import_id,
     )
@@ -366,7 +366,7 @@ async def _context(
 ) -> dict[str, Any]:
     """The host facts a parser cannot own: account, period, opening, fingerprint, layout."""
     if account is None and row.get("account_id"):
-        account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
+        account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", row["account_id"])
     if account is None:
         account = await _infer_account(conn, doc)
         if account is not None:
@@ -690,7 +690,7 @@ async def import_state(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, 
             import_id,
         )
         account = (
-            await conn.fetchrow("SELECT name FROM accounts WHERE id = $1", row["account_id"])
+            await conn.fetchrow("SELECT name FROM v_accounts WHERE id = $1", row["account_id"])
             if row["account_id"]
             else None
         )
@@ -703,11 +703,10 @@ async def import_state(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, 
             row["file_hash"],
             import_id,
         )
-    check = row["check_result"] or {}
     return {
         "import_id": row["id"],
         "status": row["status"],
-        "check": check.get("status"),
+        "check": row["check_status"],
         "account": account["name"] if account is not None else None,
         "period": {
             "start": row["period_start"].isoformat() if row["period_start"] else None,
@@ -741,7 +740,7 @@ async def ledger_opening(
         if account:
             found = await conn.fetchrow(
                 """
-                SELECT * FROM accounts
+                SELECT * FROM v_accounts
                 WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
                   AND lower(name) = lower($1)
                 """,
@@ -934,7 +933,7 @@ async def submit_parser_code(
                     import_id,
                     "needs_input" if reason in INPUT_REASONS else "parsing",
                     reason=reason,
-                    check_result=check,
+                    check=check,
                 )
             return {
                 "status": "failed",
@@ -1015,7 +1014,7 @@ async def suggest_transfers(
         own = await conn.fetch(
             """
             SELECT id, name, kind, institution, last4
-            FROM accounts
+            FROM v_accounts
             WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
               AND ($1::text IS NULL OR id <> $1)
             ORDER BY kind, name

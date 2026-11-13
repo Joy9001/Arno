@@ -298,6 +298,59 @@ A deployment works as follows:
   per-operation journal connections. While Postgres is down, the API answers with a plain
   "database unreachable" and refuses paid inference.
 
+### Database tuning
+
+No index or Postgres setting is added without an `EXPLAIN (ANALYZE, BUFFERS)` before and after at
+ten-year single-user scale, so the schema carries no speculative indexes:
+
+- **`movement_legs_movement_id_idx`:** index on `movement_legs (movement_id)` for batched leg and
+  transfer lookups for a page of movements.
+- **`movement_legs_category_id_idx`:** index on `movement_legs (category_id)` for
+  category-filtered movement searches and `v_spending` joins.
+- **`audit_log_created_at_idx`:** index on `audit_log (created_at)` for the per-request
+  writes-since-snapshot count (`6.770 ms` to `0.257 ms`).
+- **`random_page_cost=1.1`:** set on `db` in `compose.yaml` assuming SSD or NVMe storage (use `4`
+  on spinning disks); cuts reversal-state lookup (`3.132 ms` to `0.303 ms`), `v_owed` (`12.6 ms`
+  to `5.3 ms`), and `v_balances` (`127 ms` to `115 ms`).
+
+### Schema integrity
+
+An invariant the code relies on is a constraint, checked against existing data before it ships:
+
+- **Ledger transfers and legs:** `pgledger_transfers` requires integer paise (`amount =
+  trunc(amount)`) and carries a deferred foreign key (`pgledger_transfers_leg_fkey`) to
+  `movement_legs (transfer_id)`. Each row in `movement_legs` links one transfer to its `movements`
+  row (`movement_id NOT NULL`), so no transfer can commit without a leg and a leg cannot be deleted.
+- **State invariants:** `movements` pairs `kind = 'reversal'` with `reverses_id`; `accounts`
+  enforces card cycle fields and statement balance/date pairing; `schedule_occurrences` mirrors
+  the closed `kind` and `subtype` sets on `schedules`.
+- **Reversal state:** reversal state has one definition, `movement_reversal_state`, and readers
+  must not re-derive it from `reverses_id` or `kind`.
+- **Natural keys:** case-insensitive unique indexes cover `categories (lower(name))`, `payees
+  (lower(upi_id))`, and `statement_layouts (lower(institution), lower(kind))`.
+- **Account identity and single home:** `accounts.name` is nullable and must be `NULL` if and
+  only if `kind` is `'person'` or `'goal'` (`accounts_name_kind_check`). Person accounts take their
+  display name from `payees.display_name`, and goal accounts derive `<name> goal` from
+  `goals.name`; `v_accounts` exposes the resolved `name` and current `balance_paise` directly,
+  `v_legs` (with liquidity flags) and `v_balances` expose the resolved `name` and `acc_*` account
+  IDs, and `v_owed` anchors its expected-date cutoff to `Asia/Kolkata`. `pgledger_accounts.name`
+  stores the immutable `accounts.id` instead of a mutable display name.
+- **Subtype integrity and single user:** `goals.account_id` and `payees.person_account_id`
+  reference `accounts (id)`, and `tests/invariants.py` verifies their target `kind` values match
+  (`'goal'` and `'person'`). `users_one_row_idx` on `users ((true))` guarantees a single user row.
+- **Parser versions and scheduled questions:** `parser_versions.is_active` carries a partial
+  unique index on `(layout_id) WHERE is_active` so at most one version per layout is active at a
+  time without a circular pointer from `statement_layouts`, while layouts with no active version
+  remain representable. `job_schedules.scheduled_question_id` references
+  `scheduled_questions (id) ON DELETE CASCADE`, is required when and only when
+  `kind = 'scheduled_question'` (`job_schedules_scheduled_question_check`), and carries a partial
+  unique index so each scheduled question maps to at most one schedule row.
+- **Import and operations facts:** `imports.check_status` holds the check verdict (`VERIFIED`,
+  `DISCREPANCY`, or `FAILED`), so `check_result` no longer carries a `status` key, and
+  `imports.counts` is the only home for line counts. `imports.attachment_id` is the one link to a
+  statement file; `attachments.import_id` is gone. `jobs.trace_context` and
+  `preferences.deleted_at`, which nothing wrote, are dropped.
+
 ---
 
 ## Backups
@@ -348,7 +401,7 @@ were updated on November 4, 2026:
 | A forged or replayed confirm answer | Server-held history: an answer counts once, only for a pending call, with the stored arguments ([tested](system-design.md#the-safety-tests-october-31-2026)) |
 | Secrets typed into chat | `InputGuardrail` removes API keys, card numbers, PAN, and spaced Aadhaar before the model or storage sees them. Passwords, OTPs, and bank account numbers can't be detected, so a statement password has its own field on the import card |
 | Data carried out through rendered output | A [strict content security policy](system-design.md#security) from L0, with no inline scripts and images only from the app's own origin; links in agent replies render as plain text. Client file URLs are off, so a client can't make the model fetch one |
-| Agent-written SQL | The `agent_ro` grants are the boundary: `SELECT` only, no auth tables. The read-only default, the timeout, one statement through the extended protocol, and a transaction that's always rolled back are extra layers ([`tools.md`](tools.md#run_query)). `TEMP` is revoked, and no network extension such as `dblink` is installed |
+| Agent-written SQL | The `agent_ro` grants are the boundary: `SELECT` only, no auth tables, no raw `accounts` or `pgledger_*` engine objects. The read-only default, the timeout, one statement through the extended protocol, and a transaction that's always rolled back are extra layers ([`tools.md`](tools.md#run_query)). `TEMP` is revoked, and no network extension such as `dblink` is installed |
 | Agent-written code | Monty: no filesystem, environment, or network, with time and memory limits. A saved parser reruns with `os_policy` and a sleep limit set, because raw Monty otherwise exposes the clock and `random` |
 | LLM provider sees data | The self-hoster's choice for each role. See [What each role sends](#what-each-role-sends) |
 | Malicious or compromised dependency | Lockfiles, the permissive-license allowlist in `scripts/license_audit.py`, and `pip-audit` + `pnpm audit` in CI. An egress proxy is [parked](parked.md#an-egress-proxy) |
@@ -366,7 +419,7 @@ The `agent_ro` setup, tested on Postgres 18.6:
 ```sql
 ALTER ROLE agent_ro SET default_transaction_read_only = on;
 ALTER ROLE agent_ro SET statement_timeout = '2s';
-GRANT SELECT ON <the ledger, plan, people, categorization, and conversation tables and views> TO agent_ro;
+GRANT SELECT ON <agent read views and allowed non-auth, non-engine tables> TO agent_ro;
 REVOKE TEMP ON DATABASE arno FROM PUBLIC;
 
 -- Phoenix owns only its own database, and agent_ro can't connect to it.

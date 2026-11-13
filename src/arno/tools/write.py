@@ -106,7 +106,7 @@ async def resolve_account_id(conn: Connection, name: str | None) -> str:
     if not name:
         raise ToolInputError("which account?")
     rows = await conn.fetch(
-        "SELECT id, name FROM accounts WHERE active AND lower(name) = lower($1) "
+        "SELECT id, name FROM v_accounts WHERE active AND lower(name) = lower($1) "
         "ORDER BY name LIMIT 2",
         name,
     )
@@ -114,10 +114,10 @@ async def resolve_account_id(conn: Connection, name: str | None) -> str:
     if len(rows) > 1:
         raise ToolInputError(f"{name!r} names more than one account; pass the account's ID instead")
     if row is None:
-        row = await conn.fetchrow("SELECT id, name FROM accounts WHERE id = $1 AND active", name)
+        row = await conn.fetchrow("SELECT id, name FROM v_accounts WHERE id = $1 AND active", name)
     if row is None:
         archived = await conn.fetchrow(
-            "SELECT name FROM accounts WHERE lower(name) = lower($1) OR id = $2 LIMIT 1",
+            "SELECT name FROM v_accounts WHERE lower(name) = lower($1) OR id = $2 LIMIT 1",
             name,
             name,
         )
@@ -133,7 +133,7 @@ async def resolve_account_id(conn: Connection, name: str | None) -> str:
 async def _spendable_names(conn: Connection) -> str:
     """The active accounts money can actually move through, for a refusal to name."""
     rows = await conn.fetch(
-        "SELECT name FROM accounts WHERE active AND kind IN ('bank','cash','wallet','card') "
+        "SELECT name FROM v_accounts WHERE active AND kind IN ('bank','cash','wallet','card') "
         "ORDER BY name"
     )
     return ", ".join(str(row["name"]) for row in rows)
@@ -209,12 +209,11 @@ async def _usual_account(conn: Connection, payee_id: str) -> str | None:
     row = await conn.fetchrow(
         """
         SELECT fa.id, count(*) AS n
-        FROM pgledger_transfers t
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN transfer_labels tl ON tl.transfer_id = t.id
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE tl.payee_id = $1 AND fa.active AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
-        GROUP BY fa.id
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        WHERE ml.payee_id = $1 AND fa.active AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
+        GROUP BY fa.id, fa.name
         ORDER BY n DESC, fa.name
         LIMIT 1
         """,
@@ -228,7 +227,7 @@ async def _default_account(conn: Connection, payee_id: str | None) -> str:
         usual = await _usual_account(conn, payee_id)
         if usual:
             return usual
-    rows = await conn.fetch("SELECT id, name FROM accounts WHERE active AND liquid ORDER BY name")
+    rows = await conn.fetch("SELECT id, name FROM v_accounts WHERE active AND liquid ORDER BY name")
     if len(rows) == 1:
         return str(rows[0]["id"])
     if not rows:
@@ -246,11 +245,12 @@ async def _everyday_account(conn: Connection) -> str | None:
     row = await conn.fetchrow(
         """
         SELECT fa.id, count(*) AS n
-        FROM pgledger_transfers t
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        JOIN movements m ON m.id = ml.movement_id
         WHERE fa.active AND fa.liquid AND m.kind IN ('expense', 'refund')
-        GROUP BY fa.id
+        GROUP BY fa.id, fa.name
         ORDER BY n DESC, fa.name
         LIMIT 1
         """
@@ -275,15 +275,15 @@ async def _possible_duplicate(
         """
         SELECT m.id, m.date, m.description
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN transfer_labels tl ON tl.transfer_id = t.id
         JOIN captures c ON c.movement_id = m.id AND c.kind = 'chat'
         WHERE m.kind = 'expense'
           AND ($1::text IS NULL OR m.idempotency_key IS NULL OR m.idempotency_key <> $1)
           AND fa.id = $2
           AND t.amount = $3
-          AND tl.payee_id IS NOT DISTINCT FROM $4
+          AND ml.payee_id IS NOT DISTINCT FROM $4
           AND m.created_at > now() - interval '10 minutes'
         ORDER BY m.created_at DESC LIMIT 1
         """,
@@ -836,15 +836,16 @@ _NAME_COLUMNS = {"payees": "display_name"}
 async def _find_one(
     conn: Connection, table: str, name: str | None, key: str | None
 ) -> dict[str, Any]:
+    source = "v_accounts" if table == "accounts" else table
     if key:
-        row = await conn.fetchrow(f"SELECT * FROM {quote_ident(table)} WHERE id = $1", key)
+        row = await conn.fetchrow(f"SELECT * FROM {quote_ident(source)} WHERE id = $1", key)
         if row:
             return row
     if not name:
         raise ToolInputError(f"{table[:-1]} needs a name or id")
     column = quote_ident(_NAME_COLUMNS.get(table, "name"))
     rows = await conn.fetch(
-        f"SELECT * FROM {quote_ident(table)} WHERE lower({column}) = lower($1) "
+        f"SELECT * FROM {quote_ident(source)} WHERE lower({column}) = lower($1) "
         "ORDER BY created_at LIMIT 2",
         name,
     )
@@ -1393,7 +1394,7 @@ async def preference(
         existing = await conn.fetchrow(
             """
             SELECT * FROM preferences
-            WHERE active AND deleted_at IS NULL AND lower(body) = lower($1)
+            WHERE active AND lower(body) = lower($1)
             ORDER BY created_at LIMIT 1
             """,
             text,
@@ -1458,22 +1459,20 @@ async def preference(
         row = None
         if preference_id:
             row = await conn.fetchrow(
-                "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL",
+                "SELECT * FROM preferences WHERE id = $1",
                 preference_id,
             )
         if row is None and text:
             row = await conn.fetchrow(
                 """
                 SELECT * FROM preferences
-                WHERE active AND deleted_at IS NULL AND lower(body) = lower($1)
+                WHERE active AND lower(body) = lower($1)
                 ORDER BY created_at LIMIT 1
                 """,
                 text.strip(),
             )
         if row is None:
-            active = await conn.fetch(
-                "SELECT id, body FROM preferences WHERE active AND deleted_at IS NULL"
-            )
+            active = await conn.fetch("SELECT id, body FROM preferences WHERE active")
             listed = "; ".join(f"{r['id']}: {r['body']}" for r in active) or "none"
             raise ToolInputError(f"No preference matched. Active preferences: {listed}")
         async with write_group(conn, actor="agent", message_id=message_id) as group:
@@ -1500,9 +1499,7 @@ async def preference(
     if action == "classify":
         if not preference_id or kind is None:
             raise ToolInputError("classify needs the memory id and its new kind")
-        row = await conn.fetchrow(
-            "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
-        )
+        row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
         if row is None:
             raise ToolInputError("No memory matched that ID")
         async with write_group(conn, actor="agent", message_id=message_id) as group:

@@ -38,6 +38,11 @@ async def _import(conn, account: dict) -> str:
     return import_id
 
 
+async def _counts(conn, import_id: str) -> dict:
+    row = await conn.fetchrow("SELECT counts FROM imports WHERE id = $1", import_id)
+    return dict(row["counts"] or {})
+
+
 def _parsed(row: dict) -> dict:
     return {"rows": [row], "headers": ["Date", "Narration", "Debit", "Credit", "Balance"]}
 
@@ -84,7 +89,7 @@ async def test_a_upi_reference_matches_certainly_and_the_statement_wins(ledger):
             }
         ),
     )
-    review = await reconcile(
+    await reconcile(
         ledger,
         import_id=import_id,
         account=account,
@@ -94,7 +99,7 @@ async def test_a_upi_reference_matches_certainly_and_the_statement_wins(ledger):
     assert line["match_state"] == "certain"
     assert line["movement_id"] == movement["id"]
     assert line["outside_text"] is True
-    assert review["counts"]["certain"] == 1
+    assert (await _counts(ledger, import_id))["certain"] == 1
 
 
 async def test_two_candidates_are_ambiguous_and_logged_rows_are_listed(ledger):
@@ -139,9 +144,9 @@ async def test_two_candidates_are_ambiguous_and_logged_rows_are_listed(ledger):
     )
     line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
     assert line["match_state"] == "ambiguous"
-    assert review["counts"]["ambiguous"] == 1
+    assert (await _counts(ledger, import_id))["ambiguous"] == 1
     assert len(review["ambiguous"][0]["candidates"]) == 2
-    assert review["counts"]["logged_not_on_statement"] == 1
+    assert (await _counts(ledger, import_id))["logged_not_on_statement"] == 1
 
 
 async def test_reimport_dedupes_by_content_hash(ledger):
@@ -160,13 +165,13 @@ async def test_reimport_dedupes_by_content_hash(ledger):
     await ledger.execute("UPDATE imports SET status = 'committed' WHERE id = $1", first)
     second = await _import(ledger, account)
     await insert_lines(ledger, import_id=second, account=account, parsed_account=parsed)
-    review = await reconcile(
+    await reconcile(
         ledger,
         import_id=second,
         account=account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    assert review["counts"]["ignored"] == 1
+    assert (await _counts(ledger, second))["ignored"] == 1
     line = await ledger.fetchrow(
         "SELECT match_state FROM statement_lines WHERE import_id = $1", second
     )
@@ -409,13 +414,13 @@ async def test_two_identical_rows_in_one_statement_are_kept(ledger):
         parsed_account={"rows": [row, dict(row)]},
     )
     assert len(lines) == 2
-    review = await reconcile(
+    await reconcile(
         ledger,
         import_id=import_id,
         account=account,
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
-    assert review["counts"]["new"] == 2
+    assert (await _counts(ledger, import_id))["new"] == 2
 
 
 async def test_baselines_are_computed_from_real_rows(ledger):

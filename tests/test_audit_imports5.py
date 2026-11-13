@@ -79,8 +79,8 @@ async def _review(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb)
+                             check_status, review, commit_groups)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, 'VERIFIED', $9, '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
@@ -90,7 +90,6 @@ async def _review(
         opening,
         closing,
         {
-            "status": "VERIFIED",
             "opening_source": "manual",
             "opening_paise": opening,
             "closing_paise": closing,
@@ -112,8 +111,9 @@ async def _net(conn, account: dict, movement_id: str) -> int:
                      WHEN t.to_account_id = $2 THEN t.amount
                      ELSE 0 END
             ), 0)::bigint
-            FROM pgledger_transfers t
-            WHERE t.metadata ->> 'movement_id' = $3
+            FROM movement_legs ml
+            JOIN pgledger_transfers t ON t.id = ml.transfer_id
+            WHERE ml.movement_id = $3
             """,
             account["ledger_account_id"],
             account["ledger_account_id"],
@@ -128,8 +128,9 @@ async def _movements(conn, account: dict, kind: str) -> list[dict]:
         SELECT * FROM movements
         WHERE kind = $1
           AND EXISTS (
-              SELECT 1 FROM pgledger_transfers t
-              WHERE t.metadata ->> 'movement_id' = movements.id
+              SELECT 1 FROM movement_legs ml
+              JOIN pgledger_transfers t ON t.id = ml.transfer_id
+              WHERE ml.movement_id = movements.id
                 AND (t.from_account_id = $2 OR t.to_account_id = $3)
           )
         ORDER BY date, id
@@ -412,7 +413,7 @@ async def test_an_imported_card_fee_is_categorized_by_a_rule(ledger):
         """
         SELECT c.name
         FROM statement_lines sl
-        JOIN transfer_labels tl ON tl.movement_id = sl.movement_id
+        JOIN movement_legs tl ON tl.movement_id = sl.movement_id
         JOIN categories c ON c.id = tl.category_id
         WHERE sl.import_id = $1
         """,

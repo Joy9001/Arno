@@ -75,7 +75,7 @@ async def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
                         {
                             "code": (
                                 "rows = await run_query("
-                                "sql='SELECT name FROM accounts LIMIT 1')\nprint(rows)"
+                                "sql='SELECT name FROM v_accounts LIMIT 1')\nprint(rows)"
                             )
                         },
                     )

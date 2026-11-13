@@ -1,8 +1,8 @@
 """Statement layouts and their append-only parser versions.
 
-A layout is one bank and statement type, holding the header fingerprints seen for it and a
-pointer to its active version. A commit appends a version only when the script changed; a
-rollback moves the pointer without deleting anything.
+A layout is one bank and statement type, holding the header fingerprints seen for it. A commit
+appends a version only when the script changed; a rollback moves `is_active` without deleting
+anything.
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ async def layout_for(
         return None
     return await conn.fetchrow(
         """
-        SELECT l.id, l.institution, l.kind, l.variants, l.active_version_id,
+        SELECT l.id, l.institution, l.kind, l.variants,
                v.id AS version_id, v.version, v.parser, v.helper_version
         FROM statement_layouts l
-        JOIN parser_versions v ON v.id = l.active_version_id
+        JOIN parser_versions v ON v.layout_id = l.id AND v.is_active
         WHERE ($1::text IS NOT NULL AND $1 = ANY(l.variants)
                AND ($2::text IS NULL OR lower(l.kind) = lower($2))
                AND ($3::text IS NULL OR lower(l.institution) = lower($3)))
@@ -62,95 +62,111 @@ async def save_version(
     """Save a committed parser. Called only after a commit, never after a reject or failure."""
     institution = (institution or "unknown")[:120]
     kind = (kind or "unknown")[:40]
-    layout = await conn.fetchrow(
-        """
-        SELECT * FROM statement_layouts
-        WHERE institution = $1 AND kind = $2
-        FOR UPDATE
-        """,
-        institution,
-        kind,
-    )
-    if layout is None:
-        layout = await conn.fetchrow_required(
+    async with conn.transaction():
+        layout = await conn.fetchrow(
             """
-            INSERT INTO statement_layouts (id, institution, kind, variants)
-            VALUES ($1, $2, $3, array_remove(ARRAY[$4::text], NULL))
-            RETURNING *
+            SELECT * FROM statement_layouts
+            WHERE lower(institution) = lower($1) AND lower(kind) = lower($2)
+            FOR UPDATE
             """,
-            await new_id(conn, "lay"),
             institution,
             kind,
-            fingerprint,
         )
-    else:
-        # `ARRAY[$1]`, not `variants || $1::text[]`: the parameter is one fingerprint string, so
-        # asyncpg encodes it as text. Declaring the parameter text[] makes Postgres read the
-        # string as an array literal and fail on the first new variant of a known bank.
-        await conn.execute(
-            """
-            UPDATE statement_layouts
-            SET variants = variants || ARRAY[$1::text], updated_at = now()
-            WHERE id = $2 AND $1::text IS NOT NULL AND NOT ($1::text = ANY(variants))
-            """,
-            fingerprint,
-            layout["id"],
-        )
+        if layout is None:
+            layout = await conn.fetchrow_required(
+                """
+                INSERT INTO statement_layouts (id, institution, kind, variants)
+                VALUES ($1, $2, $3, array_remove(ARRAY[$4::text], NULL))
+                RETURNING *
+                """,
+                await new_id(conn, "lay"),
+                institution,
+                kind,
+                fingerprint,
+            )
+        else:
+            # `ARRAY[$1]`, not `variants || $1::text[]`: the parameter is one fingerprint string, so
+            # asyncpg encodes it as text. Declaring the parameter text[] makes Postgres read the
+            # string as an array literal and fail on the first new variant of a known bank.
+            await conn.execute(
+                """
+                UPDATE statement_layouts
+                SET variants = variants || ARRAY[$1::text], updated_at = now()
+                WHERE id = $2 AND $1::text IS NOT NULL AND NOT ($1::text = ANY(variants))
+                """,
+                fingerprint,
+                layout["id"],
+            )
 
-    active = None
-    if layout["active_version_id"]:
         active = await conn.fetchrow(
-            "SELECT * FROM parser_versions WHERE id = $1", layout["active_version_id"]
-        )
-    if (
-        active is not None
-        and active["parser"] == parser
-        and active["helper_version"] == HELPER_VERSION
-    ):
-        version = active
-    else:
-        next_version = await conn.fetchrow_required(
-            "SELECT coalesce(max(version), 0) + 1 AS version "
-            "FROM parser_versions WHERE layout_id = $1",
+            "SELECT * FROM parser_versions WHERE layout_id = $1 AND is_active",
             layout["id"],
         )
-        version = await conn.fetchrow_required(
-            """
-            INSERT INTO parser_versions
-                (id, layout_id, version, parser, helper_version, source_import_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            RETURNING *
-            """,
-            await new_id(conn, "pv"),
-            layout["id"],
-            int(next_version["version"]),
-            parser,
-            HELPER_VERSION,
-            source_import_id,
-        )
-        await conn.execute(
-            "UPDATE statement_layouts SET active_version_id = $1, updated_at = now() WHERE id = $2",
-            version["id"],
-            layout["id"],
-        )
-    return {**layout, "active_version_id": version["id"], "version": version["version"]}
+        if (
+            active is not None
+            and active["parser"] == parser
+            and active["helper_version"] == HELPER_VERSION
+        ):
+            version = active
+        else:
+            next_version = await conn.fetchrow_required(
+                "SELECT coalesce(max(version), 0) + 1 AS version "
+                "FROM parser_versions WHERE layout_id = $1",
+                layout["id"],
+            )
+            await conn.execute(
+                "UPDATE parser_versions SET is_active = false WHERE layout_id = $1 AND is_active",
+                layout["id"],
+            )
+            version = await conn.fetchrow_required(
+                """
+                INSERT INTO parser_versions
+                    (id, layout_id, version, parser, helper_version, source_import_id, is_active)
+                VALUES ($1, $2, $3, $4, $5, $6, true)
+                RETURNING *
+                """,
+                await new_id(conn, "pv"),
+                layout["id"],
+                int(next_version["version"]),
+                parser,
+                HELPER_VERSION,
+                source_import_id,
+            )
+            await conn.execute(
+                "UPDATE statement_layouts SET updated_at = now() WHERE id = $1",
+                layout["id"],
+            )
+    return {**layout, "version_id": version["id"], "version": version["version"]}
 
 
 async def rollback_layout(conn: Connection, *, layout_id: str, version: int) -> dict[str, Any]:
-    """Move a layout's active pointer back to an earlier version."""
-    target = await conn.fetchrow(
-        "SELECT id, version FROM parser_versions WHERE layout_id = $1 AND version = $2",
-        layout_id,
-        int(version),
-    )
-    if target is None:
-        raise ValueError("No such parser version")
-    await conn.execute(
-        "UPDATE statement_layouts SET active_version_id = $1, updated_at = now() WHERE id = $2",
-        target["id"],
-        layout_id,
-    )
-    return await conn.fetchrow_required("SELECT * FROM statement_layouts WHERE id = $1", layout_id)
+    """Move a layout's active flag back to an earlier version."""
+    async with conn.transaction():
+        layout = await conn.fetchrow(
+            "SELECT id FROM statement_layouts WHERE id = $1 FOR UPDATE",
+            layout_id,
+        )
+        if layout is None:
+            raise ValueError("No such layout")
+        target = await conn.fetchrow(
+            "SELECT id, version FROM parser_versions WHERE layout_id = $1 AND version = $2",
+            layout_id,
+            int(version),
+        )
+        if target is None:
+            raise ValueError("No such parser version")
+        await conn.execute(
+            "UPDATE parser_versions SET is_active = false WHERE layout_id = $1 AND is_active",
+            layout_id,
+        )
+        await conn.execute(
+            "UPDATE parser_versions SET is_active = true WHERE id = $1",
+            target["id"],
+        )
+        return await conn.fetchrow_required(
+            "UPDATE statement_layouts SET updated_at = now() WHERE id = $1 RETURNING *",
+            layout_id,
+        )
 
 
 __all__ = ["layout_for", "rollback_layout", "save_version"]

@@ -361,9 +361,11 @@ the README credits pgledger under "Built on," with no wording that implies endor
 - **Duplicates:** the retry key is the message ID plus the tool call ID. A suspected duplicate is
   the same account, amount, and payee, logged by chat within 10 minutes. Statement lines dedupe by
   a content hash.
-- **The agent's SQL** reads views for the common questions (`v_spending`, `v_cashflow`,
-  `v_balances`, `v_owed`) that the typed tools share, so there's one definition of each number.
-  The raw tables stay readable, because with double-entry they hide no double-counting trap.
+- **The agent's SQL** reads views for the common questions (`v_legs`, `v_accounts`,
+  `v_movement_state`, `v_spending`, `v_balances`, `v_owed`) that the typed tools share, so there's
+  one definition of each number. `movements`, `captures`, and the planning, import, categorization,
+  and conversation tables stay readable, while raw `accounts`, `movement_legs`, and `pgledger_*`
+  engine objects stay excluded behind the read views.
 
 ---
 

@@ -101,9 +101,6 @@ async def _import(
         account["id"],
         fingerprint,
     )
-    await conn.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2", import_id, attachment_id
-    )
     return import_id
 
 
@@ -228,7 +225,7 @@ async def test_a_purged_file_leaves_the_replay_set(ledger):
     await ledger.execute(
         """
         UPDATE attachments SET data = NULL, purged_at = now()
-        WHERE import_id = $1
+        WHERE id = (SELECT attachment_id FROM imports WHERE id = $1)
         """,
         committed,
     )
@@ -253,12 +250,12 @@ async def _review_with_parser(conn, account: dict, fingerprint: str, parser: str
     await conn.execute(
         """
         UPDATE imports
-        SET parser = $1, closing_balance_paise = NULL, check_result = $2
+        SET parser = $1, closing_balance_paise = NULL, check_result = $2,
+            check_status = 'VERIFIED'
         WHERE id = $3
         """,
         parser,
         {
-            "status": "VERIFIED",
             "opening_source": "printed",
             "opening_paise": 24567890,
             "closing_paise": 34402890,
@@ -330,7 +327,7 @@ async def test_a_version_from_another_helper_is_needing_repair(ledger):
     )
     await ledger.execute(
         "UPDATE parser_versions SET helper_version = 'old' WHERE id = $1",
-        saved["active_version_id"],
+        saved["version_id"],
     )
     account = await _account(ledger)
     current = await _import(
@@ -386,3 +383,62 @@ async def test_a_statement_without_detectable_headers_still_saves_and_replays(le
     assert found is not None and found["parser"] == "result = 1"
     assert await layout_for(ledger, None, institution="HDFC", kind="bank") is None
     assert await layout_for(ledger, None) is None
+
+
+async def test_two_active_versions_for_one_layout_are_rejected_and_activation_swaps_atomically(
+    ledger,
+):
+    import asyncpg
+    import pytest
+
+    fingerprint = detect_fingerprint(Doc(sbi_csv()))
+    assert fingerprint
+    first = await save_version(
+        ledger,
+        institution="SBI",
+        kind="bank",
+        fingerprint=fingerprint,
+        parser=SBI_PARSER,
+    )
+    second = await save_version(
+        ledger,
+        institution="SBI",
+        kind="bank",
+        fingerprint=fingerprint,
+        parser=SBI_PARSER + "\n# v2",
+    )
+
+    rows = await ledger.fetch(
+        "SELECT id, version, is_active FROM parser_versions WHERE layout_id = $1 ORDER BY version",
+        first["id"],
+    )
+    assert [(r["version"], r["is_active"]) for r in rows] == [(1, False), (2, True)]
+
+    with pytest.raises(asyncpg.UniqueViolationError) as exc:
+        async with ledger.transaction():
+            await ledger.execute(
+                "UPDATE parser_versions SET is_active = true WHERE id = $1",
+                first["version_id"],
+            )
+    assert getattr(exc.value, "constraint_name", None) == "parser_versions_layout_active_idx"
+
+    # A layout with no active version remains representable and fails closed during lookup.
+    await ledger.execute(
+        "UPDATE parser_versions SET is_active = false WHERE layout_id = $1", first["id"]
+    )
+    assert await layout_for(ledger, fingerprint) is None
+
+    # Failed rollback leaves the current active version intact because the swap is transactional.
+    await rollback_layout(ledger, layout_id=first["id"], version=2)
+    with pytest.raises(ValueError):
+        await rollback_layout(ledger, layout_id=first["id"], version=99)
+    active = await _active_layout(ledger, fingerprint)
+    assert active is not None and active["version"] == 2
+    assert active["version_id"] == second["version_id"]
+
+    await rollback_layout(ledger, layout_id=first["id"], version=1)
+    rows = await ledger.fetch(
+        "SELECT id, version, is_active FROM parser_versions WHERE layout_id = $1 ORDER BY version",
+        first["id"],
+    )
+    assert [(r["version"], r["is_active"]) for r in rows] == [(1, True), (2, False)]

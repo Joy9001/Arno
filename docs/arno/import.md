@@ -154,9 +154,12 @@ shows as plain text and is answered in chat. `result` lists each file with its s
 
 ### Parser versions
 
-A layout's versions are append-only. The layout points to its active version, and rolling back
-moves the pointer. Statement files are kept: an unlocked copy is stored once the file opens,
-because a password is never stored. You can delete a file, which takes it out of the replay set.
+A layout's versions are append-only, and at most one version per layout carries `is_active = true`
+(enforced by a partial unique index on `parser_versions (layout_id) WHERE is_active`). Activating
+a new version or rolling back clears the previous flag and sets the new one inside one transaction;
+a layout with no active version remains representable. Statement files are kept: an unlocked copy
+is stored once the file opens, because a password is never stored. You can delete a file, which
+takes it out of the replay set.
 
 The replay set is every stored statement from that bank whose import was committed and not undone.
 A new version must reproduce each one's saved rows (`statement_lines`) exactly: the same dates,

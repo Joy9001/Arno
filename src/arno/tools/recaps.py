@@ -21,7 +21,7 @@ from arno.india.formatting import format_paise
 from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import ledger_span
 from arno.tools.mark import CLOSE, OPEN, mark
-from arno.tools.read import _reversed_ids, summarize_spending
+from arno.tools.read import summarize_spending
 
 DAYS_LISTED = 7
 WEEKS_LISTED = 4
@@ -179,15 +179,16 @@ async def _spending_days(conn: Connection, start: date, end: date) -> set[date]:
     rows = await conn.fetch(
         """
         SELECT DISTINCT m.date
-        FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN accounts sp ON sp.kind = 'spending'
         WHERE t.to_account_id = sp.ledger_account_id AND m.date BETWEEN $1 AND $2
-          AND m.kind <> 'reversal' AND NOT (m.id = ANY($3))
+          AND ms.is_effective
         """,
         start,
         end,
-        await _reversed_ids(conn),
     )
     return {row["date"] for row in rows}
 
@@ -300,8 +301,9 @@ async def _income(conn: Connection, start: date, end: date) -> list[dict[str, An
         SELECT m.id, m.date, m.description,
                sum(CASE WHEN t.from_account_id = inc.ledger_account_id
                         THEN t.amount ELSE -t.amount END)::bigint AS amount_paise
-        FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
         JOIN accounts inc ON inc.kind = 'income'
         WHERE (t.from_account_id = inc.ledger_account_id OR t.to_account_id = inc.ledger_account_id)
           AND m.date BETWEEN $1 AND $2
@@ -368,12 +370,12 @@ async def spending_rows(
                c.name AS category, p.display_name AS payee,
                (coalesce(p.outside_text, false) OR coalesce(source.from_source, false)) AS outside,
                sum({signed})::bigint AS amount_paise
-        FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
         JOIN accounts sp ON sp.kind = 'spending'
-        LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
-        LEFT JOIN categories c ON c.id = tl.category_id
-        LEFT JOIN payees p ON p.id = tl.payee_id
+        LEFT JOIN categories c ON c.id = ml.category_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
         LEFT JOIN LATERAL (
             SELECT bool_or(cap.kind IN ('statement_line', 'photo')) AS from_source
             FROM captures cap
@@ -548,7 +550,12 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
             )
 
     rows = await spending_rows(conn, period.start, period.end)
-    reversed_ids = set(await _reversed_ids(conn))
+    reversed_ids = {
+        str(row["movement_id"])
+        for row in await conn.fetch(
+            "SELECT movement_id FROM movement_reversal_state() WHERE is_reversed"
+        )
+    }
     purchases = [
         row
         for row in rows

@@ -263,9 +263,7 @@ async def test_a_cash_statement_is_filed_against_the_cash_account(ledger):
     assert opening["paise"] == 350000
 
     await commit_import(ledger, import_id)
-    assert await ledger.fetchval(
-        "SELECT count(*) FROM pgledger_transfers WHERE metadata ->> 'movement_id' IS NOT NULL"
-    )
+    assert await ledger.fetchval("SELECT count(*) FROM movement_legs")
 
 
 async def test_a_wallet_statement_is_not_filed_as_the_cash_account(ledger):

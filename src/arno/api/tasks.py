@@ -207,10 +207,7 @@ async def _imports(conn: Database, task_id: str, *, running: bool) -> list[dict[
         """
         SELECT i.id, i.status, i.reason, i.progress, i.counts, a.filename
         FROM imports i
-        LEFT JOIN LATERAL (
-            SELECT filename FROM attachments
-            WHERE import_id = i.id ORDER BY created_at DESC LIMIT 1
-        ) a ON true
+        LEFT JOIN attachments a ON a.id = i.attachment_id
         WHERE i.task_id = $1
         ORDER BY i.created_at, i.id
         """,
@@ -317,7 +314,7 @@ async def task_answer(
         raise HTTPException(status_code=409, detail="That task is not waiting on this question.")
     account = await conn.fetchrow(
         """
-        SELECT id, name, kind, institution FROM accounts
+        SELECT id, name, kind, institution FROM v_accounts
         WHERE id = $1 AND active AND kind = ANY($2::text[])
         """,
         body.account_id,
@@ -350,13 +347,13 @@ async def task_answer(
     return await task_payload(conn, tasks, task_id, answered=body.question_id)
 
 
-def _versions(rows: list[Any], active_id: str | None) -> list[dict[str, Any]]:
+def _versions(rows: list[Any]) -> list[dict[str, Any]]:
     return [
         {
             "version": row["version"],
             "created_at": row["created_at"].isoformat(),
             "helper_version": row["helper_version"],
-            "active": row["id"] == active_id,
+            "active": bool(row["is_active"]),
         }
         for row in rows
     ]
@@ -371,9 +368,7 @@ async def _layouts(conn: Database) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for layout in layouts:
         rows = by_layout.get(layout["id"], [])
-        active = next(
-            (row["version"] for row in rows if row["id"] == layout["active_version_id"]), None
-        )
+        active = next((row["version"] for row in rows if row["is_active"]), None)
         items.append(
             {
                 "id": layout["id"],
@@ -381,7 +376,7 @@ async def _layouts(conn: Database) -> list[dict[str, Any]]:
                 "kind": layout["kind"],
                 "variants": list(layout["variants"] or []),
                 "active_version": active,
-                "versions": _versions(rows, layout["active_version_id"]),
+                "versions": _versions(rows),
             }
         )
     return items

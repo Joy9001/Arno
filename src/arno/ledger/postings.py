@@ -1,7 +1,8 @@
 """One balanced movement: a row in `movements` and one pgledger call for its transfers.
 
-This is the only place that writes pgledger. Every transfer carries `{movement_id}` in metadata,
-so transfers, labels, captures, and the audit log can always be joined back to one movement.
+This is the only place that writes pgledger. Every transfer has a matching row in `movement_legs`
+linking it to its movement, so transfers, labels, captures, and the audit log can always be joined
+back to one movement.
 """
 
 from __future__ import annotations
@@ -62,8 +63,8 @@ async def _existing_by_key(conn: Connection, key: str) -> dict[str, Any] | None:
 async def _existing_record(conn: Connection, existing: dict[str, Any]) -> MovementRecord:
     rows = await conn.fetch(
         """
-        SELECT t.id FROM pgledger_transfers t
-        WHERE t.metadata ->> 'movement_id' = $1 ORDER BY t.id
+        SELECT ml.transfer_id AS id FROM movement_legs ml
+        WHERE ml.movement_id = $1 ORDER BY ml.transfer_id
         """,
         existing["id"],
     )
@@ -81,6 +82,7 @@ async def create_movement_in_group(
     reverses_id: str | None = None,
     idempotency_key: str | None = None,
     capture: dict[str, Any] | None = None,
+    accounts: dict[str, dict[str, Any]] | None = None,
 ) -> MovementRecord:
     if kind not in MOVEMENT_KINDS:
         raise InvalidLedgerError(f"Unknown movement kind {kind}")
@@ -97,14 +99,21 @@ async def create_movement_in_group(
         if existing is not None:
             return await _existing_record(conn, existing)
 
+    known_accounts: dict[str, dict[str, Any]] = dict(accounts) if accounts else {}
     resolved: list[tuple[TransferSpec, dict[str, Any], dict[str, Any]]] = []
     for transfer in transfers:
         if transfer.amount_paise <= 0:
             raise InvalidLedgerError("Transfer amounts must be positive")
         if transfer.from_account_id == transfer.to_account_id:
             raise InvalidLedgerError("A transfer needs two different accounts")
-        from_account = await require_active_account(conn, transfer.from_account_id)
-        to_account = await require_active_account(conn, transfer.to_account_id)
+        from_account = known_accounts.get(transfer.from_account_id)
+        if from_account is None or not from_account["active"]:
+            from_account = await require_active_account(conn, transfer.from_account_id)
+            known_accounts[transfer.from_account_id] = from_account
+        to_account = known_accounts.get(transfer.to_account_id)
+        if to_account is None or not to_account["active"]:
+            to_account = await require_active_account(conn, transfer.to_account_id)
+            known_accounts[transfer.to_account_id] = to_account
         if from_account["ledger_account_id"] == to_account["ledger_account_id"]:
             raise InvalidLedgerError("A transfer needs two different ledger accounts")
         resolved.append((transfer, from_account, to_account))
@@ -152,7 +161,7 @@ async def create_movement_in_group(
     params.extend(
         [
             india_noon(date),
-            {"movement_id": movement_id},
+            None,
             idempotency_key,
         ]
     )
@@ -184,22 +193,23 @@ async def create_movement_in_group(
             raise InvalidLedgerError("pgledger returned a transfer that was not requested")
         row = unused.pop(match_index)
         ordered_ids.append(str(row["id"]))
+        leg = await conn.fetchrow_required(
+            """
+            INSERT INTO movement_legs
+                (transfer_id, movement_id, category_id, payee_id, expected_date, note)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            row["id"],
+            movement_id,
+            transfer.category_id,
+            transfer.payee_id,
+            transfer.expected_date,
+            transfer.note,
+        )
         if transfer.has_label():
-            label = await conn.fetchrow_required(
-                """
-                INSERT INTO transfer_labels
-                    (transfer_id, movement_id, category_id, payee_id, expected_date, note)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING *
-                """,
-                row["id"],
-                movement_id,
-                transfer.category_id,
-                transfer.payee_id,
-                transfer.expected_date,
-                transfer.note,
-            )
-            group.record_created("transfer_labels", label)
+            # An unlabelled leg is not a change the user made, so undo does not count it.
+            group.record_created("movement_legs", leg)
 
     if capture is not None:
         capture_row = await conn.fetchrow_required(

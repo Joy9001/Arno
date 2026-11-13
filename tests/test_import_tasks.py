@@ -61,9 +61,6 @@ async def _import(conn, *, task_id: str, status: str = "parsing", progress=None,
         progress,
         json.dumps(counts or {"new": 0}),
     )
-    await conn.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2", import_id, attachment_id
-    )
     return import_id
 
 
@@ -367,9 +364,7 @@ async def test_layouts_list_and_rollback(ledger):
             layout_id,
             version,
         )
-    await ledger.execute(
-        "UPDATE statement_layouts SET active_version_id = $1 WHERE id = $2", second, layout_id
-    )
+    await ledger.execute("UPDATE parser_versions SET is_active = true WHERE id = $1", second)
 
     listed = await layouts_list(ledger)
     [layout] = listed["items"]

@@ -36,7 +36,7 @@ The database has two roles:
 | Role | Can |
 |---|---|
 | `app` | Owns the schema; everything the API does |
-| `agent_ro` | `SELECT` on the ledger, plan, people, categorization, and conversation tables and views. No auth tables, and `TEMP` is revoked. These grants are the boundary. `default_transaction_read_only` and a `statement_timeout` are extra layers, because a role can change its own settings ([step 7](system-design.md#decisions)). pgledger's functions run with the caller's rights, so this role can't write through them either |
+| `agent_ro` | `SELECT` on the agent read views (`v_legs`, `v_accounts`, `v_movement_state`, `v_spending`, `v_balances`, `v_owed`) and allowed non-auth, non-engine tables. No auth tables, no raw `accounts`, `movement_legs`, or `pgledger_*` engine objects, and `TEMP` is revoked. These grants are the boundary. `default_transaction_read_only` and a `statement_timeout` are extra layers, because a role can change its own settings ([step 7](system-design.md#decisions)). pgledger's functions run with the caller's rights, so this role can't write through them either |
 
 ### Instance
 
@@ -68,8 +68,9 @@ exceptions: money that went into the Spending account.
 | Refund of a ₹600 order | Spending → Slice ₹600, labeled Food |
 
 **pgledger's tables** (vendored, append-only): `pgledger_accounts`, `pgledger_transfers`,
-`pgledger_entries`, and `pgledger_idempotency_keys`, read through their views and written through
-`pgledger_create_transfers`, which writes a whole batch or nothing.
+`pgledger_entries`, and `pgledger_idempotency_keys`, written by application code through
+`pgledger_create_transfers` (which writes a whole batch or nothing) and hidden from `agent_ro`
+behind the read-model views.
 
 **`accounts`:** every place money can sit, one-to-one with a pgledger account, carrying what
 pgledger doesn't. The following table lists its fields:
@@ -78,7 +79,7 @@ pgledger doesn't. The following table lists its fields:
 |---|---|
 | `kind` | `bank`, `card`, `cash`, `wallet`, `loan`, `asset`, `goal`, `person`, `spending`, `income`, `equity` |
 | `ledger_account_id` | The pgledger account |
-| `name`, `institution`, `last4` | "SBI savings", "Slice". Only the last four digits of an account or card number are kept |
+| `name`, `institution`, `last4` | "SBI savings", "Slice". `name` is `NULL` for `person` and `goal` accounts because their single home is `payees.display_name` and `goals.name`; readers use `v_accounts` for the resolved `name`. `pgledger_accounts.name` stores `accounts.id`. Only the last four digits of an account or card number are kept |
 | `statement_balance`, `statement_balance_as_of` | The last balance a statement or the user stated, as a check on the ledger's own balance. Staleness is always reported |
 | `liquid` | Counts toward spendable cash in the projection. True for bank, cash, and wallet accounts |
 | card: `credit_limit`, `statement_day`, `due_day` | Card spend is a liability until the due date |
@@ -86,7 +87,10 @@ pgledger doesn't. The following table lists its fields:
 | asset | No extra fields—hand updates are adjustment movements (EPF, FD, PPF, NPS, gold, funds). Statement-driven holdings are parked ([`parked.md`](parked.md)) |
 | `active` | Soft-delete keeps history |
 
-One `spending`, one `income`, and one `equity` account exist. `equity` holds opening balances and
+One `spending`, one `income`, and one `equity` account exist. `goals.account_id` and
+`payees.person_account_id` reference `accounts (id)` (the invariant checker verifies their
+target `kind` is `'goal'` and `'person'`).
+`equity` holds opening balances and
 adjustments: when a statement's closing balance disagrees with the ledger, the difference is a
 visible adjustment, and it never counts as spending. A commit also books the statement's printed
 opening at the statement's first day, so every date inside the period reads its real balance, and
@@ -94,18 +98,28 @@ it supersedes the older balance adjustments dated inside the period that the sta
 ([`import.md`](import.md), `arno repair-openings` for a ledger written before this rule).
 
 **`movements`:** one real-world money movement, written as one `pgledger_create_transfers` call.
-Its transfers carry `{movement_id}` in their metadata. The following table lists its fields:
+The following table lists its fields:
 
 | Field | Notes |
 |---|---|
 | `date` | The authoritative business date, and editable: chat logs the 14th, the statement says the 15th, and reconciling edits this without touching the ledger |
 | `description`, `kind` | `kind` is descriptive, for the UI: `expense`, `income`, `transfer`, `split`, `loan`, `refund`, `settlement`, `adjustment`, `reversal` |
-| `reverses_id` | The movement this one reverses. Undo, or fixing an amount, writes the opposite transfers in one batch |
+| `reverses_id` | The movement this one reverses. Undo, or fixing an amount, writes the opposite transfers in one batch. Reversing a reversal restores the original |
 | `idempotency_key` | The message ID plus the tool call ID, also passed to pgledger, so a retried call returns the transfers already written |
 
-**`transfer_labels`:** the editable side, keyed by transfer: `category_id`, `payee_id`,
-`expected_date` (when a person is expected to pay), and `note`. Recategorizing edits a label and
-never touches the ledger. Labels stay out of pgledger's `metadata` because a retry compares it.
+**Reversal state:** the PostgreSQL function `movement_reversal_state(as_of date DEFAULT NULL)` holds
+the single definition of whether a movement is effectively reversed. Over the `reverses_id` tree
+filtered to `date <= as_of`, each node's effective sign is `1 - sum(sign(children))`; a movement is
+reversed when its sign is at most zero, so an undo-of-undo restores the original. Every reader and
+SQL query uses `movement_reversal_state(as_of)` or `v_movement_state` instead of deriving parity
+locally.
+
+**`movement_legs`:** one row for each `pgledger_transfers` row, enforced both ways by foreign keys
+(`movement_id` is `NOT NULL` and `pgledger_transfers.id` references `movement_legs.transfer_id` with
+a deferred foreign key). It links every transfer to its movement and holds the editable fields:
+`category_id`, `payee_id`, `expected_date` (when a person is expected to pay), and `note`.
+Recategorizing edits the leg and never touches the ledger. Labels stay out of pgledger's `metadata`
+because a retry compares it.
 
 **`captures`:** the evidence behind a movement. A chat message, a screenshot, and a statement line
 can all describe one movement, so each is kept and linked: `movement_id`, `kind` (`chat`, `voice`,
@@ -121,12 +135,16 @@ each number:
 
 | View | Answers |
 |---|---|
+| `v_legs` | One row per transfer leg: `acc_*` account IDs, resolved names, kinds, liquidity flags, positive `bigint` paise (`from` -> `to`), labels, and reversal flags |
+| `v_accounts` | Every account with its resolved display `name` (`payees.display_name` for `person`, `<goal> goal` for `goal`, else `accounts.name`) and current `balance_paise` |
+| `v_movement_state` | Current reversal state for each movement (`is_reversal`, `is_reversed`, `is_effective`), backed by `movement_reversal_state()` |
 | `v_spending` | Transfers into and out of the Spending account, net, with category and payee |
-| `v_cashflow` | Money in and out of liquid accounts |
-| `v_balances` | Balances by date, summed from entries by each movement's `date`. pgledger's stored running balances follow write order, and a backfill arrives out of order, so they aren't used for dated balances |
-| `v_owed` | Who owes what: `person` account balances with expected dates |
+| `v_balances` | Daily balance history by movement `date`, summed from entries. pgledger's stored running balances follow write order, and a backfill arrives out of order, so they aren't used for dated balances |
+| `v_owed` | Who owes what: `person` account balances with `Asia/Kolkata` expected dates |
 
-The raw tables stay readable too. With double-entry they hide no double-counting trap.
+`movements`, `captures`, and the planning, import, categorization, and conversation
+tables stay readable by `agent_ro`, while raw `accounts`, `movement_legs`, and `pgledger_*` engine
+objects stay excluded so `agent_ro` sees one `acc_*` ID system, integer paise, and reversal flags.
 
 **Coverage** is derived from `imports`: the dates each account's statements cover. A gap is visible,
 and an answer over a gap says "no data."
@@ -230,13 +248,13 @@ The following tables hold memory, conversations, and provenance:
 | `preferences` | Typed memories: `kind` says whether it is a preference (how the agent behaves or talks), a fact (the user's world), or a rule (how their money data is treated), such as "Mom's monthly transfer is not discretionary spend". `created_by` (agent or user), `source_message_id`, `active`. The agent saves these unprompted when it notices a lasting one, choosing the kind, shown as a "Remembered" card with undo. Never a number the ledger owns. Forgetting sets `active` to false, so it stays listed in settings and can be turned back on. Deleting is separate, in settings only ([`tools.md`](tools.md#preference)) |
 | `conversations`, `messages` | One `conversations` row for each thread you see, and two records of it ([step 6](system-design.md#two-records-both-on-the-server)). `messages` is what you saw, never edited, and its unique `client_id` is the client's message ID, so an ID starts only one turn ([step 8](system-design.md#every-ending-saves-the-same-two-records)). `messages.trace_id` and `messages.flagged_at` mark a reply you flagged and where to read its trace ([step 9](system-design.md#agent-evals)). `messages.search` is a generated `tsvector` column that has a GIN index, using the `simple` configuration—no stemming, so Hinglish isn't mangled. `conversations.model_history` (`jsonb`) is what the model gets, and compaction may edit it. `conversations.snapshot_at` records when the pinned snapshot was taken. `conversations.outside_text_at` records when outside text first entered the conversation ([write tiers](#untrusted-text-and-write-tiers)). `conversations.run_started_at` is set while a turn runs and cleared in the transaction that saves both records, so a value still set at boot means a crash ([step 8](system-design.md#every-ending-saves-the-same-two-records)) |
 | `audit_log` | Every write: actor, `message_id`, `group_id`, table, row ID, before and after JSON, `undone_at`. Powers undo; one undo reverts a whole group, such as a payee correction and every label it changed |
-| `imports` | File hash, parser, account, period, opening and closing balances, check result, status (`review`, `committed`, or `rejected`) |
-| `statement_layouts` | One layout for each bank and statement type: `institution`, `kind`, the known header variants (normalized column headers), and a pointer to the active version. Rolling back moves the pointer ([`import.md`](import.md#parser-versions)) |
-| `parser_versions` | Append-only: `layout_id`, `version`, `parser` (the script's text), `helper_version`, `source_import_id`, `created_at`. Saved only after you commit an import that used it |
-| `attachments` | Receipt photos, UPI screenshots, and statement files as `bytea`. A statement is kept as an unlocked copy, because its password is never stored; the kept files are what a new parser version is replayed on. You can delete one. Changed November 7, 2026: statements were deleted at commit or reject ([`import.md`](import.md#parser-versions)) |
+| `imports` | File hash, parser, account, period, opening and closing balances, `check_status` (`VERIFIED`, `DISCREPANCY`, or `FAILED`) beside its detail JSON, the line counts, review facts, and status (`review`, `committed`, or `rejected`) |
+| `statement_layouts` | One layout for each bank and statement type: `institution`, `kind`, and the known header variants (normalized column headers). At most one version per layout is active at a time ([`import.md`](import.md#parser-versions)) |
+| `parser_versions` | Append-only: `layout_id`, `version`, `is_active` (with a partial unique index per `layout_id`), `parser` (the script's text), `helper_version`, `source_import_id`, `created_at`. Saved only after you commit an import that used it, and swapped atomically on activation or rollback |
+| `attachments` | Receipt photos, UPI screenshots, and statement files as `bytea`. An import points at its one statement file through `imports.attachment_id`; the row survives a purge, with `data` cleared. A statement is kept as an unlocked copy, because its password is never stored; the kept files are what a new parser version is replayed on. You can delete one. Changed November 7, 2026: statements were deleted at commit or reject ([`import.md`](import.md#parser-versions)) |
 | `spend_counters`, `spend_dedup` | Spend ceilings. The harness's `PostgresSpendStore` creates and owns them ([step 9](system-design.md#traces-phoenix)) |
 | `notifications`, `push_subscriptions` | Inbox items and web-push endpoints |
-| `jobs`, `job_schedules` | The [job loop](platform.md#notifications-and-scheduler). `jobs`: unique `key` (a job and its period), `kind`, `payload`, `status` (`pending`, `running`, `done`, or `failed`), `run_at`, `attempts`, `last_error`; never a statement password, and `agent_ro` can't read it. `job_schedules`: `kind`, `payload`, `rule` (the same rules `schedules` use), `next_run_at`, and `dtstart` (the rule's first occurrence, so `COUNT` and `INTERVAL` are counted from a fixed start) |
+| `jobs`, `job_schedules` | The [job loop](platform.md#notifications-and-scheduler). `jobs`: unique `key` (a job and its period), `kind`, `payload`, `status` (`pending`, `running`, `done`, or `failed`), `run_at`, `attempts`, `last_error`; never a statement password, and `agent_ro` can't read it. `job_schedules`: `kind`, `scheduled_question_id` (`REFERENCES scheduled_questions (id) ON DELETE CASCADE`, set when and only when `kind = 'scheduled_question'`), `payload`, `rule` (the same rules `schedules` use), `next_run_at`, and `dtstart` (the rule's first occurrence, so `COUNT` and `INTERVAL` are counted from a fixed start) |
 
 ---
 

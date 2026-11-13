@@ -327,7 +327,6 @@ export type ImportRecord = {
   closing_source_note: string | null;
   counts: ImportCounts | null;
   review: {
-    counts?: ImportCounts;
     ambiguous?: unknown[];
     logged_not_on_statement?: {
       movement_id: string;
@@ -408,6 +407,7 @@ export type ScheduledQuestionList = {
 export type JobScheduleStatus = {
   id: string;
   kind: string;
+  scheduled_question_id: string | null;
   payload: Record<string, unknown>;
   label: string;
   rule: string;

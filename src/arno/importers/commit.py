@@ -45,8 +45,9 @@ async def _net_on_account(conn: Connection, movement_id: str, ledger_account_id:
                  WHEN t.to_account_id = $2 THEN t.amount
                  ELSE 0 END
         ), 0)::bigint AS net
-        FROM pgledger_transfers t
-        WHERE t.metadata ->> 'movement_id' = $3
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE ml.movement_id = $3
         """,
         ledger_account_id,
         ledger_account_id,
@@ -253,10 +254,10 @@ async def _account_balance_at(
         f"""
         SELECT coalesce(sum(e.amount), 0)::bigint AS balance
         FROM pgledger_entries e
-        JOIN pgledger_transfers t ON t.id = e.transfer_id
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
         WHERE e.account_id = $1
-          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) {comparison} $2
+          AND m.date {comparison} $2
         """,  # noqa: S608 - the comparison is a constant of this module
         ledger_account_id,
         day,
@@ -390,8 +391,11 @@ async def _superseded_anchors(
         SELECT m.id, m.date,
                sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'adjustment'
+          AND ms.is_effective
           AND m.date BETWEEN $2 AND $3
           AND (t.from_account_id = $1 OR t.to_account_id = $1)
         GROUP BY m.id, m.date
@@ -402,10 +406,7 @@ async def _superseded_anchors(
         start,
         end,
     )
-    if not rows:
-        return []
-    states = await movements_mod._reversal_state(conn, [str(row["id"]) for row in rows])
-    return [dict(row) for row in rows if not states[str(row["id"])]["reversed"]]
+    return [dict(row) for row in rows]
 
 
 async def _reanchor_opening(
@@ -563,10 +564,14 @@ async def _commit(
     if row["status"] != "review":
         raise InvalidLedgerError(f"That import is {row['status']}, not ready to commit")
     check = row["check_result"] or {}
-    if check.get("status") != "VERIFIED":
+    if row["check_status"] != "VERIFIED":
         raise ConflictLedgerError("Only a VERIFIED import can be committed")
     account = (
-        await conn.fetchrow("SELECT * FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"])
+        await conn.fetchrow(
+            "SELECT va.* FROM accounts a JOIN v_accounts va ON va.id = a.id "
+            "WHERE a.id = $1 FOR UPDATE OF a",
+            row["account_id"],
+        )
         if row["account_id"]
         else None
     )
@@ -578,6 +583,7 @@ async def _commit(
     )
     if not opening_is_evidenced(
         check=check,
+        check_status=row["check_status"],
         review=row["review"] or {},
         account=account,
         period_start=row["period_start"],
@@ -927,8 +933,9 @@ async def review_closing_adjustment(
 async def _touches_account(conn: Connection, movement_id: str, ledger_account_id: str) -> bool:
     row = await conn.fetchrow(
         """
-        SELECT 1 FROM pgledger_transfers t
-        WHERE t.metadata ->> 'movement_id' = $1
+        SELECT 1 FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE ml.movement_id = $1
           AND (t.from_account_id = $2 OR t.to_account_id = $3)
         LIMIT 1
         """,

@@ -81,8 +81,8 @@ async def _entry_sum(conn, movement_id: str) -> int:
             """
             SELECT coalesce(sum(e.amount), 0)::bigint
             FROM pgledger_entries e
-            JOIN pgledger_transfers t ON t.id = e.transfer_id
-            WHERE t.metadata ->> 'movement_id' = $1
+            JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+            WHERE ml.movement_id = $1
             """,
             movement_id,
         )
@@ -92,8 +92,8 @@ async def _entry_sum(conn, movement_id: str) -> int:
 async def _cashflow(conn, movement_id: str) -> list[dict]:
     return await conn.fetch(
         """
-        SELECT from_kind, to_kind, amount_paise
-        FROM v_cashflow WHERE movement_id = $1 ORDER BY amount_paise
+        SELECT from_account_kind AS from_kind, to_account_kind AS to_kind, amount_paise
+        FROM v_legs WHERE movement_id = $1 ORDER BY amount_paise
         """,
         movement_id,
     )
@@ -523,7 +523,7 @@ async def test_undo_and_undo_of_undo_keep_spending_inside_its_category(ledger):
     assert await _category_totals(ledger) == {"Food & Dining": 0}
     assert (
         await ledger.fetchval(
-            "SELECT count(*) FROM transfer_labels WHERE movement_id = $1", movement["id"]
+            "SELECT count(*) FROM movement_legs WHERE movement_id = $1", movement["id"]
         )
         == 1
     )
@@ -1047,7 +1047,7 @@ async def test_a_goal_contribution_is_savings_not_consumption(ledger):
     assert (await get_goal(ledger, goal["id"]))["saved_paise"] == 250_000
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 9_750_000
     label = await ledger.fetchrow(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", contribution["id"]
+        "SELECT category_id FROM movement_legs WHERE movement_id = $1", contribution["id"]
     )
     assert label["category_id"] == await _category(ledger, "Savings & Investments")
 
@@ -1393,8 +1393,7 @@ async def test_undoing_an_added_scheduled_question_archives_it(ledger):
     ) is False
     assert (
         await ledger.fetchval(
-            "SELECT count(*) FROM job_schedules WHERE active "
-            "AND payload ->> 'scheduled_question_id' = $1",
+            "SELECT count(*) FROM job_schedules WHERE active AND scheduled_question_id = $1",
             question_id,
         )
         == 0

@@ -129,8 +129,7 @@ async def test_a_placeholder_payee_is_not_created(ledger, name):
         == 0
     )
     assert (
-        await ledger.fetchval("SELECT count(*) FROM transfer_labels WHERE payee_id IS NOT NULL")
-        == 0
+        await ledger.fetchval("SELECT count(*) FROM movement_legs WHERE payee_id IS NOT NULL") == 0
     )
     assert result["transfers"][0]["payee_name"] is None
 
@@ -194,7 +193,7 @@ async def test_a_correction_refuses_a_placeholder_payee(ledger):
 
     assert await ledger.fetchval("SELECT count(*) FROM payees") == 1
     labels = await ledger.fetch(
-        "SELECT p.display_name FROM transfer_labels tl JOIN payees p ON p.id = tl.payee_id"
+        "SELECT p.display_name FROM movement_legs tl JOIN payees p ON p.id = tl.payee_id"
     )
     assert [row["display_name"] for row in labels] == ["Blue Tokai"]
 
@@ -244,9 +243,9 @@ async def test_the_context_lists_open_imports_and_nothing_else(ledger):
     await ledger.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
-                             check_result, counts)
+                             check_result, check_status, counts)
         VALUES ('imp_review', 'h1', 'review', $1, '2026-10-01', '2026-10-31',
-                '{"status": "VERIFIED"}'::jsonb, '{"new": 2, "certain": 1}'::jsonb)
+                '{}'::jsonb, 'VERIFIED', '{"new": 2, "certain": 1}'::jsonb)
         """,
         bank["id"],
     )

@@ -18,12 +18,12 @@ from arno.ledger.common import (
     LIQUID_KINDS,
     SYSTEM_KINDS,
     account_payload,
+    account_payloads,
     balance_as_of,
     get_account_row,
     has_known_balance,
     ledger_balance,
     list_account_rows,
-    require_active_account,
     system_account,
     today,
 )
@@ -50,7 +50,7 @@ def _validate_balance_date(value: date | None) -> None:
 def _validate_account_fields(
     *,
     kind: str,
-    name: str,
+    name: str | None,
     last4: str | None,
     liquid: bool,
     credit_limit_paise: int | None,
@@ -61,7 +61,7 @@ def _validate_account_fields(
 ) -> None:
     if kind not in ACCOUNT_KINDS:
         raise InvalidLedgerError(f"Unknown account kind {kind}")
-    if not name.strip():
+    if kind not in ("person", "goal") and (name is None or not name.strip()):
         raise InvalidLedgerError("An account needs a name")
     if last4 is not None and not LAST4_RE.match(last4):
         raise InvalidLedgerError("last4 must be four digits")
@@ -114,11 +114,12 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
                 "SELECT * FROM accounts WHERE kind = $1 ORDER BY created_at LIMIT 1", kind
             )
             if row is None:
+                account_id = await new_id(conn, "acc")
                 ledger = await conn.fetchrow_required(
                     """
                     SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
                     """,
-                    name,
+                    account_id,
                     currency,
                     {"system": kind},
                 )
@@ -128,7 +129,7 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
                     VALUES ($1, $2, $3, $4, false)
                     RETURNING *
                     """,
-                    await new_id(conn, "acc"),
+                    account_id,
                     kind,
                     ledger["id"],
                     name,
@@ -151,7 +152,7 @@ async def _create_account_in_group(
     group: WriteGroup,
     *,
     kind: str,
-    name: str,
+    name: str | None = None,
     institution: str | None = None,
     last4: str | None = None,
     opening_balance_paise: int | None = None,
@@ -181,15 +182,16 @@ async def _create_account_in_group(
         tenure_months=tenure_months,
     )
 
+    account_id = await new_id(conn, "acc")
     ledger = await conn.fetchrow_required(
         """
         SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
         """,
-        name.strip(),
+        account_id,
         await _base_currency(conn),
         {"kind": kind},
     )
-    account_id = await new_id(conn, "acc")
+    stored_name = None if kind in ("person", "goal") else (name or "").strip()
     stated_as_of = opening_balance_as_of or today()
     row = await conn.fetchrow_required(
         """
@@ -204,7 +206,7 @@ async def _create_account_in_group(
         account_id,
         kind,
         ledger["id"],
-        name.strip(),
+        stored_name,
         institution,
         last4,
         opening_balance_paise,
@@ -221,6 +223,7 @@ async def _create_account_in_group(
 
     if opening_balance_paise:
         equity = await system_account(conn, "equity")
+        label = stored_name or (name.strip() if name else kind)
         if opening_balance_paise > 0:
             transfer = TransferSpec(
                 from_account_id=equity["id"],
@@ -239,7 +242,7 @@ async def _create_account_in_group(
             conn,
             group,
             date=stated_as_of,
-            description=f"Opening balance for {name.strip()}",
+            description=f"Opening balance for {label}",
             kind="adjustment",
             transfers=[transfer],
         )
@@ -252,7 +255,7 @@ async def create_account(
     conn: Connection,
     *,
     kind: str,
-    name: str,
+    name: str | None = None,
     institution: str | None = None,
     last4: str | None = None,
     opening_balance_paise: int | None = None,
@@ -295,7 +298,7 @@ async def list_accounts(
     rows = await list_account_rows(
         conn, include_system=include_system, include_inactive=include_inactive
     )
-    return [await account_payload(conn, row) for row in rows]
+    return await account_payloads(conn, rows)
 
 
 async def get_account(conn: Connection, account_id: str) -> dict[str, Any]:
@@ -346,6 +349,24 @@ async def update_account(
     if not updates:
         return await account_payload(conn, before) | {"undo_id": None}
 
+    owner_name: str | None = None
+    if "name" in updates:
+        cleaned = str(updates["name"]).strip()
+        if not cleaned:
+            raise InvalidLedgerError("An account needs a name")
+        if before["kind"] == "person":
+            owner_name = cleaned
+            del updates["name"]
+        elif before["kind"] == "goal":
+            if cleaned.lower().endswith(" goal"):
+                cleaned = cleaned[:-5].strip()
+            if not cleaned:
+                raise InvalidLedgerError("An account needs a name")
+            owner_name = cleaned
+            del updates["name"]
+        else:
+            updates["name"] = cleaned
+
     merged = {**before, **updates}
     _validate_account_fields(
         kind=merged["kind"],
@@ -359,19 +380,58 @@ async def update_account(
         tenure_months=merged["tenure_months"],
     )
 
-    columns = list(updates)
-    assignments = [f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)]
+    if not updates and owner_name is None:
+        return await account_payload(conn, before) | {"undo_id": None}
+
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        after = await conn.fetchrow_required(
-            f"""
-            UPDATE accounts SET {", ".join(assignments)}, updated_at = now()
-            WHERE id = ${len(columns) + 1} RETURNING *
-            """,
-            *[updates[column] for column in columns],
-            account_id,
-        )
-        group.record_updated("accounts", account_id, before, after)
-    return await account_payload(conn, after) | {"undo_id": group.group_id}
+        if owner_name is not None and before["kind"] == "person":
+            payee_before = await conn.fetchrow(
+                "SELECT * FROM payees WHERE person_account_id = $1", account_id
+            )
+            if payee_before is not None and payee_before["display_name"] != owner_name:
+                payee_after = await conn.fetchrow_required(
+                    "UPDATE payees SET display_name = $1, updated_at = now() "
+                    "WHERE id = $2 RETURNING *",
+                    owner_name,
+                    payee_before["id"],
+                )
+                group.record_updated("payees", payee_before["id"], payee_before, payee_after)
+        elif owner_name is not None and before["kind"] == "goal":
+            goal_before = await conn.fetchrow(
+                "SELECT * FROM goals WHERE account_id = $1", account_id
+            )
+            if goal_before is not None and goal_before["name"] != owner_name:
+                goal_after = await conn.fetchrow_required(
+                    "UPDATE goals SET name = $1, updated_at = now() WHERE id = $2 RETURNING *",
+                    owner_name,
+                    goal_before["id"],
+                )
+                group.record_updated("goals", goal_before["id"], goal_before, goal_after)
+
+        if updates:
+            before_base = {key: value for key, value in before.items() if key != "balance_paise"}
+            if before["kind"] in ("person", "goal"):
+                before_base["name"] = None
+            columns = list(updates)
+            assignments = [
+                f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)
+            ]
+            after = await conn.fetchrow_required(
+                f"""
+                UPDATE accounts SET {", ".join(assignments)}, updated_at = now()
+                WHERE id = ${len(columns) + 1} RETURNING *
+                """,
+                *[updates[column] for column in columns],
+                account_id,
+            )
+            group.record_updated("accounts", account_id, before_base, after)
+
+        if not group.entries:
+            return await account_payload(conn, before) | {"undo_id": None}
+
+    return await account_payload(conn, await get_account_row(conn, account_id)) | {
+        "undo_id": group.group_id
+    }
 
 
 async def archive_account(
@@ -394,13 +454,15 @@ async def set_statement_balance(
     message_id: str | None = None,
 ) -> dict[str, Any]:
     """Set the last stated balance and record the difference against Equity, visibly."""
-    account = await require_active_account(conn, account_id)
+    account = await get_account_row(conn, account_id)
+    if not account["active"]:
+        raise InvalidLedgerError(f"Account {account['name']} is archived")
     if account["kind"] in SYSTEM_KINDS:
         raise InvalidLedgerError("The system accounts have no statement balance")
     _validate_balance_date(as_of)
     await ensure_system_accounts(conn)
     as_of = as_of or today()
-    current = await ledger_balance(conn, account["ledger_account_id"])
+    current = int(account["balance_paise"])
     difference = int(balance_paise) - current
 
     movement_id = None
@@ -431,6 +493,9 @@ async def set_statement_balance(
             )
             movement_id = record.id
 
+        before_base = {key: value for key, value in account.items() if key != "balance_paise"}
+        if account["kind"] in ("person", "goal"):
+            before_base["name"] = None
         after = await conn.fetchrow_required(
             """
             UPDATE accounts
@@ -443,10 +508,13 @@ async def set_statement_balance(
             as_of,
             account_id,
         )
-        group.record_updated("accounts", account_id, account, after)
+        group.record_updated("accounts", account_id, before_base, after)
 
+    payload_row = (
+        {**after, "name": account["name"]} if account["kind"] in ("person", "goal") else after
+    )
     return {
-        "account": await account_payload(conn, after),
+        "account": await account_payload(conn, payload_row),
         "diff_paise": difference,
         "movement_id": movement_id,
         "undo_id": group.group_id,
@@ -514,7 +582,7 @@ async def loan_terms(conn: Connection, name: str) -> dict[str, Any]:
     tenure as the cap, and the EMI its schedule really charges. The eval grader reads the same
     terms, so an expected value can't drift from what the tool computes."""
     row = await conn.fetchrow(
-        "SELECT * FROM accounts WHERE lower(name) = lower($1) AND kind = 'loan' LIMIT 1",
+        "SELECT * FROM v_accounts WHERE lower(name) = lower($1) AND kind = 'loan' LIMIT 1",
         name,
     )
     if row is None:

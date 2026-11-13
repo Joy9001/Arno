@@ -737,9 +737,7 @@ async def get_preferences(conn: Database) -> dict[str, Any]:
 async def patch_preference(
     conn: Database, preference_id: str, body: PreferenceUpdate
 ) -> dict[str, Any]:
-    row = await conn.fetchrow(
-        "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
-    )
+    row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
     if row is None:
         raise HTTPException(status_code=404, detail="That preference does not exist.")
     async with conn.transaction():
@@ -764,9 +762,7 @@ async def patch_preference(
 async def patch_preference_kind(
     conn: Database, preference_id: str, body: PreferenceKindUpdate
 ) -> dict[str, Any]:
-    row = await conn.fetchrow(
-        "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
-    )
+    row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
     if row is None:
         raise HTTPException(status_code=404, detail="That preference does not exist.")
     async with conn.transaction():

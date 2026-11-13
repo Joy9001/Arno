@@ -191,9 +191,9 @@ async def seed_committed_statement(
     payee = await conn.fetchrow(
         """
         SELECT p.*
-        FROM transfer_labels tl
-        JOIN payees p ON p.id = tl.payee_id
-        WHERE tl.movement_id = $1
+        FROM movement_legs ml
+        JOIN payees p ON p.id = ml.payee_id
+        WHERE ml.movement_id = $1
         LIMIT 1
         """,
         line["movement_id"],
@@ -211,10 +211,10 @@ async def _first_ledger_day(conn: Connection, account_id: str) -> date | None:
     """The first day the account's ledger holds an entry on, or None for an untouched account."""
     row = await conn.fetchrow(
         """
-        SELECT min(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date)) AS day
+        SELECT min(m.date) AS day
         FROM pgledger_entries e
-        JOIN pgledger_transfers t ON t.id = e.transfer_id
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
         JOIN accounts a ON a.ledger_account_id = e.account_id
         WHERE a.id = $1
         """,

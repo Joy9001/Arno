@@ -38,14 +38,14 @@ async def _candidates(conn: Connection) -> list[dict[str, Any]]:
         FROM imports
         WHERE status = 'committed' AND undone_at IS NULL AND account_id IS NOT NULL
           AND (review -> 'anchors_repaired') IS NULL
-          AND coalesce(check_result ->> 'status', '') = 'VERIFIED'
+          AND check_status = 'VERIFIED'
         ORDER BY account_id, period_start NULLS LAST, committed_at, id
         """
     )
 
 
 async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] | None:
-    account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", item["account_id"])
+    account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", item["account_id"])
     opening = statement_opening(item["check_result"] or {})
     if account is None or opening is None:
         # No evidenced opening places the curve, so there is nothing exact to repair.

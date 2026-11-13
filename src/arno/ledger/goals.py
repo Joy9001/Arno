@@ -12,7 +12,7 @@ from typing import Any
 from arno.db.conn import Connection
 from arno.ledger.accounts import _create_account_in_group
 from arno.ledger.audit import write_group
-from arno.ledger.common import ledger_balance, today
+from arno.ledger.common import today
 from arno.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 
 GOAL_STATUSES = ("active", "achieved", "paused", "abandoned")
@@ -25,9 +25,7 @@ async def _goal_row(conn: Connection, goal_id: str) -> dict[str, Any]:
     return row
 
 
-async def goal_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
-    account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
-    saved = await ledger_balance(conn, account["ledger_account_id"]) if account else 0
+def _assemble_goal_payload(row: dict[str, Any], *, saved: int) -> dict[str, Any]:
     target = int(row["target_paise"])
     return {
         "id": row["id"],
@@ -43,6 +41,35 @@ async def goal_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
         "status": row["status"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
     }
+
+
+async def goal_payloads(conn: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    account_ids = [str(row["account_id"]) for row in rows if row.get("account_id")]
+    balances_by_account: dict[str, int] = {}
+    if account_ids:
+        # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
+        # generic plan while still using the primary-key index.
+        account_rows = await conn.fetch(
+            """
+            SELECT id, balance_paise
+            FROM v_accounts
+            WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
+            """,
+            account_ids,
+        )
+        balances_by_account = {
+            str(account["id"]): int(account["balance_paise"]) for account in account_rows
+        }
+    return [
+        _assemble_goal_payload(row, saved=balances_by_account.get(str(row["account_id"]), 0))
+        for row in rows
+    ]
+
+
+async def goal_payload(conn: Connection, row: dict[str, Any]) -> dict[str, Any]:
+    return (await goal_payloads(conn, [row]))[0]
 
 
 async def create_goal(
@@ -76,7 +103,6 @@ async def create_goal(
             conn,
             group,
             kind="goal",
-            name=f"{name.strip()} goal",
             liquid=False,
         )
         row = await conn.fetchrow_required(
@@ -103,7 +129,7 @@ async def list_goals(conn: Connection, *, include_archived: bool = False) -> lis
     rows = await conn.fetch(
         f"SELECT * FROM goals {where} ORDER BY priority, deadline NULLS LAST, name"  # noqa: S608
     )
-    return [await goal_payload(conn, row) for row in rows]
+    return await goal_payloads(conn, rows)
 
 
 async def get_goal(conn: Connection, goal_id: str) -> dict[str, Any]:
@@ -138,6 +164,10 @@ async def update_goal(
             raise NotFoundLedgerError(f"No schedule {contribution_schedule_id}")
         if row["kind"] != "goal_contribution":
             raise InvalidLedgerError("A goal contribution schedule has kind goal_contribution")
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise InvalidLedgerError("A goal needs a name")
     updates: dict[str, Any] = {}
     for key, value in {
         "name": name,

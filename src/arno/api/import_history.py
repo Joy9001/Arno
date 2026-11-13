@@ -20,18 +20,12 @@ MAX_LIMIT = 100
 # One attachment per import: multiple uploads for the same statement must not duplicate a row.
 _SELECT = """
 SELECT
-    i.id, i.status, i.period_start, i.period_end, i.check_result, i.counts,
+    i.id, i.status, i.period_start, i.period_end, i.check_status, i.counts,
     i.reason, i.created_at, i.committed_at, i.undone_at,
     a.filename, acc.name AS account_name
 FROM imports i
-LEFT JOIN LATERAL (
-    SELECT filename
-    FROM attachments
-    WHERE import_id = i.id
-    ORDER BY created_at DESC, id DESC
-    LIMIT 1
-) a ON TRUE
-LEFT JOIN accounts acc ON acc.id = i.account_id
+LEFT JOIN attachments a ON a.id = i.attachment_id
+LEFT JOIN v_accounts acc ON acc.id = i.account_id
 """
 
 
@@ -53,7 +47,6 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
 
 
 def _item(row: dict[str, Any]) -> dict[str, Any]:
-    check = row["check_result"] or {}
     return {
         "import_id": row["id"],
         "status": row["status"],
@@ -65,7 +58,7 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         }
         if row["period_start"] or row["period_end"]
         else None,
-        "check": check.get("status") if check else None,
+        "check": row["check_status"],
         "counts": row["counts"],
         "reason": row["reason"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,

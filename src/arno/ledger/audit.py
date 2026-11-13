@@ -41,7 +41,7 @@ RISK_TABLES = frozenset(
         "schedule_occurrences",
         "schedule_payments",
         "settings",
-        "transfer_labels",
+        "movement_legs",
     }
 )
 
@@ -77,8 +77,8 @@ def india_noon(day: date) -> datetime:
 
 
 def _key_column(table: str) -> str:
-    # transfer_labels is keyed by its one-to-one transfer, not by a separate id.
-    return "transfer_id" if table == "transfer_labels" else "id"
+    # movement_legs is keyed by its one-to-one transfer, not by a separate id.
+    return "transfer_id" if table == "movement_legs" else "id"
 
 
 def _row_key(table: str, row: dict[str, Any]) -> str:
@@ -167,17 +167,32 @@ async def write_group(
             await enqueue_risk_check(conn, group.group_id)
 
 
-async def group_for_row(conn: Connection, table: str, row_id: str) -> str | None:
-    row = await conn.fetchrow(
+async def groups_for_rows(
+    conn: Connection, table: str, row_ids: list[str]
+) -> dict[str, str | None]:
+    if not row_ids:
+        return {}
+    # Same `unnest(...)` generic-plan idiom as `movements._transfer_rows_for_movements`.
+    rows = await conn.fetch(
         """
-        SELECT group_id FROM audit_log
-        WHERE table_name = $1 AND row_id = $2 AND undone_at IS NULL
-        ORDER BY created_at DESC, id DESC LIMIT 1
+        SELECT DISTINCT ON (row_id) row_id, group_id
+        FROM audit_log
+        WHERE table_name = $1
+          AND row_id = ANY(ARRAY(SELECT unnest($2::text[])))
+          AND undone_at IS NULL
+        ORDER BY row_id, created_at DESC, id DESC
         """,
         table,
-        row_id,
+        row_ids,
     )
-    return str(row["group_id"]) if row else None
+    result: dict[str, str | None] = {row_id: None for row_id in row_ids}
+    for row in rows:
+        result[str(row["row_id"])] = str(row["group_id"])
+    return result
+
+
+async def group_for_row(conn: Connection, table: str, row_id: str) -> str | None:
+    return (await groups_for_rows(conn, table, [row_id]))[row_id]
 
 
 async def _load_group(conn: Connection, group_id: str) -> list[dict[str, Any]]:
@@ -220,7 +235,7 @@ async def _conflicts(
 # How a conflict reads to the user: what changed, and the one way out.
 _CONFLICT_WORDS = {
     "movements": "movement",
-    "transfer_labels": "label",
+    "movement_legs": "label",
     "category_rules": "rule",
     "payees": "payee",
     "categories": "category",
@@ -328,7 +343,6 @@ async def _restore_before(
             await _update_row(conn, group, table, row_id, {"status": "abandoned"})
         elif table in {
             "category_rules",
-            "transfer_labels",
             "captures",
             "users",
             "schedule_occurrences",
@@ -361,16 +375,12 @@ async def _restore_movement(
     movement_id: str,
     before: dict[str, Any] | None,
 ) -> None:
-    from arno.ledger.movements import _reversal_state, reverse_movement
+    from arno.ledger.movements import reverse_movement
 
     if before is None:
         # The group created this movement. A later correction or delete already reversed it, and
-        # a second reversal would move the money a third time; the user must undo that first.
-        state = (await _reversal_state(conn, [movement_id]))[movement_id]
-        if state["reversed"]:
-            raise ConflictLedgerError(
-                "That entry was already corrected or removed; undo that change first."
-            )
+        # a second reversal would move the money a third time; reverse_movement locks FOR UPDATE
+        # and refuses if an active reversal already cancels it.
         await reverse_movement(group, movement_id, note="Undo")
         return
     values: dict[str, Any] = await conn.fetchrow_required(
@@ -426,15 +436,16 @@ async def undo_group(
         )
 
     touched = {entry["table_name"] for entry in entries}
-    # A movement and the labels written with it share one group. Undo reverses the movement and
-    # keeps its labels, because the reversal copied them: the pair then nets to zero inside its
-    # category. Only a label added later (created for a movement from an earlier group) goes away.
+    # A movement and the legs written with it share one group. Undo reverses the movement and
+    # keeps its legs, because the reversal copied their labels: the pair then nets to zero inside
+    # its category. Only a leg label update added later (for a movement from an earlier group)
+    # reverts to its previous values.
     created_movements = {
         str(entry["row_id"])
         for entry in entries
         if entry["table_name"] == "movements" and entry["before"] is None
     }
-    # Movements first: a reversal copies the labels, so deleting the original labels before the
+    # Movements first: a reversal copies the labels, so reverting the original labels before the
     # reversal would lose the category that makes the net spending zero.
     ordered = [entry for entry in entries if entry["table_name"] == "movements"]
     ordered += [entry for entry in reversed(entries) if entry["table_name"] != "movements"]
@@ -451,7 +462,7 @@ async def undo_group(
             if table == "movements":
                 await _restore_movement(conn, undo, row_id, entry["before"])
             elif (
-                table == "transfer_labels"
+                table == "movement_legs"
                 and (entry["after"] or {}).get("movement_id") in created_movements
             ):
                 continue

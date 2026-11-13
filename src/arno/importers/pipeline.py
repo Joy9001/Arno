@@ -38,7 +38,7 @@ logger = logging.getLogger("arno.importers")
 async def _account_for_row(conn: Connection, import_row: dict[str, Any]) -> dict[str, Any] | None:
     if not import_row.get("account_id"):
         return None
-    row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", import_row["account_id"])
+    row = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", import_row["account_id"])
     return row
 
 
@@ -50,7 +50,7 @@ async def _real_accounts(conn: Connection) -> list[dict[str, Any]]:
     """
     return await conn.fetch(
         """
-        SELECT * FROM accounts
+        SELECT * FROM v_accounts
         WHERE active AND kind IN ('bank', 'card', 'wallet', 'cash')
         ORDER BY kind, name
         """
@@ -172,11 +172,12 @@ async def create_import(
         return dict(existing)
     async with conn.transaction():
         import_id = await new_id(conn, "imp")
-        row = await conn.fetchrow_required(
+        row = await conn.fetchrow(
             """
             INSERT INTO imports
                 (id, file_hash, status, attachment_id, account_id, parser, commit_groups)
             VALUES ($1, $2, 'parsing', $3, $4, NULL, '[]'::jsonb)
+            ON CONFLICT (attachment_id) WHERE attachment_id IS NOT NULL DO NOTHING
             RETURNING *
             """,
             import_id,
@@ -184,11 +185,11 @@ async def create_import(
             attachment_id,
             account_id,
         )
-        await conn.execute(
-            "UPDATE attachments SET import_id = $1 WHERE id = $2",
-            import_id,
-            attachment_id,
-        )
+        if row is None:
+            row = await conn.fetchrow_required(
+                "SELECT * FROM imports WHERE attachment_id = $1",
+                attachment_id,
+            )
     return dict(row)
 
 
@@ -216,10 +217,14 @@ async def _set_status(
     status: str,
     *,
     reason: str | None = None,
+    check: dict[str, Any] | None = None,
     **fields: Any,
 ) -> None:
     assignments = ["status = $1", "reason = $2", "progress = NULL"]
     params: list[Any] = [status, reason]
+    if check is not None:
+        fields["check_result"] = {key: value for key, value in check.items() if key != "status"}
+        fields["check_status"] = check.get("status")
     for key, value in fields.items():
         assignments.append(f"{key} = ${len(params) + 1}")
         params.append(value)
@@ -258,7 +263,8 @@ async def _finalize(
             UPDATE imports
             SET account_id = $1, period_start = $2, period_end = $3,
                 opening_balance_paise = $4, closing_balance_paise = $5,
-                check_result = $6, parser = $7, helper_version = $8,
+                check_result = $6::jsonb - 'status', check_status = $6::jsonb ->> 'status',
+                parser = $7, helper_version = $8,
                 fingerprint = $9, institution = $10, status = $12, reason = $13,
                 progress = NULL
             WHERE id = $11 AND status NOT IN ('rejected', 'committed')
@@ -455,7 +461,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
             """
             SELECT id, name, kind, institution, last4, ledger_account_id,
                    statement_balance_paise, statement_balance_as_of
-            FROM accounts WHERE id = $1
+            FROM v_accounts WHERE id = $1
             """,
             row["account_id"],
         )
@@ -471,9 +477,9 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     attachment = await conn.fetchrow(
         """
         SELECT id, filename, content_type, size_bytes, sha256, purged_at, unlocked_at
-        FROM attachments WHERE import_id = $1 ORDER BY created_at DESC LIMIT 1
+        FROM attachments WHERE id = $1
         """,
-        import_id,
+        row["attachment_id"],
     )
     attachment_payload = None
     if attachment is not None:
@@ -484,6 +490,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     check = row["check_result"] or {}
     opening_evidenced = opening_is_evidenced(
         check=check,
+        check_status=row["check_status"],
         review=row["review"] or {},
         account=account_row,
         period_start=row["period_start"],
@@ -512,7 +519,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     if (
         row["status"] in ("review", "needs_input")
         and account_row is not None
-        and check.get("status") == "VERIFIED"
+        and row["check_status"] == "VERIFIED"
     ):
         closing_adjustment = await review_closing_adjustment(
             conn,
@@ -554,8 +561,8 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         else None,
         "opening_paise": row["opening_balance_paise"],
         "closing_paise": row["closing_balance_paise"],
-        "check": check.get("status") if check else None,
-        "check_detail": check or None,
+        "check": row["check_status"],
+        "check_detail": row["check_result"],
         "closing_adjustment_paise": closing_adjustment,
         "closing_adjustment_reason": closing_adjustment_note,
         "stated_balance_paise": stated_balance[0] if stated_balance else None,
@@ -651,6 +658,7 @@ async def set_manual_opening(
         for line in lines
     ]
     check = dict(row["check_result"] or {})
+    check_status = row["check_status"]
     if rows:
         period = None
         if row["period_start"] and row["period_end"]:
@@ -667,6 +675,7 @@ async def set_manual_opening(
             if key in check:
                 recomputed.setdefault(key, check[key])
         check = recomputed
+        check_status = check["status"]
     review = dict(row["review"] or {})
     review["manual_opening_paise"] = opening_paise
     status = row["status"]
@@ -678,8 +687,8 @@ async def set_manual_opening(
         await conn.execute(
             """
             UPDATE imports
-            SET review = $1, check_result = $2, opening_balance_paise = $3,
-                status = $4, reason = $5, updated_at = now()
+            SET review = $1, check_result = $2::jsonb - 'status', check_status = $7,
+                opening_balance_paise = $3, status = $4, reason = $5, updated_at = now()
             WHERE id = $6
             """,
             review,
@@ -688,6 +697,7 @@ async def set_manual_opening(
             status,
             reason,
             import_id,
+            check_status,
         )
     return await import_payload(conn, import_id)
 
@@ -697,8 +707,8 @@ async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]
         """
         SELECT i.*, a.filename, acc.name AS account_name
         FROM imports i
-        LEFT JOIN attachments a ON a.import_id = i.id
-        LEFT JOIN accounts acc ON acc.id = i.account_id
+        LEFT JOIN attachments a ON a.id = i.attachment_id
+        LEFT JOIN v_accounts acc ON acc.id = i.account_id
         ORDER BY i.created_at DESC
         LIMIT $1
         """,
@@ -716,7 +726,7 @@ async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]
             }
             if row["period_start"] or row["period_end"]
             else None,
-            "check": (row["check_result"] or {}).get("status"),
+            "check": row["check_status"],
             "counts": row["counts"],
             "reason": row["reason"],
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,

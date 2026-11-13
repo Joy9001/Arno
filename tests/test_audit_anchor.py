@@ -94,8 +94,8 @@ async def _review(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb)
+                             check_status, review, commit_groups)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, 'VERIFIED', $9, '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
@@ -105,7 +105,6 @@ async def _review(
         opening,
         closing,
         {
-            "status": "VERIFIED",
             "opening_source": opening_source,
             "opening_paise": opening,
             "closing_paise": closing,
@@ -126,7 +125,8 @@ async def _adjustments_on(conn, account: dict[str, Any], day: date) -> int:
             CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END
         ), 0)::bigint
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE (t.from_account_id = $1 OR t.to_account_id = $1)
           AND m.date = $2
           AND m.kind IN ('adjustment', 'reversal')
@@ -447,8 +447,9 @@ async def _legacy_import(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups, committed_at)
-        VALUES ($1, $2, 'committed', $3, $4, $5, $6, $7, $8, '{}'::jsonb, $9, now())
+                             check_status, review, commit_groups, committed_at)
+        VALUES ($1, $2, 'committed', $3, $4, $5, $6, $7, $8, 'VERIFIED', '{}'::jsonb, $9,
+                now())
         """,
         import_id,
         f"hash-{import_id}",
@@ -458,7 +459,6 @@ async def _legacy_import(
         opening,
         closing,
         {
-            "status": "VERIFIED",
             "opening_source": "printed",
             "opening_paise": opening,
             "closing_paise": closing,

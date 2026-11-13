@@ -74,8 +74,7 @@ async def list_questions(
         SELECT sq.*, js.next_run_at
         FROM scheduled_questions sq
         LEFT JOIN job_schedules js
-            ON js.kind = 'scheduled_question'
-           AND js.payload ->> 'scheduled_question_id' = sq.id
+            ON js.scheduled_question_id = sq.id
         {where}
         ORDER BY sq.active DESC, sq.created_at
         """  # noqa: S608
@@ -89,8 +88,7 @@ async def get_question(conn: Connection, question_id: str) -> dict[str, Any]:
         SELECT sq.*, js.next_run_at
         FROM scheduled_questions sq
         LEFT JOIN job_schedules js
-            ON js.kind = 'scheduled_question'
-           AND js.payload ->> 'scheduled_question_id' = sq.id
+            ON js.scheduled_question_id = sq.id
         WHERE sq.id = $1
         """,
         question_id,

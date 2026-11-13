@@ -344,7 +344,8 @@ async def test_scheduled_question_schedule_is_ist_and_keyed_by_question(db):
     after = datetime(2026, 11, 3, 0, 0, tzinfo=UTC)
     await sync_scheduled_questions(db, now=after)
     schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    assert schedule["payload"]["scheduled_question_id"] == question["id"]
+    assert schedule["scheduled_question_id"] == question["id"]
+    assert "scheduled_question_id" not in (schedule["payload"] or {})
     assert schedule["next_run_at"] == datetime(2026, 11, 3, 3, 45, tzinfo=UTC)
 
 

@@ -659,26 +659,23 @@ async def _label_movements(
         before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
         if before is None:
             continue
-        labels = await conn.fetch(
-            "SELECT * FROM transfer_labels WHERE movement_id = $1", movement_id
+        legs = await conn.fetch(
+            "SELECT * FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id",
+            movement_id,
         )
-        for label in labels:
-            if str(label["category_id"] or "") == category_id:
+        for leg in legs:
+            if str(leg["category_id"] or "") == category_id:
                 continue
-            await conn.execute(
+            after = await conn.fetchrow(
                 """
-                UPDATE transfer_labels SET category_id = $1, updated_at = now()
+                UPDATE movement_legs SET category_id = $1, updated_at = now()
                 WHERE transfer_id = $2
+                RETURNING *
                 """,
                 category_id,
-                label["transfer_id"],
+                leg["transfer_id"],
             )
-            after = await conn.fetchrow(
-                "SELECT * FROM transfer_labels WHERE transfer_id = $1", label["transfer_id"]
-            )
-            group.record_updated(
-                "transfer_labels", str(label["transfer_id"]), dict(label), dict(after)
-            )
+            group.record_updated("movement_legs", str(leg["transfer_id"]), dict(leg), dict(after))
         await conn.execute(
             """
             UPDATE movements SET category_rule_id = $1, category_hint = NULL

@@ -636,9 +636,6 @@ def ledger_summary() -> dict[str, Any]:
     schedule's RRULE, which SQL cannot do), so an active schedule is listed with its rule.
     """
     from arno.db.conn import connect
-    from arno.ledger.movements import (
-        _effectively_reversed_ids,  # noqa: SLF001 - the ledger's own rule
-    )
 
     today = ledger_today()
     this_month = today.replace(day=1)
@@ -655,7 +652,7 @@ def ledger_summary() -> dict[str, Any]:
                            SELECT b.balance_paise FROM v_balances b
                            WHERE b.account_id = a.id ORDER BY b.as_of DESC LIMIT 1
                        ), 0)::bigint AS balance_paise
-                FROM accounts a
+                FROM v_accounts a
                 WHERE a.kind NOT IN ('spending', 'income', 'equity')
                 ORDER BY a.kind, a.name
                 """
@@ -666,22 +663,21 @@ def ledger_summary() -> dict[str, Any]:
                        coalesce(c.name, 'Uncategorized') AS category,
                        sum(CASE WHEN t.to_account_id = sp.ledger_account_id
                                 THEN t.amount ELSE -t.amount END)::bigint AS amount_paise
-                FROM pgledger_transfers t
+                FROM movement_legs ml
+                JOIN pgledger_transfers t ON t.id = ml.transfer_id
                 JOIN accounts sp ON sp.kind = 'spending'
-                JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-                LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
-                LEFT JOIN categories c ON c.id = tl.category_id
+                JOIN movements m ON m.id = ml.movement_id
+                JOIN v_movement_state ms ON ms.movement_id = m.id
+                LEFT JOIN categories c ON c.id = ml.category_id
                 WHERE m.date >= $1 AND m.date < $2
                   AND (t.from_account_id = sp.ledger_account_id
                        OR t.to_account_id = sp.ledger_account_id)
-                  AND m.kind <> 'reversal'
-                  AND m.id <> ALL($3::text[])
+                  AND ms.is_effective
                 GROUP BY 1, 2
                 ORDER BY 1 DESC, 3 DESC
                 """,
                 last_month,
                 next_month,
-                await _effectively_reversed_ids(conn),
             )
             owed = await conn.fetch(
                 """
@@ -708,8 +704,8 @@ def ledger_summary() -> dict[str, Any]:
             open_imports = await conn.fetch(
                 """
                 SELECT i.id, i.task_id, i.status, i.reason, i.counts, i.created_at,
-                       (SELECT a.filename FROM attachments a WHERE a.import_id = i.id
-                        ORDER BY a.created_at DESC LIMIT 1) AS filename
+                       (SELECT a.filename
+                        FROM attachments a WHERE a.id = i.attachment_id) AS filename
                 FROM imports i WHERE i.status NOT IN ('committed', 'rejected')
                 ORDER BY i.created_at DESC
                 """
@@ -736,8 +732,8 @@ def import_rows(limit: int = 20) -> list[dict[str, Any]]:
             rows = await conn.fetch(
                 """
                 SELECT i.id, i.task_id, i.status, i.reason, i.counts, i.created_at,
-                       (SELECT a.filename FROM attachments a WHERE a.import_id = i.id
-                        ORDER BY a.created_at DESC LIMIT 1) AS filename
+                       (SELECT a.filename
+                        FROM attachments a WHERE a.id = i.attachment_id) AS filename
                 FROM imports i ORDER BY i.created_at DESC, i.id LIMIT $1
                 """,
                 limit,

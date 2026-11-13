@@ -29,6 +29,7 @@ DUMP_NAMES = ("fin_agent.dump", "fin_agent.sql")
 REQUIRED_TABLES = {
     "accounts",
     "movements",
+    "movement_legs",
     "pgledger_accounts",
     "pgledger_entries",
     "pgledger_transfers",

@@ -292,24 +292,29 @@ async def unlink_payment(
     return {"status": "unlinked", "payment_id": row["id"], "undo_id": group.group_id}
 
 
-async def payment_evidence(
+async def payment_evidence_for_schedules(
     conn: Connection,
-    schedule_id: str,
+    schedule_ids: list[str],
     start: date,
     end: date,
     *,
     as_of: date | None = None,
-) -> dict[date, dict[str, Any]]:
+) -> dict[str, dict[date, dict[str, Any]]]:
+    if not schedule_ids:
+        return {}
     as_of = as_of or today()
+    # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
+    # generic plan while still using the `schedule_occurrences (schedule_id, due_date)` index.
     rows = await conn.fetch(
         """SELECT o.*, p.id AS payment_id, p.amount_paise AS allocated_paise,
                   m.id AS movement_id, m.date AS movement_date, m.description
            FROM schedule_occurrences o
            LEFT JOIN schedule_payments p ON p.occurrence_id = o.id
            LEFT JOIN movements m ON m.id = p.movement_id AND m.date <= $4
-           WHERE o.schedule_id = $1 AND o.due_date BETWEEN $2 AND $3
-           ORDER BY o.due_date, m.date, p.id""",
-        schedule_id,
+           WHERE o.schedule_id = ANY(ARRAY(SELECT unnest($1::text[])))
+             AND o.due_date BETWEEN $2 AND $3
+           ORDER BY o.schedule_id, o.due_date, m.date, p.id""",
+        schedule_ids,
         start,
         end,
         as_of,
@@ -319,10 +324,14 @@ async def payment_evidence(
         list({row["movement_id"] for row in rows if row["movement_id"]}),
         as_of=as_of,
     )
-    result: dict[date, dict[str, Any]] = {}
+    by_schedule: dict[str, dict[date, dict[str, Any]]] = {
+        schedule_id: {} for schedule_id in schedule_ids
+    }
     for row in rows:
+        schedule_id = str(row["schedule_id"])
         day = row["due_date"]
-        item = result.setdefault(day, {**dict(row), "paid_paise": 0, "payments": []})
+        schedule_items = by_schedule.setdefault(schedule_id, {})
+        item = schedule_items.setdefault(day, {**dict(row), "paid_paise": 0, "payments": []})
         if not row["movement_id"]:
             continue
         active = not states[row["movement_id"]]["reversed"]
@@ -339,7 +348,20 @@ async def payment_evidence(
                 "active": active,
             }
         )
-    return result
+    return by_schedule
+
+
+async def payment_evidence(
+    conn: Connection,
+    schedule_id: str,
+    start: date,
+    end: date,
+    *,
+    as_of: date | None = None,
+) -> dict[date, dict[str, Any]]:
+    return (await payment_evidence_for_schedules(conn, [schedule_id], start, end, as_of=as_of))[
+        schedule_id
+    ]
 
 
 def payment_status(expected: int | None, paid: int, due_date: date, as_of: date) -> str:

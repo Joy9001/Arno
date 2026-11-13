@@ -41,8 +41,8 @@ async def _review(conn, account: dict, *, counterparty: str | None) -> str:
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb)
+                             check_status, review, commit_groups)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, 'VERIFIED', $9, '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
@@ -52,7 +52,6 @@ async def _review(conn, account: dict, *, counterparty: str | None) -> str:
         OPENING,
         OPENING - DEBIT,
         {
-            "status": "VERIFIED",
             "opening_source": "manual",
             "opening_paise": OPENING,
             "closing_paise": OPENING - DEBIT,
@@ -86,8 +85,9 @@ async def _expense(conn, account: dict) -> dict:
         SELECT * FROM movements
         WHERE kind = 'expense'
           AND EXISTS (
-              SELECT 1 FROM pgledger_transfers t
-              WHERE t.metadata ->> 'movement_id' = movements.id
+              SELECT 1 FROM movement_legs ml
+              JOIN pgledger_transfers t ON t.id = ml.transfer_id
+              WHERE ml.movement_id = movements.id
                 AND t.from_account_id = $1
           )
         """,
@@ -98,7 +98,7 @@ async def _expense(conn, account: dict) -> dict:
 async def _expense_payee(conn, movement_id: str) -> str | None:
     return await conn.fetchval(
         """
-        SELECT p.display_name FROM transfer_labels tl
+        SELECT p.display_name FROM movement_legs tl
         JOIN payees p ON p.id = tl.payee_id
         WHERE tl.movement_id = $1
         """,
@@ -117,8 +117,7 @@ async def test_a_placeholder_counterparty_creates_no_payee(ledger, counterparty)
 
     assert result["rows"] == 1
     assert (
-        await ledger.fetchval("SELECT count(*) FROM transfer_labels WHERE payee_id IS NOT NULL")
-        == 0
+        await ledger.fetchval("SELECT count(*) FROM movement_legs WHERE payee_id IS NOT NULL") == 0
     )
     assert await ledger.fetchval("SELECT count(*) FROM captures WHERE kind = 'statement_line'") == 1
     expense = await _expense(ledger, account)

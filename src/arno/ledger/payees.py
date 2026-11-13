@@ -73,7 +73,7 @@ async def ensure_person_account(
     payee = await get_payee(conn, payee_id)
     if payee["person_account_id"]:
         row = await conn.fetchrow(
-            "SELECT * FROM accounts WHERE id = $1", payee["person_account_id"]
+            "SELECT * FROM v_accounts WHERE id = $1", payee["person_account_id"]
         )
         if row is not None and row["active"]:
             return row
@@ -86,7 +86,6 @@ async def ensure_person_account(
         conn,
         group,
         kind="person",
-        name=payee["display_name"],
         liquid=False,
     )
     after = await conn.fetchrow_required(
@@ -98,7 +97,7 @@ async def ensure_person_account(
         payee_id,
     )
     group.record_updated("payees", payee_id, payee, after)
-    return account
+    return {**account, "name": payee["display_name"]}
 
 
 async def create_payee(

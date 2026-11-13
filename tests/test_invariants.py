@@ -427,14 +427,21 @@ async def _broken_transfer(
     await conn.execute(
         """
         INSERT INTO pgledger_transfers
-            (id, from_account_id, to_account_id, amount, created_at, event_at, metadata)
-        VALUES ($1, $2, $3, $4, now(), now(), $5)
+            (id, from_account_id, to_account_id, amount, created_at, event_at)
+        VALUES ($1, $2, $3, $4, now(), now())
         """,
         transfer_id,
         from_row["ledger_account_id"],
         to_row["ledger_account_id"],
         amount_paise,
-        {"movement_id": movement_id},
+    )
+    await conn.execute(
+        """
+        INSERT INTO movement_legs (transfer_id, movement_id)
+        VALUES ($1, $2)
+        """,
+        transfer_id,
+        movement_id,
     )
     for ledger_id, signed in (
         (from_row["ledger_account_id"], -amount_paise),
@@ -519,7 +526,7 @@ async def test_each_invariant_is_caught(ledger):
 
     async def unbalanced():
         transfer = await ledger.fetchrow(
-            "SELECT id FROM pgledger_transfers WHERE metadata ->> 'movement_id' = $1",
+            "SELECT transfer_id AS id FROM movement_legs WHERE movement_id = $1",
             expense_id,
         )
         await ledger.execute(
@@ -619,7 +626,7 @@ async def test_each_invariant_is_caught(ledger):
             reverses_id=expense_id,
         )
         reversal_transfer = await ledger.fetchrow(
-            "SELECT id FROM pgledger_transfers WHERE metadata ->> 'movement_id' = $1", reversal
+            "SELECT transfer_id AS id FROM movement_legs WHERE movement_id = $1", reversal
         )
         account = await ledger.fetchrow(
             "SELECT balance, version FROM pgledger_accounts WHERE id = "
@@ -768,8 +775,8 @@ async def test_each_invariant_is_caught(ledger):
     async def unverified_import():
         await ledger.execute(
             """
-            INSERT INTO imports (file_hash, parser, account_id, status, check_result)
-            VALUES ($1, 'synthetic', $2, 'committed', '{"status": "PARSED"}'::jsonb)
+            INSERT INTO imports (file_hash, parser, account_id, status)
+            VALUES ($1, 'synthetic', $2, 'committed')
             """,
             f"case-{uuid.uuid4().hex}",
             bank["id"],

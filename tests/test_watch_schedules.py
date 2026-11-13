@@ -87,7 +87,8 @@ async def test_a_scheduled_question_is_mirrored_and_keyed_by_the_question(db):
         rule="FREQ=WEEKLY;BYDAY=SU",
     )
     schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    assert schedule["payload"]["scheduled_question_id"] == question["id"]
+    assert schedule["scheduled_question_id"] == question["id"]
+    assert "scheduled_question_id" not in (schedule["payload"] or {})
     assert schedule["next_run_at"] > datetime.now(INDIA)
 
     old = datetime.now(INDIA) - timedelta(days=1)
@@ -121,3 +122,72 @@ async def test_cost_replay_gets_a_distinct_job_for_each_five_minute_occurrence(d
     jobs = await db.fetch("SELECT key FROM jobs WHERE kind='cost_replay'")
     assert len(jobs) == 2
     assert len({job["key"] for job in jobs}) == 2
+
+
+async def test_deleting_scheduled_question_cascades_and_missing_question_id_is_rejected(db):
+    import asyncpg
+    import pytest
+
+    question = await create_question(
+        db,
+        prompt="How much did I spend on travel?",
+        rule="FREQ=WEEKLY;BYDAY=MO",
+    )
+    assert (
+        await db.fetchval(
+            "SELECT count(*) FROM job_schedules WHERE scheduled_question_id = $1",
+            question["id"],
+        )
+        == 1
+    )
+
+    with pytest.raises(asyncpg.UniqueViolationError) as dup_exc:
+        async with db.transaction():
+            await db.execute(
+                """
+                INSERT INTO job_schedules
+                    (kind, scheduled_question_id, payload, rule, next_run_at, dtstart)
+                VALUES ('scheduled_question', $1, '{}'::jsonb, 'FREQ=WEEKLY', now(), now())
+                """,
+                question["id"],
+            )
+    assert (
+        getattr(dup_exc.value, "constraint_name", None) == "job_schedules_scheduled_question_id_idx"
+    )
+
+    with pytest.raises(asyncpg.CheckViolationError) as missing_exc:
+        async with db.transaction():
+            await db.execute(
+                """
+                INSERT INTO job_schedules (kind, payload, rule, next_run_at, dtstart)
+                VALUES ('scheduled_question', '{}'::jsonb, 'FREQ=WEEKLY', now(), now())
+                """
+            )
+    assert (
+        getattr(missing_exc.value, "constraint_name", None)
+        == "job_schedules_scheduled_question_check"
+    )
+
+    with pytest.raises(asyncpg.CheckViolationError) as extra_exc:
+        async with db.transaction():
+            await db.execute(
+                """
+                INSERT INTO job_schedules
+                    (kind, scheduled_question_id, payload, rule, next_run_at, dtstart)
+                VALUES ('weekly_briefing', $1, '{}'::jsonb, 'FREQ=WEEKLY', now(), now())
+                """,
+                question["id"],
+            )
+    assert (
+        getattr(extra_exc.value, "constraint_name", None)
+        == "job_schedules_scheduled_question_check"
+    )
+
+    await db.execute("DELETE FROM scheduled_questions WHERE id = $1", question["id"])
+    assert (
+        await db.fetchval(
+            "SELECT count(*) FROM job_schedules WHERE scheduled_question_id = $1",
+            question["id"],
+        )
+        == 0
+    )

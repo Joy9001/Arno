@@ -93,7 +93,8 @@ async def test_history_item_matches_legacy_fields_with_one_attachment(authed_cli
         account_id=account["id"],
         period_start=date(2026, 2, 1),
         period_end=date(2026, 2, 28),
-        check_result={"status": "VERIFIED"},
+        check_result={},
+        check_status="VERIFIED",
         counts={
             "new": 3,
             "certain": 2,
@@ -104,23 +105,20 @@ async def test_history_item_matches_legacy_fields_with_one_attachment(authed_cli
         reason="checked",
         committed_at=committed_at,
     )
-    for filename, attached_at in (
-        ("older.csv", created_at - timedelta(minutes=2)),
-        ("latest.csv", created_at - timedelta(minutes=1)),
-    ):
-        await ledger.execute(
-            """
-            INSERT INTO attachments
-                (id, kind, filename, content_type, size_bytes, sha256, data, import_id, created_at)
-            VALUES ($1, 'statement', $2, 'text/csv', 1, $3, $4, $5, $6)
-            """,
-            await new_id(ledger, "att"),
-            filename,
-            f"sha-{filename}",
-            b"x",
-            import_id,
-            attached_at,
-        )
+    attachment_id = await new_id(ledger, "att")
+    await ledger.execute(
+        """
+        INSERT INTO attachments
+            (id, kind, filename, content_type, size_bytes, sha256, data, created_at)
+        VALUES ($1, 'statement', 'latest.csv', 'text/csv', 1, 'sha-latest', $2, $3)
+        """,
+        attachment_id,
+        b"x",
+        created_at - timedelta(minutes=1),
+    )
+    await ledger.execute(
+        "UPDATE imports SET attachment_id = $1 WHERE id = $2", attachment_id, import_id
+    )
 
     body = authed_client.get("/api/import-history", params={"limit": 25}).json()
 

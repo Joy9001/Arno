@@ -2,8 +2,9 @@
 
 Rules are the same iCalendar RRULEs the ledger uses, anchored in India time. A due schedule is
 enqueued with a key for its kind and period, then moves on from *now*: a laptop that slept through
-six Sundays gets one briefing, and a restart can't send the same one twice. The unique
-`(kind, payload)` index keeps the built-in rows and the user's scheduled questions in sync.
+six Sundays gets one briefing, and a restart can't send the same one twice. Partial unique indexes
+on `(kind, payload)` for built-in schedules and on `scheduled_question_id` for user questions keep
+both in sync.
 """
 
 from __future__ import annotations
@@ -169,7 +170,7 @@ async def ensure_builtin_schedules(
                 """
                 INSERT INTO job_schedules (kind, payload, rule, next_run_at, dtstart)
                 VALUES ($1, '{}'::jsonb, $2, $3, $3)
-                ON CONFLICT (kind, payload) DO NOTHING
+                ON CONFLICT (kind, payload) WHERE kind <> 'scheduled_question' DO NOTHING
                 """,
                 kind,
                 rule,
@@ -207,13 +208,12 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
     for question in questions:
         question_id = str(question["id"])
         active_ids.add(question_id)
-        payload = {"scheduled_question_id": question_id}
         row = await conn.fetchrow(
             """
             SELECT * FROM job_schedules
-            WHERE kind = 'scheduled_question' AND payload = $1
+            WHERE scheduled_question_id = $1
             """,
-            payload,
+            question_id,
         )
         same_rule = row is not None and row["rule"] == question["rule"]
         try:
@@ -233,11 +233,13 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
                 continue
             await conn.execute(
                 """
-                INSERT INTO job_schedules (kind, payload, rule, next_run_at, dtstart)
-                VALUES ('scheduled_question', $1, $2, $3, $3)
-                ON CONFLICT (kind, payload) DO NOTHING
+                INSERT INTO job_schedules
+                    (kind, scheduled_question_id, payload, rule, next_run_at, dtstart)
+                VALUES ('scheduled_question', $1, '{}'::jsonb, $2, $3, $3)
+                ON CONFLICT (scheduled_question_id)
+                    WHERE scheduled_question_id IS NOT NULL DO NOTHING
                 """,
-                payload,
+                question_id,
                 question["rule"],
                 occurrence,
             )
@@ -277,7 +279,7 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
     for row in await conn.fetch(
         "SELECT * FROM job_schedules WHERE kind = 'scheduled_question' AND active"
     ):
-        question_id = (row["payload"] or {}).get("scheduled_question_id")
+        question_id = str(row["scheduled_question_id"])
         if question_id not in active_ids:
             await conn.execute(
                 "UPDATE job_schedules SET active = false, updated_at = now() WHERE id = $1",
@@ -304,6 +306,8 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
         for row in rows:
             kind = str(row["kind"])
             payload = dict(row["payload"] or {})
+            if row["scheduled_question_id"] is not None:
+                payload["scheduled_question_id"] = str(row["scheduled_question_id"])
             occurrence = row["next_run_at"].astimezone(INDIA)
             period = period_for(kind, occurrence, payload)
             job_payload = {
@@ -439,7 +443,7 @@ async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
         SELECT js.*, sq.prompt AS question_prompt
         FROM job_schedules js
         LEFT JOIN scheduled_questions sq
-            ON sq.id = js.payload ->> 'scheduled_question_id'
+            ON sq.id = js.scheduled_question_id
         ORDER BY js.active DESC, js.next_run_at
         """
     )
@@ -456,6 +460,7 @@ async def job_status(conn: Connection, *, limit: int = 20) -> dict[str, Any]:
             {
                 "id": row["id"],
                 "kind": row["kind"],
+                "scheduled_question_id": row["scheduled_question_id"],
                 "payload": row["payload"] or {},
                 "label": row["question_prompt"] or row["kind"].replace("_", " ").title(),
                 "rule": row["rule"],

@@ -463,3 +463,55 @@ async def test_future_correction_creates_a_rule_without_relabelling_the_past(led
             "SELECT default_category_id FROM payees WHERE id = $1", landlord["id"]
         )
     )["default_category_id"] == rent
+
+
+async def test_v_accounts_balance_paise_matches_application_balance_after_movements(ledger):
+    bank = await _bank(ledger, opening=1_000_000)
+    card = await create_account(
+        ledger,
+        kind="card",
+        name="HDFC Millennia",
+        opening_balance_paise=-250_000,
+        credit_limit_paise=500_000,
+        statement_day=10,
+        due_day=28,
+    )
+    friend = await create_payee(ledger, display_name="Karan", kind="person")
+    food = await _category(ledger, "Food & Dining")
+
+    await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=150_000,
+        description="Dinner",
+        category_id=food,
+    )
+    await record_transfer(
+        ledger,
+        from_account_id=bank["id"],
+        to_account_id=card["id"],
+        amount_paise=200_000,
+    )
+    await record_lending(
+        ledger,
+        account_id=bank["id"],
+        payee_id=friend["id"],
+        amount_paise=300_000,
+        direction="i_lent",
+    )
+
+    affected = [bank["id"], card["id"], friend["person_account_id"]]
+    view_rows = {
+        str(row["id"]): int(row["balance_paise"])
+        for row in await ledger.fetch(
+            "SELECT id, balance_paise FROM v_accounts WHERE id = ANY($1::text[])",
+            affected,
+        )
+    }
+    for account_id in affected:
+        app_account = await get_account(ledger, account_id)
+        assert view_rows[account_id] == app_account["balance_paise"]
+
+    assert view_rows[bank["id"]] == 350_000
+    assert view_rows[card["id"]] == -50_000
+    assert view_rows[friend["person_account_id"]] == 300_000

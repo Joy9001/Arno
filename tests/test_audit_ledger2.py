@@ -70,7 +70,7 @@ async def _labels(conn, movement_id: str) -> list[dict]:
         """
         SELECT fa.kind AS from_kind, ta.kind AS to_kind,
                t.amount::bigint AS amount_paise, p.display_name AS payee_name
-        FROM transfer_labels tl
+        FROM movement_legs tl
         JOIN pgledger_transfers t ON t.id = tl.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id

@@ -20,9 +20,7 @@ async def update_preference_body(conn: Connection, preference_id: str, body: str
         raise InvalidLedgerError(
             f"A saved preference must be at most {MAX_PREFERENCE_BODY} characters."
         )
-    row = await conn.fetchrow(
-        "SELECT * FROM preferences WHERE id = $1 AND deleted_at IS NULL", preference_id
-    )
+    row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
     if row is None:
         raise NotFoundLedgerError("That preference does not exist.")
     async with write_group(conn, actor="user") as group:

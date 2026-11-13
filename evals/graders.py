@@ -312,11 +312,11 @@ async def _new_movements(conn: Connection, output: EvalOutput) -> list[dict[str,
                (array_agg(DISTINCT c.name)
                     FILTER (WHERE c.name IS NOT NULL))[1] AS category
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts sp ON sp.kind = 'spending'
-        LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
-        LEFT JOIN payees p ON p.id = tl.payee_id
-        LEFT JOIN categories c ON c.id = tl.category_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
+        LEFT JOIN categories c ON c.id = ml.category_id
         WHERE m.created_at >= $1
            OR EXISTS (SELECT 1 FROM captures cap WHERE cap.movement_id = m.id AND cap.ref = ANY($2))
         GROUP BY m.id
@@ -747,9 +747,9 @@ async def grade_writes(
             rows = await conn.fetch(
                 """
                 SELECT p.display_name
-                FROM transfer_labels tl
-                JOIN payees p ON p.id = tl.payee_id
-                JOIN movements m ON m.id = tl.movement_id
+                FROM movement_legs ml
+                JOIN payees p ON p.id = ml.payee_id
+                JOIN movements m ON m.id = ml.movement_id
                 WHERE m.created_at >= $1
                 """,
                 datetime.fromisoformat(output.started_at),

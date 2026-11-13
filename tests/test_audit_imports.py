@@ -102,8 +102,8 @@ async def _review_import(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, $9, '[]'::jsonb)
+                             check_status, review, commit_groups)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, 'VERIFIED', $9, '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
@@ -112,7 +112,7 @@ async def _review_import(
         PERIOD[1],
         opening,
         closing,
-        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": opening},
+        {"opening_source": "manual", "opening_paise": opening},
         {"manual_opening_paise": opening},
     )
     await insert_lines(conn, import_id=import_id, account=account, parsed_account={"rows": rows})
@@ -274,8 +274,9 @@ async def test_a_closing_adjustment_is_visible_and_never_consumption(ledger):
     assert adjustment["description"].startswith("Balance adjustment")
     to_spending = await ledger.fetchval(
         """
-        SELECT count(*) FROM pgledger_transfers t
-        WHERE t.metadata ->> 'movement_id' = $1 AND t.to_account_id = $2
+        SELECT count(*) FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE ml.movement_id = $1 AND t.to_account_id = $2
         """,
         adjustment["id"],
         spending["ledger_account_id"],
@@ -466,21 +467,18 @@ async def test_the_gate_compares_rows_in_parser_order_not_id_order(ledger, monke
     assert fingerprint
     account = await _account(ledger)
     import_id = await new_id(ledger, "imp")
+    attachment_id = await _attachment(ledger, sbi_csv())
     await ledger.execute(
         """
-        INSERT INTO imports (id, file_hash, status, account_id, institution, fingerprint,
-                             period_start, period_end, commit_groups)
-        VALUES ($1, 'hash-order', 'committed', $2, 'SBI', $3, '2026-04-01', '2026-04-30',
+        INSERT INTO imports (id, file_hash, status, attachment_id, account_id, institution,
+                             fingerprint, period_start, period_end, commit_groups)
+        VALUES ($1, 'hash-order', 'committed', $2, $3, 'SBI', $4, '2026-04-01', '2026-04-30',
                 '[]'::jsonb)
         """,
         import_id,
+        attachment_id,
         account["id"],
         fingerprint,
-    )
-    await ledger.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2",
-        import_id,
-        await _attachment(ledger, sbi_csv()),
     )
     _reversing_ids(monkeypatch)
     await insert_lines(
@@ -515,21 +513,18 @@ async def test_the_gate_compares_rows_in_parser_order_not_id_order(ledger, monke
     )
     monkeypatch.undo()
     current = await new_id(ledger, "imp")
+    attachment_id = await _attachment(ledger, sbi_csv())
     await ledger.execute(
         """
-        INSERT INTO imports (id, file_hash, status, account_id, institution, fingerprint,
-                             period_start, period_end, commit_groups)
-        VALUES ($1, 'hash-order-2', 'parsing', $2, 'SBI', $3, '2026-04-01', '2026-04-30',
+        INSERT INTO imports (id, file_hash, status, attachment_id, account_id, institution,
+                             fingerprint, period_start, period_end, commit_groups)
+        VALUES ($1, 'hash-order-2', 'parsing', $2, $3, 'SBI', $4, '2026-04-01', '2026-04-30',
                 '[]'::jsonb)
         """,
         current,
+        attachment_id,
         account["id"],
         fingerprint,
-    )
-    await ledger.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2",
-        current,
-        await _attachment(ledger, sbi_csv()),
     )
 
     result = await run_gate(
@@ -570,18 +565,21 @@ async def _card_review(
             "rows": len(rows),
         }
     )
+    check_status = check.pop("status")
     await conn.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             commit_groups)
-        VALUES ($1, $2, 'review', $3, '2026-04-01', '2026-04-30', 0, $4, $5, '[]'::jsonb)
+                             check_status, commit_groups)
+        VALUES ($1, $2, 'review', $3, '2026-04-01', '2026-04-30', 0, $4, $5, $6,
+                '[]'::jsonb)
         """,
         import_id,
         f"hash-{import_id}",
         card["id"],
         closing,
         check,
+        check_status,
     )
     await insert_lines(conn, import_id=import_id, account=card, parsed_account={"rows": rows})
     await reconcile(conn, import_id=import_id, account=card, period=PERIOD)
@@ -807,7 +805,7 @@ async def test_a_user_category_survives_a_later_rule_run(ledger):
 
     kept = await ledger.fetchval(
         """
-        SELECT category_id FROM transfer_labels
+        SELECT category_id FROM movement_legs
         WHERE movement_id = $1 AND category_id IS NOT NULL
         """,
         line["movement_id"],
@@ -855,7 +853,7 @@ async def test_a_user_rule_beats_a_later_llm_answer_for_the_same_payee(ledger):
     )
     labeled = await ledger.fetchval(
         """
-        SELECT category_id FROM transfer_labels
+        SELECT category_id FROM movement_legs
         WHERE movement_id = $1 AND category_id IS NOT NULL
         """,
         line["movement_id"],
@@ -915,9 +913,6 @@ async def test_a_committed_import_cannot_be_parsed_and_booked_again(ledger):
         import_id,
         attachment_id,
         account["id"],
-    )
-    await ledger.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2", import_id, attachment_id
     )
     first = await submit_parser_code(ledger, import_ids=[import_id], code=SBI_PARSER)
     assert first["status"] == "parser_submitted", first

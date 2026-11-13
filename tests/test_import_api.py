@@ -139,9 +139,6 @@ async def test_review_commit_and_undo_over_rest(authed_client, ledger):
         attachment_id,
         account["id"],
     )
-    await ledger.execute(
-        "UPDATE attachments SET import_id = $1 WHERE id = $2", import_id, attachment_id
-    )
 
     await submit_parser_code(ledger, import_ids=[import_id], code=SBI_PARSER)
 

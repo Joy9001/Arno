@@ -132,23 +132,24 @@ async def _import_rows(conn: Connection, import_id: str) -> list[dict[str, Any]]
                payee.kind AS payee_kind, payee.display_name AS payee_name
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         LEFT JOIN LATERAL (
-            SELECT tl.category_id
-            FROM transfer_labels tl
-            WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL
+            SELECT ml.category_id
+            FROM movement_legs ml
+            WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
             LIMIT 1
         ) label ON true
         LEFT JOIN LATERAL (
             SELECT p.kind, p.display_name
-            FROM transfer_labels tl
-            JOIN payees p ON p.id = tl.payee_id
-            WHERE tl.movement_id = m.id
+            FROM movement_legs ml
+            JOIN payees p ON p.id = ml.payee_id
+            WHERE ml.movement_id = m.id
             LIMIT 1
         ) payee ON true
         WHERE sl.import_id = $1
           AND sl.match_state = 'merged'
           AND sl.movement_id IS NOT NULL
-          AND m.reverses_id IS NULL
+          AND ms.is_effective
         ORDER BY sl.date, sl.id
         """,
         import_id,
@@ -181,57 +182,27 @@ async def _label(
     category_id: str,
     rule_id: str | None,
 ) -> bool:
-    labels = await conn.fetch("SELECT * FROM transfer_labels WHERE movement_id = $1", movement_id)
-    if not labels:
-        # A plain expense with no payee, note, or category has no label row at all. Without
-        # creating one the rule fires, records itself, and leaves the row uncategorized — how a
-        # card's annual fee, whose narration names nobody, used to stay uncategorized.
-        transfer = await conn.fetchrow(
-            """
-            SELECT t.id
-            FROM pgledger_transfers t
-            JOIN accounts sp ON sp.kind = 'spending'
-            WHERE t.metadata ->> 'movement_id' = $1
-              AND (t.from_account_id = sp.ledger_account_id
-                   OR t.to_account_id = sp.ledger_account_id)
-            ORDER BY t.id
-            LIMIT 1
-            """,
-            movement_id,
-        )
-        if transfer is None:
-            return False
-        labels = [
-            await conn.fetchrow_required(
-                """
-                INSERT INTO transfer_labels (transfer_id, movement_id, category_id)
-                VALUES ($1, $2, $3) RETURNING *
-                """,
-                transfer["id"],
-                movement_id,
-                category_id,
-            )
-        ]
-        group.record_created("transfer_labels", labels[0])
-    for label in labels:
-        if label["category_id"] == category_id:
+    legs = await conn.fetch(
+        "SELECT * FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id",
+        movement_id,
+    )
+    if not legs:
+        return False
+    for leg in legs:
+        if leg["category_id"] == category_id:
             continue
-        await conn.execute(
+        after = await conn.fetchrow(
             """
-            UPDATE transfer_labels
+            UPDATE movement_legs
             SET category_id = $1, updated_at = now()
             WHERE transfer_id = $2
+            RETURNING *
             """,
             category_id,
-            label["transfer_id"],
-        )
-        after = await conn.fetchrow(
-            "SELECT * FROM transfer_labels WHERE transfer_id = $1", label["transfer_id"]
+            leg["transfer_id"],
         )
         if after is not None:
-            group.record_updated(
-                "transfer_labels", str(label["transfer_id"]), dict(label), dict(after)
-            )
+            group.record_updated("movement_legs", str(leg["transfer_id"]), dict(leg), dict(after))
     before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
     if before is None:
         return False
@@ -260,23 +231,24 @@ async def _refund_source(
                m.category_rule_id, label.category_id, payee.display_name AS payee_name
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN LATERAL (
-            SELECT tl.category_id
-            FROM transfer_labels tl
-            WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL
+            SELECT ml.category_id
+            FROM movement_legs ml
+            WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
             LIMIT 1
         ) label ON true
         LEFT JOIN LATERAL (
             SELECT p.display_name
-            FROM transfer_labels tl
-            JOIN payees p ON p.id = tl.payee_id
-            WHERE tl.movement_id = m.id
+            FROM movement_legs ml
+            JOIN payees p ON p.id = ml.payee_id
+            WHERE ml.movement_id = m.id
             LIMIT 1
         ) payee ON true
         WHERE sl.amount_paise < 0
           AND m.date BETWEEN $1 AND $2
           AND abs(sl.amount_paise) >= $3
-          AND m.reverses_id IS NULL
+          AND ms.is_effective
         ORDER BY m.date DESC, sl.id DESC
         LIMIT 100
         """,
@@ -405,21 +377,22 @@ async def check_payees(
                payee.display_name AS payee_name
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN LATERAL (
-            SELECT tl.category_id, c.name AS category_name
-            FROM transfer_labels tl
-            JOIN categories c ON c.id = tl.category_id
-            WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL
+            SELECT ml.category_id, c.name AS category_name
+            FROM movement_legs ml
+            JOIN categories c ON c.id = ml.category_id
+            WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
             LIMIT 1
         ) label ON true
         LEFT JOIN LATERAL (
             SELECT p.display_name
-            FROM transfer_labels tl
-            JOIN payees p ON p.id = tl.payee_id
-            WHERE tl.movement_id = m.id
+            FROM movement_legs ml
+            JOIN payees p ON p.id = ml.payee_id
+            WHERE ml.movement_id = m.id
             LIMIT 1
         ) payee ON true
-        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND m.reverses_id IS NULL
+        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND ms.is_effective
         ORDER BY sl.date, sl.id
         """,
         import_id,

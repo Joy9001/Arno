@@ -105,7 +105,7 @@ async def _case(conn: Connection, import_id: str) -> dict[str, Any] | None:
                a.kind AS account_kind, a.name AS account_name,
                a.institution AS account_institution
         FROM imports i
-        LEFT JOIN accounts a ON a.id = i.account_id
+        LEFT JOIN v_accounts a ON a.id = i.account_id
         WHERE i.id = $1
         """,
         import_id,
@@ -128,14 +128,9 @@ async def _replay_rows(
                a.name AS account_name, a.last4,
                att.filename, att.data
         FROM imports i
-        JOIN accounts a ON a.id = i.account_id
-        JOIN LATERAL (
-            SELECT filename, data
-            FROM attachments x
-            WHERE x.import_id = i.id AND x.data IS NOT NULL AND x.purged_at IS NULL
-            ORDER BY x.created_at DESC
-            LIMIT 1
-        ) att ON true
+        JOIN v_accounts a ON a.id = i.account_id
+        JOIN attachments att ON att.id = i.attachment_id
+         AND att.data IS NOT NULL AND att.purged_at IS NULL
         WHERE i.status = 'committed'
           AND i.undone_at IS NULL
           AND i.id <> $1
@@ -176,7 +171,7 @@ async def _needs_repair(
         """
         SELECT v.helper_version
         FROM statement_layouts l
-        JOIN parser_versions v ON v.id = l.active_version_id
+        JOIN parser_versions v ON v.layout_id = l.id AND v.is_active
         WHERE lower(l.institution) = lower($1)
           AND lower(l.kind) = lower($2)
           AND $3 = ANY(l.variants)

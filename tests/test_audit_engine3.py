@@ -107,7 +107,7 @@ async def _question_schedule(db, question_id: str):
     return await db.fetchrow(
         """
         SELECT * FROM job_schedules
-        WHERE kind = 'scheduled_question' AND payload ->> 'scheduled_question_id' = $1
+        WHERE kind = 'scheduled_question' AND scheduled_question_id = $1
         """,
         question_id,
     )
@@ -360,7 +360,8 @@ async def test_the_demo_loan_book_a_months_interest_at_its_rate(demo_ledger):
                    AS interest_paise,
                sum(CASE WHEN a.kind = 'loan' THEN e.amount ELSE 0 END)::bigint AS principal_paise
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN pgledger_entries e ON e.transfer_id = t.id
         JOIN accounts a ON a.ledger_account_id = e.account_id
         WHERE m.kind = 'loan' AND m.reverses_id IS NULL

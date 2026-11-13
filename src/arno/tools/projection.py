@@ -42,20 +42,32 @@ from arno.ledger.settings import read_settings
 from arno.tools.mark import mark
 
 
-async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> int:
-    row = await conn.fetchrow(
+async def _balances_at(
+    conn: Connection, ledger_account_ids: list[str], as_of: date
+) -> dict[str, int]:
+    if not ledger_account_ids:
+        return {}
+    # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
+    # generic plan while still using the `pgledger_entries (account_id)` index.
+    rows = await conn.fetch(
         """
-        SELECT coalesce(sum(e.amount), 0)::bigint AS balance_paise
+        SELECT e.account_id, coalesce(sum(e.amount), 0)::bigint AS balance_paise
         FROM pgledger_entries e
-        JOIN pgledger_transfers t ON t.id = e.transfer_id
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE e.account_id = $1
-          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $2
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+          AND m.date <= $2
+        GROUP BY e.account_id
         """,
-        ledger_account_id,
+        ledger_account_ids,
         as_of,
     )
-    return int(row["balance_paise"]) if row else 0
+    by_id = {str(row["account_id"]): int(row["balance_paise"]) for row in rows}
+    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
+
+
+async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> int:
+    return (await _balances_at(conn, [ledger_account_id], as_of))[ledger_account_id]
 
 
 async def _horizon_for_loading(
@@ -74,18 +86,33 @@ async def _horizon_for_loading(
     return min(3_650, max(90, ask_horizon_days or 0, furthest))
 
 
-async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) -> date | None:
-    """The date of the account's last movement on or before ``as_of``."""
-    return await conn.fetchval(
+async def _last_movements(
+    conn: Connection, ledger_account_ids: list[str], as_of: date
+) -> dict[str, date | None]:
+    """The date of each account's last movement on or before ``as_of``."""
+    if not ledger_account_ids:
+        return {}
+    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `_balances_at`.
+    rows = await conn.fetch(
         """
-        SELECT max(m.date)
-        FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        WHERE (t.from_account_id = $1 OR t.to_account_id = $1) AND m.date <= $2
+        SELECT e.account_id, max(m.date) AS last_date
+        FROM pgledger_entries e
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+          AND m.date <= $2
+        GROUP BY e.account_id
         """,
-        ledger_account_id,
+        ledger_account_ids,
         as_of,
     )
+    by_id = {str(row["account_id"]): row["last_date"] for row in rows}
+    return {account_id: by_id.get(account_id) for account_id in ledger_account_ids}
+
+
+async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) -> date | None:
+    """The date of the account's last movement on or before ``as_of``."""
+    return (await _last_movements(conn, [ledger_account_id], as_of))[ledger_account_id]
 
 
 # An account is known on a day when its row existed then, or when the ledger already held an entry
@@ -95,10 +122,10 @@ _KNOWN_ON_DAY = """
           AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1
                OR EXISTS (
                    SELECT 1 FROM pgledger_entries e
-                   JOIN pgledger_transfers t ON t.id = e.transfer_id
-                   LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-                   WHERE e.account_id = accounts.ledger_account_id
-                     AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $1
+                   JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+                   JOIN movements m ON m.id = ml.movement_id
+                   WHERE e.account_id = v_accounts.ledger_account_id
+                     AND m.date <= $1
                ))
 """
 
@@ -108,21 +135,25 @@ async def _card_rows(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
         f"""
-        SELECT * FROM accounts
+        SELECT * FROM v_accounts
         WHERE kind = 'card' AND active{_KNOWN_ON_DAY}
         ORDER BY name
         """,  # noqa: S608 - the fragment is a constant of this module
         as_of,
         known_then,
     )
+    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    balances = await _balances_at(conn, ledger_ids, as_of)
+    last_dates = await _last_movements(conn, ledger_ids, as_of)
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        balance = await _balance_at(conn, row["ledger_account_id"], as_of)
+        ledger_id = str(row["ledger_account_id"])
+        balance = balances[ledger_id]
         outstanding = max(-balance, 0)
         stated = row["statement_balance_as_of"]
         known = has_known_balance(row) and stated is not None and stated <= as_of
-        anchor = balance_anchor(row, await _last_movement(conn, row["ledger_account_id"], as_of))
+        anchor = balance_anchor(row, last_dates[ledger_id])
         cards.append(
             {
                 **dict(row),
@@ -150,22 +181,26 @@ async def _liquid_rows(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     rows = await conn.fetch(
         f"""
-        SELECT * FROM accounts
+        SELECT * FROM v_accounts
         WHERE liquid AND active{_KNOWN_ON_DAY}
         ORDER BY name
         """,  # noqa: S608 - the fragment is a constant of this module
         as_of,
         known_then,
     )
+    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    balances = await _balances_at(conn, ledger_ids, as_of)
+    last_dates = await _last_movements(conn, ledger_ids, as_of)
     accounts: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        balance = await _balance_at(conn, row["ledger_account_id"], as_of)
+        ledger_id = str(row["ledger_account_id"])
+        balance = balances[ledger_id]
         stated = row["statement_balance_as_of"]
         # A statement dated after as_of says nothing about the balance on as_of.
         known = has_known_balance(row) and (stated is None or stated <= as_of)
         # The age of the balance comes from ledger.common, the one definition the context uses.
-        anchor = balance_anchor(row, await _last_movement(conn, row["ledger_account_id"], as_of))
+        anchor = balance_anchor(row, last_dates[ledger_id])
         as_of_date = anchor if known else None
         age = (as_of - as_of_date).days if as_of_date is not None else None
         accounts.append(
@@ -198,10 +233,23 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
         as_of,
         known_then,
     )
+    account_ids = [str(row["account_id"]) for row in rows if row.get("account_id")]
+    ledger_by_account: dict[str, str] = {}
+    if account_ids:
+        account_rows = await conn.fetch(
+            """
+            SELECT id, ledger_account_id
+            FROM accounts
+            WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
+            """,
+            account_ids,
+        )
+        ledger_by_account = {str(acc["id"]): str(acc["ledger_account_id"]) for acc in account_rows}
+    balances = await _balances_at(conn, list(ledger_by_account.values()), as_of)
     goals: list[dict[str, Any]] = []
     for row in rows:
-        account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", row["account_id"])
-        saved = await _balance_at(conn, account["ledger_account_id"], as_of) if account else 0
+        ledger_id = ledger_by_account.get(str(row["account_id"]))
+        saved = balances.get(ledger_id, 0) if ledger_id else 0
         goals.append(
             {
                 **dict(row),
@@ -217,28 +265,23 @@ async def _spend_categories(
     as_of: date,
     covered_category_ids: set[str],
 ) -> tuple[list[SpendCategory], list[BaselineSource], list[str]]:
-    from arno.tools.read import _reversed_ids  # one definition of a corrected-away row
-
-    reversed_ids = await _reversed_ids(conn)
     window_start = as_of - timedelta(days=HISTORY_DAYS)
     window_end = as_of - timedelta(days=1)
     categories = await conn.fetch("SELECT * FROM categories WHERE active ORDER BY name")
     baselines = {row["category_id"]: row for row in await conn.fetch("SELECT * FROM baselines")}
     spend_rows = await conn.fetch(
         """
-        SELECT tl.category_id, v.date, sum(v.amount_paise)::bigint AS amount_paise
+        SELECT v.category_id, v.date, sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
-        JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
-        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
-          AND tl.category_id IS NOT NULL
-          AND NOT (v.movement_id = ANY($3))
-        GROUP BY tl.category_id, v.date
+          AND v.category_id IS NOT NULL
+          AND ms.is_effective
+        GROUP BY v.category_id, v.date
         """,
         window_start,
         window_end,
-        reversed_ids,
     )
     daily: dict[str, dict[date, int]] = {}
     for row in spend_rows:
@@ -249,15 +292,14 @@ async def _spend_categories(
         """
         SELECT coalesce(sum(v.amount_paise), 0)::bigint AS amount_paise
         FROM v_spending v
-        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND v.category_id IS NULL
-          AND NOT (v.movement_id = ANY($3))
+          AND ms.is_effective
         """,
         window_start,
         window_end,
-        reversed_ids,
     )
     if uncategorized and int(uncategorized["amount_paise"]) > 0:
         gaps.append(
@@ -267,25 +309,23 @@ async def _spend_categories(
 
     card_rows = await conn.fetch(
         """
-        SELECT tl.category_id,
+        SELECT v.category_id,
                CASE WHEN fa.kind = 'card' THEN fa.id ELSE ta.id END AS card_id,
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN pgledger_transfers t ON t.id = v.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-        JOIN transfer_labels tl ON tl.transfer_id = v.transfer_id
-        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
-          AND tl.category_id IS NOT NULL
+          AND v.category_id IS NOT NULL
           AND (fa.kind = 'card' OR ta.kind = 'card')
-          AND NOT (v.movement_id = ANY($3))
-        GROUP BY tl.category_id, 2
+          AND ms.is_effective
+        GROUP BY v.category_id, 2
         """,
         window_start,
         window_end,
-        reversed_ids,
     )
     card_choice: dict[str, tuple[str, int]] = {}
     card_counts: dict[str, int] = {}
@@ -379,19 +419,18 @@ async def _owed_events(
         """
         SELECT p.id AS payee_id, p.display_name, p.outside_text,
                coalesce(sum(e.amount), 0)::bigint AS balance_paise,
-               min(tl.expected_date) AS expected_date
+               min(ml.expected_date) AS expected_date
         FROM accounts a
         JOIN payees p ON p.person_account_id = a.id
         LEFT JOIN pgledger_entries e ON e.account_id = a.ledger_account_id
-        LEFT JOIN pgledger_transfers t ON t.id = e.transfer_id
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
-        LEFT JOIN transfer_labels tl ON tl.transfer_id = e.transfer_id
+        LEFT JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        LEFT JOIN movements m ON m.id = ml.movement_id
         WHERE a.kind = 'person'
           AND (NOT $2 OR (a.created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
-          AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) <= $1
+          AND m.date <= $1
         GROUP BY p.id, p.display_name, p.outside_text
-        HAVING coalesce(sum(e.amount), 0) <> 0 AND min(tl.expected_date) IS NOT NULL
-        ORDER BY min(tl.expected_date), p.display_name
+        HAVING coalesce(sum(e.amount), 0) <> 0 AND min(ml.expected_date) IS NOT NULL
+        ORDER BY min(ml.expected_date), p.display_name
         """,
         as_of,
         known_then,
@@ -479,11 +518,12 @@ async def load_inputs(
         as_of,
         known_then,
     )
+    expanded_by_id = await schedules_mod.expand_schedules(
+        conn, schedule_rows, as_of + timedelta(days=1), end, as_of=as_of
+    )
     for row in schedule_rows:
         amount = row["amount_paise"]
-        occurrences = await schedules_mod.expand_schedule(
-            conn, row, as_of + timedelta(days=1), end, as_of=as_of
-        )
+        occurrences = expanded_by_id[str(row["id"])]
         if not occurrences:
             continue
         # schedules.name is NOT NULL, so its mark is never null either.

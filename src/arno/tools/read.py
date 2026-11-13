@@ -137,17 +137,101 @@ async def coverage(
     }
 
 
+async def _accounts_coverage(
+    conn: Connection,
+    account_ids: list[str],
+    start: date,
+    end: date,
+    *,
+    today: date | None = None,
+) -> dict[str, dict[str, Any]]:
+    if not account_ids:
+        return {}
+    day = today or ledger_today()
+    # Routing `unnest($3::text[])` through a subquery creates an InitPlan so Postgres caches a
+    # generic plan.
+    rows = await conn.fetch(
+        """
+        SELECT account_id, period_start, period_end
+        FROM imports
+        WHERE status = 'committed'
+          AND undone_at IS NULL
+          AND period_start IS NOT NULL AND period_end IS NOT NULL
+          AND period_end >= $1 AND period_start <= $2
+          AND account_id = ANY(ARRAY(SELECT unnest($3::text[])))
+        """,
+        start,
+        end,
+        account_ids,
+    )
+    intervals_by_account: dict[str, list[tuple[date, date]]] = {
+        account_id: [] for account_id in account_ids
+    }
+    for row in rows:
+        intervals_by_account.setdefault(str(row["account_id"]), []).append(
+            (row["period_start"], row["period_end"])
+        )
+    months = [
+        (
+            key,
+            date(int(key[:4]), int(key[5:7]), 1),
+            date(int(key[:4]), int(key[5:7]), calendar.monthrange(int(key[:4]), int(key[5:7]))[1]),
+        )
+        for key in _month_keys(start, end)
+    ]
+    result: dict[str, dict[str, Any]] = {}
+    for account_id in account_ids:
+        span = _merge(intervals_by_account.get(account_id, []))
+        gaps: list[str] = []
+        for key, month_start, month_end in months:
+            required_start = max(month_start, start)
+            required_end = min(month_end, end)
+            if required_start > day:
+                gaps.append(key)
+                continue
+            covered = any(
+                interval_start <= required_start and interval_end >= min(required_end, day)
+                for interval_start, interval_end in span
+            )
+            if not covered:
+                gaps.append(key)
+        covered_from = max(span[0][0], start) if span else None
+        covered_to = min(span[-1][1], end) if span else None
+        result[account_id] = {
+            "complete": not gaps,
+            "gaps": gaps,
+            "from": covered_from.isoformat() if covered_from else None,
+            "to": covered_to.isoformat() if covered_to else None,
+        }
+    return result
+
+
 async def _account_coverage(
     conn: Connection, account_id: str, start: date, end: date, *, today: date | None = None
 ) -> dict[str, Any]:
-    return await coverage(conn, account_id=account_id, start=start, end=end, today=today)
+    return (await _accounts_coverage(conn, [account_id], start, end, today=today))[account_id]
+
+
+async def _payees_outside(conn: Connection, payee_ids: list[str]) -> dict[str, bool]:
+    if not payee_ids:
+        return {}
+    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `movement_payloads`.
+    rows = await conn.fetch(
+        """
+        SELECT id, outside_text
+        FROM payees
+        WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
+        """,
+        payee_ids,
+    )
+    by_id = {str(row["id"]): bool(row["outside_text"]) for row in rows}
+    return {payee_id: by_id.get(payee_id, False) for payee_id in payee_ids}
 
 
 async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
     if not payee_id:
         return False
-    row = await conn.fetchrow("SELECT outside_text FROM payees WHERE id = $1", payee_id)
-    return bool(row and row["outside_text"])
+    return (await _payees_outside(conn, [payee_id]))[payee_id]
 
 
 async def get_financial_context(conn: Connection) -> dict[str, Any]:
@@ -157,6 +241,13 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
     day = ledger_today()
     settings = await settings_mod.read_settings(conn)
     account_rows = await accounts_mod.list_accounts(conn)
+    coverage_by_account = await _accounts_coverage(
+        conn,
+        [str(row["id"]) for row in account_rows],
+        day - timedelta(days=366),
+        day,
+        today=day,
+    )
     outside = False
     accounts: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -167,9 +258,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         # date would make a fresh check look stale. One definition, in `ledger.common`.
         as_of = balance_anchor(row, row["balance_as_of"])
         balance = money(row["balance_paise"]) if known else None
-        coverage_row = await _account_coverage(
-            conn, row["id"], day - timedelta(days=366), day, today=day
-        )
+        coverage_row = coverage_by_account[str(row["id"])]
         # The age is days since that same anchor, computed once in `account_payload`, so the age
         # and the as_of date always agree; statement freshness is the coverage gap below, which
         # says what it actually means.
@@ -283,9 +372,20 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         for row in goal_rows
     ]
 
+    schedule_rows = await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY kind, name")
+    expanded_400 = await schedules_mod.expand_schedules(
+        conn, schedule_rows, day, day + timedelta(days=400)
+    )
+    horizon_366 = (day + timedelta(days=366)).isoformat()
+    expanded_366 = {
+        schedule_id: [event for event in events if event["date"] <= horizon_366]
+        for schedule_id, events in expanded_400.items()
+    }
+    payloads = await schedules_mod.schedule_payloads(
+        conn, schedule_rows, expanded_by_id=expanded_366
+    )
     schedules: list[dict[str, Any]] = []
-    for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY kind, name"):
-        payload = await schedules_mod.schedule_payload(conn, row)
+    for row, payload in zip(schedule_rows, payloads, strict=False):
         name = payload["name"]
         if payload["outside_text"]:
             name = mark(name) or name
@@ -293,7 +393,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         # A schedule's future runs are the ledger's own expansion, not the 30-day event list:
         # `schedule_occurrences` only holds runs a payment was matched to. Each date carries its
         # weekday, computed in code, so the agent never works one out itself.
-        expanded = await schedules_mod.expand_schedule(conn, row, day, day + timedelta(days=400))
+        expanded = expanded_400[str(row["id"])]
         run_dates = [
             {"date": event["date"], "weekday": event["weekday"]}
             for event in expanded
@@ -349,7 +449,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         for row in await conn.fetch(
             """
             SELECT id, body, kind FROM preferences
-            WHERE active AND deleted_at IS NULL
+            WHERE active
             ORDER BY created_at
             """
         )
@@ -389,16 +489,16 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
             ),
             "lines": int(row["line_count"]),
             "counts": row["counts"] or {},
-            "check": (row["check_result"] or {}).get("status"),
+            "check": row["check_status"],
         }
         for row in await conn.fetch(
             """
-            SELECT i.id, i.status, i.period_start, i.period_end, i.counts, i.check_result,
+            SELECT i.id, i.status, i.period_start, i.period_end, i.counts, i.check_status,
                    acc.name AS account_name,
                    (SELECT count(*) FROM statement_lines sl WHERE sl.import_id = i.id)
                        AS line_count
             FROM imports i
-            LEFT JOIN accounts acc ON acc.id = i.account_id
+            LEFT JOIN v_accounts acc ON acc.id = i.account_id
             WHERE i.status NOT IN ('committed', 'rejected') AND i.undone_at IS NULL
             ORDER BY i.created_at DESC, i.id DESC
             """
@@ -470,7 +570,7 @@ async def _resolve_named(conn: Connection, table: str, value: str | None) -> str
     value = value.replace(OPEN, "").replace(CLOSE, "").strip()
     if table == "accounts":
         rows = await conn.fetch(
-            "SELECT id, name FROM accounts WHERE lower(name) = lower($1) AND active ORDER BY id",
+            "SELECT id, name FROM v_accounts WHERE lower(name) = lower($1) AND active ORDER BY id",
             value,
         )
     elif table == "categories":
@@ -526,12 +626,6 @@ def _check_filters(filters: dict[str, Any], allowed: frozenset[str], period_hint
         )
 
 
-async def _reversed_ids(conn: Connection) -> list[str]:
-    """Movements a live reversal cancels. A corrected entry and its reversal are bookkeeping, not
-    activity, so lists and counts leave both out. One definition, shared with the ledger."""
-    return await movements_mod._effectively_reversed_ids(conn)  # noqa: SLF001
-
-
 def _like(value: str) -> str:
     """A search is literal: `%`, `_`, and `\\` match themselves, never act as a wildcard."""
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -576,51 +670,56 @@ async def query_movements(
         clauses.append(
             f"""
             EXISTS (
-                SELECT 1 FROM pgledger_transfers t
+                SELECT 1 FROM movement_legs ml
+                JOIN pgledger_transfers t ON t.id = ml.transfer_id
                 JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
                 JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-                WHERE t.metadata ->> 'movement_id' = m.id
+                WHERE ml.movement_id = m.id
                   AND (fa.id = ${len(params) - 1} OR ta.id = ${len(params)})
             )
             """
         )
     if category_id or payee_id:
-        label_clauses = ["tl.movement_id = m.id"]
+        label_clauses = ["ml.movement_id = m.id"]
         if category_id:
             params.append(category_id)
-            label_clauses.append(f"tl.category_id = ${len(params)}")
+            label_clauses.append(f"ml.category_id = ${len(params)}")
         if payee_id:
             params.append(payee_id)
-            label_clauses.append(f"tl.payee_id = ${len(params)}")
+            label_clauses.append(f"ml.payee_id = ${len(params)}")
         clauses.append(
-            f"EXISTS (SELECT 1 FROM transfer_labels tl WHERE {' AND '.join(label_clauses)})"
+            f"EXISTS (SELECT 1 FROM movement_legs ml WHERE {' AND '.join(label_clauses)})"
         )
     if filters.get("text"):
-        # A description lives on the movement, so it must match even when the row has no label
-        # (a plain expense with no payee, category, or note). The note needs a label row.
+        # A description lives on the movement, and notes live on its legs.
         pattern = _like(filters["text"])
         params.extend([pattern, pattern])
         clauses.append(
             f"(m.description ILIKE ${len(params) - 1} OR EXISTS ("
-            "SELECT 1 FROM transfer_labels tl "
-            f"WHERE tl.movement_id = m.id AND tl.note ILIKE ${len(params)}))"
+            "SELECT 1 FROM movement_legs ml "
+            f"WHERE ml.movement_id = m.id AND ml.note ILIKE ${len(params)}))"
         )
     if filters.get("min_paise") is not None or filters.get("max_paise") is not None:
         inner: list[str] = []
         if filters.get("min_paise") is not None:
             params.append(filters["min_paise"])
-            inner.append(f"amount >= ${len(params)}")
+            inner.append(f"t.amount >= ${len(params)}")
         if filters.get("max_paise") is not None:
             params.append(filters["max_paise"])
-            inner.append(f"amount <= ${len(params)}")
+            inner.append(f"t.amount <= ${len(params)}")
         clauses.append(
-            "EXISTS (SELECT 1 FROM pgledger_transfers t WHERE t.metadata ->> 'movement_id' = m.id "
-            f"AND {' AND '.join(inner)})"
+            "EXISTS (SELECT 1 FROM movement_legs ml "
+            "JOIN pgledger_transfers t ON t.id = ml.transfer_id "
+            f"WHERE ml.movement_id = m.id AND {' AND '.join(inner)})"
         )
     if not filters.get("include_reversed"):
         # In SQL, not after LIMIT, so total_count, the page, and next_cursor agree.
-        clauses.append("m.kind <> 'reversal'")
-        hidden = await _reversed_ids(conn)
+        hidden = [
+            str(row["movement_id"])
+            for row in await conn.fetch(
+                "SELECT movement_id FROM v_movement_state WHERE NOT is_effective"
+            )
+        ]
         if hidden:
             params.append(hidden)
             clauses.append(f"NOT (m.id = ANY(${len(params)}))")
@@ -661,13 +760,24 @@ async def query_movements(
 
     outside = False
     items: list[dict[str, Any]] = []
-    for row in visible:
-        payload = await movements_mod.movement_payload(conn, row, state=states[str(row["id"])])
+    payloads = await movements_mod.movement_payloads(conn, visible, states=states)
+    payee_ids = list(
+        {
+            str(transfer["payee_id"])
+            for payload in payloads
+            for transfer in payload["transfers"]
+            if transfer.get("payee_id")
+        }
+    )
+    outside_by_payee = await _payees_outside(conn, payee_ids)
+    for payload in payloads:
         # A statement line or a photo is outside text whatever its payee: the description is
         # still the bank's words, not the user's, and it must be marked before the model reads it.
         from_source = any(kind in {"statement_line", "photo"} for kind in payload["evidence"])
         payee_outside = [
-            await _payee_is_outside(conn, transfer.get("payee_id"))
+            outside_by_payee.get(str(transfer["payee_id"]), False)
+            if transfer.get("payee_id")
+            else False
             for transfer in payload["transfers"]
         ]
         transfers: list[dict[str, Any]] = []
@@ -753,25 +863,24 @@ async def summarize_spending(
 
     # The sum keeps every row, since a reversal nets its original to zero; the count leaves the
     # pair out, so three grocery trips with one corrected entry count as three, not five.
-    params: list[Any] = [await _reversed_ids(conn), start, end]
+    params: list[Any] = [start, end]
     clauses = [
-        "t.metadata ->> 'movement_id' = m.id",
         "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
-        "m.date BETWEEN $2 AND $3",
+        "m.date BETWEEN $1 AND $2",
     ]
     if account_id:
         params.extend([account_id, account_id])
         clauses.append(f"(fa.id = ${len(params) - 1} OR ta.id = ${len(params)})")
     if category_id:
         params.append(category_id)
-        clauses.append(f"tl.category_id = ${len(params)}")
+        clauses.append(f"ml.category_id = ${len(params)}")
     if payee_id:
         params.append(payee_id)
-        clauses.append(f"tl.payee_id = ${len(params)}")
+        clauses.append(f"ml.payee_id = ${len(params)}")
     if filters.get("text"):
         pattern = _like(filters["text"])
         params.extend([pattern, pattern])
-        clauses.append(f"(tl.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})")
+        clauses.append(f"(ml.note ILIKE ${len(params) - 1} OR m.description ILIKE ${len(params)})")
 
     rows = await conn.fetch(
         f"""
@@ -781,22 +890,37 @@ async def summarize_spending(
                         THEN t.amount ELSE -t.amount END
                )::bigint AS amount_paise,
                count(DISTINCT m.id) FILTER (
-                   WHERE m.kind <> 'reversal' AND NOT (m.id = ANY($1))
+                   WHERE ms.is_effective
                )::bigint AS n,
-               (array_agg(tl.payee_id) FILTER (WHERE tl.payee_id IS NOT NULL))[1] AS payee_id
-        FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+               (array_agg(ml.payee_id) FILTER (WHERE ml.payee_id IS NOT NULL))[1] AS payee_id
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN accounts sp ON sp.kind = 'spending'
-        LEFT JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        LEFT JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-        LEFT JOIN transfer_labels tl ON tl.transfer_id = t.id
-        LEFT JOIN categories c ON c.id = tl.category_id
-        LEFT JOIN payees p ON p.id = tl.payee_id
+        LEFT JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        LEFT JOIN v_accounts ta ON ta.ledger_account_id = t.to_account_id
+        LEFT JOIN categories c ON c.id = ml.category_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE {" AND ".join(clauses)}
         GROUP BY 1
         ORDER BY 2 DESC, 1
         """,  # noqa: S608
         *params,
+    )
+    outside_by_payee = (
+        await _payees_outside(
+            conn,
+            list(
+                {
+                    str(row["payee_id"])
+                    for row in rows
+                    if (int(row["amount_paise"]) != 0 or int(row["n"]) != 0) and row.get("payee_id")
+                }
+            ),
+        )
+        if group_by == "payee"
+        else {}
     )
     outside = False
     groups: list[dict[str, Any]] = []
@@ -808,7 +932,8 @@ async def summarize_spending(
             # period's total defined, but it must not appear as a ₹0 category.
             continue
         key = row["key"]
-        if group_by == "payee" and await _payee_is_outside(conn, row.get("payee_id")):
+        row_payee_id = row.get("payee_id")
+        if group_by == "payee" and row_payee_id and outside_by_payee.get(str(row_payee_id), False):
             key = mark(key)
             outside = True
         groups.append(
@@ -877,7 +1002,7 @@ async def active_preferences(conn: Connection) -> list[dict[str, Any]]:
     return await conn.fetch(
         """
         SELECT id, body, kind, created_by, active, created_at, updated_at
-        FROM preferences WHERE deleted_at IS NULL ORDER BY created_at
+        FROM preferences ORDER BY created_at
         """
     )
 

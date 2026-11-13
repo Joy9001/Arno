@@ -93,7 +93,7 @@ async def test_a_run_code_query_card_streams_a_valid_client_chunk(authed_client,
                         {
                             "code": (
                                 "rows = await run_query("
-                                "sql='SELECT name FROM accounts LIMIT 1')\nprint(rows)"
+                                "sql='SELECT name FROM v_accounts LIMIT 1')\nprint(rows)"
                             )
                         },
                     )

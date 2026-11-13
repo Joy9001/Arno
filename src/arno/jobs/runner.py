@@ -92,8 +92,7 @@ async def enqueue_job(
 ) -> str:
     """Insert one job in the caller's transaction. A duplicate key returns the existing id.
 
-    `jobs.trace_context` remains nullable for historical rows; new jobs leave it empty and
-    each attempt starts its own native Pydantic AI trace.
+    Each attempt starts its own native Pydantic AI trace.
     """
     row = await conn.fetchrow(
         """

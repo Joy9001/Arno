@@ -2,9 +2,9 @@
 
 **What it shows:** Arno's ledger. One real money movement is one pgledger call of balanced
 transfers between accounts. pgledger's tables are vendored and append-only. Arno's tables sit
-around them: `accounts` carries the domain fields, `transfer_labels` holds the editable category
-and payee, `payees` identifies who money went to, and `captures` links every chat message, photo,
-and statement line to its movement.
+around them: `accounts` carries the domain fields, `movement_legs` links each transfer to its
+movement and holds its editable category and payee, `payees` identifies who money went to, and
+`captures` links every chat message, photo, and statement line to its movement.
 
 **Diagram type:** ER, with a dashed zone around the vendored tables.
 

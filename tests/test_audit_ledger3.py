@@ -256,8 +256,9 @@ async def _interest_legs(conn, movement_id):
         """
         SELECT t.amount::bigint AS amount_paise
         FROM pgledger_transfers t
+        JOIN movement_legs ml ON ml.transfer_id = t.id
         JOIN accounts a ON a.ledger_account_id = t.to_account_id
-        WHERE t.metadata ->> 'movement_id' = $1 AND a.kind = 'spending'
+        WHERE ml.movement_id = $1 AND a.kind = 'spending'
         ORDER BY t.id
         """,
         movement_id,
@@ -285,8 +286,9 @@ async def test_only_the_first_loan_payment_in_a_month_books_interest(ledger):
     assert await ledger.fetchval(
         """
         SELECT coalesce(sum(t.amount), 0)::bigint FROM pgledger_transfers t
+        JOIN movement_legs ml ON ml.transfer_id = t.id
         JOIN accounts a ON a.ledger_account_id = t.to_account_id
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movements m ON m.id = ml.movement_id
         WHERE a.kind = 'spending' AND m.kind = 'loan'
         """
     ) == _month_interest(50_000_000)
@@ -408,7 +410,7 @@ async def test_a_payee_named_after_a_category_is_not_stored(ledger):
     )
     assert result["status"] == "recorded"
     label = await ledger.fetchrow(
-        "SELECT payee_id, category_id FROM transfer_labels WHERE movement_id = $1",
+        "SELECT payee_id, category_id FROM movement_legs WHERE movement_id = $1",
         result["movement_id"],
     )
     assert label["payee_id"] is None
@@ -443,7 +445,7 @@ async def test_a_plain_transfer_into_a_goal_is_labelled_as_saving(ledger):
     bank = await _bank(ledger)
     goal = await create_goal(ledger, name="Ledger3 trip", target_paise=1_000_000)
     account_name = await ledger.fetchval(
-        "SELECT name FROM accounts WHERE id = $1", goal["account_id"]
+        "SELECT name FROM v_accounts WHERE id = $1", goal["account_id"]
     )
 
     result = await write_tools.record_movement(
@@ -459,7 +461,7 @@ async def test_a_plain_transfer_into_a_goal_is_labelled_as_saving(ledger):
     )
 
     label = await ledger.fetchrow(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", result["movement_id"]
+        "SELECT category_id FROM movement_legs WHERE movement_id = $1", result["movement_id"]
     )
     assert label["category_id"] == await _category(ledger, "Savings & Investments")
     assert result["summary"] == f"Contribution to {account_name}"

@@ -62,19 +62,20 @@ async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
         SELECT
             count(*) FILTER (
                 WHERE EXISTS (
-                    SELECT 1 FROM transfer_labels tl
-                    WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL
+                    SELECT 1 FROM movement_legs ml
+                    WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
                 )
             )::int AS labeled,
             count(*) FILTER (
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM transfer_labels tl
-                    WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL
+                    SELECT 1 FROM movement_legs ml
+                    WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
                 )
             )::int AS uncategorized
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
-        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND ms.is_effective
         """,
         import_id,
     )

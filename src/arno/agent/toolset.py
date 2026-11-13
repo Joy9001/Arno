@@ -237,14 +237,49 @@ async def recap(ctx: RunContext[AgentDeps], period: str) -> ToolReturn:
 
 
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
-    """Read-only SQL for questions the typed tools can't answer, including conversation search.
-    Try query_movements and summarize_spending first. Prefer the views v_spending, v_cashflow,
-    v_balances, and v_owed. Tables: accounts, movements, transfer_labels, captures, imports,
-    statement_lines, schedules, goals, payees, categories, category_rules, baselines, preferences,
-    messages, conversations, settings. The database is PostgreSQL. For conversation search:
-    messages(conversation_id, role, body_text, created_at) and
-    conversations(id, title, created_at, updated_at). The role cannot write and has a 2-second
-    timeout."""
+    """Read-only PostgreSQL (2-second timeout) for questions typed tools can't answer, including
+    conversation search. Try query_movements and summarize_spending first.
+
+    Ledger:
+    - v_legs: transfer legs from -> to with resolved account names, kinds, liquidity flags, labels,
+      and reversal flags
+    - v_accounts: every account with resolved display name and current balance_paise
+    - v_movement_state: per-movement reversal status and effectiveness
+    - v_spending: transfers touching the spending account with category and payee
+    - v_balances: daily cumulative ledger balance history per account in Asia/Kolkata
+    - v_owed: net balance and next Asia/Kolkata expected date per person account
+    - movements: money events by IST date, kind, and reversal parent link
+    - captures: chat, voice, photo, and statement-line evidence linked to movements
+
+    Planning:
+    - schedules: recurring income, obligation, installment, and goal-contribution rules
+    - schedule_occurrences: materialized due dates with frozen expectations
+    - schedule_payments: explicit allocations from movements to occurrences
+    - goals: savings targets linked to each goal account
+    - scheduled_questions: user-scheduled recurring agent prompts
+
+    Import:
+    - imports: statement upload batches, coverage periods, stated balances, and status
+    - statement_lines: parsed statement rows with dedupe hash and match state
+
+    Other:
+    - payees: people, merchants, and organizations (person payees own a person account)
+    - categories: spending categories and reducibility flags
+    - category_rules: learned payee-to-category matching rules
+    - baselines: typical daily spend per category (estimated or computed)
+    - preferences: remembered user preferences, facts, and money rules
+    - conversations: chat threads and snapshots
+    - messages: chat thread turns with full-text search index (simple config)
+    - settings: single-row instance config (currency, time zone, cash floor, horizon)
+
+    Conventions:
+    - Account IDs are acc_* everywhere; all money amounts are integer paise.
+    - Signs: v_legs is positive from -> to; v_spending is + into spending, - out;
+      v_accounts.balance_paise and v_balances are cumulative net (+ asset or receivable, - card
+      or loan debt); v_owed is + they owe you, - you owe them; statement_lines is signed credit
+      minus debit (- debit, + credit).
+    - Reversals: a reversal is its own movement with opposite legs, so raw sums net out; filter
+      with is_reversed / is_reversal or v_movement_state when counting or listing."""
     try:
         payload = await read_tools.run_query(sql)
     except (asyncpg.QueryCanceledError, TimeoutError) as exc:

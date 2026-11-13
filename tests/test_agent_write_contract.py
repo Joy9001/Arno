@@ -103,12 +103,12 @@ async def test_expense_uses_amount_rupees_and_payee(demo_ledger):
         SELECT m.id, m.kind, m.date, t.amount::bigint AS amount_paise,
                p.display_name AS payee, c.name AS category
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-        LEFT JOIN transfer_labels l ON l.transfer_id = t.id
-        LEFT JOIN payees p ON p.id = l.payee_id
-        LEFT JOIN categories c ON c.id = l.category_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
+        LEFT JOIN categories c ON c.id = ml.category_id
         WHERE m.kind = 'expense' AND ta.kind = 'spending'
         ORDER BY m.created_at DESC LIMIT 1
         """
@@ -141,9 +141,9 @@ async def test_expense_without_a_payee_is_a_row_with_no_payee(demo_ledger):
         """
         SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
-        LEFT JOIN transfer_labels l ON l.transfer_id = t.id
-        LEFT JOIN payees p ON p.id = l.payee_id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
         """
     )
@@ -168,9 +168,9 @@ async def test_hinglish_expense_uses_the_same_contract(demo_ledger):
         """
         SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
-        LEFT JOIN transfer_labels l ON l.transfer_id = t.id
-        LEFT JOIN payees p ON p.id = l.payee_id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
         """
     )
@@ -219,7 +219,8 @@ async def test_correction_takes_amount_rupees(demo_ledger):
         """
         SELECT t.amount::bigint AS amount_paise
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'expense'
         ORDER BY m.created_at DESC LIMIT 1
         """
@@ -251,7 +252,8 @@ async def test_split_takes_people_and_shares(demo_ledger):
         """
         SELECT m.kind, sum(t.amount)::bigint AS total
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'split'
         GROUP BY m.id, m.kind
         ORDER BY max(m.created_at) DESC LIMIT 1
@@ -331,7 +333,8 @@ async def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
         """
         SELECT fa.name AS from_name, ta.name AS to_name, t.amount::bigint AS amount_paise
         FROM movements m
-        JOIN pgledger_transfers t ON t.metadata ->> 'movement_id' = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
         WHERE m.kind = 'transfer' ORDER BY m.created_at DESC LIMIT 1

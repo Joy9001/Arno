@@ -186,8 +186,6 @@ def detect_recurring(charges: list[Charge], schedules: list[KnownSchedule]) -> l
 
 
 async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
-    from arno.tools.read import _reversed_ids  # one definition of a corrected-away row
-
     start = as_of - timedelta(days=HISTORY_DAYS)
     rows = await conn.fetch(
         """
@@ -196,16 +194,15 @@ async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN payees p ON p.id = v.payee_id
-        JOIN movements m ON m.id = v.movement_id AND m.reverses_id IS NULL
+        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         WHERE v.amount_paise > 0
           AND v.date BETWEEN $1 AND $2
           AND p.active
-          AND NOT (v.movement_id = ANY($3))
+          AND ms.is_effective
         GROUP BY v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text
         """,
         start,
         as_of,
-        await _reversed_ids(conn),
     )
     return [
         Charge(
@@ -242,16 +239,19 @@ async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[
     start = day - timedelta(days=90)
     end = day - timedelta(days=MISSED_AFTER_DAYS)
     proposals: list[dict[str, Any]] = []
-    for row in await conn.fetch(
+    rows = await conn.fetch(
         """
         SELECT * FROM schedules
         WHERE active AND kind IN ('obligation', 'instalment') AND amount_paise IS NOT NULL
         ORDER BY name
         """
-    ):
-        occurrences = await schedules_mod.expand_schedule(
-            conn, row, max(start, row["starts"]), end, as_of=day
-        )
+    )
+    starts_by_id = {str(row["id"]): max(start, row["starts"]) for row in rows}
+    expanded_by_id = await schedules_mod.expand_schedules(
+        conn, rows, start, end, as_of=day, starts_by_id=starts_by_id
+    )
+    for row in rows:
+        occurrences = expanded_by_id[str(row["id"])]
         for occurrence in occurrences:
             amount = occurrence["amount_paise"]
             if not amount or amount <= 0 or occurrence["paid_paise"]:

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import zipfile
 from datetime import date, timedelta
 
@@ -258,7 +257,8 @@ async def test_every_read_path_agrees_on_the_spending_total(ledger):
         SELECT coalesce(sum(CASE WHEN t.to_account_id = sp.ledger_account_id
                                  THEN t.amount ELSE -t.amount END), 0)::bigint
         FROM pgledger_transfers t
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movement_legs ml ON ml.transfer_id = t.id
+        JOIN movements m ON m.id = ml.movement_id
         JOIN accounts sp ON sp.kind = 'spending'
         WHERE (t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)
           AND m.date BETWEEN $1 AND $2
@@ -283,9 +283,12 @@ async def test_every_read_path_agrees_on_the_spending_total(ledger):
     exported = await export.export_json(ledger)
     tables = exported["tables"]
     dates = {row["id"]: row["date"] for row in tables["movements"]}
+    movement_by_transfer = {
+        row["transfer_id"]: row["movement_id"] for row in tables["movement_legs"]
+    }
     exported_total = 0
     for transfer in tables["pgledger_transfers"]:
-        movement_id = (transfer["metadata"] or {}).get("movement_id")
+        movement_id = movement_by_transfer.get(transfer["id"])
         day = dates.get(movement_id)
         if day is None or not (START.isoformat() <= day <= END.isoformat()):
             continue
@@ -300,12 +303,13 @@ async def test_every_read_path_agrees_on_the_spending_total(ledger):
         transfer_rows = list(
             csv.DictReader(io.StringIO(bundle.read("pgledger_transfers.csv").decode()))
         )
+        leg_rows = list(csv.DictReader(io.StringIO(bundle.read("movement_legs.csv").decode())))
         movement_rows = list(csv.DictReader(io.StringIO(bundle.read("movements.csv").decode())))
     csv_dates = {row["id"]: row["date"] for row in movement_rows}
+    csv_movement_by_transfer = {row["transfer_id"]: row["movement_id"] for row in leg_rows}
     csv_total = 0
     for transfer in transfer_rows:
-        metadata = json.loads(transfer["metadata"]) if transfer["metadata"] else {}
-        day = csv_dates.get(metadata.get("movement_id"))
+        day = csv_dates.get(csv_movement_by_transfer.get(transfer["id"]))
         if day is None or not (START.isoformat() <= day <= END.isoformat()):
             continue
         if transfer["to_account_id"] == spending_ledger_id:
@@ -656,7 +660,7 @@ async def test_answering_a_group_labels_only_the_spending_side_and_catches_a_bar
     person_labels = await ledger.fetch(
         """
         SELECT tl.category_id
-        FROM transfer_labels tl
+        FROM movement_legs tl
         JOIN pgledger_transfers t ON t.id = tl.transfer_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
         WHERE tl.movement_id = $1 AND ta.kind = 'person'
@@ -698,7 +702,7 @@ async def test_a_statement_row_with_no_payee_is_marked_in_the_biggest_story(ledg
     # A parser that finds no counterparty leaves the row without a payee. The narration is
     # still the bank's text, so the biggest story must mark it.
     await ledger.execute(
-        "UPDATE transfer_labels SET payee_id = NULL WHERE movement_id = $1",
+        "UPDATE movement_legs SET payee_id = NULL WHERE movement_id = $1",
         seeded["movement_id"],
     )
 

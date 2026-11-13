@@ -121,7 +121,7 @@ RESET_TABLES = (
     "payees",
     "categories",
     "movements",
-    "transfer_labels",
+    "movement_legs",
     "captures",
     "imports",
     "statement_lines",

@@ -77,8 +77,9 @@ async def _committed(conn, account: dict, rows: list[dict]) -> str:
         period=(date(2026, 4, 1), date(2026, 4, 30)),
     )
     await conn.execute(
-        "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
-        {"status": "VERIFIED", "opening_source": "manual", "opening_paise": 0},
+        "UPDATE imports SET check_result = $1, check_status = 'VERIFIED', review = $2 "
+        "WHERE id = $3",
+        {"opening_source": "manual", "opening_paise": 0},
         {"manual_opening_paise": 0},
         import_id,
     )
@@ -273,7 +274,7 @@ async def test_a_refund_takes_the_purchase_category(ledger):
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
         JOIN LATERAL (
-            SELECT tl.category_id FROM transfer_labels tl
+            SELECT tl.category_id FROM movement_legs tl
             WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL LIMIT 1
         ) label ON true
         WHERE sl.import_id = $1 AND sl.amount_paise > 0
@@ -307,7 +308,7 @@ async def test_deleting_a_rule_keeps_the_label_it_put_on_a_row(ledger):
     )
     assert movement["category_rule_id"] is None
     assert (
-        await ledger.fetchval("SELECT count(*) FROM transfer_labels WHERE category_id IS NOT NULL")
+        await ledger.fetchval("SELECT count(*) FROM movement_legs WHERE category_id IS NOT NULL")
         == 1
     )
 
@@ -322,7 +323,7 @@ async def test_commit_labels_nothing_and_queues_the_categorizer(ledger):
     labels = await ledger.fetch(
         """
         SELECT tl.category_id
-        FROM statement_lines sl JOIN transfer_labels tl ON tl.movement_id = sl.movement_id
+        FROM statement_lines sl JOIN movement_legs tl ON tl.movement_id = sl.movement_id
         WHERE sl.import_id = $1
         """,
         import_id,
@@ -534,7 +535,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
         LEFT JOIN LATERAL (
-            SELECT tl.category_id FROM transfer_labels tl
+            SELECT tl.category_id FROM movement_legs tl
             WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL LIMIT 1
         ) label ON true
         LEFT JOIN categories c ON c.id = label.category_id
@@ -565,7 +566,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
         LEFT JOIN LATERAL (
-            SELECT tl.category_id FROM transfer_labels tl
+            SELECT tl.category_id FROM movement_legs tl
             WHERE tl.movement_id = m.id AND tl.category_id IS NOT NULL LIMIT 1
         ) label ON true
         WHERE sl.import_id = $1
@@ -765,7 +766,7 @@ async def test_a_finished_batch_starts_a_fresh_run_that_saves(ledger, monkeypatc
         """
         SELECT c.name
         FROM statement_lines sl
-        JOIN transfer_labels tl ON tl.movement_id = sl.movement_id
+        JOIN movement_legs tl ON tl.movement_id = sl.movement_id
         JOIN categories c ON c.id = tl.category_id
         WHERE sl.import_id = $1
         """,
@@ -842,7 +843,7 @@ async def test_answering_a_group_writes_a_user_rule_and_one_undo_reverts_it(ledg
     labels = await ledger.fetch(
         """
         SELECT tl.category_id FROM statement_lines sl
-        JOIN transfer_labels tl ON tl.movement_id = sl.movement_id
+        JOIN movement_legs tl ON tl.movement_id = sl.movement_id
         WHERE sl.import_id IN (SELECT id FROM imports) ORDER BY sl.date
         """
     )
@@ -853,7 +854,7 @@ async def test_answering_a_group_writes_a_user_rule_and_one_undo_reverts_it(ledg
     labels = await ledger.fetch(
         """
         SELECT tl.category_id
-        FROM statement_lines sl JOIN transfer_labels tl ON tl.movement_id = sl.movement_id
+        FROM statement_lines sl JOIN movement_legs tl ON tl.movement_id = sl.movement_id
         ORDER BY sl.date
         """
     )

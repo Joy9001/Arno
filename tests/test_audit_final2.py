@@ -72,12 +72,14 @@ async def _review(
         "opening_paise": opening,
         "closing_paise": closing,
     }
+    check_status = stored.get("status")
+    stored = {key: value for key, value in stored.items() if key != "status"}
     await conn.execute(
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             review, commit_groups)
-        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, '{}'::jsonb, '[]'::jsonb)
+                             review, commit_groups, check_status)
+        VALUES ($1, $2, 'review', $3, $4, $5, $6, $7, $8, '{}'::jsonb, '[]'::jsonb, $9)
         """,
         import_id,
         f"hash-{import_id}",
@@ -87,6 +89,7 @@ async def _review(
         opening,
         closing,
         stored,
+        check_status,
     )
     fresh = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     await insert_lines(conn, import_id=import_id, account=fresh, parsed_account={"rows": rows})

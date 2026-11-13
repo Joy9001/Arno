@@ -689,6 +689,20 @@ Answer each when its layer arrives, not before.
     confirm card from the tool and its arguments ([design.md](design.md#untrusted-text-and-write-tiers)).
   - **Backtest publishing.** A month without a usable starting balance is not a measurement, and
     `arno backtest --publish` refuses to write one (`engine/backtest.py`).
+- **Schema redesign on November 13, 2026.** One spine and one source of truth across the ledger
+  ([`design.md`](design.md), migrations `0031`-`0038`):
+  - **`movement_legs` spine.** Every `pgledger_transfers` row pairs 1:1 with `movement_legs`,
+    enforced at commit by a `DEFERRABLE INITIALLY DEFERRED` foreign key; labels live on the leg.
+  - **One reversal state.** `movement_reversal_state(as_of)` and `v_movement_state` define
+    "effectively reversed" once in SQL (`1 - sum(child signs) <= 0`), replacing divergent queries.
+  - **One home for an account's name.** `accounts.name` is `NULL` on `person` and `goal` accounts;
+    `v_accounts` resolves their names from `payees` and `goals`, and `pgledger_accounts.name`
+    stores the `acc_*` ID.
+  - **Named agent read model.** `agent_ro` reads 23 objects (`v_accounts`, `v_legs` with
+    `from_account_liquid` and `to_account_liquid`, `v_movement_state`, `v_spending`, `v_balances`
+    without view-level sorting, `v_owed`, and 17 domain tables, excluding raw `accounts`,
+    `movement_legs`, and `pgledger_*` views); indexes, settings (`random_page_cost = 1.1`), and
+    constraints land only with measured evidence.
 
 ---
 

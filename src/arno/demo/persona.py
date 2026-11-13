@@ -43,7 +43,7 @@ DEMO_SETTINGS = {
 _RESET_TABLES = """
 TRUNCATE
     pgledger_idempotency_keys, pgledger_entries, pgledger_transfers, pgledger_accounts,
-    accounts, payees, categories, movements, transfer_labels, captures,
+    accounts, payees, categories, movements, movement_legs, captures,
     imports, statement_lines, statement_layouts, parser_versions, attachments,
     schedules, goals, scheduled_questions,
     category_rules, baselines, audit_log, backup_runs
@@ -127,8 +127,8 @@ async def _seed_statement_coverage(
                 """
                 INSERT INTO imports (
                     file_hash, parser, account_id, period_start, period_end,
-                    check_result, status, committed_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, 'committed', now())
+                    check_status, check_result, status, committed_at
+                ) VALUES ($1, $2, $3, $4, $5, 'VERIFIED', $6, 'committed', now())
                 """,
                 f"demo-statement:{account['id']}:{key}",
                 "synthetic-demo",
@@ -136,7 +136,6 @@ async def _seed_statement_coverage(
                 start,
                 end,
                 {
-                    "status": "VERIFIED",
                     "synthetic": True,
                     "source": "demo persona coverage",
                 },

@@ -224,6 +224,7 @@ def check_statement(
 def opening_is_evidenced(
     *,
     check: dict[str, Any],
+    check_status: str | None,
     review: dict[str, Any],
     account: dict[str, Any] | None,
     period_start: Any = None,
@@ -235,7 +236,7 @@ def opening_is_evidenced(
     prior anchored ledger balance. Bank formats, including printed openings with no running
     balances, keep their existing contract.
     """
-    if check.get("status") != "VERIFIED":
+    if check_status != "VERIFIED":
         return False
     if check.get("reason") == "empty statement, balance unchanged":
         return True

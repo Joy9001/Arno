@@ -71,15 +71,16 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(demo_ledger, tmp_p
         report = await restore_from_directory(tmp_path, target, force=True, require_manifest=False)
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
-            # Migration 0005's list, exactly: read the ledger and the plan...
+            # Migration 0036's read boundary: semantic views and allowed tables...
             reads = {
                 table: await restored.fetchval(
                     "SELECT has_table_privilege('agent_ro', $1, 'SELECT')", table
                 )
                 for table in (
-                    "accounts",
+                    "v_accounts",
+                    "v_legs",
+                    "v_movement_state",
                     "movements",
-                    "pgledger_accounts_view",
                     "payees",
                     "preferences",
                     "schedule_occurrences",
@@ -87,12 +88,18 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(demo_ledger, tmp_p
                 )
             }
             assert all(reads.values()), reads
-            # ...and nothing from auth, secrets, jobs, or the audit trail.
+            # ...and nothing from auth, secrets, jobs, raw ledger views/tables, or the audit trail.
             hidden = {
                 table: await restored.fetchval(
                     "SELECT has_table_privilege('agent_ro', $1, 'SELECT')", table
                 )
                 for table in (
+                    "accounts",
+                    "movement_legs",
+                    "pgledger_accounts_view",
+                    "pgledger_transfers_view",
+                    "pgledger_entries_view",
+                    "pgledger_idempotency_keys_view",
                     "users",
                     "sessions",
                     "setup_tokens",
@@ -106,7 +113,7 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(demo_ledger, tmp_p
             }
             assert not any(hidden.values()), hidden
             assert not await restored.fetchval(
-                "SELECT has_table_privilege('agent_ro', 'accounts', 'INSERT')"
+                "SELECT has_table_privilege('agent_ro', 'movements', 'INSERT')"
             )
 
             # The dumper reads everything for `pg_dump` and writes only its own status row.

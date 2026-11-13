@@ -13,7 +13,6 @@ from typing import Any
 from arno.db.conn import Connection
 from arno.importers.layout_detect import line_text, text_lines
 from arno.importers.readers import Doc
-from arno.ledger.movements import _effectively_reversed_ids
 
 _MONTHS = {
     "jan": 1,
@@ -171,7 +170,8 @@ async def ledger_last_date(conn: Connection, account_id: str) -> dt.date | None:
         FROM accounts a
         JOIN pgledger_transfers t
           ON t.from_account_id = a.ledger_account_id OR t.to_account_id = a.ledger_account_id
-        JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movement_legs ml ON ml.transfer_id = t.id
+        JOIN movements m ON m.id = ml.movement_id
         WHERE a.id = $1
         """,
         account_id,
@@ -193,30 +193,25 @@ async def ledger_opening(
     account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
     if account is None:
         return None
-    cancelled = await _effectively_reversed_ids(conn)
     params: list[Any] = [account["ledger_account_id"]]
     cutoff = ""
     if period_start is not None:
         cutoff = """
-            AND coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date) < $2
+            AND m.date < $2
         """
         params.append(period_start)
-    standing = (
-        f"m.id IS NULL OR (m.reverses_id IS NULL AND NOT (m.id = ANY(${len(params) + 1}::text[])))"
-    )
-    params.append(cancelled)
     row = await conn.fetchrow(
         f"""
         SELECT coalesce(sum(e.amount), 0)::bigint AS balance,
-               count(*) FILTER (WHERE {standing})::bigint AS entries,
-               max(coalesce(m.date, (t.event_at AT TIME ZONE 'Asia/Kolkata')::date))
-                   FILTER (WHERE {standing}) AS as_of
+               count(*) FILTER (WHERE ms.is_effective)::bigint AS entries,
+               max(m.date) FILTER (WHERE ms.is_effective) AS as_of
         FROM pgledger_entries e
-        JOIN pgledger_transfers t ON t.id = e.transfer_id
-        LEFT JOIN movements m ON m.id = t.metadata ->> 'movement_id'
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
         WHERE e.account_id = $1
         {cutoff}
-        """,  # noqa: S608 - cutoff and standing are constants of this module
+        """,  # noqa: S608 - cutoff is a constant of this module
         *params,
     )
     if row is None or int(row["entries"]) == 0:

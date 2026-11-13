@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import date, timedelta
+from typing import Any
 
-from arno.ledger.accounts import create_account
+from arno.ledger.accounts import create_account, list_accounts
 from arno.ledger.audit import undo_group
 from arno.ledger.movements import correct_movement, list_movements, record_expense
 from arno.ledger.payees import create_payee
+from arno.tools.read import query_movements, summarize_spending
 
 
 async def _bank(conn, name: str = "Pagination bank"):
@@ -248,3 +251,170 @@ async def test_filters_narrow_the_page_and_the_total_across_all_pages(ledger):
         )
     )["total_count"] == 2
     assert (await list_movements(ledger, start=date(2026, 10, 6), limit=200))["total_count"] == 0
+
+
+async def _count_statements(conn: Any, action: Any) -> tuple[Any, int]:
+    queries: list[str] = []
+
+    def logger(record: Any) -> None:
+        queries.append(record.query)
+
+    conn.add_query_logger(logger)
+    try:
+        result = await action()
+        await asyncio.sleep(0)
+    finally:
+        conn.remove_query_logger(logger)
+    return result, len(queries)
+
+
+async def test_list_movements_statement_count_is_independent_of_page_size(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger)
+    for index in range(6):
+        await _expense(
+            ledger,
+            bank,
+            food,
+            description=f"Row {index}",
+            when=date(2026, 10, 1) + timedelta(days=index),
+        )
+
+    async def count_queries(limit: int) -> tuple[int, int]:
+        page, stmts = await _count_statements(ledger, lambda: list_movements(ledger, limit=limit))
+        return len(page["items"]), stmts
+
+    small_rows, small_stmts = await count_queries(2)
+    large_rows, large_stmts = await count_queries(5)
+    assert small_rows == 2
+    assert large_rows == 5
+    assert small_stmts == large_stmts
+
+
+async def test_query_movements_statement_count_is_independent_of_page_size(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger)
+    for index in range(6):
+        payee = await create_payee(
+            ledger,
+            display_name=f"Merchant {index}",
+            kind="merchant",
+            outside_text=index % 2 == 0,
+        )
+        await _expense(
+            ledger,
+            bank,
+            food,
+            description=f"Query row {index}",
+            when=date(2026, 10, 1) + timedelta(days=index),
+            payee_id=payee["id"],
+        )
+
+    small_page, small_stmts = await _count_statements(
+        ledger, lambda: query_movements(ledger, limit=2)
+    )
+    large_page, large_stmts = await _count_statements(
+        ledger, lambda: query_movements(ledger, limit=5)
+    )
+    assert len(small_page["rows"]) == 2
+    assert len(large_page["rows"]) == 5
+    assert small_stmts == large_stmts
+
+
+async def test_list_accounts_statement_count_is_independent_of_account_count(ledger):
+    await create_account(ledger, kind="bank", name="Bank One", opening_balance_paise=100_00)
+    await create_account(
+        ledger,
+        kind="card",
+        name="Card One",
+        opening_balance_paise=0,
+        credit_limit_paise=500_000,
+        statement_day=10,
+        due_day=25,
+    )
+    small_accounts, small_stmts = await _count_statements(ledger, lambda: list_accounts(ledger))
+
+    for index in range(4):
+        await create_account(
+            ledger,
+            kind="wallet" if index % 2 == 0 else "bank",
+            name=f"Extra Account {index}",
+            opening_balance_paise=50_00 * (index + 1),
+        )
+    large_accounts, large_stmts = await _count_statements(ledger, lambda: list_accounts(ledger))
+    assert len(small_accounts) < len(large_accounts)
+    assert small_stmts == large_stmts
+
+
+async def test_summarize_spending_by_payee_statement_count_is_independent_of_payee_count(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger)
+    for index in range(2):
+        payee = await create_payee(
+            ledger, display_name=f"Sept Payee {index}", kind="merchant", outside_text=index == 0
+        )
+        await _expense(
+            ledger,
+            bank,
+            food,
+            description=f"Sept {index}",
+            when=date(2026, 9, 1) + timedelta(days=index),
+            payee_id=payee["id"],
+        )
+    for index in range(5):
+        payee = await create_payee(
+            ledger, display_name=f"Oct Payee {index}", kind="merchant", outside_text=index % 2 == 0
+        )
+        await _expense(
+            ledger,
+            bank,
+            food,
+            description=f"Oct {index}",
+            when=date(2026, 10, 1) + timedelta(days=index),
+            payee_id=payee["id"],
+        )
+
+    small_summary, small_stmts = await _count_statements(
+        ledger, lambda: summarize_spending(ledger, group_by="payee", period="2026-09")
+    )
+    large_summary, large_stmts = await _count_statements(
+        ledger, lambda: summarize_spending(ledger, group_by="payee", period="2026-10")
+    )
+    assert len(small_summary["groups"]) == 2
+    assert len(large_summary["groups"]) == 5
+    assert small_stmts == large_stmts
+
+
+async def test_record_expense_statement_count_stays_within_budget(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger)
+    payee = await create_payee(ledger, display_name="Budget Cafe", kind="merchant")
+
+    _, stmts_with_rules = await _count_statements(
+        ledger,
+        lambda: record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=12_500,
+            description="Lunch",
+            payee_id=payee["id"],
+            category_id=food,
+            date=date(2026, 10, 10),
+            apply_rules=True,
+        ),
+    )
+    _, stmts_without_rules = await _count_statements(
+        ledger,
+        lambda: record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=12_500,
+            description="Dinner",
+            payee_id=payee["id"],
+            category_id=food,
+            date=date(2026, 10, 11),
+            apply_rules=False,
+        ),
+    )
+    assert stmts_with_rules <= 17
+    assert stmts_without_rules <= 17

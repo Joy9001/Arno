@@ -101,7 +101,9 @@ async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     assert detail["parser_saved"] is True
 
     attachment = await ledger.fetchrow(
-        "SELECT data, purged_at FROM attachments WHERE import_id = $1", row["id"]
+        "SELECT a.data, a.purged_at FROM imports i JOIN attachments a ON a.id = i.attachment_id "
+        "WHERE i.id = $1",
+        row["id"],
     )
     assert attachment["data"] is not None and attachment["purged_at"] is None
 
@@ -193,7 +195,9 @@ async def test_a_new_layout_runs_the_parser_then_saves_only_after_commit(ledger)
     assert await ledger.fetchval("SELECT count(*) FROM parser_versions") == 1
     layout = await ledger.fetchrow("SELECT * FROM statement_layouts")
     version = await ledger.fetchrow("SELECT * FROM parser_versions")
-    assert layout["active_version_id"] == version["id"]
+    assert "active_version_id" not in layout
+    assert version["layout_id"] == layout["id"]
+    assert version["is_active"] is True
     assert version["version"] == 1
     assert version["helper_version"]
     assert layout["kind"] == "bank"
@@ -258,7 +262,8 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
         ledger_opening=24567890,
     )
     await ledger.execute(
-        "UPDATE imports SET check_result = $1 WHERE id = $2",
+        "UPDATE imports SET check_result = $1::jsonb - 'status', "
+        "check_status = $1::jsonb ->> 'status' WHERE id = $2",
         check,
         import_id,
     )
@@ -274,7 +279,7 @@ async def test_statement_wins_on_date_and_keeps_labels_and_captures(ledger):
     corrected = await ledger.fetchrow("SELECT * FROM movements WHERE id = $1", line["movement_id"])
     assert str(corrected["date"]) == "2026-04-03"
     label = await ledger.fetchrow(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = $1",
+        "SELECT category_id FROM movement_legs WHERE movement_id = $1",
         corrected["id"],
     )
     assert label["category_id"] == category["id"]
@@ -333,7 +338,12 @@ async def test_commit_adds_a_visible_equity_adjustment_and_queues_baselines(ledg
         period=("2026-04-01", "2026-04-30"),
         ledger_opening=24567890,
     )
-    await ledger.execute("UPDATE imports SET check_result = $1 WHERE id = $2", check, import_id)
+    await ledger.execute(
+        "UPDATE imports SET check_result = $1::jsonb - 'status', "
+        "check_status = $1::jsonb ->> 'status' WHERE id = $2",
+        check,
+        import_id,
+    )
     await reconcile(
         ledger,
         import_id=import_id,
@@ -501,7 +511,7 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
     assert first["kind"] == "transfer"
     assert second["kind"] == "expense"
     label = await ledger.fetchrow(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", second["id"]
+        "SELECT category_id FROM movement_legs WHERE movement_id = $1", second["id"]
     )
     assert label["category_id"] is None
     queued = await ledger.fetchval(
@@ -541,7 +551,8 @@ async def _verify(conn, import_id: str, opening_paise: int | None = None) -> Non
         opening_paise = int(previous["paise"]) if previous else 0
     review["manual_opening_paise"] = opening_paise
     await conn.execute(
-        "UPDATE imports SET check_result = $1, review = $2 WHERE id = $3",
+        "UPDATE imports SET check_result = $1::jsonb - 'status', "
+        "check_status = $1::jsonb ->> 'status', review = $2 WHERE id = $3",
         {
             "status": "VERIFIED",
             "opening_source": "manual",
@@ -596,7 +607,7 @@ async def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
     assert movement["kind"] == "refund"
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'income'") == 0
     label = await ledger.fetchrow(
-        "SELECT category_id FROM transfer_labels WHERE movement_id = $1", movement["id"]
+        "SELECT category_id FROM movement_legs WHERE movement_id = $1", movement["id"]
     )
     assert label["category_id"] == food["id"]
 
@@ -808,15 +819,14 @@ async def _assumed_zero_review(conn, account: dict, rows: list[dict], closing: i
         """
         INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
                              opening_balance_paise, closing_balance_paise, check_result,
-                             commit_groups)
+                             check_status, commit_groups)
         VALUES ($1, 'hash-assumed-zero', 'review', $2, '2026-04-01', '2026-04-30',
-                0, $3, $4, '[]'::jsonb)
+                0, $3, $4, 'VERIFIED', '[]'::jsonb)
         """,
         import_id,
         account["id"],
         closing,
         {
-            "status": "VERIFIED",
             "opening_source": "printed",
             "opening_paise": 0,
             "closing_paise": closing,
@@ -885,7 +895,12 @@ async def test_a_bank_printed_opening_without_running_balances_still_commits(led
     check = check_statement(rows, 24567890, 24522890, period=("2026-04-01", "2026-04-30"))
     assert check["status"] == "VERIFIED"
     assert check["opening_source"] == "printed"
-    await ledger.execute("UPDATE imports SET check_result = $1 WHERE id = $2", check, import_id)
+    await ledger.execute(
+        "UPDATE imports SET check_result = $1::jsonb - 'status', "
+        "check_status = $1::jsonb ->> 'status' WHERE id = $2",
+        check,
+        import_id,
+    )
     await reconcile(
         ledger,
         import_id=import_id,
