@@ -16,6 +16,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`web-interface-design.md`](web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
 | [`observability.md`](observability.md) | Operator view: Phoenix tracing, logs, settings, recovery, owner commands |
 | [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
+| [`engine-blueprint.md`](engine-blueprint.md) | The engine redesign: what the shipped engine gets wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
 that needs a table, a schema, or three paragraphs of justification goes in a satellite doc
@@ -45,6 +46,11 @@ Every figure on these surfaces still comes from an API return. Layout and visual
 version, the image tags, and the git tag move with it. An existing install moves its data once, by
 [upgrading from Fin-Agent](self-hosting.md#66-upgrading-from-fin-agent); the backup format keeps the
 old name so that archives written before today still restore.
+
+**Engine redesign on November 13, 2026.** The projection, affordability, pattern, and money engine
+is rebuilt on one integer scenario matrix, behind a backtest that scores every change against
+baselines before it ships. Design and build order:
+[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6.
 
 ---
 
@@ -248,6 +254,7 @@ The following table records the choice for each layer:
 | Data access | Plain SQL through asyncpg, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL. One Postgres driver across the app, the tools, and the harness's spend store |
 | Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
 | Type checking | Pyrefly, `strict` preset, any warning fails | Chosen Nov 10, 2026, over basedpyright: it understands Pydantic models without a plugin and sets strictness for each path. The pure money core is strictest. Policy and the tightening plan: [`typing.md`](typing.md) |
+| Engine arithmetic | NumPy, integer arrays only | Chosen Nov 13, 2026, for the redesigned engine: 16,384 scenarios need array arithmetic, and pure Python takes seconds for 1,000. BSD-3-Clause. Added with the scenario kernel, not before ([`engine-blueprint.md`](engine-blueprint.md)) |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
 | Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP, and the pinned Phoenix build accepts Arno's supplied costs. The agent container retains its separate filesystem boundary |
@@ -587,6 +594,35 @@ Answer each when its layer arrives, not before.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
     `data_quality` says so; there is no per-account setting to keep in sync.
+- **L5 redesign:** decided November 13, 2026, and not yet built. The engine is rebuilt to
+  [`engine-blueprint.md`](engine-blueprint.md), in that document's build order. The L5 answers
+  above and the L6 recurring-charge thresholds below describe the shipped engine until a step
+  replaces them. A model change ships only if it beats the one before it on the new backtest.
+  - **NumPy.** A runtime dependency for the scenario kernel (§3).
+  - **Scenario count.** 16,384 at every horizon, replacing 1,000.
+  - **Block resampling.** Single days stay unless a fixed block of 2 or 3 days wins on the
+    backtest.
+  - **Obligation rule.** An obligation is met when at least 99% of scenarios can pay it. This
+    replaces "no run misses one", which tightened as the run count rose.
+  - **First floor crossing.** The first date by which more than 10% of scenarios have crossed, so
+    it is absent exactly when the floor probability passes.
+  - **Goal slips.** The "no goal slips" clause of a `yes` goes, because it could never fail. A
+    goal slips only through the delay-a-goal tradeoff.
+  - **Detected series.** A detected recurring charge the user has not confirmed enters the
+    projection as an outflow, labeled in `data_quality`. Detected income never enters the base
+    case; with no confirmed income the projection stays unusable.
+  - **EMI cost.** A card EMI carries interest, fee, and GST. The rate comes from the what-if,
+    then the card, then a labeled default of 16% a year; zero only for a stated no-cost offer.
+    The 18% GST on interest and fees is checked against an issuer's terms before it is coded.
+  - **Pattern thresholds.** Two posterior thresholds, a lower one to propose a series and a
+    higher one to project it, both set from precision on labeled data.
+  - **Quantiles.** Order statistics with no interpolation; published numbers shift by a few
+    paise.
+  - **Short history.** Below 14 real days the pool is topped up with pseudo-days around the
+    stated baseline, with a spread set by the backtest.
+  - **One-off mark.** Whether a payment can be excluded from the rare-large-spend stream waits on
+    the backtest, which decides whether that stream ships at all.
+  - **Release gate.** Still open: whether "shipped" waits for the redesign.
 - **L6:** settled in code and recorded here.
   - **Notification and briefing times.** The notification time is 08:00 Asia/Kolkata and the
     weekly briefing is Sunday at that time. Both are settings; nightly risk, pattern, baseline,

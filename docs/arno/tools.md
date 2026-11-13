@@ -328,6 +328,10 @@ not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal 
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
 
+This is the shipped engine. Its replacement is decided (`plan.md` §6) and specified in
+[`engine-blueprint.md`](engine-blueprint.md): 16,384 scenarios, an explicit obligation threshold,
+and no goal-slip clause. This section changes as each step lands.
+
 ### `run_query`
 
 **Description:** "Read-only SQL for questions the typed tools can't answer, including conversation

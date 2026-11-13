@@ -398,6 +398,10 @@ agent replies render as plain text ([`platform.md`](platform.md#security)).
 One function in code, seeded so the same inputs always give the same output. No LLM
 involvement—this is the tested arithmetic every affordability verdict comes from.
 
+This section and [Pattern detection](#pattern-detection) describe the shipped engine. Its
+replacement is decided (`plan.md` §6) and specified in
+[`engine-blueprint.md`](engine-blueprint.md); each part here changes when its step lands.
+
 ### Inputs
 
 - Liquid balance: the ledger balance of `liquid` accounts, with their statement ages reported.
