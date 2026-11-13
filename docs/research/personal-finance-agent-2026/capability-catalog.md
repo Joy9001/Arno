@@ -5,6 +5,9 @@ AI Harness 0.64.0. This catalog defines proposed capability outcomes and accepta
 does not approve scope changes, select paid services, or claim unfinished features are available.
 [The plan](../../arno/plan.md) owns product decisions.
 
+The external MCP server shortlist was expanded on November 13, 2026. The application-coverage labels
+below retain the November 12 source baseline.
+
 ## Reading this catalog
 
 Each entry gives a one-line name, a short description, the user benefit, agent actions, enabling
@@ -12,10 +15,9 @@ tools, and a completion checklist. _Existing_ describes inspected source; _parti
 working foundations with a narrower scope; _proposed_ describes additional work. _Parked_ means the
 current plan deliberately excludes that work. None of these labels means a new live test passed.
 
-An internal tool is application Python over the database or engine. A Pydantic capability supplies
-framework plumbing; it may still call an external vendor. A _provider-native_ tool executes at the
-model provider. _Model Context Protocol_ (_MCP_) is another way to connect tools, not a source of
-financial correctness. The registry identifies which route is available or proposed.
+Tool mappings identify internal application functions, Pydantic capabilities, and concrete external
+MCP servers. Vendor MCP tool names may differ from that vendor's Pydantic harness adapter; the
+registry names the interface being proposed.
 
 Core capabilities are C01–C11 and C17–C22. Whole-life capabilities C12–C16 apply when the user's
 assets and circumstances require them. C23–C27 are optional extensions, not requirements for every
@@ -117,8 +119,9 @@ balances and explain disagreements between user statements and imported records.
   [read coverage](../../../src/arno/tools/read.py) and
   [accounts](../../../src/arno/ledger/accounts.py).
 - Pydantic: existing Code Mode and typed tool returns; proposed structured coverage-review results.
-- External: user statements initially; optional eligible aggregation after
-  [T07](#t07-account-access). A bank feed does not itself establish complete liability coverage.
+- External: statements initially; evaluate Fi Money's user-authorized personal-finance MCP under
+  [T03](#t03-external-mcp-servers), including its actual liability and transaction coverage. Direct
+  aggregation access remains a separate route in [T07](#t07-account-access).
 
 **Completion checklist:**
 
@@ -426,8 +429,9 @@ cash.
   snapshots. Current asset accounts store hand-updated balances, not a portfolio model.
 - External: CASParser, issuer/DP statements, and approved valuation sources in
   [T06](#t06-holdings-and-valuations).
-- MCP: Alpha Vantage is a candidate market-data interface, not holdings acquisition; exact Indian
-  instrument coverage, auth, and data rights remain selection gates. No broker writes are needed.
+- MCP: select the user's broker route, such as Kite or Upstox, in [T03](#t03-external-mcp-servers).
+  Fi Money is deferred pending its adoption checks. Alpha Vantage or Twelve Data can supply required
+  reference data after instrument/plan verification. Holdings and prices remain separate inputs.
 
 **Completion checklist:**
 
@@ -592,8 +596,9 @@ establish.
 - Pydantic: `WebSearch(local=True)`/`WebFetch(local=True)` as explicit client-side fallbacks, or
   harness Exa/You.com in [T02](#t02-external-research). Current Arno chat does not have configured
   search or fetch.
-- Direct APIs/MCP: Tavily, Brave, Parallel, Exa, or You.com are alternatives; select one route after
-  an India-focused comparison. [T03](#t03-mcp-access) describes constrained MCP access.
+- External MCP: Tavily's `tavily_search` and `tavily_extract` are the first implementation
+  candidate. Exa and Parallel are research alternatives in [T03](#t03-external-mcp-servers);
+  validate the selection on Indian questions. Direct APIs remain another integration option.
 
 **Completion checklist:**
 
@@ -983,24 +988,34 @@ fetch](https://pydantic.dev/docs/ai/capabilities/web-fetch/),
 [Parallel source policy](https://docs.parallel.ai/resources/source-policy). Publication filters do
 not determine a rule's statutory effective date.
 
-### T03: MCP access
+### T03: External MCP servers
 
-MCP is a protocol, not a financial engine or proof of a server's quality. Pinned source supports
-`pydantic_ai.capabilities.MCP`, `pydantic_ai.mcp.MCPToolset`, and
-`fastmcp.client.transports.StreamableHttpTransport`. Prefer a client-executed path so local hooks,
-limits, and authorization checks can be applied. These controls require integration and testing.
+The recommended starting set is Tavily for research and the user's existing broker MCP for holdings.
+Fi Money is a broader personal-data candidate with unresolved adoption blockers. These are proposed
+selections, not configured integrations. The [server assessment](external-mcp-servers.md) records
+endpoints, authentication, alternatives, and completion checks; the [India
+evidence](external-mcp-india.md) covers the personal-data routes.
 
-`MCP` constructs toolsets with server instructions enabled. In 2.64.0 the controlling keyword
-belongs to `MCPToolset`, for example `MCP(local=MCPToolset(url, include_instructions=False))`. Use
-an explicit tool allowlist, reviewed server identity, host-held auth, and resource ceilings.
-Provider-native MCP executes remotely and does not pass through the same local wrappers.
+The following table maps the concrete servers to their role in Arno.
 
-Official server candidates include [Alpha
-Vantage](https://github.com/alphavantage/alpha_vantage_mcp) for selected market data and
-[Parallel](https://docs.parallel.ai/integrations/mcp/quickstart) for research. Parallel documents
-`https://mcp.parallel.ai/mcp` for new installations. No server was connected; actual tool schemas,
-OAuth scopes, retention, token storage, and failure behavior remain acceptance gates. See [Pydantic
-MCP](https://pydantic.dev/docs/ai/capabilities/mcp/).
+| Server | Tools/data to use | Capabilities and selection |
+|---|---|---|
+| [Tavily](https://docs.tavily.com/documentation/mcp) | `tavily_search`, `tavily_extract` | C05/C15/C17; first research implementation candidate |
+| [Fi Money](https://github.com/epiFi/mcp-docs) | `fetch_net_worth`, `fetch_bank_transactions`, `fetch_mf_transactions`, `fetch_epf_details`, and other documented reads | C02/C11/C12/C19; defer until continuity, host-side auth, and storage concerns are resolved |
+| [Kite](https://github.com/zerodha/kite-mcp-server) | `get_holdings`, `get_mf_holdings`, `get_quotes`, `get_historical_data` | C12/C13; conditional on a Zerodha account; expose the required reads |
+| [Upstox](https://upstox.com/developer/api-documentation/mcp-integration/) | Holdings, mutual funds, funds, positions, and profile reads; verify deployed names | C12/C19; conditional on an Upstox account; documented read-only route |
+| [Groww](https://groww.in/updates/groww-mcp) | Stock holdings and market reads; verify deployed names | C12/C19; conditional on a Groww account and strict read allowlist; published scope excludes mutual funds |
+| [Exa](https://exa.ai/docs/get-started/exa-mcp) | `web_search_exa`, `web_fetch_exa`, optional `web_search_advanced_exa` | C17; alternative research server |
+| [Parallel](https://docs.parallel.ai/integrations/mcp/quickstart) | `web_search`, `web_fetch`, optional authenticated `web_research` | C17; alternative research server |
+| [Brave Search](https://github.com/brave/brave-search-mcp-server) | `brave_web_search`, `brave_news_search` | C17; locally operated search alternative with a separate page-reading path |
+| [Alpha Vantage](https://mcp.alphavantage.co/) | `SYMBOL_SEARCH`, `GLOBAL_QUOTE`, `TIME_SERIES_DAILY`, `FX_DAILY` | C12/C13/C23; selected instrument/reference-data gaps |
+| [Twelve Data](https://github.com/twelvedata/mcp) | `get_price`, `get_quote`, `get_time_series` | Market-data alternative after instrument/plan checks |
+| [FMP](https://site.financialmodelingprep.com/developer/docs/mcp-server) | `quote`, `chart`, `company`, `statements` | Later company-information need; outside the default household connector set |
+
+Connect only the selected tools through client-executed `MCPToolset` or the `MCP` capability, with
+host-held auth and the C17/C21 controls. The existing [framework
+verification](verification-framework.md) records exact Pydantic configuration. No live server
+connection or comparative quality test was run.
 
 ### T04: Document reading
 
@@ -1132,10 +1147,10 @@ C10 saves those calculations. C12 precedes C13; C14 combines C07, C10, and relev
 C05 and C17 supply reviewed terms and current rules for C11, C15, and C16. C19 is required whenever
 an external connector is selected; C23–C27 need their own user trigger and scope decision.
 
-The research establishes enablement paths, not a vendor winner. Before selecting a service, record
-the actual user questions, country/instrument coverage, auth/scopes, source/date quality, privacy,
-quotas/cost, failure behavior, and required data rights. A live trial must use the authorized test
-account and synthetic fixtures; it is not implied by this documentation request.
+The server shortlist recommends a first pilot, not a measured quality winner. Before selecting a
+service, record the actual user questions, country/instrument coverage, auth/scopes, source/date
+quality, privacy, quotas/cost, failure behavior, and required data rights. A live trial must use the
+authorized test account and synthetic fixtures; it is not implied by this documentation request.
 
 Static workflow skills may guide financial review, debt comparison, scenario planning, document
 extraction, or research. [On-demand

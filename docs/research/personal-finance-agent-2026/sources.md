@@ -1,6 +1,6 @@
 # Source ledger
 
-Sources accessed on November 11–12, 2026. This ledger emphasizes the sources that drive the
+Sources accessed on November 11–13, 2026. This ledger emphasizes the sources that drive the
 applied assessment. The supporting notes carry the wider product and API citations.
 
 ## Confidence rules
@@ -82,6 +82,30 @@ The following sources support the additional tool mappings and boundaries.
 
 No endpoint was exercised with credentials or personal records. Integration quality, software/model
 licenses at a selected version, data-use permission, and production behavior remain separate checks.
+
+## External MCP servers checked on November 13
+
+The [server assessment](external-mcp-servers.md) expands the catalog with actual vendor servers.
+Its first research implementation candidate is Tavily; Fi Money and Kite are conditional
+personal-data candidates. The [India note](external-mcp-india.md) records additional access checks.
+These recommendations use first-party documentation, not an authenticated reliability benchmark.
+
+The following sources establish the concrete interfaces.
+
+| Source | What was checked | Confidence and remaining limit |
+|---|---|---|
+| [Tavily MCP](https://docs.tavily.com/documentation/mcp), [maintainer source](https://github.com/tavily-ai/tavily-mcp/blob/main/src/index.ts) | Hosted address, search/extract tools, auth options, public filtering schema | High for documented interface; compare deployed schema and Indian-question quality |
+| [Fi Money setup](https://fi.money/features/getting-started-with-fi-mcp), [tool documentation](https://github.com/epiFi/mcp-docs), [current notice](https://fi.money/) | Server route, six documented finance tools, access workflow, banking transition | High for published material; current MCP operation, production schema, host-side auth, and storage guidance remain unresolved |
+| [Kite MCP](https://github.com/zerodha/kite-mcp-server) | Official hosted address and portfolio/market read names | High for maintained interface; deployed tool set and account/session behavior need testing |
+| [Upstox MCP](https://upstox.com/developer/api-documentation/mcp-integration/) | Official endpoint, supported account reads, daily OAuth | High for documentation; actual authenticated tool names and behavior not exercised |
+| [Groww MCP](https://groww.in/updates/groww-mcp) | Official endpoint, stock/F&O scope, order actions | High for published scope; verify actual reads and reject mutation tools; mutual-fund access not established |
+| [Exa MCP](https://exa.ai/docs/get-started/exa-mcp) | Hosted address, MCP-specific search/fetch names, opt-in filters/research | High for documented interface; exact access limits and quality are unmeasured |
+| [Brave official server](https://github.com/brave/brave-search-mcp-server) | Vendor package, stdio/HTTP routes, web/news tools | High for maintained interface; requires local operation and selected API access |
+| [Twelve Data MCP](https://github.com/twelvedata/mcp), [market tools](https://github.com/twelvedata/mcp/blob/main/src/tools/market.py) | Official hosted route, account auth, source-level price/history tools | High for documented/source contract; instrument and plan coverage not exercised |
+| [FMP MCP](https://site.financialmodelingprep.com/developer/docs/mcp-server) | Hosted route, header auth, custom OAuth registration, category tools | High for published contract; plan-aware tool discovery and missing-data behavior untested |
+
+The earlier Parallel and Alpha Vantage sources were rechecked for their server routes and actual
+tool names. No connector was installed or connected to an account during this pass.
 
 ## Unresolved checks before adoption
 

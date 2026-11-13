@@ -9,6 +9,10 @@ For the detailed specification, read the [capability catalog](capability-catalog
 tool mappings, current coverage, and completion checklists. This assessment explains the judgment;
 the catalog makes each proposed outcome and its evidence requirements inspectable.
 
+The November 13 [external MCP server assessment](external-mcp-servers.md) names the recommended
+servers, exact read tools, connection routes, and conditional alternatives. It includes Fi Money
+and Kite for Indian personal-finance data, rather than treating MCP only as framework plumbing.
+
 ## Judgment
 
 Arno has a substantial foundation: a ledger, imports with review, financial calculations,
