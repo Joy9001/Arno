@@ -15,7 +15,7 @@ native systemd install, arm64 images, and public-internet hosting are deliberate
 | Need | Why |
 |---|---|
 | An x86-64 Linux host, Docker Desktop, or a VPS with Docker Compose | The shipped images are amd64 |
-| About 2 GB of RAM free, plus Phoenix (4 GB with `--profile local-llm`) | Postgres, the API, Phoenix, and the optional services |
+| About 2 GB of RAM free, plus Phoenix and any optional profile you start | Postgres, the API, Phoenix, and the optional services |
 | Tailscale on the host, and the Tailscale app on every device you will use | The only network path to the app from another device. A host-only setup needs none (§2.2) |
 | Host disk encryption **on** | It is what protects the database at rest |
 | A password manager, and somewhere off this machine for the restic password | Losing the restic password makes every backup unreadable |
@@ -151,18 +151,18 @@ If `5433`, `8000`, or `6006` is already taken, set `ARNO_DB_PORT`, `ARNO_API_POR
 `PHOENIX_UI_PORT` in `.env`. `tailscale serve --bg ${ARNO_API_PORT}` then points at the right
 port. Running a second stack on one host also needs `COMPOSE_PROJECT_NAME` (or `-p <name>` on every
 command): `compose.yaml` pins `name: arno`, so a second stack collides on container names even
-with different ports. The optional Ollama and speech-to-text ports are fixed at `11434` and
-`8001`, so only one stack on a host can start each profile.
+with different ports. The optional Ollama and whisper.cpp ports are fixed at `11434` and `8001`, so
+only one stack on a host can start each profile.
 
 ---
 
 ## 3. Configure models
 
 Each role takes a provider, billing mode, base URL, API key, and model ID. The same code path runs
-a local Ollama/speaches endpoint and a cloud API. `*_BILLING_MODE` is `metered` (default), `local`,
-or `reported`; there is no subscription mode. An unknown price stops paid inference instead of
-running free, so a paid role must name a provider whose price is verified. Model IDs must be
-exact, dated versions, never floating `latest` aliases; re-run `arno eval --model X` after
+a local Ollama or whisper.cpp endpoint and a cloud API. `*_BILLING_MODE` is `metered` (default),
+`local`, or `reported`; there is no subscription mode. An unknown price stops paid inference
+instead of running free, so a paid role must name a provider whose price is verified. Model IDs
+must be exact, dated versions, never floating `latest` aliases; re-run `arno eval --model X` after
 changing one.
 
 | Role | Variables | Used for |
@@ -258,22 +258,48 @@ handles; the product is designed for a frontier model.
 ### 3.4 Local speech-to-text
 
 ```bash
-docker compose --profile local-stt up -d
+docker compose --profile local-stt up -d --build whisper
 ```
 
 ```dotenv
 STT_PROVIDER=openai
 STT_BILLING_MODE=local
-STT_BASE_URL=http://speaches:8000/v1
-STT_MODEL=Systran/faster-whisper-small
+STT_BASE_URL=http://whisper:8000/v1
+STT_MODEL=small
 STT_API_KEY=not-needed
 STT_PAYEE_CONTEXT=1
 ```
 
-speaches installs `STT_MODEL` (`PRELOAD_MODELS`) into the `speaches-data` volume on
-first start (speaches returns 404 until a model is installed). A cloud
-OpenAI-compatible transcription endpoint works too; with a cloud endpoint, the optional payee-name
-prompt sends those names out as well. Set `STT_PAYEE_CONTEXT=0` to keep them local.
+The profile runs whisper.cpp's native `whisper-server`. On first start it downloads the GGML
+weights named by `STT_MODEL` and the Silero VAD model into `whisper-data`, so
+transcriptions fail until that finishes. `STT_MODEL` is `small` (default) or `large-v3-turbo`; the
+same value is the model the API journals, while the server ignores the multipart model field. Set
+`STT_MODEL=large-v3-turbo` for the larger multilingual model, then run
+`docker compose --profile local-stt up -d whisper api` (with the GPU override if used) so both
+services read the same model selection and the trace label matches. Weights
+and the VAD model are caches: deleting `whisper-data` makes the next start download them again.
+`whisper-cache` is a disposable location for the CUDA driver's cache. It can stay empty when the
+GPU uses precompiled kernels, as on the tested GTX 1650.
+
+On an NVIDIA card, keep the same values and run:
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml --profile local-stt up -d --build whisper
+```
+
+The override keeps the service and volumes, builds the CUDA image target, and reserves the GPU.
+The final image copies the prebuilt server from the pinned whisper.cpp v1.9.5 image and adds the
+CUDA 13 runtime, which needs driver 580 or newer; its build includes compute capability 7.5. The
+CPU target is the default and needs no GPU.
+
+When replacing Speaches, stop its container first because both services use host port `8001`.
+Update `STT_BASE_URL` and `STT_MODEL` to the values above, then recreate the API with
+`docker compose up -d --no-deps api` so it reads the new environment. Faster-whisper weights cannot
+be reused. An existing GGML file from the pinned source can be copied into `whisper-data` before
+first start; the entrypoint checks its size and SHA-256 and skips the download when they match.
+
+A cloud OpenAI-compatible transcription endpoint works too; with a cloud endpoint, the optional
+payee-name prompt sends those names out as well. Set `STT_PAYEE_CONTEXT=0` to keep them local.
 
 ### 3.5 Vision
 
@@ -333,7 +359,7 @@ Checked **October 31, 2026**. Provider terms change; re-check before trusting a 
 | [OpenAI API](https://developers.openai.com/api/docs/guides/your-data) | No, by default | Abuse-monitoring logs, up to 30 days, longer if legally required or to prevent harm |
 | [Gemini paid](https://ai.google.dev/gemini-api/terms) | No | Limited abuse-monitoring logs |
 | [Gemini unpaid](https://ai.google.dev/gemini-api/terms) | **Yes, with human review.** Google's terms say not to send personal information | Don't use it for any role |
-| Local models (Ollama, `speaches`) | Nothing leaves | |
+| Local models (Ollama, whisper.cpp) | Nothing leaves | |
 
 **The one thing to avoid for every role is Gemini's unpaid tier.** It trains on your data with
 human review.
@@ -586,7 +612,8 @@ done
 Those five hold the ledger, the restic repository, the pre-migration dumps, the parser task records,
 and the traces. `cp -a` keeps every file's owner, mode, and timestamp, which is what lets Postgres
 read the copied data. The optional `local-llm` and `local-stt` caches (`ollama-data`,
-`speaches-data`) are not copied: they hold downloaded models, and their profiles pull them again.
+`whisper-data`, and `whisper-cache`) are not copied: they hold downloaded models and kernels, and
+their profiles pull or rebuild them again.
 
 **5. Rename the variables in `.env`, and the database path.** On Linux or in Git Bash,
 `sed -i 's/^FIN_AGENT_/ARNO_/' .env` renames every prefix; elsewhere do it by hand. Then edit the

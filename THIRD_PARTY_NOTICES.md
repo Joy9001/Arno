@@ -191,9 +191,25 @@ identifier below was checked against the official `LICENSE` file for the pinned 
 | `postgres:18.6` (database, Phoenix init, API tools) | PostgreSQL License |
 | `arno-phoenix-cost:21.0.0`, based on pinned `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2); source, patch, and license stay in the separate service image |
 | `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
-| `ghcr.io/speaches-ai/speaches:0.8.3-cpu` (optional `local-stt` profile) | MIT |
+| `arno-whisper:1.9.5-cpu` and `arno-whisper:1.9.5-gpu` (optional `local-stt` profile) | MIT for Arno packaging and whisper.cpp; `ffmpeg` LGPL-2.1-or-later, built from source without GPL parts; CUDA libraries retain NVIDIA licenses |
 | `ghcr.io/joy9001/arno` (this repository) | MIT for Arno code; bundled dependencies as listed above |
 | `ghcr.io/joy9001/arno-backup` (this repository) | MIT for Arno code; `restic` BSD-2-Clause, `jq` MIT |
+
+## Local speech-to-text
+
+The optional `local-stt` profile copies a prebuilt native server and its ggml/Whisper libraries
+from the pinned official whisper.cpp images, builds FFmpeg from the official release tarball, then
+downloads the weights and VAD model on first start. None of these are part of the Arno application
+image.
+
+| Component | License |
+|---|---|
+| `ghcr.io/ggml-org/whisper.cpp` at commit `d1be6fd` (v1.9.5), CPU and CUDA images | MIT |
+| Whisper small and large-v3-turbo GGML weights from `ggerganov/whisper.cpp` at revision `5359861` | MIT (OpenAI Whisper) |
+| Silero VAD `ggml-silero-v5.1.2.bin` from `ggml-org/whisper-vad` | MIT (Silero VAD) |
+| `nvidia/cuda:13.0.0-base-ubuntu22.04` and cuBLAS libraries copied from the pinned upstream CUDA image | NVIDIA CUDA Toolkit license; full EULA in `/usr/share/doc/cuda-cudart-13-0/copyright`, container license in `/NGC-DL-CONTAINER-LICENSE` |
+| NCCL libraries copied from the pinned upstream CUDA image | BSD-3-Clause; package notices ship in `/licenses/nccl/` |
+| `ffmpeg` 9.0.2 built from the official `https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz` (SHA-256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`), shared build with `--disable-autodetect` and no `--enable-gpl`, `--enable-version3`, `--enable-nonfree`, or `--enable-lib*` | LGPL-2.1-or-later; `COPYING.LGPLv2.1` and the build configuration ship in `/licenses/ffmpeg/` |
 
 ## Base images and build tools
 

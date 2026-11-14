@@ -8,7 +8,7 @@ LLM endpoints you chose and the encrypted off-site backups.
 
 **Diagram type:** Architecture, grouped by network boundary.
 
-**What the budget forced out:** Ollama and `speaches` (optional local profiles that sit inside the
+**What the budget forced out:** Ollama and whisper.cpp (optional local profiles that sit inside the
 machine), contentless push pings, and the CLI on the host are left out; the step 10 text and
 [`platform.md`](../platform.md#deployment) cover them. 8 nodes, 3 zones, 8 arrows; the accent marks the
 API and the one way in.

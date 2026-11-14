@@ -248,18 +248,19 @@ services:
   backup:     # pg_dump → restic → off-site, when the last success is over 24 hours old
   phoenix:    # native Pydantic AI traces; own database; loopback UI; auth on
   ollama:     # profile: local-llm
-  speaches:   # profile: local-stt  (OpenAI-compatible faster-whisper)
+  whisper:    # profile: local-stt  (native whisper.cpp server)
 ```
 
 A deployment works as follows:
 
 - Running `docker compose up` with the default profile needs a cloud LLM API key, and the
-  `--profile local-llm` flag also starts Ollama. Each role's endpoint is set by an environment
-  variable.
+  `--profile local-llm` flag also starts Ollama while `--profile local-stt` starts whisper.cpp.
+  Each role's endpoint comes from an environment variable.
 - Access is through Tailscale on the host: `tailscale serve --bg` proxies HTTPS on the tailnet to the
   API, which Compose publishes on loopback only. A sidecar stays an option for a VPS
   ([step 10](system-design.md#running-it)).
-- Updating is `docker compose pull`, `up -d`, then `up -d --build phoenix`. `compose.yaml` pins
+- Updating is `docker compose pull`, `up -d`, then `up -d --build phoenix` (and
+  `up -d --build whisper` when the optional `local-stt` profile is in use). `compose.yaml` pins
   `ghcr.io/joy9001/arno:$ARNO_VERSION` (and the matching backup image), and the release
   workflow pushes the version tag. Phoenix is built locally from its pinned context. The API runs `pg_dump` before any migration and writes it to the
   `pre-migration-data` volume, and migrations run in a transaction. After upgrading an instance that
@@ -503,7 +504,7 @@ this table with its date:
 | [OpenAI API](https://developers.openai.com/api/docs/guides/your-data) | No, by default | Abuse-monitoring logs, up to 30 days, longer if legally required or to prevent harm |
 | [Gemini paid](https://ai.google.dev/gemini-api/terms) | No | Limited abuse-monitoring logs |
 | [Gemini unpaid](https://ai.google.dev/gemini-api/terms) | **Yes, with human review.** Google's terms say not to send personal information | Don't use it for any role |
-| Local models (Ollama, `speaches`) | Nothing leaves | |
+| Local models (Ollama, whisper.cpp) | Nothing leaves | |
 
 ---
 

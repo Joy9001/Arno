@@ -1,6 +1,6 @@
 """The `STT_*` role: one OpenAI-compatible transcription request, metered as a direct call.
 
-The endpoint is the same for `speaches` on the `local-stt` Compose profile and a cloud API:
+The endpoint is the same for native whisper.cpp on the `local-stt` Compose profile and a cloud API:
 `POST {STT_BASE_URL}/audio/transcriptions`. The optional `prompt` carries the user's payee names,
 because those are the words a Hinglish note is most likely to mis-hear. A cloud endpoint receives
 that prompt too, which is why the caller can turn it off.
@@ -11,9 +11,9 @@ priced through the one pricing function. A paid endpoint whose model cannot be p
 before the request, and a response with no usable usage is recorded unknown and stops.
 """
 
-# TODO(L7): no live STT endpoint or Hinglish audio corpus was available. Tests prove the
-# request shape with a loopback stub; real cloud-versus-local Hinglish WER and the payee-name
-# prompt's effect remain unmeasured. See plan.md section 6.
+# TODO(L7): measure cloud-versus-local Hinglish WER and payee-name prompt effects on real audio.
+# Loopback tests prove the request shape; synthetic local recordings do not establish either.
+# See plan.md section 6.
 
 from __future__ import annotations
 

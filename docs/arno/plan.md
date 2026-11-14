@@ -245,7 +245,7 @@ it to each piece:
 | Agent loop, tool calling, UI streaming | Buy: PydanticAI | Harness library, Vercel-AI-protocol adapter, provider switching. [`harness.md`](harness.md) |
 | Reading statement files | Buy: `pypdfium2`, `python-calamine`, and the like | One reader for each kind of file. [`import.md`](import.md) |
 | Parsing a statement layout | Build once: the agent writes a parser in Monty, saved for that layout | No parser for each bank. Tested on synthetic files; the L3 spike is the real test. [System design, step 5](system-design.md#imports-the-agent-writes-the-parser) |
-| Speech-to-text | Buy: any OpenAI-compatible STT endpoint | `speaches` (faster-whisper) locally, or a cloud API |
+| Speech-to-text | Buy: any OpenAI-compatible STT endpoint | whisper.cpp's native server locally, or a cloud API |
 | Photo extraction | Buy: any OpenAI-compatible vision model | The `VISION_*` role, local or cloud |
 | Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Arno doesn't invent its own security code |
 | Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
@@ -276,7 +276,7 @@ The following table records the choice for each layer:
 | Engine arithmetic | NumPy, integer arrays only | Chosen Nov 13, 2026, for the redesigned engine: 16,384 scenarios need array arithmetic, and pure Python takes seconds for 1,000. BSD-3-Clause. Added with the scenario kernel, not before ([`engine-blueprint.md`](engine-blueprint.md)) |
 | Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
 | Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
-| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and speaches | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP, and the pinned Phoenix build accepts Arno's supplied costs. The agent container retains its separate filesystem boundary |
+| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and whisper.cpp | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP, and the pinned Phoenix build accepts Arno's supplied costs. The agent container retains its separate filesystem boundary |
 | License | Application code: MIT | Runtime dependencies and standalone service images have their own licenses, recorded in `THIRD_PARTY_NOTICES.md`. Phoenix is included in normal startup and can be disabled with the standard `OTEL_SDK_DISABLED` |
 
 ### Provider switch
@@ -302,7 +302,7 @@ CHAT_MODEL=qwen3:4b                       # or a cloud model id
 CHAT_PROVIDER=ollama                      # or openai, anthropic, openai-chatgpt, opencode, openrouter
 CHAT_BILLING_MODE=local                   # or metered, reported
 VISION_BASE_URL=...  VISION_MODEL=...     # photos, statement pages with no text
-STT_BASE_URL=http://speaches:8000/v1      # or a cloud transcription endpoint
+STT_BASE_URL=http://whisper:8000/v1      # or a cloud transcription endpoint
 CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails
 CHAT_FALLBACK_CONTEXT_WINDOW=...                      # the window the backup's server really uses
 ```
@@ -662,11 +662,22 @@ Answer each when its layer arrives, not before.
   - **Scheduled questions.** Read-only, with the pinned financial snapshot and CodeMode read tools
     only. Each run has 20 model requests and a $1 default ceiling (`spend_limit_usd`), against the
     shared $20 daily ceiling. The answer goes to the Inbox.
-- **L7:** the cloud-versus-local Hinglish comparison is **not measured on this host**. No `STT_*`
-  endpoint and no Hinglish audio corpus are configured, so the Hinglish and voice-transcript eval
-  cases test the agent downstream of a transcript, not the speech model. The code path is one for
-  both. Locally, `speaches` 0.9.0-rc.3-cpu (Whisper through faster-whisper) is the `local-stt` Compose
-  profile. **Qwen3-ASR 0.6B and 1.7B are Apache-2.0** (checked on Hugging Face, November 3, 2026),
+- **L7:** the cloud-versus-local Hinglish comparison is **not measured on this host**. No paired
+  Hinglish audio corpus has been recorded, so the Hinglish and voice-transcript eval cases test
+  the agent downstream of a transcript, not the speech model. The code path is one for
+  both. Locally, the `local-stt` Compose profile runs whisper.cpp v1.9.5's native `whisper-server`
+  with Silero VAD. It replaced Speaches on November 14, 2026. The images copy the prebuilt server
+  and its ggml/Whisper libraries from the commit-tagged official CPU or CUDA image, so the final
+  image carries no compiler or CUDA toolkit; the CPU target is the default and the GPU override
+  adds the CUDA 13 runtime and a server that includes compute capability 7.5. The API still sees one
+  OpenAI-compatible `/v1/audio/transcriptions` endpoint. `STT_MODEL` selects the weights and is
+  also the trace label: `small` (default) or `large-v3-turbo`. The server ignores the multipart
+  model field, decodes the browser's WebM through ffmpeg, and defaults to no context between
+  requests.
+  Synthetic WebM checks on the GTX 1650 preserved the spoken amounts 500, 1,500, and 50 rupees,
+  including a quiet recording; pure silence and white noise returned empty text with VAD enabled.
+  These checks establish local integration, not Hinglish accuracy or a cloud comparison.
+  **Qwen3-ASR 0.6B and 1.7B are Apache-2.0** (checked on Hugging Face, November 3, 2026),
   and vLLM serves them through the same OpenAI-compatible `/v1/audio/transcriptions` API,
   including its prompt field, so Qwen3-ASR is a viable local alternative to Whisper. The
   payee-name context prompt is implemented and on by default (`STT_PAYEE_CONTEXT=1`); whether it

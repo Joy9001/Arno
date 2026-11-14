@@ -452,10 +452,10 @@ The photo endpoint runs this call, so the server adds the extracted fields to th
 ([step 7](system-design.md#decisions)). The photo is saved first, so a failed vision call leaves a
 retry card rather than a lost photo.
 
-**Voice.** Push-to-talk audio → the `STT_*` endpoint (a local `speaches` server or a cloud API)
-→ text → the normal chat path, sent at once with the transcript shown. A transcript is your own
-words, so it doesn't flag the thread. The audio is saved first, so a failed transcription leaves a
-retry card.
+**Voice.** Push-to-talk audio → the `STT_*` endpoint (native whisper.cpp on the `local-stt`
+profile, or a cloud API) → text → the normal chat path, sent at once with the transcript
+shown. A transcript is your own words, so it doesn't flag the thread. The audio is saved first, so
+a failed transcription leaves a retry card.
 The `STT_*` call can carry the active payee names as a context prompt, because those are the words a
 Hinglish note is most likely to mishear. It is on by default; `STT_PAYEE_CONTEXT=0` turns it off.
 With a cloud endpoint, those names reach that provider as well.

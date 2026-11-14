@@ -236,9 +236,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 - [ ] Walk through Home's notifications dialog and Settings in a real browser (`web/src/pages/Home.tsx:1`).
 - [ ] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
       timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`).
-- [ ] Configure `STT_*` (`speaches` or Qwen3-ASR), then record real Hinglish voice notes.
-      Compare cloud against local, and keep or drop `STT_PAYEE_CONTEXT` based on the results
-      (`capture/transcribe.py:9`).
+- [ ] Configure `STT_*` (`local-stt`'s native whisper.cpp, or Qwen3-ASR), then record real
+      Hinglish voice notes. Compare cloud against local, and keep or drop `STT_PAYEE_CONTEXT` based
+      on the results (`capture/transcribe.py:9`).
 - [ ] Configure `VISION_*`, then log real receipts and UPI screenshots (`capture/photo.py:8`).
 - [ ] Share a screenshot from GPay, PhonePe, or Paytm into the installed PWA (`web/src/sw.ts:6`).
 

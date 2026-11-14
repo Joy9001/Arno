@@ -133,26 +133,37 @@ services:
     ports:
       - "127.0.0.1:11434:11434"
 
-  # `docker compose --profile local-stt up`: local speech-to-text for the STT role.
-  # speaches returns 404 until a model is installed; PRELOAD_MODELS installs STT_MODEL into the
-  # volume at startup (once). Needs 0.9.0-rc.3 or newer.
-  speaches:
-    image: ghcr.io/speaches-ai/speaches:0.9.0-rc.3-cpu
+  # `docker compose --profile local-stt up`: native whisper.cpp server for the STT role.
+  # The entrypoint downloads the GGML weights and Silero VAD model into `whisper-data` on first
+  # start, so the service is not ready until that finishes. `whisper-cache` gives the CUDA driver
+  # a writable cache location; it can stay empty when the GPU uses precompiled kernels.
+  whisper:
+    build:
+      context: ./deploy/whisper
+      target: cpu
+    image: arno-whisper:1.9.5-cpu
     profiles: ["local-stt"]
     restart: unless-stopped
     logging: *default-logging
     environment:
-      PRELOAD_MODELS: '["${STT_MODEL:-Systran/faster-whisper-small}"]'
-      # -1 keeps the model loaded; the 300 s default reloaded it into VRAM (~75 s) after any idle gap.
-      STT_MODEL_TTL: "-1"
-      ENABLE_UI: "false"
-      WHISPER__INFERENCE_DEVICE: cpu
-      WHISPER__COMPUTE_TYPE: int8
+      # `small` or `large-v3-turbo`. This is also the API's trace label; the native server ignores
+      # the multipart model field.
+      STT_MODEL: ${STT_MODEL:-small}
+      CUDA_CACHE_PATH: /cache/cuda
     volumes:
-      - speaches-data:/home/ubuntu/.cache/huggingface
+      - whisper-data:/models
+      - whisper-cache:/cache
     ports:
-      # Host development only. The API inside Compose reaches it at http://speaches:8000/v1.
+      # Host development only. The API inside Compose reaches it at http://whisper:8000/v1.
       - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First boot can download the large model before the server binds its port.
+      start_period: 30m
+    stop_grace_period: 30s
 
   phoenix:
     # Arno builds this one from deploy/phoenix-cost: stock Phoenix 21.0 ignores
@@ -214,5 +225,6 @@ volumes:
   pre-migration-data:
   tasks-data:
   ollama-data:
-  speaches-data:
+  whisper-data:
+  whisper-cache:
   phoenix-data:
