@@ -18,6 +18,7 @@ _END_GRID: tuple[float, ...] = (0.02, 0.10)
 _MAX_CANDIDATES = 8
 _NEXT_DATE_HORIZON_DAYS = 400
 _MAX_SAMPLES = 12
+UNRELATED_SHARE: float = 0.1
 
 # Overflow guard: scaling by 2^-512 shifts only the IEEE-754 binary exponent.
 _SCALE_THRESHOLD = 1e150
@@ -519,24 +520,31 @@ def _dp_likelihood_ratio(
     t_days: float,
     q_j: Sequence[float],
     matches_by_j: Sequence[Sequence[tuple[int, float]]],
+    unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[float, int, float]:
     """Compute LR = L / L0 and alive probability for one grid point via exact canonical DP.
 
     Canonical counting rule (so every (s, t, labeling) is counted once):
-    - Before the first match, all unrelated observations sit in an inactive prefix I[i] = 1.
+    - Before the first match, all unrelated observations sit in an inactive prefix I[i] = u^(i-1)
+      where each unrelated observation contributes u = unrelated_share relative to no-pattern.
     - Three conceptual states:
       1) A0 ("active, nothing matched yet"): tracks paths that started at s <= j and skipped
          every expected date up to j. Unrelated observations are disallowed in A0; an A0 path
-         may end at t only when all observations are consumed (i == M).
+         may end at t with all M observations unrelated (weight u^M).
       2) S ("active, last step match or skip"): S[i] holds paths with >= 1 match consuming
          i observations and expected dates up to j, ending on a match or skip at j.
       3) U ("active, last step unrelated"): U[i] holds paths ending on an unrelated observation
          after the latest match/skip at j. Because a skip may never follow an unrelated step and
-         an end may never follow an unrelated step, U[i] = sum_{k=1}^{i-1} S[k], and P[i] =
-         S[i] + U[i] = sum_{k=1}^{i} S[k] is simply the prefix sum of S across observations.
+         an end may never follow an unrelated step, P[i] = S[i] + U[i] =
+         sum_{k=1}^{i} S[k] * u^(i-k) is the u-weighted prefix sum of S across observations.
     """
     if n == 0:
         return 0.0, 0, 0.0
+
+    u = unrelated_share
+    u_pows = [1.0] * (m + 1)
+    for k in range(1, m + 1):
+        u_pows[k] = u_pows[k - 1] * u
 
     pi_scaled = 1.0 / n
     stay = 1.0 - c
@@ -558,7 +566,9 @@ def _dp_likelihood_ratio(
         s_curr = [val * stay_qj for val in s_prev]
         for obs_idx, f_val in matches_by_j[j]:
             m_factor = match_scale * f_val
-            s_curr[obs_idx] += (pi_scaled + (a0_prev + p_prev[obs_idx - 1]) * stay) * m_factor
+            s_curr[obs_idx] += (
+                (pi_scaled + a0_prev * stay) * u_pows[obs_idx - 1] + p_prev[obs_idx - 1] * stay
+            ) * m_factor
 
         p_curr = [0.0] * (m + 1)
         running = 0.0
@@ -567,16 +577,17 @@ def _dp_likelihood_ratio(
             val = s_curr[i]
             if val > max_col:
                 max_col = val
-            running += val
+            running = running * u + val
             p_curr[i] = running
         if running > max_col:
             max_col = running
 
+        end_mass = a0_curr * u_pows[m] + running
         if j == n - 1:
-            alive_lr = a0_curr + running
+            alive_lr = end_mass
             total_lr += alive_lr
         else:
-            total_lr += (a0_curr + running) * c
+            total_lr += end_mass * c
 
         if max_col > _SCALE_THRESHOLD or total_lr > _SCALE_THRESHOLD:
             a0_curr *= _SCALE_DOWN
@@ -605,12 +616,18 @@ def _viterbi_matched_with_bounds(
     w: int,
     c: float,
     t_days: float,
+    unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[str, ...]:
     """Find the best alignment's matched movement IDs via max-product canonical DP."""
     m = len(payments)
     n = len(expected_ordinals)
     if m == 0 or n == 0:
         return ()
+
+    u = unrelated_share
+    u_pows = [1.0] * (m + 1)
+    for k in range(1, m + 1):
+        u_pows[k] = u_pows[k - 1] * u
 
     payment_ordinals = [p.date.toordinal() for p in payments]
     f_weights = _jitter_weights(w)
@@ -659,12 +676,13 @@ def _viterbi_matched_with_bounds(
 
         for obs_idx, f_val in matches_by_j[j]:
             m_factor = match_scale * f_val
+            prefix_u = u_pows[obs_idx - 1]
 
-            cand_val = pi_scaled * m_factor
+            cand_val = pi_scaled * prefix_u * m_factor
             cand_bp: tuple[int, int, bool] = (-1, -1, True)
 
             if j > 0:
-                from_a0 = a0_prev * stay * m_factor
+                from_a0 = a0_prev * stay * prefix_u * m_factor
                 if from_a0 > cand_val:
                     cand_val = from_a0
                     cand_bp = (-1, -1, True)
@@ -689,18 +707,22 @@ def _viterbi_matched_with_bounds(
             val = s_curr[i]
             if val > max_col:
                 max_col = val
+            best_p *= u
             if val > best_p:
                 best_p = val
                 best_arg = i
+            elif best_p == 0.0:
+                best_arg = 0
             p_curr[i] = best_p
             p_arg_curr[i] = best_arg
 
         p_end = 1.0 if j == n - 1 else c
-        if a0_curr * p_end > best_end_val:
-            best_end_val = a0_curr * p_end
+        a0_end = a0_curr * u_pows[m] * p_end
+        if a0_end > best_end_val:
+            best_end_val = a0_end
             best_end_state = None
         for i in range(1, m + 1):
-            end_val = s_curr[i] * p_end
+            end_val = s_curr[i] * u_pows[m - i] * p_end
             if end_val > best_end_val:
                 best_end_val = end_val
                 best_end_state = (i, j)
@@ -753,6 +775,7 @@ def _score_rule_grid(
     win_start_ord: int,
     as_of_ord: int,
     t_days: float,
+    unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[float, int, _GridResult]:
     m = len(payment_ordinals)
     n = len(expected_ordinals)
@@ -784,6 +807,7 @@ def _score_rule_grid(
                     t_days=t_days,
                     q_j=q_j,
                     matches_by_j=matches_by_j,
+                    unrelated_share=unrelated_share,
                 )
                 results.append(
                     _GridResult(q=q, w=w, c=c, lr_mantissa=lr_m, lr_exp2=lr_e, alive=alive)
@@ -878,6 +902,7 @@ def _detect_with(
     as_of: date,
     window_start: date,
     calendar: IndiaCalendar | None = None,
+    unrelated_share: float = UNRELATED_SHARE,
     _expanded_cache: dict[tuple[str, str, date, str], list[date]] | None = None,
     _priors: Sequence[float] | None = None,
 ) -> Detection | None:
@@ -922,6 +947,7 @@ def _detect_with(
             win_start_ord=win_start_ord,
             as_of_ord=as_of_ord,
             t_days=t_days,
+            unrelated_share=unrelated_share,
         )
         prior = (
             _priors[idx]
@@ -980,6 +1006,7 @@ def _detect_with(
         w=best_grid.w,
         c=best_grid.c,
         t_days=t_days,
+        unrelated_share=unrelated_share,
     )
     matched_set = set(matched)
     matched_amounts = [p.amount_paise for p in in_window if p.movement_id in matched_set]
@@ -1024,6 +1051,7 @@ def detect(
     as_of: date,
     window_start: date,
     calendar: IndiaCalendar | None = None,
+    unrelated_share: float = UNRELATED_SHARE,
 ) -> Detection | None:
     """Detect the most probable calendar rule and its probabilities for one payee."""
     in_window = [p for p in payments if window_start <= p.date <= as_of]
@@ -1122,6 +1150,7 @@ def detect(
         as_of=as_of,
         window_start=window_start,
         calendar=cal,
+        unrelated_share=unrelated_share,
         _expanded_cache=expanded_cache,
         _priors=top_priors,
     )

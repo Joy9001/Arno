@@ -12,6 +12,7 @@ from arno.engine.series import (
     _END_GRID,
     _JITTER_GRID,
     _SKIP_GRID,
+    UNRELATED_SHARE,
     Detection,
     Payment,
     Rule,
@@ -36,6 +37,7 @@ def _brute_force_lr(
     q: float,
     w: int,
     c: float,
+    unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[Fraction, Fraction]:
     """Exact Fraction enumeration over every (s, t, labeling) for the generative model."""
     m = len(payment_ordinals)
@@ -44,6 +46,7 @@ def _brute_force_lr(
 
     q_f = Fraction(str(q))
     c_f = Fraction(str(c))
+    u_f = Fraction(str(unrelated_share))
     one_minus_q = 1 - q_f
     one_minus_c = 1 - c_f
     pi_f = Fraction(1, n)
@@ -76,9 +79,10 @@ def _brute_force_lr(
             term_sum = Fraction(0)
 
             for k in range(max_k + 1):
+                unrelated_factor = u_f ** (m - k)
                 for obs_idxs in itertools.combinations(range(m), k):
                     for exp_idxs in itertools.combinations(range(s, t + 1), k):
-                        prod = Fraction(1)
+                        prod = unrelated_factor
                         possible = True
                         for r in range(k):
                             f_val = f_frac(
@@ -111,7 +115,7 @@ def test_dp_matches_brute_force_oracle() -> None:
     base = date(2026, 1, 10)
     win_start_ord = base.toordinal()
 
-    # Curated edge cases + random small instances (total 25 instances x 12 grid points = 300).
+    # Curated edge cases + random small instances (25 instances x 12 grid points x 3 u = 900).
     instances: list[tuple[int, list[int], list[int]]] = [
         # 1. Censoring at both ends
         (
@@ -162,44 +166,53 @@ def test_dp_matches_brute_force_oracle() -> None:
 
     assert len(instances) == 25
     checks = 0
-    for as_of_ord, obs_ords, exp_ords in instances:
-        t_days = float(as_of_ord - win_start_ord + 1)
-        m = len(obs_ords)
-        n = len(exp_ords)
-        for w in _JITTER_GRID:
-            f_weights = _jitter_weights(w)
-            matches_by_j = _precompute_matches(obs_ords, exp_ords, w=w, f_weights=f_weights)
-            for q in _SKIP_GRID:
-                q_j = _censoring_skip_probs(
-                    exp_ords,
-                    win_start_ord=win_start_ord,
-                    as_of_ord=as_of_ord,
-                    q=q,
-                    w=w,
-                    f_weights=f_weights,
-                )
-                for c in _END_GRID:
-                    dp_lr, dp_exp2, dp_alive = _dp_likelihood_ratio(
-                        m, n, q=q, c=c, t_days=t_days, q_j=q_j, matches_by_j=matches_by_j
-                    )
-                    dp_val = dp_lr * (2.0**dp_exp2)
-                    bf_lr, bf_alive = _brute_force_lr(
-                        obs_ords,
+    for u in (1.0, 0.1, 0.37):
+        for as_of_ord, obs_ords, exp_ords in instances:
+            t_days = float(as_of_ord - win_start_ord + 1)
+            m = len(obs_ords)
+            n = len(exp_ords)
+            for w in _JITTER_GRID:
+                f_weights = _jitter_weights(w)
+                matches_by_j = _precompute_matches(obs_ords, exp_ords, w=w, f_weights=f_weights)
+                for q in _SKIP_GRID:
+                    q_j = _censoring_skip_probs(
                         exp_ords,
                         win_start_ord=win_start_ord,
                         as_of_ord=as_of_ord,
                         q=q,
                         w=w,
-                        c=c,
+                        f_weights=f_weights,
                     )
-                    bf_val = float(bf_lr)
-                    if bf_val == 0.0:
-                        assert dp_val == 0.0
-                    else:
-                        assert abs(dp_val - bf_val) / bf_val < 1e-12
-                    assert abs(dp_alive - float(bf_alive)) < 1e-12
-                    checks += 1
-    assert checks == 300
+                    for c in _END_GRID:
+                        dp_lr, dp_exp2, dp_alive = _dp_likelihood_ratio(
+                            m,
+                            n,
+                            q=q,
+                            c=c,
+                            t_days=t_days,
+                            q_j=q_j,
+                            matches_by_j=matches_by_j,
+                            unrelated_share=u,
+                        )
+                        dp_val = dp_lr * (2.0**dp_exp2)
+                        bf_lr, bf_alive = _brute_force_lr(
+                            obs_ords,
+                            exp_ords,
+                            win_start_ord=win_start_ord,
+                            as_of_ord=as_of_ord,
+                            q=q,
+                            w=w,
+                            c=c,
+                            unrelated_share=u,
+                        )
+                        bf_val = float(bf_lr)
+                        if bf_val == 0.0:
+                            assert dp_val == 0.0
+                        else:
+                            assert abs(dp_val - bf_val) / bf_val < 1e-12
+                        assert abs(dp_alive - float(bf_alive)) < 1e-12
+                        checks += 1
+    assert checks == 900
 
 
 def _make_payments(dates: list[date], amounts: list[int] | int = 50_000) -> list[Payment]:
@@ -422,6 +435,22 @@ def test_random_uniform_dates_low_confidence() -> None:
     res = detect(_make_payments(dates, 50_000), as_of=as_of, window_start=win_start)
     assert res is not None
     assert res.confidence < 0.5
+
+
+def test_random_uniform_20_payments_800_days_low_confidence() -> None:
+    as_of = date(2026, 11, 15)
+    window_start = as_of - timedelta(days=800)
+    span = (as_of - window_start).days
+    cal = calendar_for(window_start - timedelta(days=14), as_of + timedelta(days=410))
+    for seed in (11, 23, 37, 53, 79):
+        rng = random.Random(seed)
+        offsets = sorted(rng.sample(range(span + 1), k=20))
+        dates = [window_start + timedelta(days=o) for o in offsets]
+        res = detect(
+            _make_payments(dates, 50_000), as_of=as_of, window_start=window_start, calendar=cal
+        )
+        assert res is not None
+        assert res.confidence < 0.5
 
 
 def test_weekly_does_not_beat_no_pattern_on_monthly_payments() -> None:
