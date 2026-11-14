@@ -870,3 +870,45 @@ def test_run_eval_is_the_only_path_that_enables_model_requests(monkeypatch, tmp_
     assert seen["allow"] is True
     assert not pydantic_models.ALLOW_MODEL_REQUESTS
     assert cards[0].model == "test-model"
+
+
+def test_failure_and_flag_transcripts_mask_database_password():
+    from pydantic_evals.reporting import EvaluationResult, ReportCase
+
+    from evals.runner import failure_transcript, flag_transcript
+
+    secret = "s3cr3t_pw_99"
+    trial_dsn = f"postgresql://app:{secret}@db.example.internal:5546/arno_eval_trial_42"
+    report_case = ReportCase(
+        name="probe_case",
+        inputs=EvalInput(case_id="probe_case", messages=["How much did I spend?"]),
+        metadata=EvalMeta(category="answers", expected={}),
+        expected_output=None,
+        output=EvalOutput(
+            reply="You spent ₹100.",
+            started_at=datetime.now(UTC).isoformat(),
+            number_flags=["₹100"],
+            trial_db=trial_dsn,
+        ),
+        metrics={},
+        attributes={},
+        scores={},
+        labels={},
+        assertions={
+            "outcome": EvaluationResult(
+                name="outcome",
+                value=False,
+                reason="failed",
+                source=OutcomeEvaluator(judge=None).as_spec(),
+            )
+        },
+        task_duration=0.1,
+        total_duration=0.1,
+    )
+    report = EvaluationReport(name="probe", cases=[report_case])
+
+    failures_md = failure_transcript(report)
+    flags_md = flag_transcript(report)
+    for text in (failures_md, flags_md):
+        assert secret not in text
+        assert "postgresql://app:***@db.example.internal:5546/arno_eval_trial_42" in text

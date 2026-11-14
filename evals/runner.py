@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic_ai import models as pydantic_models
 from pydantic_ai.messages import (
@@ -810,6 +811,23 @@ def write_scorecard_files(cards: list[Scorecard], directory: Path = RESULTS_DIR)
     return written
 
 
+def _mask_dsn_password(dsn: str) -> str:
+    """Redact any password in a Postgres DSN while keeping host, port, and database name."""
+    if "://" in dsn:
+        parsed = urlsplit(dsn)
+        auth, sep, hostport = parsed.netloc.rpartition("@")
+        if sep and ":" in auth:
+            user, _, _ = auth.partition(":")
+            return urlunsplit(parsed._replace(netloc=f"{user}:***@{hostport}"))
+        return dsn
+    from arno.db.conn import conninfo_to_dict
+
+    info = conninfo_to_dict(dsn)
+    if "password" in info:
+        return " ".join(f"{k}={'***' if k == 'password' else v}" for k, v in info.items())
+    return dsn
+
+
 def flag_transcript(
     report: EvaluationReport[EvalInput, EvalOutput, EvalMeta],
 ) -> str:
@@ -824,7 +842,7 @@ def flag_transcript(
             lines.append(f"- reply: {case.output.reply or '(empty)'}")
             lines.append(f"- number flags: {case.output.number_flags}")
             if case.output.trial_db:
-                lines.append(f"- trial db: `{case.output.trial_db}`")
+                lines.append(f"- trial db: `{_mask_dsn_password(case.output.trial_db)}`")
             if case.output.attempts:
                 lines.append("- attempts:")
                 for attempt in case.output.attempts:
@@ -862,7 +880,7 @@ def failure_transcript(
                     lines.append(f"- error: `{case.output.error}`")
                 lines.append(f"- number flags: {case.output.number_flags}")
                 if case.output.trial_db:
-                    lines.append(f"- trial db: `{case.output.trial_db}`")
+                    lines.append(f"- trial db: `{_mask_dsn_password(case.output.trial_db)}`")
                 if case.output.attempts:
                     lines.append("- attempts:")
                     for attempt in case.output.attempts:
