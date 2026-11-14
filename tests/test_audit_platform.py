@@ -441,6 +441,71 @@ async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
             )
 
 
+async def test_app_role_is_not_superuser_and_holds_expected_attributes(db):
+    role = await db.fetchrow_required(
+        """
+        SELECT rolsuper, rolinherit, rolcreaterole, rolcreatedb,
+               rolcanlogin, rolreplication, rolbypassrls
+        FROM pg_roles
+        WHERE rolname = 'app'
+        """
+    )
+    assert dict(role) == {
+        "rolsuper": False,
+        "rolinherit": True,
+        "rolcreaterole": True,
+        "rolcreatedb": True,
+        "rolcanlogin": True,
+        "rolreplication": False,
+        "rolbypassrls": False,
+    }
+
+    memberships = {
+        row["role"]: (row["admin_option"], row["inherit_option"], row["set_option"])
+        for row in await db.fetch(
+            """
+            SELECT r.rolname AS role, a.admin_option, a.inherit_option, a.set_option
+            FROM pg_auth_members a
+            JOIN pg_roles r ON r.oid = a.roleid
+            JOIN pg_roles m ON m.oid = a.member
+            WHERE m.rolname = 'app'
+            """
+        )
+    }
+    assert memberships == {
+        "pg_signal_backend": (False, True, True),
+        "agent_ro": (True, False, False),
+        "backup": (True, False, False),
+    }
+
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await db.execute("SELECT * FROM pg_authid LIMIT 1")
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await db.execute("ALTER SYSTEM SET work_mem = '64MB'")
+    with pytest.raises(asyncpg.InsufficientPrivilegeError):
+        await db.execute("COPY (SELECT 1) TO PROGRAM 'cat'")
+
+
+async def test_warn_if_superuser_logs_when_superuser_and_is_silent_for_normal_role(
+    db, caplog, monkeypatch
+):
+    from arno.db.bootstrap import warn_if_superuser
+
+    with caplog.at_level("WARNING"):
+        assert await warn_if_superuser(db) is False
+    assert caplog.records == []
+
+    async def _fake_fetchrow(
+        query: str, *args: object, timeout: float | None = None
+    ) -> dict[str, object]:
+        return {"role": "app", "rolsuper": True}
+
+    monkeypatch.setattr(db, "fetchrow", _fake_fetchrow)
+    with caplog.at_level("WARNING"):
+        assert await warn_if_superuser(db) is True
+    assert any("deploy/demote-app.sh" in rec.getMessage() for rec in caplog.records)
+
+
 async def test_restore_verification_catches_a_broken_ledger_and_changed_content(demo_ledger):
     from arno.backup_restore import build_manifest, verify_database
 

@@ -370,7 +370,8 @@ An invariant the code relies on is a constraint, checked against existing data b
 - The restore drill is `arno restore`. On a fresh machine, given the backup and the restic
   password, it pulls the dump and manifest out of the newest snapshot, restores into a
   database that has no tables, recomputes every table's hash, and checks that every transfer
-  balances and every account balance equals its entries. The dump carries the migrations' table
+  balances and every account balance equals its entries. It runs as `app` using `CREATEDB`,
+  `CREATEROLE`, and `pg_signal_backend`—never `SUPERUSER`. The dump carries the migrations' table
   grants and the restore recreates the two login roles, so `run_query` and the backup sidecar work
   on the restored database. Restore from a backup the current image made: an older dump still
   restores, but a dump written without its table grants leaves `run_query` unprivileged until a new
@@ -414,7 +415,21 @@ Logs are standard application output and stay on the host. Traces include prompt
 content because Pydantic AI's default instrumentation is used; that is why Phoenix stays on this
 machine. There is no Loki, Grafana, or Collector in the path.
 
-The `agent_ro` setup, tested on Postgres 18.6:
+The following table lists the five Postgres roles and how each connects, tested on Postgres 18.6:
+
+| Role | Attributes and memberships | Reachable how |
+|---|---|---|
+| `postgres` | Bootstrap superuser, password `NULL` | Local container socket only (`docker compose exec db psql -U postgres`); refused over TCP |
+| `app` | `LOGIN CREATEDB CREATEROLE NOSUPERUSER NOBYPASSRLS NOREPLICATION`, member of `pg_signal_backend`, `ADMIN OPTION` (`INHERIT FALSE, SET FALSE`) on `agent_ro` and `backup` | Password in `POSTGRES_PASSWORD`; owns the Arno databases |
+| `agent_ro` | `LOGIN`, `default_transaction_read_only = on`, `statement_timeout = '2s'`, `SELECT` on allowed read views/tables, `TEMP` revoked | Password set at boot from `AGENT_RO_PASSWORD` |
+| `backup` | `LOGIN`, `SELECT` on all tables/sequences in `public`, `INSERT` on `backup_runs` only, `TEMP` revoked | Password set at boot from `BACKUP_PASSWORD` |
+| `phoenix` | `LOGIN`, owns only database `phoenix` | Password in `PHOENIX_PASSWORD` |
+
+The `app` role never holds `SUPERUSER`, `BYPASSRLS`, `REPLICATION`, `pg_read_server_files`,
+`pg_write_server_files`, `pg_execute_server_program`, or `SET ON PARAMETER session_replication_role`.
+Fresh clusters create this layout through `deploy/app-role.sh` and `deploy/phoenix-db.sh`; existing
+volumes convert once with `deploy/demote-app.sh`
+([upgrade steps](self-hosting.md#67-upgrading-an-existing-install)).
 
 ```sql
 ALTER ROLE agent_ro SET default_transaction_read_only = on;

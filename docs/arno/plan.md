@@ -52,6 +52,13 @@ is rebuilt on one integer scenario matrix, behind a backtest that scores every c
 baselines before it ships. Design and build order:
 [`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6.
 
+**App role demoted on November 14, 2026.** The `app` role owns the Arno databases without
+`SUPERUSER` (`LOGIN CREATEDB CREATEROLE`, `pg_signal_backend`, and `ADMIN OPTION` on `agent_ro` and
+`backup`), while `postgres` is the local-socket-only bootstrap superuser with no network password.
+Fresh installs start in this shape; existing volumes convert once with `deploy/demote-app.sh`
+([upgrade steps](self-hosting.md#67-upgrading-an-existing-install) and
+[role setup](platform.md#security)).
+
 ---
 
 ## 1. The product

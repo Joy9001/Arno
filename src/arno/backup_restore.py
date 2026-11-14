@@ -45,12 +45,15 @@ REQUIRED_TABLES = {
 
 # Login roles live on the cluster, not in a database, so `pg_dump` cannot carry them. A restore
 # into a fresh cluster must recreate them before anything names them. The list and settings mirror
-# migrations 0002 and 0006; their passwords are set again from the environment at boot.
+# migrations 0002 and 0006 without the superuser-only `NO*` flags (PostgreSQL 18 rejects even
+# `NOSUPERUSER`/`NOREPLICATION`/`NOBYPASSRLS` from a non-superuser role); `ensure_roles` verifies
+# those three attributes are false instead. Their passwords are set again from the environment at
+# boot.
 ROLE_STATEMENTS = (
-    "ALTER ROLE agent_ro NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "ALTER ROLE agent_ro NOCREATEDB NOCREATEROLE",
     "ALTER ROLE agent_ro SET default_transaction_read_only = on",
     "ALTER ROLE agent_ro SET statement_timeout = '2s'",
-    "ALTER ROLE backup NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS",
+    "ALTER ROLE backup NOCREATEDB NOCREATEROLE",
 )
 
 # `agent_ro`'s SELECT list is the security boundary and is not guessed here: it comes back from
@@ -249,6 +252,18 @@ async def ensure_roles(target_dsn: str) -> None:
                 await conn.execute(f"CREATE ROLE {quote_ident(role)} LOGIN")
         for statement in ROLE_STATEMENTS:
             await conn.execute(statement)
+        elevated = await conn.fetchval(
+            """
+            SELECT array_agg(rolname ORDER BY rolname)
+            FROM pg_roles
+            WHERE rolname IN ('agent_ro', 'backup')
+              AND (rolsuper OR rolreplication OR rolbypassrls)
+            """
+        )
+        if elevated:
+            raise RestoreError(
+                f"Role(s) {elevated} hold privileged attributes that a non-superuser cannot clear"
+            )
         database = (await conn.fetchrow_required("SELECT current_database() AS name"))["name"]
         if not isinstance(database, str):
             raise RestoreError("The target database's name could not be read.")

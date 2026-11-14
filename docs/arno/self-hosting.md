@@ -74,8 +74,10 @@ ARNO_RP_ORIGIN=https://<machine>.<tailnet>.ts.net
 ```
 
 Generate the three database passwords with `openssl rand -hex 32` (hex, not base64: these land
-inside the `DATABASE_URL` in `compose.yaml`, where `/` and `+` break the URI). Any generator is
-fine for `RESTIC_PASSWORD` and the Phoenix values.
+inside the `DATABASE_URL` in `compose.yaml`, where `/` and `+` break the URI).
+`POSTGRES_PASSWORD` sets the password for `app` (the non-superuser database owner); the
+`postgres` bootstrap superuser has no network password and accepts connections only over the
+container's local socket. Any generator is fine for `RESTIC_PASSWORD` and the Phoenix values.
 `RESTIC_PASSWORD` is the one secret that must live somewhere other than this machine.
 
 Without Tailscale, use `ARNO_RP_ID=localhost` and
@@ -453,7 +455,8 @@ docker compose up -d
 The command creates `arno` if it is absent, refuses to touch a database that already has
 tables, restores the newest snapshot, recomputes every table's row count and hash, and checks that
 every transfer balances and every account balance equals its entries. It prints one `ok` line per
-check and exits non-zero on any mismatch. It also recreates the `agent_ro` and `backup` login roles,
+check and exits non-zero on any mismatch. It runs as `app` using `CREATEDB`, `CREATEROLE`, and
+`pg_signal_backend`—never `SUPERUSER`—and recreates the `agent_ro` and `backup` login roles,
 restores the dump's own table grants, and re-grants the backup role from the image, so `run_query`
 and the backup sidecar work on the restored database. Restore from a backup the current image made.
 An older dump also restores and the app works, but a dump written without its table grants carries
@@ -522,7 +525,7 @@ Do not point a new major version at the old data volume. Do a dump and restore:
 
 ```bash
 # 1. Dump from the old server.
-docker compose exec -T db pg_dump -U app --format=custom arno > arno-before-upgrade.dump
+docker compose exec -T db pg_dump -U postgres --format=custom arno > arno-before-upgrade.dump
 docker compose down
 
 # 2. Change the `db` image tag in compose.yaml to the new major, e.g. postgres:19.x.
@@ -594,13 +597,13 @@ one `DATABASE_URL` line so its database is `arno` instead of `fin_agent`, and ch
 
 ```bash
 docker compose up -d db
-docker compose exec db psql -U app -d postgres -c "ALTER DATABASE fin_agent RENAME TO arno"
+docker compose exec db psql -U postgres -d postgres -c "ALTER DATABASE fin_agent RENAME TO arno"
 ```
 
-`POSTGRES_DB` only names a database at first initialization, so the existing one keeps the old name
-until this command renames it. `psql` connects over the container's local socket, which trusts the
-`app` role, so no password is involved. Nothing else is running yet, so nothing is connected to the
-database being renamed.
+The initialization scripts run only on an empty volume, so an existing database keeps its old name
+until this command renames it. `psql` connects as `postgres` over the container's local socket,
+which needs no password. Nothing else is running yet, so nothing is connected to the database being
+renamed.
 
 **7. Start the rest.**
 
@@ -634,6 +637,56 @@ Until then they are the untouched original of everything the new install holds. 
 before the rename restore unchanged; [§6.1](#61-backups) says why the archive still carries the old
 name.
 
+### 6.7 Upgrading an existing install
+
+Volumes initialized before November 14, 2026 made `app` the Postgres bootstrap superuser; the API
+logs a startup warning naming `deploy/demote-app.sh` until the cluster is converted. The script
+converts an existing volume in place without deleting any volume or data database, keeps the `app`
+password unchanged, verifies every table, hash, `schema_version` row, and grant before swapping,
+and leaves a rollback copy named `arno__pre_demote`.
+
+**1. Stop the clients while leaving Postgres running.**
+
+```bash
+docker compose stop api backup phoenix
+```
+
+**2. Run the one-time conversion script inside `db`.**
+
+```bash
+docker compose exec -T db bash -s -- arno < deploy/demote-app.sh
+```
+
+If the cluster holds other Arno databases (for example a scratch or demo database), list all of
+them after `arno` or pass `--leave-others` to leave them owned by `postgres`. If the script is
+interrupted, run the exact same command again to resume.
+
+**3. Start the stack again and confirm there is no superuser warning.**
+
+```bash
+docker compose up -d
+curl -s http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health
+docker compose logs api | tail -n 20
+```
+
+**4. Drop the rollback copy once you have verified the instance works.**
+
+```bash
+docker compose exec db psql -U postgres -d postgres -c 'DROP DATABASE "arno__pre_demote";'
+```
+
+**Rollback.** Before the database swap, remove any staging database with
+`docker compose exec db psql -U postgres -d postgres -c 'DROP DATABASE IF EXISTS "arno__converted" WITH (FORCE);'`
+and start the stack again. After the swap, while `arno__pre_demote` is still present:
+
+```bash
+docker compose stop api backup phoenix
+docker compose exec db psql -U postgres -d postgres \
+  -c 'ALTER DATABASE arno RENAME TO arno__failed; ALTER DATABASE arno__pre_demote RENAME TO arno;'
+docker compose exec db psql -U postgres -d postgres -c 'ALTER ROLE app WITH SUPERUSER;'
+docker compose up -d
+```
+
 ---
 
 ## 7. Security and privacy posture
@@ -648,10 +701,13 @@ name.
   'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy:
   no-referrer`, and a `TrustedHost` allowlist for the tailnet name.
 - **Uploads:** 25 MB cap on statements, photos, and audio.
-- **Database roles:** `app` owns the schema; `agent_ro` is SELECT-only on the ledger, plan,
-  people, categorization, settings, and conversation tables, with no auth tables, no `TEMP`, and a
-  two-second statement timeout; `backup` can SELECT for `pg_dump` and INSERT into `backup_runs`
-  only. Phoenix owns only its own database and `agent_ro` cannot connect to it.
+- **Database roles:** `postgres` is the local-socket-only bootstrap superuser with password `NULL`;
+  `app` owns the Arno databases without `SUPERUSER` (`LOGIN CREATEDB CREATEROLE`,
+  `pg_signal_backend`, and `ADMIN OPTION` with `INHERIT FALSE, SET FALSE` on `agent_ro` and
+  `backup`); `agent_ro` is SELECT-only on the ledger, plan, people, categorization, settings, and
+  conversation tables, with no auth tables, no `TEMP`, and a two-second statement timeout; `backup`
+  can SELECT for `pg_dump` and INSERT into `backup_runs` only. Phoenix owns only its own database
+  and `agent_ro` cannot connect to it.
 - **Logs:** standard Python/Uvicorn stdout, kept on the host. They are not shipped to a central
   log store. Traces include prompts, replies, and tool data because Pydantic AI's default
   instrumentation is used, which is why Phoenix stays local. There is no custom metadata-only mode.

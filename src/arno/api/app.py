@@ -43,7 +43,7 @@ from arno.api.wake import wake
 from arno.auth.enrollment import enrollment_message
 from arno.auth.setup import ensure_setup_token, setup_required
 from arno.config import Settings, get_settings
-from arno.db.bootstrap import set_agent_ro_password, set_backup_password
+from arno.db.bootstrap import set_agent_ro_password, set_backup_password, warn_if_superuser
 from arno.db.conn import connect
 from arno.db.migrate import run_migrations
 from arno.db.pre_migration import dump_before_migrating
@@ -65,6 +65,7 @@ logger = logging.getLogger("arno")
 async def _bootstrap(settings: Settings) -> list[int]:
     applied: list[int] = []
     async with connect(settings.database_url) as conn:
+        await warn_if_superuser(conn)
         if settings.auto_migrate:
             await dump_before_migrating(conn, settings)
             applied = await run_migrations(conn)

@@ -85,6 +85,19 @@ def test_phoenix_has_its_own_role_and_database():
     assert "PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}" in compose
 
 
+def test_compose_initializes_non_superuser_app_role():
+    compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    app_role = (ROOT / "deploy/app-role.sh").read_text(encoding="utf-8")
+
+    assert "POSTGRES_USER:" not in compose
+    assert "POSTGRES_DB:" not in compose
+    assert "./deploy/app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro" in compose
+    assert "./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/20-phoenix-db.sh:ro" in compose
+    assert "NOSUPERUSER NOBYPASSRLS NOREPLICATION" in app_role
+    assert "GRANT pg_signal_backend TO app" in app_role
+    assert "ALTER ROLE postgres PASSWORD NULL" in app_role
+
+
 def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
     if shutil.which("docker") is None:
         pytest.skip("docker compose is unavailable")

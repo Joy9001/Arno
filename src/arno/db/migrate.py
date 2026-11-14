@@ -102,6 +102,23 @@ async def applied(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
+_SUPERUSER_ROLE_ATTRS = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+_NON_SUPERUSER_ROLE_ATTRS = "NOCREATEDB NOCREATEROLE"
+
+
+def _executable_sql(migration: Migration, *, is_superuser: bool) -> str:
+    """Adapt historical role-hardening DDL for a non-superuser CREATEROLE owner.
+
+    PostgreSQL 18 rejects `ALTER ROLE ... NOSUPERUSER/NOREPLICATION/NOBYPASSRLS` from a
+    non-superuser even when those attributes are already false. Applied migration files cannot
+    be edited without breaking `schema_version` checksums on existing clusters, so strip only
+    those three attributes at execution time while still hashing the original file.
+    """
+    if is_superuser or _SUPERUSER_ROLE_ATTRS not in migration.sql:
+        return migration.sql
+    return migration.sql.replace(_SUPERUSER_ROLE_ATTRS, _NON_SUPERUSER_ROLE_ATTRS)
+
+
 async def run_migrations(
     conn: Connection | None = None, directory: Path = MIGRATIONS_DIR
 ) -> list[int]:
@@ -124,12 +141,30 @@ async def run_migrations(
                     f"Migration {version} ({by_version[version].name}) changed after it was applied"
                 )
 
+        is_superuser = bool(
+            await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+        )
         newly_applied: list[int] = []
         for migration in migrations:
             if migration.version in recorded:
                 continue
+            sql = _executable_sql(migration, is_superuser=is_superuser)
             async with conn.transaction():
-                await conn.execute(migration.sql)
+                await conn.execute(sql)
+                if sql != migration.sql:
+                    elevated = await conn.fetchval(
+                        """
+                        SELECT array_agg(rolname ORDER BY rolname)
+                        FROM pg_roles
+                        WHERE rolname IN ('agent_ro', 'backup')
+                          AND (rolsuper OR rolreplication OR rolbypassrls)
+                        """
+                    )
+                    if elevated:
+                        raise MigrationError(
+                            f"Role(s) {elevated} hold privileged attributes that a non-superuser "
+                            "cannot clear"
+                        )
                 await conn.execute(
                     "INSERT INTO schema_version (version, name, checksum) VALUES ($1, $2, $3)",
                     migration.version,

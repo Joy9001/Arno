@@ -14,15 +14,16 @@ services:
     # Assumes SSD/NVMe storage; use 4 on spinning disks.
     command: ["postgres", "-c", "random_page_cost=1.1"]
     environment:
-      POSTGRES_USER: app
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: arno
+      APP_PASSWORD: ${POSTGRES_PASSWORD}
+      APP_DB: arno
       PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-}
     volumes:
       # Postgres 18 images store data under /var/lib/postgresql/<major>/; mounting data/ is
       # rejected at boot.
       - db-data:/var/lib/postgresql
-      - ./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/phoenix-db.sh:ro
+      - ./deploy/app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
+      - ./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/20-phoenix-db.sh:ro
     # Published on loopback for development (tests, psql). Not reachable from the tailnet.
     ports:
       - "127.0.0.1:${ARNO_DB_PORT:-5433}:5432"

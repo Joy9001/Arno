@@ -30,3 +30,18 @@ async def set_agent_ro_password(conn: Connection, password: str | None) -> None:
 
 async def set_backup_password(conn: Connection, password: str | None) -> None:
     await _set_role_password(conn, "backup", password)
+
+
+async def warn_if_superuser(conn: Connection) -> bool:
+    """Log one warning at boot if the connected role is still a Postgres superuser."""
+    row = await conn.fetchrow_required(
+        "SELECT current_user AS role, rolsuper FROM pg_roles WHERE rolname = current_user"
+    )
+    if bool(row["rolsuper"]):
+        logger.warning(
+            "Database role %r is a PostgreSQL superuser; run deploy/demote-app.sh to convert "
+            "it to a normal owner role.",
+            row["role"],
+        )
+        return True
+    return False

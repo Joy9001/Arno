@@ -325,13 +325,65 @@ async def clean_database(migrated: list[int], demo_snapshot: str) -> None:
         await _reset(conn)
 
 
+SNAPSHOT_RESTORE_ORDER = (
+    # Roots (no FKs to other tables in RESET_TABLES)
+    "settings",
+    "users",
+    "setup_tokens",
+    "categories",
+    "pgledger_accounts",
+    "scheduled_questions",
+    "conversations",
+    "attachments",
+    "vapid_keys",
+    "risk_state",
+    "backup_runs",
+    "notifications",
+    "jobs",
+    "recap_views",
+    "llm_calls",
+    "model_credentials",
+    "push_subscriptions",
+    # Tier 1
+    "sessions",
+    "webauthn_challenges",
+    "accounts",
+    "category_rules",
+    "baselines",
+    "messages",
+    "job_schedules",
+    # Tier 2
+    "payees",
+    "schedules",
+    "goals",
+    "schedule_occurrences",
+    "statement_layouts",
+    "imports",
+    "parser_versions",
+    "preferences",
+    "audit_log",
+    # Tier 3
+    "movements",
+    "categorize_runs",
+    # Tier 4
+    "pgledger_transfers",
+    "movement_legs",
+    "pgledger_entries",
+    "pgledger_idempotency_keys",
+    "captures",
+    "statement_lines",
+    "schedule_payments",
+)
+
+
 @pytest.fixture(scope="session")
 def demo_snapshot(migrated: list[int]) -> Iterator[str]:
     """Seed the demo persona once, snapshot it into a scratch schema, and return its restore SQL.
 
-    Built once per session, first. The restore runs as one simple-protocol round trip with
-    foreign-key triggers off, because the snapshot is known good.
+    Built once per session, first. The restore runs as one simple-protocol round trip in
+    topological table order so it needs no superuser privilege to disable foreign-key triggers.
     """
+    assert set(SNAPSHOT_RESTORE_ORDER) == {*RESET_TABLES, "settings"}
     dsn = _dsn()
 
     async def _build() -> str:
@@ -340,18 +392,76 @@ def demo_snapshot(migrated: list[int]) -> Iterator[str]:
             await seed_demo(conn, today=date(2026, 11, 1), reset=True)
             await conn.execute(f"DROP SCHEMA IF EXISTS {SNAPSHOT_SCHEMA} CASCADE")
             await conn.execute(f"CREATE SCHEMA {SNAPSHOT_SCHEMA}")
-            statements = ["BEGIN;", "SET LOCAL session_replication_role = replica;"]
-            for table in (*RESET_TABLES, "settings"):
+            snapshotted: dict[str, list[str]] = {}
+            for table in SNAPSHOT_RESTORE_ORDER:
                 columns = await _snapshot_table(conn, table)
+                if columns is not None:
+                    snapshotted[table] = columns
+
+            statements = ["BEGIN;"]
+            if "accounts" in snapshotted and "emi_schedule_id" in snapshotted["accounts"]:
+                statements.append("UPDATE public.accounts SET emi_schedule_id = NULL;")
+            if "movements" in snapshotted and "reverses_id" in snapshotted["movements"]:
+                statements.append("UPDATE public.movements SET reverses_id = NULL;")
+            for table in reversed(SNAPSHOT_RESTORE_ORDER):
+                if table in snapshotted:
+                    statements.append(f"DELETE FROM public.{quote_ident(table)};")
+
+            for table in SNAPSHOT_RESTORE_ORDER:
+                columns = snapshotted.get(table)
                 if columns is None:
                     continue
-                names = ", ".join(quote_ident(column) for column in columns)
                 target = f"public.{quote_ident(table)}"
-                statements.append(f"DELETE FROM {target};")
-                statements.append(
-                    f"INSERT INTO {target} ({names}) "
-                    f"SELECT {names} FROM {SNAPSHOT_SCHEMA}.{quote_ident(table)};"
-                )
+                source = f"{SNAPSHOT_SCHEMA}.{quote_ident(table)}"
+                if table == "accounts" and "emi_schedule_id" in columns:
+                    select_cols = ", ".join(
+                        "NULL" if col == "emi_schedule_id" else quote_ident(col) for col in columns
+                    )
+                    names = ", ".join(quote_ident(col) for col in columns)
+                    statements.append(
+                        f"INSERT INTO {target} ({names}) SELECT {select_cols} FROM {source};"
+                    )
+                elif table == "statement_layouts" and "source_import_id" in columns:
+                    select_cols = ", ".join(
+                        "NULL" if col == "source_import_id" else quote_ident(col) for col in columns
+                    )
+                    names = ", ".join(quote_ident(col) for col in columns)
+                    statements.append(
+                        f"INSERT INTO {target} ({names}) SELECT {select_cols} FROM {source};"
+                    )
+                elif table == "movements" and "reverses_id" in columns:
+                    names = ", ".join(quote_ident(col) for col in columns)
+                    prefixed = ", ".join(f"m.{quote_ident(col)}" for col in columns)
+                    ordered = ", ".join(f"o.{quote_ident(col)}" for col in columns)
+                    statements.append(
+                        f"WITH RECURSIVE ordered AS ("
+                        f"SELECT {prefixed}, 0 AS _depth "
+                        f"FROM {source} m WHERE m.reverses_id IS NULL "
+                        f"UNION ALL "
+                        f"SELECT {prefixed}, o._depth + 1 FROM {source} m "
+                        f"JOIN ordered o ON m.reverses_id = o.id"
+                        f") INSERT INTO {target} ({names}) "
+                        f"SELECT {ordered} FROM ordered o ORDER BY o._depth, o.id;"
+                    )
+                else:
+                    names = ", ".join(quote_ident(col) for col in columns)
+                    statements.append(
+                        f"INSERT INTO {target} ({names}) SELECT {names} FROM {source};"
+                    )
+                if table == "schedules" and "accounts" in snapshotted:
+                    statements.append(
+                        f"UPDATE public.accounts a SET emi_schedule_id = s.emi_schedule_id "
+                        f"FROM {SNAPSHOT_SCHEMA}.accounts s "
+                        f"WHERE a.id = s.id AND s.emi_schedule_id IS NOT NULL;"
+                    )
+                if table == "imports" and "statement_layouts" in snapshotted:
+                    statements.append(
+                        f"UPDATE public.statement_layouts sl "
+                        f"SET source_import_id = s.source_import_id "
+                        f"FROM {SNAPSHOT_SCHEMA}.statement_layouts s "
+                        f"WHERE sl.id = s.id AND s.source_import_id IS NOT NULL;"
+                    )
+
             # A restore reads like a fresh seed: the audit trail's clock starts now, so a grader
             # looking for writes newer than a trial's start still sees the seed's rows.
             # shortcut: only audit_log's clock is refreshed; widen it if another table's matters.

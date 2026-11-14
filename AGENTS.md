@@ -38,9 +38,11 @@ this file holds only what you can't read off the code.
   applied migration**, add the next one.
 - `src/arno/db/vendor/pgledger/` is vendored unmodified at a pinned commit. Don't edit it; its
   licence notice is in `THIRD_PARTY_NOTICES.md`.
-- Three roles: `app` (owns schema), `agent_ro` (agent's `run_query`: SELECT only on ledger-side
-  tables and views, no auth tables, 2 s timeout), `backup`. A new table the agent should see needs a
-  grant in a migration; auth and secrets tables must stay out of `agent_ro`.
+- Five roles: `postgres` (bootstrap superuser, password `NULL`, local socket only), `app`
+  (database owner, `CREATEDB CREATEROLE`, `pg_signal_backend`, no superuser), `agent_ro` (agent's
+  `run_query`: SELECT only on ledger-side tables and views, no auth tables, 2 s timeout), `backup`,
+  and `phoenix` (owns only the `phoenix` database). A new table the agent should see needs a grant
+  in a migration; auth and secrets tables must stay out of `agent_ro`.
 
 ## Commands
 
