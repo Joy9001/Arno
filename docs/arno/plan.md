@@ -59,6 +59,18 @@ Fresh installs start in this shape; existing volumes convert once with `deploy/d
 ([upgrade steps](self-hosting.md#67-upgrading-an-existing-install) and
 [role setup](platform.md#security)).
 
+**API connection cache on November 14, 2026.** Reverses the earlier one-connection-for-each-use
+decision for the API process: `connect()` now binds to a per-loop cache of up to eight idle
+`asyncpg` connections owned by the API lifespan, opening direct connections immediately when the
+idle cache is empty. Unlike a limiter pool such as `asyncpg.Pool`, which could make a long chat
+stream starve or deadlock other requests, the cache keeps the never-wait behavior. Measured
+before/after warm medians on the demo database (host-to-container, baseline connect `43.9 ms`,
+pre-ping `1.5 ms`): movements list `90.7 ms` → `20.6 ms` (`1` → `0` connects), record expense
+`111.9 ms` → `28.8 ms` (`1` → `0`), undo `122.5 ms` → `36.0 ms` (`1` → `0`), stubbed two-tool
+chat turn `699.4 ms` → `382.6 ms` (`7` → `0`), and home load `2,083.9 ms` → `1,896.0 ms`
+(`6` → `0`). Cache, outage, and uncertain-commit rules:
+[`platform.md`](platform.md#database-connections).
+
 ---
 
 ## 1. The product

@@ -18,10 +18,27 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import asyncpg
+
 from arno.db.conn import Connection, quote_ident
-from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError, NotFoundLedgerError
+from arno.ledger.errors import (
+    CommitOutcomeUnknownError,
+    ConflictLedgerError,
+    InvalidLedgerError,
+    NotFoundLedgerError,
+)
 
 Actor = str
+
+_COMMIT_LOSS_ERRORS = (
+    asyncpg.PostgresConnectionError,
+    asyncpg.AdminShutdownError,
+    asyncpg.CrashShutdownError,
+    asyncpg.CannotConnectNowError,
+    asyncpg.InterfaceError,
+    OSError,
+    TimeoutError,
+)
 
 # Columns a generic restore may touch. Identity and provenance stay put.
 _IMMUTABLE_COLUMNS = {"id", "created_at"}
@@ -122,6 +139,11 @@ class WriteGroup:
         self.record(table, _row_key(table, row), before=row, after=None)
 
 
+async def _commit_transaction(tx: Any) -> None:
+    """Commit the group's transaction (a narrow seam for testing commit-time loss)."""
+    await tx.commit()
+
+
 @asynccontextmanager
 async def write_group(
     conn: Connection,
@@ -137,7 +159,10 @@ async def write_group(
     """
     if actor not in {"user", "agent", "system"}:
         raise InvalidLedgerError("actor must be user, agent, or system")
-    async with conn.transaction():
+    nested = conn.is_in_transaction()
+    tx = conn.transaction()
+    await tx.start()
+    try:
         group = WriteGroup(
             conn=conn,
             group_id=group_id or await new_id(conn, "und"),
@@ -145,6 +170,10 @@ async def write_group(
             message_id=message_id,
         )
         yield group
+        if conn.is_closed():
+            raise asyncpg.ConnectionDoesNotExistError(
+                "The connection closed before COMMIT could be sent."
+            )
         for entry in group.entries:
             await conn.execute(
                 """
@@ -165,6 +194,25 @@ async def write_group(
             from arno.jobs.runner import enqueue_risk_check
 
             await enqueue_risk_check(conn, group.group_id)
+    except BaseException:
+        if not conn.is_closed():
+            try:
+                await tx.rollback()
+            except _COMMIT_LOSS_ERRORS:
+                pass
+        raise
+
+    if nested:
+        await tx.commit()
+        return
+    if conn.is_closed():
+        raise asyncpg.ConnectionDoesNotExistError(
+            "The connection closed before COMMIT could be sent."
+        )
+    try:
+        await _commit_transaction(tx)
+    except _COMMIT_LOSS_ERRORS as exc:
+        raise CommitOutcomeUnknownError() from exc
 
 
 async def groups_for_rows(

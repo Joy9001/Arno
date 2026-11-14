@@ -21,6 +21,7 @@ from arno.agent.chatgpt_auth import background_inference
 from arno.agent.cost_journal import cost_identity
 from arno.agent.spend import COST_STOP_ERRORS
 from arno.db.conn import Connection, connect
+from arno.ledger.errors import CommitOutcomeUnknownError
 
 logger = logging.getLogger("arno.jobs")
 
@@ -398,6 +399,10 @@ class JobRunner:
             )
             async with connect() as conn:
                 await _fail(conn, job, type(exc).__name__, timed_out=False, final=True)
+        except CommitOutcomeUnknownError as exc:
+            logger.warning("job %s stopped with uncertain commit outcome: %s", job["key"], exc)
+            async with connect() as conn:
+                await _fail(conn, job, str(exc), timed_out=False, final=True)
         except TimeoutError:
             after = f" after {float(timeout):.0f}s" if timeout is not None else ""
             logger.warning("job %s timed out%s", job["key"], after)

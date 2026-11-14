@@ -573,14 +573,23 @@ async def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
 async def _call_write(
     fn: Callable[[Connection], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
+    from arno.ledger.errors import CommitOutcomeUnknownError, LedgerError
+
     async with connect() as conn:
         try:
             return await fn(conn)
         except write_tools.ToolInputError as exc:
             raise ModelRetry(str(exc)) from exc
+        except CommitOutcomeUnknownError as exc:
+            return {
+                "status": "outcome_unknown",
+                "committed": "unknown",
+                "message": (
+                    f"{exc.message} Tell the user the outcome is unknown and to verify "
+                    "whether the change was recorded; do not call this write tool again."
+                ),
+            }
         except Exception as exc:  # noqa: BLE001 - ledger errors teach the model
-            from arno.ledger.errors import LedgerError
-
             if isinstance(exc, LedgerError):
                 raise ModelRetry(exc.message) from exc
             raise
@@ -706,7 +715,7 @@ async def update_setup(
             message_id=ctx.deps.message_id,
         )
     )
-    if ctx.tool_call_approved:
+    if ctx.tool_call_approved and payload.get("status") != "outcome_unknown":
         try:
             await _clear_confirmed_marks(
                 [str(value) for value in payload_data.values() if isinstance(value, str)]

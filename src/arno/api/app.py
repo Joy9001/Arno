@@ -44,7 +44,12 @@ from arno.auth.enrollment import enrollment_message
 from arno.auth.setup import ensure_setup_token, setup_required
 from arno.config import Settings, get_settings
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password, warn_if_superuser
-from arno.db.conn import connect
+from arno.db.conn import (
+    ConnectionCache,
+    bind_connection_cache,
+    close_connection_cache,
+    connect,
+)
 from arno.db.migrate import run_migrations
 from arno.db.pre_migration import dump_before_migrating
 from arno.importers.seed_rules import ensure_seed_rules
@@ -54,7 +59,7 @@ from arno.jobs.runner import JobRunner, recover_interrupted_jobs
 from arno.jobs.schedules import ensure_builtin_schedules, sync_scheduled_questions
 from arno.ledger.accounts import ensure_system_accounts
 from arno.ledger.categories import ensure_default_categories
-from arno.ledger.errors import LedgerError
+from arno.ledger.errors import CommitOutcomeUnknownError, LedgerError
 from arno.logging_utils import configure_logging
 from arno.notifications import ensure_vapid_keys
 from arno.observability import bootstrap_observability, shutdown_observability
@@ -102,6 +107,7 @@ async def _bootstrap(settings: Settings) -> list[int]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    db_cache: ConnectionCache | None = None
     pool = None
     tasks_pool = None
     await _bootstrap(app.state.settings)
@@ -112,6 +118,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         interrupted = await recover_interrupted_jobs(conn)
         if interrupted:
             logger.warning("requeued %d interrupted job(s)", interrupted)
+    db_cache = bind_connection_cache(app.state.settings.database_url)
     spend_store, pool = await make_spend_store(app.state.settings.database_url)
     app.state.spend_store = spend_store
     app.state.spend_pool = pool
@@ -136,38 +143,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     )
     parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)
     app.state.tasks = tasks
-    async with tasks.opened():
-        try:
-            async with connect() as conn:
-                if settled := await reconcile_imports(conn, tasks.records):
-                    logger.warning("settled %d import(s) left parsing", settled)
-        except Exception:  # noqa: BLE001 - a stale status must not stop the app
-            logger.exception("import status reconcile failed")
-        app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
-        app.state.turns = TurnManager(app.state.agent, tasks=tasks)
-
-        async def wake_thread(thread_id: str) -> None:
-            await wake(app, thread_id)
-
-        app.state.turns.waker = wake_thread
-        for thread_id in waiting_threads(tasks, since=time.time() - 86_400):
-            app.state.turns.schedule_wake(thread_id)
-        app.state.jobs = JobRunner()
-        if app.state.settings.jobs_enabled:
-            app.state.jobs.start()
-
-        try:
-            yield
-        finally:
+    try:
+        async with tasks.opened():
             try:
-                await app.state.jobs.stop()
-                await app.state.turns.drain()
-            finally:
-                if pool is not None:
-                    await pool.close()
-                if tasks_pool is not None:
-                    await tasks_pool.close()
-                shutdown_observability()
+                async with connect() as conn:
+                    if settled := await reconcile_imports(conn, tasks.records):
+                        logger.warning("settled %d import(s) left parsing", settled)
+            except Exception:  # noqa: BLE001 - a stale status must not stop the app
+                logger.exception("import status reconcile failed")
+            app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
+            app.state.turns = TurnManager(app.state.agent, tasks=tasks)
+
+            async def wake_thread(thread_id: str) -> None:
+                await wake(app, thread_id)
+
+            app.state.turns.waker = wake_thread
+            for thread_id in waiting_threads(tasks, since=time.time() - 86_400):
+                app.state.turns.schedule_wake(thread_id)
+            app.state.jobs = JobRunner()
+            if app.state.settings.jobs_enabled:
+                app.state.jobs.start()
+
+            yield
+    finally:
+        try:
+            jobs = getattr(app.state, "jobs", None)
+            if jobs is not None:
+                await jobs.stop()
+            turns = getattr(app.state, "turns", None)
+            if turns is not None:
+                await turns.drain()
+        finally:
+            if db_cache is not None:
+                await close_connection_cache(db_cache)
+            if pool is not None:
+                await pool.close()
+            if tasks_pool is not None:
+                await tasks_pool.close()
+            shutdown_observability()
 
 
 async def _settle_parser(event: Any) -> None:
@@ -226,16 +239,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def validation_exception(request: Request, exc: RequestValidationError) -> JSONResponse:
         return problem(422, detail="The request body or query is not valid.")
 
+    @app.exception_handler(CommitOutcomeUnknownError)
+    async def commit_outcome_unknown(
+        request: Request, exc: CommitOutcomeUnknownError
+    ) -> JSONResponse:
+        route = request.scope.get("route")
+        logger.warning(
+            "commit outcome unknown while serving %s",
+            getattr(route, "path", request.method),
+        )
+        return problem(
+            503,
+            detail=(
+                "The connection was lost while saving. Check whether the change was recorded "
+                "before trying again."
+            ),
+        )
+
     @app.exception_handler(asyncpg.PostgresConnectionError)
     @app.exception_handler(asyncpg.CannotConnectNowError)
     @app.exception_handler(asyncpg.ConnectionDoesNotExistError)
+    @app.exception_handler(asyncpg.AdminShutdownError)
+    @app.exception_handler(asyncpg.CrashShutdownError)
+    @app.exception_handler(asyncpg.InternalClientError)
     @app.exception_handler(OSError)
     async def database_unreachable(request: Request, exc: Exception) -> JSONResponse:
+        # TimeoutError subclasses OSError; db connect timeouts become ConnectionError at conn.py.
+        if isinstance(exc, TimeoutError):
+            raise exc
         route = request.scope.get("route")
-        logger.warning(
-            "database unreachable while serving %s",
-            getattr(route, "path", request.method),
-        )
+        target = getattr(route, "path", request.method)
+        if isinstance(exc, asyncpg.InternalClientError):
+            logger.exception("database client error while serving %s", target)
+        else:
+            logger.warning("database unreachable while serving %s", target)
         return problem(503, detail="The database is unreachable.")
 
     @app.exception_handler(LedgerError)

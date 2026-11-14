@@ -40,3 +40,17 @@ class ConflictLedgerError(LedgerError):
 class UnavailableLedgerError(LedgerError):
     status = 503
     title = "Service unavailable"
+
+
+class CommitOutcomeUnknownError(Exception):
+    """The connection dropped while committing; the transaction may or may not have landed."""
+
+    def __init__(
+        self,
+        message: str = (
+            "The connection was lost while saving. Check whether the change was recorded "
+            "before trying again."
+        ),
+    ) -> None:
+        super().__init__(message)
+        self.message = message

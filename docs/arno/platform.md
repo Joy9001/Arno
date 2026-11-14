@@ -293,10 +293,42 @@ A deployment works as follows:
 - Each model role reads `*_PROVIDER` and `*_BILLING_MODE`. The modes are `metered`, `local`, and
   `reported`; there is no subscription mode. Every paid path shares one strict store and pricing
   callback, so a database failure refuses paid inference instead of running uncapped.
-- The API opens one database connection per use rather than a pool, so a Postgres restart leaves
-  nothing to recover. The two exceptions are a small asyncpg pool for the spend store and
-  per-operation journal connections. While Postgres is down, the API answers with a plain
-  "database unreachable" and refuses paid inference.
+
+### Database connections
+
+The API process uses a per-loop cache of idle `asyncpg` connections (`API_POOL_MAX_IDLE = 8`)
+created in the FastAPI lifespan and closed after background jobs and active turns stop:
+
+- **Cache, not a limiter:** `connect()` pops and pre-pings the most recently released idle
+  connection when one is available, and opens a new direct connection immediately when the idle
+  deque is empty—never waiting on capacity. A limiter pool such as `asyncpg.Pool` could make a
+  long chat stream starve or deadlock other requests (for instance when a streaming turn holds a
+  connection while tools open their own); the cache keeps the old never-wait behavior. Leaving
+  `async with connect()` or calling `close()` on a cached `Connection` runs `reset()` (rolling back
+  any open transaction and resetting session state) and returns it to the idle deque up to eight
+  connections; excess connections close for real.
+- **Uncached on purpose:** `connect()` bypasses the cache and opens a direct connection whenever an
+  explicit `dsn` or `role` is passed, on any other event loop (CLI commands and worker threads), or
+  when `current_database_url()` differs from the bound DSN (eval trials under `use_database_url`).
+  The `agent_ro` role for `run_query` stays direct so each model-written SQL query gets a fresh
+  isolated session, and the `spend_store` and `tasks` pools stay separate with their own timeouts
+  and fail-closed rules.
+- **Outage and recovery:** the only automatic retry happens before a connection is handed out—reused
+  connections run a `SELECT 1` pre-ping on acquire and are terminated and discarded if dead, trying
+  the next idle entry or opening a fresh connection. After `connect()` returns, reads and writes
+  never retry automatically. Connect `TimeoutError`s convert at the `conn.py` boundary into
+  `ConnectionError`, and `asyncpg.InternalClientError` (such as a server `FATAL` arriving on a
+  checked-out connection between statements) maps to `503` ("The database is unreachable.") while
+  logging the exception; non-database timeouts (such as model timeouts) keep surfacing normally.
+  The cache survives database outages and recovers on the first request after Postgres returns
+  without restarting the API process; boot still requires Postgres, and outages refuse paid
+  inference.
+- **Uncertain commits:** `write_group` distinguishes a connection lost before `COMMIT` was sent
+  (rolled back; ordinary `503` unreachable error) from a connection lost while `COMMIT` was in
+  flight, which raises `CommitOutcomeUnknownError`. The API maps that exception to `503` asking the
+  user to verify whether the change was recorded before trying again, agent write tools return an
+  explicit `"outcome_unknown"` result telling the model not to re-issue the write, and the job
+  runner fails the job immediately without retrying.
 
 ### Database tuning
 
