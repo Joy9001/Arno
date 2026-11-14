@@ -595,55 +595,48 @@ async def test_a_backfilled_account_is_known_before_its_row_existed(ledger):
     assert "no liquid account" not in inputs.data_quality["setup_gaps"]
 
 
-def _row_result(gaps: list[str]) -> dict[str, Any]:
-    return {
-        "as_of": "2026-01-01",
-        "actual_paise": 100,
-        "median_paise": 100,
-        "p10_paise": 100,
-        "p90_paise": 100,
-        "error_paise": 0,
-        "absolute_error_paise": 0,
-        "in_band": True,
-        "floor_probability": 1.0,
-        "blocking_gaps": [gap for gap in gaps if gap in backtest.UNUSABLE_SETUP_GAPS],
-    }
+_README = "intro\n<!-- backtest:start -->\nold\n<!-- backtest:end -->\noutro\n"
 
 
-def test_the_backtest_says_when_it_could_not_measure_a_month(tmp_path):
-    rows = [
-        _row_result(["no liquid account", "no floor set; the projection uses zero"]),
-        _row_result(["no confirmed income schedule"]),
-    ]
-    result = backtest._summarize(rows, "real backfill")
+def _score(group: str = "ledger") -> backtest.Score:
+    return backtest.Score(
+        group=group,
+        as_of=date(2026, 1, 1),
+        forecaster="flat",
+        target="end",
+        horizon=7,
+        crps=100.0,
+        pinball=(10.0, 50.0, 10.0),
+        covered=True,
+        width=0,
+        pit=0.5,
+        breach_probability=None,
+        breached=None,
+    )
 
-    # A gap that only weakens the model is not a reason to refuse; a missing starting point is.
-    assert result["blocking_gaps"] == ["no confirmed income schedule", "no liquid account"]
+
+def test_the_backtest_says_when_it_could_not_measure_an_origin(tmp_path):
+    # Every origin was dropped for missing setup: nothing was measured.
+    result = backtest.summarize([], source="real ledger", dropped=2, names=["flat"])
+
     report = backtest.format_report(result)
     assert "not a measurement" in report.lower()
-    assert "no liquid account" in report
+    assert "2 dropped" in report
     assert "must not be published" in report
 
     readme = tmp_path / "README.md"
-    readme.write_text(
-        "intro\n<!-- backtest:start -->\nold\n<!-- backtest:end -->\noutro\n", encoding="utf-8"
-    )
+    readme.write_text(_README, encoding="utf-8")
     with pytest.raises(ValueError, match="not a measurement"):
         backtest.publish_report(result, readme)
-    assert readme.read_text(encoding="utf-8") == (
-        "intro\n<!-- backtest:start -->\nold\n<!-- backtest:end -->\noutro\n"
-    )
+    assert readme.read_text(encoding="utf-8") == _README
 
 
-def test_a_measured_backtest_still_publishes(tmp_path):
-    rows = [_row_result(["no floor set; the projection uses zero"])]
-    result = backtest._summarize(rows, "real backfill")
-    assert result["blocking_gaps"] == []
+def test_a_measured_backtest_still_publishes_and_counts_what_it_dropped(tmp_path):
+    result = backtest.summarize([_score()], source="real ledger", dropped=1, names=["flat"])
     readme = tmp_path / "README.md"
-    readme.write_text(
-        "intro\n<!-- backtest:start -->\nold\n<!-- backtest:end -->\noutro\n", encoding="utf-8"
-    )
+    readme.write_text(_README, encoding="utf-8")
 
     backtest.publish_report(result, readme)
 
-    assert "Source: real backfill" in readme.read_text(encoding="utf-8")
+    text = readme.read_text(encoding="utf-8")
+    assert "Source: real ledger. 1 weekly origins scored, 1 dropped" in text

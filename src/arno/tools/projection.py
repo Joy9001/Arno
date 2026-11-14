@@ -12,16 +12,20 @@ from typing import Any, cast
 
 from arno.db.conn import Connection
 from arno.engine.affordability import Hypothetical, afford
+from arno.engine.inputs import (
+    CategoryRow,
+    ConfiguredSchedule,
+    LedgerSnapshot,
+    Occurrence,
+    SpendRow,
+    build_inputs,
+)
 from arno.engine.money import _add_months, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
     HISTORY_DAYS,
-    MIN_REAL_DAYS,
-    NO_CONFIRMED_INCOME,
-    NO_LIQUID_ACCOUNT,
     BalanceAge,
-    BaselineSource,
     CardAccount,
     CashEvent,
     GoalPlan,
@@ -30,7 +34,6 @@ from arno.engine.projection import (
     Projection,
     ProjectionInput,
     SourceRef,
-    SpendCategory,
 )
 from arno.engine.projection import (
     project as run_projection,
@@ -259,58 +262,13 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
     return goals
 
 
-async def _spend_categories(
-    conn: Connection,
-    *,
-    as_of: date,
-    covered_category_ids: set[str],
-) -> tuple[list[SpendCategory], list[BaselineSource], list[str]]:
-    window_start = as_of - timedelta(days=HISTORY_DAYS)
-    window_end = as_of - timedelta(days=1)
-    categories = await conn.fetch("SELECT * FROM categories WHERE active ORDER BY name")
-    baselines = {row["category_id"]: row for row in await conn.fetch("SELECT * FROM baselines")}
-    spend_rows = await conn.fetch(
+async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
+    """Positive spend in the history window, by day, category, and paying card."""
+    rows = await conn.fetch(
         """
-        SELECT v.category_id, v.date, sum(v.amount_paise)::bigint AS amount_paise
-        FROM v_spending v
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
-        WHERE v.date BETWEEN $1 AND $2
-          AND v.amount_paise > 0
-          AND v.category_id IS NOT NULL
-          AND ms.is_effective
-        GROUP BY v.category_id, v.date
-        """,
-        window_start,
-        window_end,
-    )
-    daily: dict[str, dict[date, int]] = {}
-    for row in spend_rows:
-        daily.setdefault(str(row["category_id"]), {})[row["date"]] = int(row["amount_paise"])
-
-    gaps: list[str] = []
-    uncategorized = await conn.fetchrow(
-        """
-        SELECT coalesce(sum(v.amount_paise), 0)::bigint AS amount_paise
-        FROM v_spending v
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
-        WHERE v.date BETWEEN $1 AND $2
-          AND v.amount_paise > 0
-          AND v.category_id IS NULL
-          AND ms.is_effective
-        """,
-        window_start,
-        window_end,
-    )
-    if uncategorized and int(uncategorized["amount_paise"]) > 0:
-        gaps.append(
-            "uncategorized spending is not simulated as variable spend; label those rows in the "
-            "ledger"
-        )
-
-    card_rows = await conn.fetch(
-        """
-        SELECT v.category_id,
-               CASE WHEN fa.kind = 'card' THEN fa.id ELSE ta.id END AS card_id,
+        SELECT v.date, v.category_id,
+               CASE WHEN fa.kind = 'card' THEN fa.id
+                    WHEN ta.kind = 'card' THEN ta.id END AS card_id,
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN pgledger_transfers t ON t.id = v.transfer_id
@@ -319,95 +277,41 @@ async def _spend_categories(
         JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
-          AND v.category_id IS NOT NULL
-          AND (fa.kind = 'card' OR ta.kind = 'card')
           AND ms.is_effective
-        GROUP BY v.category_id, 2
+        GROUP BY 1, 2, 3
+        ORDER BY 1, 2, 3
         """,
-        window_start,
-        window_end,
+        as_of - timedelta(days=HISTORY_DAYS),
+        as_of - timedelta(days=1),
     )
-    card_choice: dict[str, tuple[str, int]] = {}
-    card_counts: dict[str, int] = {}
-    for row in card_rows:
-        category_id = str(row["category_id"])
-        amount = int(row["amount_paise"])
-        card_counts[category_id] = card_counts.get(category_id, 0) + 1
-        current = card_choice.get(category_id)
-        if current is None or amount > current[1]:
-            card_choice[category_id] = (str(row["card_id"]), amount)
+    return [
+        SpendRow(
+            date=row["date"],
+            category_id=str(row["category_id"]) if row["category_id"] else None,
+            card_id=str(row["card_id"]) if row["card_id"] else None,
+            amount_paise=int(row["amount_paise"]),
+        )
+        for row in rows
+    ]
 
-    result: list[SpendCategory] = []
-    baseline_rows: list[BaselineSource] = []
-    days = [window_start + timedelta(days=offset) for offset in range(HISTORY_DAYS)]
-    for category in categories:
-        category_id = str(category["id"])
-        if category_id in covered_category_ids:
-            gaps.append(
-                f"{category['name']} is covered by an obligation and is not simulated as "
-                "variable spend"
-            )
-            continue
-        by_day = daily.get(category_id, {})
-        real_days = sum(1 for amount in by_day.values() if amount > 0)
-        day_label = f"{real_days} real spending day" + ("" if real_days == 1 else "s")
-        baseline = baselines.get(category_id)
-        if real_days < MIN_REAL_DAYS and baseline is None:
-            if by_day:
-                gaps.append(
-                    f"{category['name']} has only {day_label} and no setup "
-                    "estimate, so it is left out"
-                )
-            continue
-        if baseline is not None:
-            baseline_per_day = int(baseline["amount_per_day_paise"])
-            source = str(baseline["source"])
-        else:
-            baseline_per_day = round(sum(by_day.values()) / HISTORY_DAYS) if by_day else 0
-            source = "computed"
-        history = tuple((day, max(0, int(by_day.get(day, 0)))) for day in days)
-        total_spend = sum(by_day.values())
-        chosen = card_choice.get(category_id)
-        share = round(chosen[1] / total_spend, 4) if chosen is not None and total_spend > 0 else 0.0
-        card_id = chosen[0] if chosen is not None and share > 0 else None
-        if card_counts.get(category_id, 0) > 1:
-            gaps.append(
-                f"{category['name']} was charged to more than one card; its variable spend uses "
-                "the card with the largest share"
-            )
-        if real_days < MIN_REAL_DAYS:
-            gaps.append(
-                f"{category['name']} has only {day_label}; its "
-                f"{money(baseline_per_day)['text']}/day {source} estimate is used flat"
-            )
-        elif share == 0:
-            gaps.append(
-                f"{category['name']} has no card history; its variable spend is treated as cash"
-            )
-        result.append(
-            SpendCategory(
-                id=category_id,
+
+async def _category_rows(conn: Connection) -> list[CategoryRow]:
+    baselines = {row["category_id"]: row for row in await conn.fetch("SELECT * FROM baselines")}
+    rows: list[CategoryRow] = []
+    for category in await conn.fetch("SELECT * FROM categories WHERE active ORDER BY name"):
+        baseline = baselines.get(category["id"])
+        rows.append(
+            CategoryRow(
+                id=str(category["id"]),
                 name=str(category["name"]),
-                baseline_per_day_paise=baseline_per_day,
-                baseline_source=source,
                 reducible=bool(category["reducible"]),
-                card_share=share,
-                card_id=card_id,
-                history=history,
-                covered_by_obligation=False,
+                baseline_per_day_paise=(
+                    int(baseline["amount_per_day_paise"]) if baseline is not None else None
+                ),
+                baseline_source=str(baseline["source"]) if baseline is not None else None,
             )
         )
-        baseline_rows.append(
-            {
-                "category": category["name"],
-                "id": category_id,
-                "source": source,
-                "amount_per_day_paise": baseline_per_day,
-                "real_days": real_days,
-                "card_share": share,
-            }
-        )
-    return result, baseline_rows, gaps
+    return rows
 
 
 async def _owed_events(
@@ -475,14 +379,14 @@ async def _owed_events(
     return events, sources, gaps
 
 
-async def load_inputs(
+async def load_snapshot(
     conn: Connection,
     *,
     as_of: date | None = None,
     horizon_days: int | None = None,
     known_then: bool = False,
-) -> ProjectionInput:
-    """Build the pure engine's inputs from the ledger as of ``as_of``.
+) -> LedgerSnapshot:
+    """Read everything the projection needs from the ledger as of ``as_of``.
 
     ``known_then`` asks for the ledger as it stood on that day: an account, schedule, or goal
     created later is left out. The backtest uses it; a projection requested "as of" an earlier
@@ -490,7 +394,6 @@ async def load_inputs(
     """
     as_of = as_of or ledger_today()
     settings = await read_settings(conn)
-    floor = int(settings["floor_paise"] or 0)
     end = as_of + timedelta(
         days=await _horizon_for_loading(conn, as_of, horizon_days, known_then=known_then)
     )
@@ -505,9 +408,8 @@ async def load_inputs(
     }
     card_by_account = {row["id"]: row for row in card_rows}
 
-    events: list[CashEvent] = []
+    occurrences: list[Occurrence] = []
     schedule_sources: dict[str, SourceRef] = {}
-    covered_categories: set[str] = set()
     schedule_rows = await conn.fetch(
         """
         SELECT * FROM schedules
@@ -523,8 +425,8 @@ async def load_inputs(
     )
     for row in schedule_rows:
         amount = row["amount_paise"]
-        occurrences = expanded_by_id[str(row["id"])]
-        if not occurrences:
+        expanded = expanded_by_id[str(row["id"])]
+        if not expanded:
             continue
         # schedules.name is NOT NULL, so its mark is never null either.
         display_name = cast(str, mark(row["name"]) if row["outside_text"] else row["name"])
@@ -535,96 +437,36 @@ async def load_inputs(
             "detail": f"{row['kind']} · {row['rule']}",
             "amount_paise": int(amount) if amount else None,
         }
-        for occurrence in occurrences:
-            if (
-                occurrence["kind"] in {"obligation", "instalment"}
-                and occurrence["amount_paise"] is not None
-                and occurrence["category_id"]
-            ):
-                covered_categories.add(str(occurrence["category_id"]))
-            remaining = occurrence["remaining_paise"]
-            if remaining is None or remaining <= 0:
-                continue
-            when = date.fromisoformat(occurrence["date"])
-            kind = occurrence["kind"]
+        goal = goal_by_schedule.get(row["id"])
+        for occurrence in expanded:
+            card = card_by_account.get(occurrence["account_id"])
             # An occurrence's name comes from its schedule, which is NOT NULL.
-            display_name = cast(
+            name = cast(
                 str,
                 mark(occurrence["name"]) if occurrence["outside_text"] else occurrence["name"],
             )
-            if kind.startswith("income"):
-                events.append(
-                    CashEvent(
-                        date=when,
-                        amount_paise=int(remaining),
-                        name=display_name,
-                        kind=kind,
-                        source_id=str(row["id"]),
-                        confirmed=bool(row["confirmed"]),
-                    )
+            occurrences.append(
+                Occurrence(
+                    schedule_id=str(row["id"]),
+                    name=name,
+                    kind=occurrence["kind"],
+                    date=date.fromisoformat(occurrence["date"]),
+                    amount_paise=occurrence["amount_paise"],
+                    remaining_paise=occurrence["remaining_paise"],
+                    category_id=(
+                        str(occurrence["category_id"]) if occurrence["category_id"] else None
+                    ),
+                    card_id=card["id"] if card else None,
+                    goal_id=goal["id"] if goal else None,
+                    confirmed=bool(row["confirmed"]),
+                    linked_goal=goal is not None,
                 )
-            elif kind in {"obligation", "instalment"}:
-                card = card_by_account.get(occurrence["account_id"])
-                events.append(
-                    CashEvent(
-                        date=when,
-                        amount_paise=-int(remaining),
-                        name=display_name,
-                        kind=kind,
-                        source_id=str(row["id"]),
-                        card_id=card["id"] if card else None,
-                    )
-                )
-            elif kind == "goal_contribution":
-                goal = goal_by_schedule.get(row["id"])
-                events.append(
-                    CashEvent(
-                        date=when,
-                        amount_paise=-int(remaining),
-                        name=display_name,
-                        kind=kind,
-                        source_id=str(row["id"]),
-                        goal_id=goal["id"] if goal else None,
-                    )
-                )
-                if goal is None:
-                    gaps.append(
-                        f"{row['name']} is not linked to a goal; it still leaves liquid cash"
-                    )
+            )
 
     owed_events, owed_sources, owed_gaps = await _owed_events(
         conn, as_of=as_of, end=end, known_then=known_then
     )
-    events.extend(owed_events)
     gaps.extend(owed_gaps)
-
-    categories, baseline_rows, category_gaps = await _spend_categories(
-        conn, as_of=as_of, covered_category_ids=covered_categories
-    )
-    gaps.extend(category_gaps)
-
-    # Setup gaps describe what is configured, not what happens to fall inside this horizon: an
-    # annual salary or a fully paid one-off is still configured.
-    current = [row for row in schedule_rows if row["ends"] is None or row["ends"] >= as_of]
-    income_count = sum(
-        1 for row in current if row["kind"].startswith("income") and row["confirmed"]
-    )
-    obligation_count = sum(1 for row in current if row["kind"] in {"obligation", "instalment"})
-    setup_gaps: list[str] = []
-    if not liquid_rows:
-        setup_gaps.append(NO_LIQUID_ACCOUNT)
-    if floor <= 0:
-        setup_gaps.append("no floor set; the projection uses zero")
-    if not income_count:
-        setup_gaps.append(NO_CONFIRMED_INCOME)
-    if not obligation_count:
-        setup_gaps.append("no obligations")
-    if not goal_rows:
-        setup_gaps.append("no active goals")
-    if not baseline_rows:
-        setup_gaps.append("no spending baselines or history")
-    if not any(row["known"] for row in liquid_rows):
-        setup_gaps.append("no liquid account has a known balance")
 
     liquid = tuple(
         LiquidAccount(
@@ -663,7 +505,6 @@ async def load_inputs(
         )
         for row in goal_rows
     )
-
     balance_ages: list[BalanceAge] = [
         {
             "account": row["name"],
@@ -687,90 +528,44 @@ async def load_inputs(
         }
         for row in card_rows
     ]
-
-    sources: list[SourceRef] = []
-    for row in liquid_rows:
-        sources.append(
-            {
-                "kind": "account",
-                "id": row["id"],
-                "name": row["name"],
-                "detail": (
-                    f"liquid · balance as of {row['as_of_date'].isoformat()}"
-                    if row["as_of_date"]
-                    else "liquid · balance unknown"
-                ),
-                "amount_paise": int(row["balance_paise"]),
-            }
-        )
-    for row in card_rows:
-        sources.append(
-            {
-                "kind": "card",
-                "id": row["id"],
-                "name": row["name"],
-                "detail": (
-                    f"statement day {row['statement_day']} · due day {row['due_day']} · "
-                    f"outstanding {row['outstanding_paise']} paise"
-                ),
-                "amount_paise": int(row["outstanding_paise"]),
-            }
-        )
-    sources.extend(schedule_sources.values())
-    for row in goal_rows:
-        sources.append(
-            {
-                "kind": "goal",
-                "id": row["id"],
-                "name": row["name"],
-                "detail": (
-                    f"saved {row['saved_paise']} of {row['target_paise']} paise"
-                    + (f" · due {row['deadline'].isoformat()}" if row["deadline"] else "")
-                ),
-                "amount_paise": int(row["target_paise"]),
-            }
-        )
-    for row in baseline_rows:
-        days = int(row["real_days"])
-        origin = "from your history" if row["source"] == "computed" else "from your setup estimate"
-        detail = f"{money(int(row['amount_per_day_paise']))['text']}/day {origin}"
-        if days:
-            detail += f" · {days} real day" + ("" if days == 1 else "s")
-        sources.append(
-            {
-                "kind": "category",
-                "id": row["id"],
-                "name": row["category"],
-                "detail": detail,
-                "amount_paise": int(row["amount_per_day_paise"]),
-            }
-        )
-    sources.extend(owed_sources)
-    unique: dict[tuple[str, str], SourceRef] = {}
-    for source in sources:
-        unique[(source["kind"], source["id"])] = source
     outside = any(
         row["outside_text"]
         for row in await conn.fetch("SELECT outside_text FROM schedules WHERE active")
     ) or any(row["outside_text"] for row in await conn.fetch("SELECT outside_text FROM payees"))
 
-    return ProjectionInput(
+    return LedgerSnapshot(
         as_of=as_of,
-        floor_paise=floor,
+        floor_paise=int(settings["floor_paise"] or 0),
         liquid=liquid,
-        events=tuple(sorted(events, key=lambda event: (event.date, event.name))),
         cards=cards,
         goals=goals,
-        categories=tuple(categories),
+        occurrences=tuple(occurrences),
+        schedules=tuple(
+            ConfiguredSchedule(kind=row["kind"], confirmed=bool(row["confirmed"]), ends=row["ends"])
+            for row in schedule_rows
+        ),
+        owed=tuple(owed_events),
+        categories=tuple(await _category_rows(conn)),
+        spend=tuple(await _spend_rows(conn, as_of)),
         ask_horizon_days=horizon_days,
-        data_quality={
-            "balance_ages": balance_ages,
-            "baseline_sources": baseline_rows,
-            "gaps": gaps,
-            "setup_gaps": setup_gaps,
-            "outside_text": outside,
-        },
-        sources=tuple(unique.values()),
+        gaps=tuple(gaps),
+        balance_ages=tuple(balance_ages),
+        schedule_sources=tuple(schedule_sources.values()),
+        owed_sources=tuple(owed_sources),
+        outside_text=outside,
+    )
+
+
+async def load_inputs(
+    conn: Connection,
+    *,
+    as_of: date | None = None,
+    horizon_days: int | None = None,
+    known_then: bool = False,
+) -> ProjectionInput:
+    """Build the pure engine's inputs from the ledger as of ``as_of``."""
+    return build_inputs(
+        await load_snapshot(conn, as_of=as_of, horizon_days=horizon_days, known_then=known_then)
     )
 
 
@@ -928,4 +723,4 @@ def card(result: Projection) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["card", "load_inputs", "project", "summary"]
+__all__ = ["card", "load_inputs", "load_snapshot", "project", "summary"]

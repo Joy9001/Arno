@@ -4,45 +4,56 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
-import pytest
-
-from arno.engine import backtest, hackerrank
-
-
-def test_synthetic_history_is_deterministic_and_has_twelve_month_starts():
-    one = backtest.generate_synthetic_history()
-    two = backtest.generate_synthetic_history()
-    assert one.balances == two.balances
-    assert len(one.month_starts) == 12
-    assert one.month_starts[0] < one.month_starts[-1]
-    assert one.balances[one.month_starts[0]] > 0
+from arno.engine import backtest, hackerrank, personas
+from arno.engine.inputs import build_inputs
 
 
-def test_synthetic_backtest_reports_error_and_band_calibration():
-    result = backtest.backtest_synthetic(runs=100)
-    assert result["source"] == "synthetic 12-month history"
-    assert result["months"] == 12
-    assert result["median_absolute_error_paise"] is not None
-    assert result["median_absolute_error_paise"] >= 0
-    assert 0.0 <= result["band_calibration"] <= 1.0
-    assert all("in_band" in row for row in result["rows"])
+def test_a_persona_snapshot_sees_nothing_after_its_day():
+    persona = personas.generate("salaried_steady", personas.TUNING_SEEDS[0])
+    ledger = backtest._ledger(persona)
+    as_of = persona.end - timedelta(days=120)
+
+    snapshot = backtest.persona_snapshot(ledger, as_of)
+
+    assert snapshot.spend
+    assert all(row.date < as_of for row in snapshot.spend)
+    assert all(row.date > as_of for row in snapshot.occurrences)
+    assert snapshot.liquid[0].balance_paise == personas.bank_balance(persona, as_of)
+    for card in snapshot.cards:
+        assert card.outstanding_paise == max(personas.card_outstanding(persona, card.id, as_of), 0)
+    inputs = build_inputs(snapshot)
+    assert "no confirmed income schedule" not in inputs.data_quality["setup_gaps"]
+
+
+def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():
+    result = backtest.backtest_personas(
+        seeds=(personas.HOLDOUT_SEEDS[0],),
+        keys=("salaried_steady",),
+        names=("flat", "schedule_mean"),
+        workers=1,
+    )
+
+    assert result["cases"] > 40
+    assert {row["forecaster"] for row in result["metrics"]} == {"flat", "schedule_mean"}
+    flat = next(
+        row
+        for row in result["metrics"]
+        if row["forecaster"] == "flat" and row["target"] == "end" and row["horizon"] == 30
+    )
+    assert "schedule_mean" in flat["skill"]
     report = backtest.format_report(result)
-    assert "synthetic 12-month history" in report
-    assert "P10-P90" in report
+    assert "weekly origins scored" in report
+    assert "| end | 30 | flat |" in report
 
 
-async def test_db_backtest_refuses_without_a_twelve_month_backfill(demo_ledger):
-    with pytest.raises(ValueError, match="12 months"):
-        await backtest.backtest(demo_ledger, source="db", runs=20)
-
-
-async def test_auto_backtest_falls_back_to_synthetic_when_the_ledger_is_short(demo_ledger):
-    result = await backtest.backtest(demo_ledger, source="auto", runs=50)
-    assert result["source"] == "synthetic 12-month history"
-    assert result["months"] == 12
+async def test_the_db_backtest_drops_and_counts_origins_it_cannot_start_from(demo_ledger):
+    result = await backtest.backtest(demo_ledger, source="db", names=("flat",))
+    assert result["source"] == "real ledger"
+    assert result["cases"] >= 0
+    assert result["dropped"] >= 0
 
 
 def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:

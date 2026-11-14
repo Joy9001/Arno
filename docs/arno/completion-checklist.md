@@ -197,9 +197,8 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 ### Engine measures (L5), after the backfill
 
-- [ ] **Milestone 29:** run `arno backtest` on the real backfill, and publish the median
-      30-day error and band calibration in place of the synthetic block. Remove the TODO at
-      `engine/backtest.py:413`.
+- [ ] **Milestone 29:** run `arno backtest --source db --publish` on the real backfill, so its
+      scores replace the synthetic-household block in the README.
 - [ ] Set the forecast-accuracy target in `system-design.md`. The success measures said to set it
       after the first real backtest.
 - [x] **Milestone 30:** `arno hackerrank --dataset <folder>` scored 88.8% on the 25 samples:
@@ -348,8 +347,8 @@ it could not; the groups above keep their original detail.
 
 - [ ] **Milestone 29, the backtest.** A run against the copy refused to publish: with no income
       schedule in the ledger, every month is unusable as a measurement. Add the salary schedule in
-      chat (or setup), then `uv run arno backtest --publish`, and set the accuracy target in
-      `system-design.md` from the result.
+      chat (or setup), then `uv run arno backtest --source db --publish`, and set the accuracy
+      target in `system-design.md` from the result.
 - [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
       months under `private/statements/union-bank/` and run `arno import-spike`.
 - [ ] **Milestone 24 and the remaining Slice cycles.** Several repayments are missing from the

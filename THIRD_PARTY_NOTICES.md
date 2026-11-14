@@ -116,6 +116,7 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `httpx2` | BSD-3-Clause |
 | `genai-prices` | MIT |
 | `msoffcrypto-tool` | MIT |
+| `numpy` | BSD-3-Clause (bundled libraries below) |
 | `olefile` | BSD |
 | `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | Apache-2.0 |
 | `pydantic` | MIT |
@@ -133,7 +134,11 @@ audit in `scripts/license_audit.py` covers every transitive package too.
 | `uvicorn` | BSD-3-Clause |
 | `webauthn` | BSD-3-Clause |
 
-Weak-copyleft libraries are used unmodified: `pywebpush` is MPL-2.0.
+Weak-copyleft libraries are used unmodified: `pywebpush` is MPL-2.0. NumPy's Linux wheel
+bundles OpenBLAS and LAPACK (BSD-3-Clause), `libgfortran` (GPL-3.0-or-later WITH
+GCC-exception-3.1, the same runtime exception as the base image's `libgcc`), and `libquadmath`
+(LGPL-2.1-or-later), all as unmodified shared libraries; their texts are in NumPy's
+`LICENSE.txt`.
 These are the direct dependency licenses. Arno's own source is MIT (`LICENSE`). The
 `python:3.14-slim` base image ships Debian packages under their own licenses, and the database
 and Phoenix services run as separate Compose images with their own licenses, listed under

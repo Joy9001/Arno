@@ -434,20 +434,34 @@ def test_a_monthly_charge_on_a_short_month_end_suggests_the_last_day():
     assert _suggested_rule(30, date(2026, 1, 15)) == "FREQ=MONTHLY;BYMONTHDAY=15"
 
 
-def test_backtest_median_error_and_band_calibration_are_computed():
-    from arno.engine.backtest import _summarize
+def test_backtest_summary_scores_each_forecaster_with_an_interval():
+    from arno.engine.backtest import Score, summarize
 
-    rows = [
-        {"error_paise": 10, "absolute_error_paise": 10, "in_band": True},
-        {"error_paise": -20, "absolute_error_paise": 20, "in_band": False},
-        {"error_paise": 30, "absolute_error_paise": 30, "in_band": True},
-        {"error_paise": 40, "absolute_error_paise": 40, "in_band": False},
-    ]
-    result = _summarize(rows, "test")
-    assert result["months"] == 4
-    assert result["median_error_paise"] == 20
-    assert result["median_absolute_error_paise"] == 25
-    assert result["band_calibration"] == 0.5
+    def score(group: str, day: int, crps: float, covered: bool) -> Score:
+        return Score(
+            group=group,
+            as_of=date(2026, 1, day),
+            forecaster="flat",
+            target="end",
+            horizon=7,
+            crps=crps,
+            pinball=(1.0, 2.0, 3.0),
+            covered=covered,
+            width=100,
+            pit=0.5,
+            breach_probability=None,
+            breached=None,
+        )
+
+    rows = [score("a", 1, 10, True), score("a", 8, 30, False), score("b", 1, 20, True)]
+    result = summarize(rows, source="test", dropped=0, names=["flat"])
+    (row,) = result["metrics"]
+    assert result["cases"] == 3
+    assert row["crps"]["mean"] == 20
+    assert row["crps"]["low"] < 20 < row["crps"]["high"]
+    assert row["coverage"]["mean"] == 2 / 3
+    assert row["width_paise"] == 100
+    assert row["pinball"] == [1.0, 2.0, 3.0]
 
 
 def test_a_month_end_recurrence_keeps_its_day_of_month():

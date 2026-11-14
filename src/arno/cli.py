@@ -528,27 +528,37 @@ def eval_command(
         raise typer.Exit(code=1)
 
 
-async def _run_backtest(settings: Settings, *, source: str, runs: int) -> Any:
+async def _run_backtest(settings: Settings, *, source: str) -> Any:
     from arno.engine.backtest import backtest as run_backtest
 
     async with connect(settings.database_url) as conn:
-        return await run_backtest(conn, source=source, runs=runs)
+        return await run_backtest(conn, source=source)
 
 
 @app.command("backtest")
 def backtest_command(
-    source: str = typer.Option("auto", help="auto, db, or synthetic."),
-    runs: int = typer.Option(1_000, help="Seeded walks for each month."),
+    source: str = typer.Option("personas", help="personas (synthetic) or db (the real ledger)."),
+    seeds: str = typer.Option(
+        "holdout", help="Persona seeds: tuning (to choose settings) or holdout (to publish)."
+    ),
     publish: bool = typer.Option(
-        True, "--publish/--no-publish", help="Replace the README backtest section."
+        False, "--publish/--no-publish", help="Replace the README backtest section."
     ),
 ) -> None:
-    """Run project() as of each month's first day and compare with the balance 30 days later."""
-    from arno.engine.backtest import format_report, publish_report
+    """Forecast as of weekly past days and score each forecast against what happened next."""
+    from arno.engine.backtest import SEED_SETS, backtest_personas, format_report, publish_report
 
-    settings = _settings()
     try:
-        result = asyncio.run(_run_backtest(settings, source=source, runs=runs))
+        if source == "personas":
+            if seeds not in SEED_SETS:
+                raise ValueError("seeds is tuning or holdout")
+            if publish and seeds != "holdout":
+                raise ValueError("only the holdout seeds are published")
+            result = backtest_personas(seeds=SEED_SETS[seeds])
+        elif source == "db":
+            result = asyncio.run(_run_backtest(_settings(), source=source))
+        else:
+            raise ValueError("source is personas or db")
     except ValueError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from exc

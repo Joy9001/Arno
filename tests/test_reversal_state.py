@@ -32,7 +32,7 @@ from arno.ledger.movements import (
 )
 from arno.ledger.payees import create_payee
 from arno.ledger.uncategorized import uncategorized_rows
-from arno.tools.projection import _spend_categories
+from arno.tools.projection import load_inputs
 from arno.tools.read import query_movements, summarize_spending
 from arno.tools.recaps import _spending_days, recap
 
@@ -445,9 +445,9 @@ async def test_baselines_projection_patterns_recaps_and_loan_interest_across_und
     as_of_after = d3 + timedelta(days=1)
     base_rev = await recompute_baselines(ledger, as_of=as_of_after)
     assert base_rev["computed"] == 0
-    spend_cats_rev, _, gaps_rev = await _spend_categories(
-        ledger, as_of=as_of_after, covered_category_ids=set()
-    )
+    inputs_rev = await load_inputs(ledger, as_of=as_of_after)
+    spend_cats_rev = inputs_rev.categories
+    gaps_rev = inputs_rev.data_quality.get("gaps") or []
     assert all("uncategorized spending" not in g for g in gaps_rev)
     assert any("Groceries has only 2 real spending days" in g for g in gaps_rev)
     assert all(c.name != "Groceries" for c in spend_cats_rev)
@@ -467,9 +467,9 @@ async def test_baselines_projection_patterns_recaps_and_loan_interest_across_und
 
     base_res = await recompute_baselines(ledger, as_of=as_of_after)
     assert base_res["computed"] == 1
-    spend_cats_res, _, gaps_res = await _spend_categories(
-        ledger, as_of=as_of_after, covered_category_ids=set()
-    )
+    inputs_res = await load_inputs(ledger, as_of=as_of_after)
+    spend_cats_res = inputs_res.categories
+    gaps_res = inputs_res.data_quality.get("gaps") or []
     assert any(
         c.name == "Groceries" and sum(amt for _, amt in c.history) == 45_000 for c in spend_cats_res
     )

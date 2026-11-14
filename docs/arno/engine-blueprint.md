@@ -1,9 +1,11 @@
 # Engine blueprint: the next projection, affordability, pattern, and money engine
 
-**Status: decided on November 13, 2026, and not yet built.** The decisions of section 11 are
+**Status: decided on November 13, 2026, and being built.** The decisions of section 11 are
 recorded in [`plan.md`](plan.md) §6, which owns them. Until a step of section 10 lands,
 `design.md` and `tools.md` describe the shipped engine. Written against `src/arno/engine` at
-commit `4d37028`.
+commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic households the
+shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat balance
+forecasts the end balance better than it does (README, "Projection backtest").
 Revised the same day after two external reviews; each accepted finding was first checked against
 the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 

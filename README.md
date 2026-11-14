@@ -84,31 +84,43 @@ Run notes:
 
 ### Projection backtest
 
-The projection runs from the first day of each month, and its median is compared with the actual
-balance 30 days later. This run uses synthetic history, because a real ledger needs an income
-schedule before the backtest will publish its result.
+Each forecaster runs from 52 weekly past origins on ten synthetic households built to break its
+assumptions (`src/arno/engine/personas.py`, which shares no code with the engine). Every forecast
+is scored as a distribution against what happened over the next 7 to 90 days, beside three
+baselines. These numbers come from the held-out seeds; settings are chosen on the tuning seeds. A
+real ledger is scored the same way with `arno backtest --source db` once it has a confirmed
+income schedule.
 
 <!-- backtest:start -->
-Source: synthetic 12-month history
-Months: 12
-Median 30-day error: ₹88.67
-Median absolute 30-day error: ₹233.74
-Actual balance inside the P10-P90 band: 75% of months
+Source: synthetic personas, seeds 201, 202. 978 weekly origins scored, 0 dropped for missing setup.
+CRPS is the forecast's distance from the outcome in rupees (lower is better); skill is against `schedule_mean` with its Diebold-Mariano p-value; coverage is how often the outcome fell inside P10-P90, with a 95% interval.
 
-| Month start | Actual | Median | P10 | P90 | In band |
-|---|---|---|---|---|---|
-| 2025-10-01 | ₹4,72,551.58 | ₹4,72,811.82 | ₹4,72,478.56 | ₹4,73,145.68 | yes |
-| 2025-11-01 | ₹5,25,711.74 | ₹5,26,037.26 | ₹5,25,698.54 | ₹5,26,351.40 | yes |
-| 2025-12-01 | ₹5,79,351.36 | ₹5,79,250.32 | ₹5,78,917.09 | ₹5,79,579.22 | yes |
-| 2026-01-01 | ₹6,33,277.65 | ₹6,32,310.62 | ₹6,32,000.05 | ₹6,32,652.50 | no |
-| 2026-02-01 | ₹6,71,848.12 | ₹6,71,795.66 | ₹6,71,448.90 | ₹6,72,142.88 | yes |
-| 2026-03-01 | ₹7,41,344.10 | ₹7,41,516.62 | ₹7,41,123.74 | ₹7,41,859.30 | yes |
-| 2026-04-01 | ₹7,94,873.06 | ₹7,94,915.70 | ₹7,94,510.32 | ₹7,95,292.25 | yes |
-| 2026-05-01 | ₹8,48,378.18 | ₹8,48,675.72 | ₹8,48,299.18 | ₹8,49,036.35 | yes |
-| 2026-06-01 | ₹9,01,466.74 | ₹9,01,601.44 | ₹9,01,291.52 | ₹9,01,930.10 | yes |
-| 2026-07-01 | ₹9,54,365.84 | ₹9,54,962.78 | ₹9,54,619.59 | ₹9,55,317.13 | no |
-| 2026-08-01 | ₹10,08,513.93 | ₹10,07,290.74 | ₹10,06,926.46 | ₹10,07,648.05 | no |
-| 2026-09-01 | ₹10,62,420.57 | ₹10,62,213.33 | ₹10,61,844.64 | ₹10,62,584.24 | yes |
+| Target | Days | Forecaster | CRPS | Skill (p) | P10-P90 coverage | Width | Breach Brier |
+|---|---|---|---|---|---|---|---|
+| end | 7 | flat | ₹53,393.29 | -475.5% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 7 | schedule | ₹9,007.68 | +2.9% (0.19) | 0% (0%-1%) | ₹0 | - |
+| end | 7 | schedule_mean | ₹9,278.23 | - | 0% (0%-0%) | ₹0 | - |
+| end | 7 | engine_walk | ₹8,285.29 | +10.7% (0.00) | 30% (27%-33%) | ₹5,730.15 | - |
+| lowest | 7 | flat | ₹28,045.89 | -331.5% (0.00) | 4% (3%-6%) | ₹0 | 0.011 |
+| lowest | 7 | schedule | ₹6,242.09 | +4.0% (0.16) | 3% (2%-5%) | ₹0 | 0.013 |
+| lowest | 7 | schedule_mean | ₹6,499.68 | - | 2% (1%-3%) | ₹0 | 0.027 |
+| lowest | 7 | engine_walk | ₹5,591.58 | +14.0% (0.00) | 33% (30%-36%) | ₹5,161.41 | 0.021 |
+| end | 30 | flat | ₹21,278.19 | +10.2% (0.20) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule | ₹32,935.76 | -39.0% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule_mean | ₹23,701.12 | - | 0% (0%-0%) | ₹0 | - |
+| end | 30 | engine_walk | ₹21,181.02 | +10.6% (0.00) | 24% (20%-27%) | ₹13,228.42 | - |
+| lowest | 30 | flat | ₹51,121.18 | -217.4% (0.00) | 2% (1%-3%) | ₹0 | 0.044 |
+| lowest | 30 | schedule | ₹16,048.65 | +0.3% (0.94) | 2% (1%-2%) | ₹0 | 0.080 |
+| lowest | 30 | schedule_mean | ₹16,104.53 | - | 1% (0%-1%) | ₹0 | 0.152 |
+| lowest | 30 | engine_walk | ₹14,117.04 | +12.3% (0.00) | 23% (20%-27%) | ₹10,621.29 | 0.139 |
+| end | 90 | flat | ₹35,192.98 | +37.1% (0.01) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule | ₹1,49,708.04 | -167.5% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule_mean | ₹55,965.58 | - | 0% (0%-0%) | ₹0 | - |
+| end | 90 | engine_walk | ₹50,872.41 | +9.1% (0.00) | 30% (25%-36%) | ₹35,483.55 | - |
+| lowest | 90 | flat | ₹64,795.94 | -83.9% (0.00) | 1% (1%-2%) | ₹0 | 0.177 |
+| lowest | 90 | schedule | ₹35,726.76 | -1.4% (0.89) | 1% (0%-1%) | ₹0 | 0.246 |
+| lowest | 90 | schedule_mean | ₹35,243.07 | - | 1% (0%-1%) | ₹0 | 0.225 |
+| lowest | 90 | engine_walk | ₹32,133.24 | +8.8% (0.00) | 30% (25%-35%) | ₹22,102.04 | 0.208 |
 <!-- backtest:end -->
 
 ### HackerRank "Buy or Wait"

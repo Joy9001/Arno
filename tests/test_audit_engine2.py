@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from arno.engine.backtest import format_report
+from arno.engine.backtest import Score, format_report, summarize
 from arno.engine.projection import (
     CurvePoint,
     LiquidAccount,
@@ -231,27 +231,26 @@ async def test_a_projection_as_of_a_past_day_ignores_rows_created_later(ledger):
 
 
 def test_a_real_backfill_report_states_what_it_could_not_know():
-    result = {
-        "source": "real backfill",
-        "months": 1,
-        "median_error_paise": 0,
-        "median_absolute_error_paise": 0,
-        "band_calibration": 1.0,
-        "rows": [
-            {
-                "as_of": "2026-01-01",
-                "actual_paise": 100_000,
-                "median_paise": 100_000,
-                "p10_paise": 90_000,
-                "p90_paise": 110_000,
-                "in_band": True,
-            }
-        ],
-    }
-    report = format_report(result)
-    assert "created after a month start are excluded" in report
+    score = Score(
+        group="ledger",
+        as_of=date(2026, 1, 1),
+        forecaster="flat",
+        target="end",
+        horizon=7,
+        crps=0.0,
+        pinball=(0.0, 0.0, 0.0),
+        covered=True,
+        width=0,
+        pit=0.5,
+        breach_probability=None,
+        breached=None,
+    )
+    real = summarize([score], source="real ledger", dropped=0, names=["flat"])
+    report = format_report(real)
+    assert "created after an origin are excluded" in report
     assert "read in its current form" in report
-    assert "created after a month start" not in format_report(result | {"source": "synthetic"})
+    synthetic = summarize([score], source="synthetic personas", dropped=0, names=["flat"])
+    assert "created after an origin" not in format_report(synthetic)
 
 
 # --- recurrence: a month-end day never skips a month ----------------------------------------
