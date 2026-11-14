@@ -526,7 +526,8 @@ def afford(
             "No liquid account has a known balance, so there is no affordability verdict."
         )
     result["data_quality"]["gaps"].append(
-        f"the verdict uses {runs} seeded walks at a {threshold:.0%} floor probability threshold"
+        f"the verdict uses {runs:,} seeded scenarios at a {threshold:.0%} floor probability "
+        "threshold"
     )
     return result
 

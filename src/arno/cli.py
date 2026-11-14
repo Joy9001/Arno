@@ -625,7 +625,7 @@ def hackerrank_command(
         1,
         "--runs",
         min=1,
-        help="Runs of the seeded walk. The sample has no spend pools, so every run is the same.",
+        help="Seeded scenarios. The sample has no spend pools, so every scenario is the same.",
     ),
 ) -> None:
     """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""

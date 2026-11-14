@@ -209,7 +209,7 @@ def render_template(numbers: dict[str, Any]) -> str:
         )
     elif floor["first_crossing"]:
         floor_text = (
-            f"The projection's median path crosses your floor on {floor['first_crossing']}."
+            f"One in ten projected futures goes below your floor by {floor['first_crossing']}."
         )
     else:
         floor_text = (

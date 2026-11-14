@@ -310,12 +310,14 @@ UI: daily curve (median and P10-P90), source IDs, projection card.
 
 ```
 horizon = max(90 days, furthest goal deadline, asked horizon)
-inputs  = liquid balances, expanded schedules, card cycles, goal contributions,
-          money owed with an expected date, baselines
-runs    = 1,000 seeded walks; each day apply income, obligations, card dues,
+inputs  = liquid balances, expanded schedules, card cycles split at the last statement close,
+          goal contributions, money owed with an expected date, baselines
+runs    = 16,384 seeded scenarios; each day apply income, card bills due, obligations,
           goal contributions, resampled variable spend
-curve   = median and P10-P90 for each day
-floor_probability = share of runs that never cross the floor
+curve   = median and P10-P90 for each day, as order statistics
+floor_probability = share of scenarios that never cross the floor
+first_floor_crossing = first date by which more than 10% of scenarios have crossed
+obligations_met = every obligation is paid in at least 99% of scenarios
 if hypothetical:
     rerun with it
     if threshold met, no goal slips, no obligation missed: verdict = yes
@@ -329,9 +331,9 @@ not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal 
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
 
-This is the shipped engine. Its replacement is decided (`plan.md` §6) and specified in
-[`engine-blueprint.md`](engine-blueprint.md): 16,384 scenarios, an explicit obligation threshold,
-and no goal-slip clause. This section changes as each step lands.
+The scenario kernel of [`engine-blueprint.md`](engine-blueprint.md) has landed. The verdict and
+its tradeoffs still use the shipped rules until the blueprint's affordability step lands: that
+step drops the goal-slip clause and finds each tradeoff from the same scenarios.
 
 ### `run_query`
 

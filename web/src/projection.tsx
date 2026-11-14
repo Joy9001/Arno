@@ -375,8 +375,8 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
         {floorSet && floorText ? `Floor ${floorText} · ` : ""}
         Lowest median point {formatPaise(medianLow)} on {dateLabel(payload.median_low.date)}
         {payload.first_floor_crossing
-          ? ` · median crosses ${floorSet ? "the floor" : "₹0"} on ${dateLabel(payload.first_floor_crossing)}`
-          : ` · the median never crosses ${floorSet ? "the floor" : "₹0"}`}
+          ? ` · 1 in 10 futures goes below ${floorSet ? "the floor" : "₹0"} by ${dateLabel(payload.first_floor_crossing)}`
+          : ` · fewer than 1 in 10 futures go below ${floorSet ? "the floor" : "₹0"}`}
         {floorSet && payload.optimistic
           ? ` · with unconfirmed income: ${percent(payload.optimistic.floor_probability)} above floor (optimistic only)`
           : ""}

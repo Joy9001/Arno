@@ -32,7 +32,7 @@ async def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
     payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
     assert payload["numbers"]["week"]["from"] == "2026-10-26"
     assert "Your week" in payload["template"]
-    assert "90-day chance" in payload["template"] or "crosses your floor" in payload["template"]
+    assert "90-day chance" in payload["template"] or "goes below your floor" in payload["template"]
     assert render_template(payload["numbers"]) == payload["template"]
     import json
 

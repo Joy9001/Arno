@@ -48,7 +48,7 @@ const MIN_HORIZON_DAYS = 90;
 const MAX_HORIZON_DAYS = 3650;
 const EMI_TENURES = [3, 6, 9, 12, 18, 24, 36, 48];
 const PROJECTION_DESCRIPTION =
-  "The ledger behind today and a seeded walk ahead of it: income, obligations, instalments, card dues, goal contributions, and variable spend. The band is the P10–P90 spread; the floor probability is not a guarantee.";
+  "The ledger behind today and thousands of seeded futures ahead of it: income, obligations, instalments, card dues, goal contributions, and variable spend. The band is the P10–P90 spread; the floor probability is not a guarantee.";
 
 const VERDICT: Record<string, { text: string; tone: string }> = {
   yes: { text: "Yes", tone: "good" },
@@ -280,8 +280,8 @@ export function ProjectionPanel() {
           {!gated && (
             <p className="moneyv-facts">
               {data.first_floor_crossing
-                ? `The median crosses ${floorSet ? "the floor" : "zero"} on ${formatDate(data.first_floor_crossing)}`
-                : `The median never crosses ${floorSet ? "the floor" : "zero"} within the horizon`}
+                ? `1 in 10 futures goes below ${floorSet ? "the floor" : "zero"} by ${formatDate(data.first_floor_crossing)}`
+                : `Fewer than 1 in 10 futures go below ${floorSet ? "the floor" : "zero"} within the horizon`}
               {data.optimistic
                 ? ` · with unconfirmed income: ${percent(data.optimistic.floor_probability)} above ${
                     floorSet ? "floor" : "zero"

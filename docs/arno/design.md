@@ -416,9 +416,9 @@ agent replies render as plain text ([`platform.md`](platform.md#security)).
 One function in code, seeded so the same inputs always give the same output. No LLM
 involvement—this is the tested arithmetic every affordability verdict comes from.
 
-This section and [Pattern detection](#pattern-detection) describe the shipped engine. Its
-replacement is decided (`plan.md` §6) and specified in
-[`engine-blueprint.md`](engine-blueprint.md); each part here changes when its step lands.
+The scenario kernel ([`engine-blueprint.md`](engine-blueprint.md) §4) has landed; the parts of
+this section and [Pattern detection](#pattern-detection) that a later step of that blueprint
+replaces change when it lands.
 
 ### Inputs
 
@@ -426,27 +426,36 @@ replacement is decided (`plan.md` §6) and specified in
 - Horizon: max(90 days, furthest goal deadline, the asked horizon).
 - Scheduled events expanded from the `schedules` table over the horizon. Unconfirmed variable
   income is shown as an optimistic case only, never counted toward a verdict.
-- Card cycles: card outstanding plus projected card spend, paid in full from a bank account on each
-  card's due date.
-- Variable spend, simulated: each run fills the horizon by resampling real past days of spend for
-  each category, excluding categories already covered by obligations. A thousand runs give the
-  spread. Until a category has enough real days, its setup estimate is used as a flat rate and the
-  `data_quality` field says so. Single days are resampled with weekday and weekend pools kept
-  apart, the L5 decision in `plan.md` §6.
+- Card cycles: each card's outstanding is split at its last statement close. The closed bill is
+  due on its due date (today, if that has passed); spend since the close joins the next bill.
+- Variable spend, simulated: each scenario fills the horizon by resampling real past days of spend
+  for each category, excluding categories already covered by obligations. Until a category has
+  enough real days, its setup estimate is used as a flat rate and the `data_quality` field says
+  so. Single days are resampled with weekday and weekend pools kept apart, the L5 decision in
+  `plan.md` §6. How days are drawn is one switch per change in `projection.Model`; a switch ships
+  only when it beats the one before it on the backtest.
 - Goal contributions move money into a goal's account; those fenced savings are not spendable.
 - Money owed counts only when its label has an `expected_date`.
 
 ### Walk
 
-Each run walks day by day, applying events in a fixed order: income, obligations and
-installments, card dues, goal contributions, and variable spend.
+16,384 seeded scenarios run at once, in whole paise. The draw for a scenario on a day is a hash of
+the seed, the pool, the scenario, and the date, so a scenario never depends on how many run. Each
+day applies events in a fixed order: income, card bills due, obligations and installments, one-off
+payments and goal contributions, then variable spend. Card spend is charged up to the card's
+limit and the rest leaves cash that day; used credit falls only when a bill is paid.
 
 ### Output
 
 - Daily liquid and spendable balance: the median, and a P10-P90 band (in 8 of 10 simulated
-  futures the balance stays inside it).
-- **Floor probability:** the share of runs that never cross the floor.
-- Minimum point and date on the median path; first date the median goes below the floor, if any.
+  futures the balance stays inside it). Each is an order statistic, a balance that one scenario
+  actually reached.
+- **Floor probability:** the share of scenarios that never cross the floor, with a 95% interval;
+  `data_quality` flags a borderline result when that interval contains the threshold.
+- Minimum point and date on the median path.
+- **First floor crossing:** the first date by which more than 10% of scenarios have crossed the
+  floor. It is absent exactly when the floor probability passes the 90% threshold.
+- An obligation is met when at least 99% of scenarios can pay it on its date.
 - Goal completion dates.
 - Source IDs: the balances, schedules, and baselines that fed the run, for citations.
 - `data_quality`: balance ages, baseline sources, coverage gaps. The agent must state these.

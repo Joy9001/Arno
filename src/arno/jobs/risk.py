@@ -2,9 +2,10 @@
 
 An episode begins when the floor probability falls below the engine's own threshold (against the
 floor, or against zero when no floor is set), or when the first projected floor crossing moves
-earlier. The state row is updated in the same transaction as the warning, so a retried job cannot
-send the same episode twice. When the picture recovers the state re-arms, and a later turn warns
-again.
+earlier. The crossing is the first date by which more than 10% of projected futures have gone
+below the floor. The state row is updated in the same transaction as the warning, so a retried job
+cannot send the same episode twice. When the picture recovers the state re-arms, and a later turn
+warns again.
 """
 
 from __future__ import annotations
@@ -59,8 +60,8 @@ async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str,
             )
         if crossing_moved:
             parts.append(
-                f"The projection now first goes {below} on {crossing_text}, earlier than "
-                f"{last_crossing.isoformat()} before."
+                f"One in ten projected futures now goes {below} by {crossing_text}, "
+                f"earlier than {last_crossing.isoformat()} before."
             )
         parts.append(
             (

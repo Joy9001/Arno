@@ -1,27 +1,31 @@
-"""The seeded, day-by-day cash projection.
+"""The cash projection: thousands of seeded futures, and every statistic from the same ones.
 
 This module is pure: it never touches the database, the clock, or the network. The database
 adapter in `arno.tools.projection` turns the ledger into these inputs, and the affordability
 verdict in `arno.engine.affordability` wraps them. Every affordability number the product
-states comes through this walk.
+states comes through `project`.
 
-Money is whole paise. A day's balance is the sum of liquid accounts; card spend is a liability
-until its due date, when the card's outstanding plus everything charged since the last bill is
-paid in full. Variable spend is resampled from real history, one day at a time, with weekday and
-weekend pools kept apart so weekend clustering survives without resampling whole weeks (the L5
-decision recorded in plan.md §6).
+Money is whole paise. A day's balance is the sum of liquid accounts. Card spend is a liability:
+it is charged up to the card's limit (the rest leaves cash that day) and leaves cash when its
+bill falls due. `Model` says how everyday spend is drawn from history; each of its switches is
+admitted only if it beats the one before it on the backtest. `arno.engine.kernel` does the
+arithmetic for all scenarios at once.
 """
 
 from __future__ import annotations
 
 import calendar
-import random
+import math
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from functools import lru_cache
 from typing import NotRequired, Required, TypedDict
 
-DEFAULT_RUNS = 1_000
+import numpy as np
+
+from arno.engine import kernel
+
+DEFAULT_RUNS = 16_384
 DEFAULT_SEED = 20261103
 FLOOR_THRESHOLD = 0.90
 HISTORY_DAYS = 90
@@ -61,7 +65,7 @@ class BaselineSource(TypedDict):
 
 
 class Simulation(TypedDict):
-    """How the seeded walk ran, so a reader can tell sampling from a flat estimate."""
+    """How the scenarios ran, so a reader can tell sampling from a flat estimate."""
 
     runs: int
     seed: int
@@ -72,6 +76,8 @@ class Simulation(TypedDict):
     obligation_misses: int
     include_unconfirmed: bool
     resampling: str
+    floor_interval: NotRequired[list[float]]
+    floor_shortfall_paise: NotRequired[int]
 
 
 class DataQuality(TypedDict, total=False):
@@ -291,6 +297,9 @@ class CardAccount:
     known: bool = True
     # A positive ledger balance is an overpayment: usable credit beyond the limit.
     credit_paise: int = 0
+    # Spend since the last statement closed, due with the next bill. None: the split is
+    # unknown and the whole outstanding is due on the first due date.
+    unbilled_paise: int | None = None
 
     @property
     def available_credit_paise(self) -> int:
@@ -433,18 +442,6 @@ def horizon_days(inputs: ProjectionInput) -> int:
     return max(1, min(MAX_HORIZON_DAYS, max(BASE_HORIZON_DAYS, asked, furthest)))
 
 
-def percentile(values: list[int], q: float) -> int:
-    """Linear-interpolated percentile, so 1,000 runs give a stable P10 and P90."""
-    if len(values) == 0:
-        return 0
-    ordered = sorted(values)
-    position = (len(ordered) - 1) * q
-    low = int(position)
-    high = min(low + 1, len(ordered) - 1)
-    fraction = position - low
-    return int(round(ordered[low] + (ordered[high] - ordered[low]) * fraction))
-
-
 def _dense_history(category: SpendCategory) -> list[tuple[date, int]]:
     if len(category.history) == 0:
         return []
@@ -470,195 +467,6 @@ def _pools(category: SpendCategory) -> tuple[list[int], list[int], list[int], bo
     for day, amount in history:
         (weekend if day.weekday() >= 5 else weekday).append(amount)
     return weekday, weekend, [amount for _day, amount in history], True
-
-
-def _simulate(
-    inputs: ProjectionInput,
-    *,
-    runs: int,
-    seed: int,
-    include_unconfirmed: bool = False,
-) -> tuple[list[list[int]], Simulation]:
-    """Walk every run and return balances by day (index 0 is as_of)."""
-    days = horizon_days(inputs)
-    start = inputs.as_of
-    end = start + timedelta(days=days)
-
-    events_by_day: dict[date, list[CashEvent]] = {}
-    start_events: list[CashEvent] = []
-    for event in inputs.events:
-        if not event.confirmed and not include_unconfirmed:
-            continue
-        if event.at_start or event.date <= start:
-            start_events.append(event)
-        elif event.date <= end:
-            events_by_day.setdefault(event.date, []).append(event)
-
-    cards = {card.id: card for card in inputs.cards}
-    card_pending: dict[tuple[str, date], int] = {}
-    card_initial_due: dict[str, date] = {}
-    for card in inputs.cards:
-        if card.outstanding_paise > 0:
-            due = _first_due_on_or_after(card, start)
-            if due <= end:
-                card_initial_due[card.id] = due
-
-    category_pools = {category.id: _pools(category) for category in inputs.categories}
-    sampled: list[str] = []
-    flat: list[str] = []
-    for category in inputs.categories:
-        weekday, weekend, _all, real = category_pools[category.id]
-        (sampled if real else flat).append(category.name)
-
-    paths: list[list[int]] = []
-    missed_obligation_runs = 0
-    credit_exceeded = False
-
-    for run in range(runs):
-        rng = random.Random(f"{seed}:{run}")
-        balance = inputs.starting_balance_paise
-        goal_saved = {goal.id: goal.saved_paise for goal in inputs.goals}
-        paid_initial: set[str] = set()
-
-        def charge_card(
-            card_id: str,
-            amount: int,
-            when: date,
-            paid_initial: set[str] = paid_initial,
-        ) -> int:
-            """Add a charge to the card's bill, returning any part that must be paid in cash."""
-            nonlocal credit_exceeded
-            card = cards[card_id]
-            pending = sum(
-                value
-                for (pending_card, _due), value in card_pending.items()
-                if pending_card == card_id
-            )
-            outstanding = 0 if card_id in paid_initial else card.outstanding_paise
-            used = outstanding - card.credit_paise + pending
-            if used + amount > card.credit_limit_paise:
-                excess = used + amount - card.credit_limit_paise
-                credit_exceeded = True
-                amount -= excess
-                due = card_due_date(card, when)
-                if due <= end:
-                    card_pending[(card_id, due)] = card_pending.get((card_id, due), 0) + amount
-                return excess
-            due = card_due_date(card, when)
-            if due <= end:
-                card_pending[(card_id, due)] = card_pending.get((card_id, due), 0) + amount
-            return 0
-
-        def apply_event(event: CashEvent, goal_saved: dict[str, int] = goal_saved) -> None:
-            nonlocal balance
-            amount = event.amount_paise
-            if event.card_id is not None and amount < 0:
-                balance -= charge_card(event.card_id, -amount, max(event.date, start))
-                return
-            if event.goal_id is not None and amount < 0:
-                spent = -amount
-                balance -= spent
-                if event.goal_id in goal_saved:
-                    goal_saved[event.goal_id] += spent
-                return
-            balance += amount
-
-        # A bill already due today is paid today; the first curve point is after it.
-        for card in inputs.cards:
-            if card_initial_due.get(card.id) == start and card.id not in paid_initial:
-                balance -= card.outstanding_paise
-                paid_initial.add(card.id)
-        for event in start_events:
-            apply_event(event)
-        path: list[int] = [balance]
-
-        for offset in range(1, days + 1):
-            day = start + timedelta(days=offset)
-            day_events = events_by_day.get(day, [])
-
-            # 1. Income, including money owed to the user that is expected today.
-            for event in day_events:
-                if event.kind.startswith("income") or event.kind == "owed_receipt":
-                    if event.amount_paise > 0:
-                        apply_event(event)
-
-            # 2. Obligations and installments. A card-charged bill is added to the card.
-            obligation_today = False
-            for event in day_events:
-                if event.kind in {"obligation", "instalment", "owed_payment"}:
-                    obligation_today = True
-                    apply_event(event)
-
-            # 3. Card dues: the initial outstanding on the first due date, plus every charge
-            #    belonging to this bill.
-            for card in inputs.cards:
-                if card_initial_due.get(card.id) == day and card.id not in paid_initial:
-                    balance -= card.outstanding_paise
-                    paid_initial.add(card.id)
-                due_amount = card_pending.pop((card.id, day), 0)
-                if due_amount != 0:
-                    balance -= due_amount
-
-            if obligation_today and balance < 0:
-                missed_obligation_runs += 1
-
-            # 3b. A one-off modelled purchase (the affordability hypothetical) lands on its date.
-            for event in day_events:
-                if event.kind in {"hypothetical", "hypothetical_emi"}:
-                    apply_event(event)
-
-            # 4. Goal contributions: liquid cash moves into a non-liquid goal account.
-            for event in day_events:
-                if event.kind == "goal_contribution":
-                    apply_event(event)
-
-            # 5. Variable spend, resampled one day at a time.
-            for category in inputs.categories:
-                weekday, weekend, all_days, real = category_pools[category.id]
-                if real:
-                    pool = weekend if day.weekday() >= 5 else weekday
-                    if len(pool) == 0:
-                        pool = all_days
-                    amount = rng.choice(pool)
-                else:
-                    amount = category.baseline_per_day_paise
-                if amount <= 0:
-                    continue
-                if category.reduce_ratio > 0 and (
-                    category.reduce_until is None or day <= category.reduce_until
-                ):
-                    amount = int(round(amount * (1 - category.reduce_ratio)))
-                    if amount <= 0:
-                        continue
-                card_part = int(round(amount * category.card_share))
-                card_part = max(0, min(card_part, amount))
-                cash_part = amount - card_part
-                balance -= cash_part
-                if card_part != 0:
-                    card = (
-                        cards.get(category.card_id)
-                        if category.card_id is not None
-                        else next(iter(inputs.cards), None)
-                    )
-                    if card is None:
-                        balance -= card_part
-                    else:
-                        balance -= charge_card(card.id, card_part, day)
-
-            path.append(balance)
-        paths.append(path)
-
-    return paths, {
-        "runs": runs,
-        "seed": seed,
-        "days": days,
-        "categories_sampled": sampled,
-        "categories_flat": flat,
-        "credit_limit_exceeded": credit_exceeded,
-        "obligation_misses": missed_obligation_runs,
-        "include_unconfirmed": include_unconfirmed,
-        "resampling": "single-day, stratified weekday/weekend",
-    }
 
 
 def _goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
@@ -698,45 +506,308 @@ def _goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
     return rows
 
 
-def _summary(
-    inputs: ProjectionInput,
-    paths: list[list[int]],
-    *,
-    runs: int,
-    seed: int,
-    include_unconfirmed: bool,
-    simulation: Simulation,
-) -> Projection:
-    days = horizon_days(inputs)
-    floor = inputs.floor_paise
-    curve: list[CurvePoint] = []
-    for index in range(days + 1):
-        values = [path[index] for path in paths]
-        curve.append(
-            {
-                "date": (inputs.as_of + timedelta(days=index)).isoformat(),
-                "median_paise": percentile(values, 0.50),
-                "p10_paise": percentile(values, 0.10),
-                "p90_paise": percentile(values, 0.90),
-            }
-        )
-    run_minima = [min(path) for path in paths]
-    floor_probability = sum(1 for value in run_minima if value >= floor) / runs if runs > 0 else 0.0
-    median_curve = [point["median_paise"] for point in curve]
-    lowest = min(median_curve)
-    lowest_index = median_curve.index(lowest)
-    first_crossing = next(
-        (point["date"] for point in curve if point["median_paise"] < floor),
-        None,
+@dataclass(frozen=True, slots=True)
+class Model:
+    """How everyday spend is drawn. Each field is one switch the backtest admits or rejects.
+
+    The defaults are the walk shipped before the scenario kernel: one independent draw per
+    category per day from that category's 90-day pool, weekday and weekend apart, and a flat daily
+    rate for a category with too little history.
+    """
+
+    pooling: str = "category"  # "category": one draw per category; "day": whole historical days
+    pool_resampling: bool = False
+    block_length: int = 1
+    recency_half_life_days: int | None = None
+    rare_mad_multiple: int | None = None
+    prior_quarters: tuple[int, ...] | None = None
+
+
+LEGACY_MODEL = Model()
+MODEL = LEGACY_MODEL
+OBLIGATION_THRESHOLD = 0.99
+CROSSING_SHARE = 0.10
+_OBLIGATION_KINDS = frozenset({"obligation", "instalment", "owed_payment"})
+_LATER_KINDS = frozenset({"hypothetical", "hypothetical_emi", "goal_contribution"})
+
+
+def _day_index(as_of: date, day: date, days: int) -> int:
+    offset = (day - as_of).days
+    return offset if 0 <= offset <= days else -1
+
+
+def last_statement_close(statement_day: int, as_of: date) -> date:
+    """The last statement close on or before ``as_of``: spend after it joins the next bill."""
+    close = _next_on_or_after(as_of, statement_day)
+    if close == as_of:
+        return close
+    previous = _add_months(date(close.year, close.month, 1), -1)
+    return _clamped_day(previous.year, previous.month, statement_day)
+
+
+def _card_spec(card: CardAccount, as_of: date, days: int, total: int) -> kernel.CardSpec:
+    due_of_day = np.fromiter(
+        (
+            _day_index(as_of, card_due_date(card, as_of + timedelta(days=t)), days)
+            for t in range(total)
+        ),
+        dtype=np.int64,
+        count=total,
     )
+    bills: dict[int, int] = {}
+    outstanding = card.outstanding_paise
+    if outstanding > 0:
+        if card.unbilled_paise is None:
+            # With no split known, the whole balance is due on the first due date.
+            due = _day_index(as_of, _first_due_on_or_after(card, as_of), days)
+            if due >= 0:
+                bills[due] = outstanding
+        else:
+            unbilled = max(0, min(card.unbilled_paise, outstanding))
+            billed = outstanding - unbilled
+            if billed > 0:
+                # An unpaid closed bill is due on its due date, or today if that has passed.
+                due_day = card_due_date(card, last_statement_close(card.statement_day, as_of))
+                due = 0 if due_day < as_of else _day_index(as_of, due_day, days)
+                if due >= 0:
+                    bills[due] = bills.get(due, 0) + billed
+            if unbilled > 0 and int(due_of_day[0]) >= 0:
+                first = int(due_of_day[0])
+                bills[first] = bills.get(first, 0) + unbilled
+    return kernel.CardSpec(
+        limit=card.credit_limit_paise,
+        used=outstanding - card.credit_paise,
+        due_of_day=due_of_day,
+        bills=bills,
+        obligation=np.zeros(total, dtype=np.int64),
+        other=np.zeros(total, dtype=np.int64),
+    )
+
+
+def _category_pool(
+    category: SpendCategory, card_index: int | None, stream: int
+) -> kernel.Pool | None:
+    weekday, weekend, all_days, real = _pools(category)
+    if real:
+        amounts = all_days
+        classes = [
+            kernel.WEEKEND if day.weekday() >= 5 else kernel.WEEKDAY
+            for day, _amount in _dense_history(category)
+        ]
+    else:
+        amounts = [category.baseline_per_day_paise] * 2
+        classes = [kernel.WEEKDAY, kernel.WEEKEND]
+    del weekday, weekend
+    if not any(amount > 0 for amount in amounts):
+        return None
+    values = np.maximum(np.array(amounts, dtype=np.int64), 0)
+    if card_index is None:
+        card = np.zeros_like(values)
+    else:
+        card = np.array(
+            [
+                max(0, min(int(round(int(value) * category.card_share)), int(value)))
+                for value in values
+            ],
+            dtype=np.int64,
+        )
+    cash = values - card
+    columns: dict[str, kernel.I64] = {"cash": cash}
+    if card_index is not None:
+        columns[f"card{card_index}"] = card
+    if category.reducible:
+        columns["cash_cut"] = cash
+        if card_index is not None:
+            columns[f"card{card_index}_cut"] = card
+    return kernel.Pool(columns=columns, classes=np.array(classes, dtype=np.int8), stream=stream)
+
+
+@dataclass(frozen=True, slots=True)
+class _Prepared:
+    spec: kernel.Spec
+    sampled: list[str]
+    flat: list[str]
+
+
+def _prepare(inputs: ProjectionInput, model: Model) -> _Prepared:
+    days = horizon_days(inputs)
+    total = days + 1
+    as_of = inputs.as_of
+    first_day = as_of.toordinal()
+    classes = np.array(
+        [
+            kernel.WEEKEND if (as_of + timedelta(days=t)).weekday() >= 5 else kernel.WEEKDAY
+            for t in range(total)
+        ],
+        dtype=np.int8,
+    )
+    inflow = np.zeros(total, dtype=np.int64)
+    obligation = np.zeros(total, dtype=np.int64)
+    later = np.zeros(total, dtype=np.int64)
+    unconfirmed = np.zeros(total, dtype=np.int64)
+    obligation_days: set[int] = set()
+    card_index = {card.id: index for index, card in enumerate(inputs.cards)}
+    cards = [_card_spec(card, as_of, days, total) for card in inputs.cards]
+
+    for event in inputs.events:
+        start = event.at_start or event.date <= as_of
+        index = 0 if start else _day_index(as_of, event.date, days)
+        if index < 0:
+            continue
+        amount = event.amount_paise
+        charged = event.card_id if amount < 0 and event.card_id in card_index else None
+        if not event.confirmed:
+            if amount > 0 and event.kind.startswith("income"):
+                unconfirmed[index] += amount
+            continue
+        if start:
+            # Today's events all apply, whatever their kind; a card charge joins its bill.
+            if charged is not None:
+                other = cards[card_index[charged]].other
+                assert other is not None
+                other[0] += -amount
+            elif amount > 0:
+                inflow[0] += amount
+            else:
+                later[0] += -amount
+            continue
+        kind = event.kind
+        if kind.startswith("income") or kind == "owed_receipt":
+            if amount > 0:
+                inflow[index] += amount
+        elif kind in _OBLIGATION_KINDS:
+            obligation_days.add(index)
+            if charged is not None:
+                owed = cards[card_index[charged]].obligation
+                assert owed is not None
+                owed[index] += -amount
+            elif amount > 0:
+                inflow[index] += amount
+            else:
+                obligation[index] += -amount
+        elif kind in _LATER_KINDS:
+            if charged is not None:
+                other = cards[card_index[charged]].other
+                assert other is not None
+                other[index] += -amount
+            elif amount > 0:
+                inflow[index] += amount
+            else:
+                later[index] += -amount
+
+    pools: list[kernel.Pool] = []
+    sampled: list[str] = []
+    flat: list[str] = []
+    for stream, category in enumerate(inputs.categories, start=1):
+        real = _pools(category)[3]
+        (sampled if real else flat).append(category.name)
+        # The card a category's share goes to, as the walk always chose it: its own card, else
+        # the first card; a share with no card at all, or an unknown card, is cash.
+        if category.card_share <= 0 or len(inputs.cards) == 0:
+            index: int | None = None
+        elif category.card_id is None:
+            index = 0
+        else:
+            index = card_index.get(category.card_id)
+        pool = _category_pool(category, index, stream)
+        if pool is not None:
+            pools.append(pool)
+
+    cut_bps = 0
+    cut_until = -1
+    for category in inputs.categories:
+        if category.reduce_ratio > 0:
+            cut_bps = int(round(category.reduce_ratio * 10_000))
+            cut_until = (
+                days
+                if category.reduce_until is None
+                else min(days, (category.reduce_until - as_of).days)
+            )
+            break
+
+    spec = kernel.Spec(
+        start_balance=inputs.starting_balance_paise,
+        days=days,
+        first_day=first_day,
+        classes=classes,
+        inflow=inflow,
+        obligation=obligation,
+        later=later,
+        obligation_days=np.array(sorted(obligation_days), dtype=np.int64),
+        unconfirmed=unconfirmed,
+        floor=inputs.floor_paise,
+        cards=tuple(cards),
+        pools=tuple(pools),
+        cut_bps=cut_bps,
+        cut_until=cut_until,
+    )
+    return _Prepared(spec=spec, sampled=sampled, flat=flat)
+
+
+def _rank(count: int, share: float) -> int:
+    """The 0-based index of the order statistic at rank ceil(share * count)."""
+    return max(1, math.ceil(share * count)) - 1
+
+
+def _first_crossing(as_of: date, crossings: kernel.I64, scenarios: int) -> str | None:
+    # More than 10% of scenarios below the floor: absent exactly when the floor probability passes.
+    over = np.flatnonzero(crossings * 10 > scenarios)
+    return (as_of + timedelta(days=int(over[0]))).isoformat() if len(over) > 0 else None
+
+
+def _median_low(as_of: date, medians: kernel.I64) -> MedianLow:
+    index = int(np.argmin(medians))
+    return {"date": (as_of + timedelta(days=index)).isoformat(), "paise": int(medians[index])}
+
+
+def _summary(
+    inputs: ProjectionInput, prepared: _Prepared, run: kernel.Run, seed: int
+) -> Projection:
+    days = run.days
+    floor = inputs.floor_paise
+    scenarios = run.scenarios
+    as_of = inputs.as_of
+    curve: list[CurvePoint] = [
+        {
+            "date": (as_of + timedelta(days=index)).isoformat(),
+            "median_paise": int(run.curve[index, 1]),
+            "p10_paise": int(run.curve[index, 0]),
+            "p90_paise": int(run.curve[index, 2]),
+        }
+        for index in range(days + 1)
+    ]
+    held = int(np.count_nonzero(run.minima >= floor))
+    low_rank = _rank(scenarios, 0.1)
+    floor_probability = held / scenarios
+    low, high = _wilson(held, scenarios)
+    breaching = run.minima[run.minima < floor]
+    misses = int(np.count_nonzero(run.obligation_failures * 100 > scenarios))
+    simulation: Simulation = {
+        "runs": scenarios,
+        "seed": seed,
+        "days": days,
+        "categories_sampled": prepared.sampled,
+        "categories_flat": prepared.flat,
+        "credit_limit_exceeded": run.credit_exceeded,
+        "obligation_misses": misses,
+        "include_unconfirmed": False,
+        "resampling": _describe(MODEL),
+        "floor_interval": [round(low, 4), round(high, 4)],
+        "floor_shortfall_paise": int(floor - breaching.mean()) if len(breaching) > 0 else 0,
+    }
     data_quality: DataQuality = {**inputs.data_quality}
-    recorded_gaps = data_quality.get("gaps")
-    existing_gaps = list(recorded_gaps) if recorded_gaps is not None else []
-    if simulation["credit_limit_exceeded"]:
-        existing_gaps.append(
+    recorded = data_quality.get("gaps")
+    gaps = list(recorded) if recorded is not None else []
+    if run.credit_exceeded:
+        gaps.append(
             "projected card spend exceeds the card limit; the excess is treated as cash spend"
         )
-    data_quality["gaps"] = existing_gaps
+    if low < FLOOR_THRESHOLD <= high:
+        gaps.append(
+            f"borderline: the floor probability's 95% interval ({low:.1%} to {high:.1%}) "
+            f"contains the {FLOOR_THRESHOLD:.0%} threshold"
+        )
+    data_quality["gaps"] = gaps
     data_quality["simulation"] = simulation
 
     source_ids: SourceIds = {
@@ -761,71 +832,41 @@ def _summary(
         "goals": sorted({goal.id for goal in inputs.goals}),
         "categories": sorted({category.id for category in inputs.categories}),
     }
-    return {
-        "as_of": inputs.as_of.isoformat(),
+    result: Projection = {
+        "as_of": as_of.isoformat(),
         "horizon_days": days,
-        "end": (inputs.as_of + timedelta(days=days)).isoformat(),
+        "end": (as_of + timedelta(days=days)).isoformat(),
         "floor_paise": floor,
         "floor_set": floor > 0,
         "floor_threshold": FLOOR_THRESHOLD,
         "floor_probability": round(floor_probability, 4),
-        "median_low": {
-            "date": curve[lowest_index]["date"],
-            "paise": lowest,
-        },
-        "p10_low_paise": percentile(run_minima, 0.10),
-        "first_floor_crossing": first_crossing,
+        "median_low": _median_low(as_of, run.curve[:, 1]),
+        "p10_low_paise": int(np.partition(run.minima, low_rank)[low_rank]),
+        "first_floor_crossing": _first_crossing(as_of, run.crossings, scenarios),
         "curve": curve,
         "goals": _goal_rows(inputs),
-        "obligations_met": simulation["obligation_misses"] == 0,
+        "obligations_met": misses == 0,
         "data_quality": data_quality,
         "sources": list(inputs.sources),
         "source_ids": source_ids,
-        "runs": runs,
+        "runs": scenarios,
         "seed": seed,
         "optimistic": None,
     }
-
-
-def project(
-    inputs: ProjectionInput,
-    *,
-    runs: int = DEFAULT_RUNS,
-    seed: int = DEFAULT_SEED,
-) -> Projection:
-    """Run the seeded projection and return the curve, floor probability, and data quality."""
-    if runs < 1:
-        raise ValueError("runs must be positive")
-    paths, simulation = _simulate(inputs, runs=runs, seed=seed, include_unconfirmed=False)
-    result = _summary(
-        inputs,
-        paths,
-        runs=runs,
-        seed=seed,
-        include_unconfirmed=False,
-        simulation=simulation,
-    )
     unconfirmed = [
         event
         for event in inputs.events
         if not event.confirmed and event.amount_paise > 0 and event.kind.startswith("income")
     ]
-    if len(unconfirmed) > 0:
-        optimistic_paths, optimistic_simulation = _simulate(
-            inputs, runs=runs, seed=seed, include_unconfirmed=True
-        )
-        optimistic = _summary(
-            inputs,
-            optimistic_paths,
-            runs=runs,
-            seed=seed,
-            include_unconfirmed=True,
-            simulation=optimistic_simulation,
-        )
+    optimistic_minima, optimistic_crossings = run.optimistic_minima, run.optimistic_crossings
+    if optimistic_minima is not None and optimistic_crossings is not None and len(unconfirmed) > 0:
+        shifted = run.curve[:, 1] + np.cumsum(prepared.spec.unconfirmed)
         result["optimistic"] = {
-            "floor_probability": optimistic["floor_probability"],
-            "median_low": optimistic["median_low"],
-            "first_floor_crossing": optimistic["first_floor_crossing"],
+            "floor_probability": round(
+                int(np.count_nonzero(optimistic_minima >= floor)) / scenarios, 4
+            ),
+            "median_low": _median_low(as_of, shifted),
+            "first_floor_crossing": _first_crossing(as_of, optimistic_crossings, scenarios),
             "income": [
                 {
                     "date": event.date.isoformat(),
@@ -836,11 +877,68 @@ def project(
                 for event in sorted(unconfirmed, key=lambda item: item.date)
             ],
         }
-        result["data_quality"]["gaps"].append(
+        gaps.append(
             "unconfirmed variable income is shown only as an optimistic case and is not counted "
             "toward the verdict"
         )
     return result
+
+
+def _wilson(successes: int, n: int) -> tuple[float, float]:
+    z = 1.959963984540054
+    p = successes / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def _describe(model: Model) -> str:
+    parts = ["whole-day vectors" if model.pooling == "day" else "one draw per category"]
+    parts.append("weekday/weekend matched")
+    if model.block_length > 1:
+        parts.append(f"blocks of about {model.block_length} days")
+    if model.pool_resampling:
+        parts.append("per-scenario pool resampling")
+    if model.recency_half_life_days is not None:
+        parts.append(f"recency half-life {model.recency_half_life_days} days")
+    if model.rare_mad_multiple is not None:
+        parts.append("rare large days as their own stream")
+    return ", ".join(parts)
+
+
+def _run(
+    inputs: ProjectionInput,
+    *,
+    runs: int,
+    seed: int,
+    keep_days: int = 0,
+    checkpoints: tuple[int, ...] = (),
+    model: Model | None = None,
+) -> tuple[_Prepared, kernel.Run]:
+    if runs < 1:
+        raise ValueError("runs must be positive")
+    chosen = model if model is not None else MODEL
+    prepared = _prepare(inputs, chosen)
+    settings = kernel.Settings(
+        scenarios=runs,
+        seed=seed,
+        block_length=chosen.block_length,
+        keep_days=keep_days,
+        checkpoints=checkpoints,
+    )
+    return prepared, kernel.run(prepared.spec, settings)
+
+
+def project(
+    inputs: ProjectionInput,
+    *,
+    runs: int = DEFAULT_RUNS,
+    seed: int = DEFAULT_SEED,
+    model: Model | None = None,
+) -> Projection:
+    """Run the scenario kernel and return the curve, floor probability, and data quality."""
+    prepared, run = _run(inputs, runs=runs, seed=seed, model=model)
+    return _summary(inputs, prepared, run, seed)
 
 
 def simulate_paths(
@@ -848,9 +946,14 @@ def simulate_paths(
     *,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
-) -> list[list[int]]:
-    paths, _simulation = _simulate(inputs, runs=runs, seed=seed, include_unconfirmed=False)
-    return paths
+    days: int | None = None,
+    model: Model | None = None,
+) -> kernel.I64:
+    """Every scenario's daily balance for the first ``days`` days (the whole horizon by default)."""
+    keep = (horizon_days(inputs) + 1) if days is None else days + 1
+    _prepared, run = _run(inputs, runs=runs, seed=seed, keep_days=keep, model=model)
+    assert run.paths is not None
+    return run.paths
 
 
 def safe_amount_today(
@@ -860,10 +963,21 @@ def safe_amount_today(
     seed: int = DEFAULT_SEED,
 ) -> int:
     """The largest one-off payment today that keeps the floor probability at the threshold."""
-    paths = simulate_paths(inputs, runs=runs, seed=seed)
-    run_minima = [min(path) for path in paths]
-    headroom = percentile(run_minima, 1 - FLOOR_THRESHOLD) - inputs.floor_paise
+    _prepared, run = _run(inputs, runs=runs, seed=seed)
+    rank = _rank(run.scenarios, 1 - FLOOR_THRESHOLD)
+    headroom = int(np.partition(run.minima, rank)[rank]) - inputs.floor_paise
     return max(0, headroom)
+
+
+def _checkpoints(spec: kernel.Spec, extra: tuple[int, ...] = ()) -> tuple[int, ...]:
+    """The days the horizon's minimum can fall on: before any inflow, and the last day.
+
+    Spend and bills only lower the balance, so it can rise only on a day with an inflow; the
+    minimum over any span ending at a checkpoint is the minimum over its checkpoints.
+    """
+    rising = np.flatnonzero((spec.inflow > 0) | (spec.unconfirmed > 0))
+    days = {int(day) - 1 for day in rising if int(day) > 0} | {spec.days, *extra}
+    return tuple(sorted(day for day in days if 0 <= day <= spec.days))
 
 
 def first_full_payment_date(
@@ -876,50 +990,45 @@ def first_full_payment_date(
 ) -> PaymentDate | None:
     """Earliest date a single payment of ``amount_paise`` clears the floor threshold.
 
-    A one-off payment only shifts every later day by the same amount, so prefix and suffix minima
-    answer every candidate date in one pass over the simulated paths.
+    Paying on day ``t`` lowers every balance from ``t`` on. Passing then needs the days before
+    ``t`` above the floor and the days from ``t`` on above the floor plus the payment. The second
+    part only changes after a checkpoint and the first only gets harder, so the answer is the
+    start day or the day after a checkpoint, and only checkpoint balances are needed.
     """
     if amount_paise <= 0:
         return None
-    paths = simulate_paths(inputs, runs=runs, seed=seed)
-    days = len(paths[0]) - 1
-    start_index = 0
-    if start_on is not None:
-        start_index = max(0, (start_on - inputs.as_of).days)
-    prefix_minima: list[list[int]] = []
-    suffix_minima: list[list[int]] = []
-    for path in paths:
-        prefix = [0] * (days + 1)
-        running = path[0]
-        for index in range(days + 1):
-            running = min(running, path[index])
-            prefix[index] = running
-        prefix_minima.append(prefix)
-        minima = [0] * (days + 1)
-        running = path[days]
-        for index in range(days, -1, -1):
-            running = min(running, path[index])
-            minima[index] = running
-        suffix_minima.append(minima)
-
-    for index in range(start_index, days + 1):
-        if index == 0:
-            values = [suffix_minima[run][0] - amount_paise for run in range(len(paths))]
+    prepared = _prepare(inputs, MODEL)
+    days = prepared.spec.days
+    start = 0 if start_on is None else max(0, (start_on - inputs.as_of).days)
+    if start > days:
+        return None
+    marks = _checkpoints(prepared.spec, (start - 1,) if start > 0 else ())
+    settings = kernel.Settings(
+        scenarios=runs, seed=seed, block_length=MODEL.block_length, checkpoints=marks
+    )
+    run = kernel.run(prepared.spec, settings)
+    assert run.checkpoints is not None
+    balances = run.checkpoints
+    position = {day: column for column, day in enumerate(marks)}
+    prefix = np.minimum.accumulate(balances, axis=1)
+    suffix = np.minimum.accumulate(balances[:, ::-1], axis=1)[:, ::-1]
+    floor = inputs.floor_paise
+    needed = runs - _rank(runs, 1 - FLOOR_THRESHOLD)
+    candidates = sorted({start, *(day + 1 for day in marks if start < day + 1 <= days)})
+    for day in candidates:
+        later = [column for column, mark in enumerate(marks) if mark >= day]
+        if len(later) == 0:
+            break
+        after = suffix[:, later[0]] - amount_paise
+        if day > 0:
+            before = prefix[:, position[day - 1]] if day - 1 in position else None
+            assert before is not None
+            values = np.minimum(before, after)
         else:
-            values = [
-                min(
-                    prefix_minima[run][index - 1],
-                    suffix_minima[run][index] - amount_paise,
-                )
-                for run in range(len(paths))
-            ]
-        if percentile(values, 1 - FLOOR_THRESHOLD) >= inputs.floor_paise:
-            found = inputs.as_of + timedelta(days=index)
-            return {
-                "date": found.isoformat(),
-                "days": index,
-                "amount_paise": amount_paise,
-            }
+            values = after
+        if int(np.count_nonzero(values >= floor)) >= needed:
+            found = inputs.as_of + timedelta(days=day)
+            return {"date": found.isoformat(), "days": day, "amount_paise": amount_paise}
     return None
 
 
@@ -975,8 +1084,8 @@ __all__ = [
     "SpendCategory",
     "card_due_date",
     "first_full_payment_date",
+    "last_statement_close",
     "horizon_days",
-    "percentile",
     "project",
     "reduce_categories",
     "safe_amount_today",

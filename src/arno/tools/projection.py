@@ -34,6 +34,7 @@ from arno.engine.projection import (
     Projection,
     ProjectionInput,
     SourceRef,
+    last_statement_close,
 )
 from arno.engine.projection import (
     project as run_projection,
@@ -133,6 +134,40 @@ _KNOWN_ON_DAY = """
 """
 
 
+async def _unbilled(conn: Connection, rows: list[Any], as_of: date) -> dict[str, int]:
+    """Each card's net charges since its last statement closed: the part of its outstanding that
+    joins the next bill, not the one already billed. Payments from the user's own accounts are not
+    charges."""
+    if not rows:
+        return {}
+    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    closes = [last_statement_close(int(row["statement_day"]), as_of) for row in rows]
+    charged = await conn.fetch(
+        """
+        SELECT c.ledger_id,
+               coalesce(sum(CASE WHEN t.from_account_id = c.ledger_id THEN t.amount
+                                 ELSE -t.amount END), 0)::bigint AS charged_paise
+        FROM unnest($1::text[], $2::date[]) AS c(ledger_id, closed)
+        JOIN pgledger_transfers t
+          ON t.from_account_id = c.ledger_id OR t.to_account_id = c.ledger_id
+        JOIN movement_legs ml ON ml.transfer_id = t.id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN accounts other ON other.ledger_account_id = CASE
+            WHEN t.from_account_id = c.ledger_id THEN t.to_account_id ELSE t.from_account_id END
+        WHERE m.date > c.closed AND m.date <= $3
+          AND ms.is_effective
+          AND NOT other.liquid AND other.kind <> 'card'
+        GROUP BY c.ledger_id
+        """,
+        ledger_ids,
+        closes,
+        as_of,
+    )
+    by_ledger = {str(row["ledger_id"]): int(row["charged_paise"]) for row in charged}
+    return {ledger_id: by_ledger.get(ledger_id, 0) for ledger_id in ledger_ids}
+
+
 async def _card_rows(
     conn: Connection, as_of: date, *, known_then: bool
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -148,6 +183,7 @@ async def _card_rows(
     ledger_ids = [str(row["ledger_account_id"]) for row in rows]
     balances = await _balances_at(conn, ledger_ids, as_of)
     last_dates = await _last_movements(conn, ledger_ids, as_of)
+    unbilled = await _unbilled(conn, rows, as_of)
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
@@ -161,6 +197,7 @@ async def _card_rows(
             {
                 **dict(row),
                 "outstanding_paise": outstanding,
+                "unbilled_paise": max(0, min(unbilled[ledger_id], outstanding)),
                 # A credit balance (an overpayment) is usable, the same rule as the account
                 # payload; an unknown card claims no credit at all.
                 "credit_paise": max(balance, 0) if known else 0,
@@ -490,6 +527,7 @@ async def load_snapshot(
             credit_limit_paise=int(row["credit_limit_paise"] or 0),
             known=row["known"],
             credit_paise=int(row["credit_paise"]),
+            unbilled_paise=int(row["unbilled_paise"]),
         )
         for row in card_rows
     )

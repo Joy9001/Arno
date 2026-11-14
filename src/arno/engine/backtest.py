@@ -40,13 +40,16 @@ from arno.engine.inputs import (
 )
 from arno.engine.money import money
 from arno.engine.projection import (
+    DEFAULT_RUNS,
     DEFAULT_SEED,
     HISTORY_DAYS,
     UNUSABLE_SETUP_GAPS,
     CardAccount,
     GoalPlan,
     LiquidAccount,
+    Model,
     ProjectionInput,
+    last_statement_close,
     simulate_paths,
 )
 from arno.india.recurrence import expand_rule
@@ -73,14 +76,13 @@ Forecaster = Callable[[ProjectionInput, int], Paths]
 # --- Forecasters -------------------------------------------------------------------------------
 
 
-def _walk(inputs: ProjectionInput, *, runs: int, seed: int) -> Paths:
-    paths = simulate_paths(inputs, runs=runs, seed=seed)
-    return np.asarray(paths, dtype=np.int64)[:, : LAST_HORIZON + 1]
+def _walk(inputs: ProjectionInput, *, runs: int, seed: int, model: Model | None = None) -> Paths:
+    return simulate_paths(inputs, runs=runs, seed=seed, days=LAST_HORIZON, model=model)
 
 
-def engine_walk(inputs: ProjectionInput, seed: int) -> Paths:
-    """The shipped engine: 1,000 seeded walks."""
-    return _walk(inputs, runs=1_000, seed=seed)
+def engine(inputs: ProjectionInput, seed: int) -> Paths:
+    """The shipped engine, as `project` runs it."""
+    return _walk(inputs, runs=DEFAULT_RUNS, seed=seed)
 
 
 def flat(inputs: ProjectionInput, seed: int) -> Paths:
@@ -115,7 +117,7 @@ FORECASTERS: dict[str, Forecaster] = {
     "flat": flat,
     "schedule": schedule_only,
     "schedule_mean": schedule_mean,
-    "engine_walk": engine_walk,
+    "engine": engine,
 }
 BASELINES = ("flat", "schedule", "schedule_mean")
 
@@ -277,6 +279,20 @@ def _baseline(
     return None, None
 
 
+def _unbilled(persona: personas_mod.Persona, card: personas_mod.Card, as_of: date) -> int:
+    """Net card spend since the last statement closed, as the loader reads it."""
+    closed = last_statement_close(card.statement_day, as_of)
+    total = 0
+    for movement in persona.movements:
+        if movement.account != card.id or not closed < movement.date <= as_of:
+            continue
+        if movement.kind == "spend":
+            total += movement.amount_paise
+        elif movement.kind == "refund":
+            total -= movement.amount_paise
+    return max(total, 0)
+
+
 def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
     """The persona's ledger as the loader would read it on ``as_of``, with nothing from later."""
     persona = ledger.persona
@@ -349,6 +365,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
                 statement_day=card.statement_day,
                 due_day=card.due_day,
                 outstanding_paise=max(int(ledger.cards[card.id][at]), 0),
+                unbilled_paise=_unbilled(persona, card, as_of),
                 credit_limit_paise=card.credit_limit_paise,
             )
             for card in persona.cards

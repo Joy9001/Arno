@@ -357,7 +357,7 @@ async def test_risk_warns_against_zero_when_no_floor_is_set(db, monkeypatch):
     body = row["body"]
     assert "staying above zero" in body
     assert "below the 90% line" in body
-    assert "goes below zero on 2026-11-20" in body
+    assert "goes below zero by 2026-11-20" in body
     assert "your floor" not in body
     assert "No floor is set" in body
 
@@ -373,7 +373,7 @@ async def test_risk_keeps_its_floor_wording_when_a_floor_is_set(db, monkeypatch)
     assert row is not None
     body = row["body"]
     assert "staying above your floor" in body
-    assert "goes below your floor on 2026-11-20" in body
+    assert "goes below your floor by 2026-11-20" in body
     assert "zero" not in body
 
 
