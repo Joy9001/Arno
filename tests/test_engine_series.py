@@ -9,9 +9,12 @@ from datetime import date, timedelta
 from fractions import Fraction
 
 from arno.engine.series import (
+    _E,
     _END_GRID,
     _JITTER_GRID,
     _SKIP_GRID,
+    PROJECT_CONFIDENCE,
+    PROPOSE_CONFIDENCE,
     UNRELATED_SHARE,
     Detection,
     Payment,
@@ -47,10 +50,13 @@ def _brute_force_lr(
     q_f = Fraction(str(q))
     c_f = Fraction(str(c))
     u_f = Fraction(str(unrelated_share))
+    e_f = Fraction(str(_E))
     one_minus_q = 1 - q_f
     one_minus_c = 1 - c_f
     pi_f = Fraction(1, n)
     denom = (w + 1) * (w + 1)
+    lambda_f = Fraction(m, 1) / (e_f * t_days)
+    l0_f = lambda_f**m
 
     def f_frac(d: int) -> Fraction:
         ad = abs(d)
@@ -67,8 +73,8 @@ def _brute_force_lr(
                 cens += f_frac(d)
         q_j.append(q_f + one_minus_q * cens)
 
-    total_lr = Fraction(0)
-    alive_lr = Fraction(0)
+    total_l = Fraction(0)
+    alive_l = Fraction(0)
 
     for s in range(n):
         for t in range(s, n):
@@ -79,7 +85,7 @@ def _brute_force_lr(
             term_sum = Fraction(0)
 
             for k in range(max_k + 1):
-                unrelated_factor = u_f ** (m - k)
+                unrelated_factor = (u_f * lambda_f) ** (m - k)
                 for obs_idxs in itertools.combinations(range(m), k):
                     for exp_idxs in itertools.combinations(range(s, t + 1), k):
                         prod = unrelated_factor
@@ -91,7 +97,7 @@ def _brute_force_lr(
                             if f_val == 0:
                                 possible = False
                                 break
-                            prod *= one_minus_q * f_val * t_days
+                            prod *= one_minus_q * f_val
                         if not possible:
                             continue
                         matched_j = set(exp_idxs)
@@ -101,11 +107,12 @@ def _brute_force_lr(
                         term_sum += prod
 
             contrib = pi_f * p_t_given_s * term_sum
-            total_lr += contrib
+            total_l += contrib
             if t == n - 1:
-                alive_lr += contrib
+                alive_l += contrib
 
-    alive = (alive_lr / total_lr) if total_lr > 0 else Fraction(0)
+    total_lr = total_l / l0_f
+    alive = (alive_l / total_l) if total_l > 0 else Fraction(0)
     return total_lr, alive
 
 
@@ -171,6 +178,7 @@ def test_dp_matches_brute_force_oracle() -> None:
             t_days = float(as_of_ord - win_start_ord + 1)
             m = len(obs_ords)
             n = len(exp_ords)
+            background_scale = _E * t_days / m
             for w in _JITTER_GRID:
                 f_weights = _jitter_weights(w)
                 matches_by_j = _precompute_matches(obs_ords, exp_ords, w=w, f_weights=f_weights)
@@ -189,7 +197,7 @@ def test_dp_matches_brute_force_oracle() -> None:
                             n,
                             q=q,
                             c=c,
-                            t_days=t_days,
+                            background_scale=background_scale,
                             q_j=q_j,
                             matches_by_j=matches_by_j,
                             unrelated_share=u,
@@ -453,6 +461,22 @@ def test_random_uniform_20_payments_800_days_low_confidence() -> None:
         assert res.confidence < 0.5
 
 
+def test_random_uniform_30_payments_800_days_low_confidence() -> None:
+    as_of = date(2026, 11, 15)
+    window_start = as_of - timedelta(days=800)
+    span = (as_of - window_start).days
+    cal = calendar_for(window_start - timedelta(days=14), as_of + timedelta(days=410))
+    for seed in (11, 23, 37, 53, 79):
+        rng = random.Random(seed)
+        offsets = sorted(rng.sample(range(span + 1), k=30))
+        dates = [window_start + timedelta(days=o) for o in offsets]
+        res = detect(
+            _make_payments(dates, 50_000), as_of=as_of, window_start=window_start, calendar=cal
+        )
+        assert res is not None
+        assert res.confidence < 0.5
+
+
 def test_weekly_does_not_beat_no_pattern_on_monthly_payments() -> None:
     # 4 clean monthly payments on the 5th (May..Aug 2026: Tue, Fri, Sun, Wed).
     dates = [date(2026, m, 5) for m in (5, 6, 7, 8)]
@@ -498,7 +522,7 @@ def test_upcoming_and_empty_inputs() -> None:
     ]
     assert upcoming(res, after=date(2026, 5, 10), until=date(2026, 5, 10)) == []
 
-    # Fewer than 2 payments in window -> None
+    # Fewer than 3 payments in window -> None
     assert (
         detect(
             [Payment("only1", date(2026, 5, 5), 1000)],
@@ -507,6 +531,31 @@ def test_upcoming_and_empty_inputs() -> None:
         )
         is None
     )
+
+
+def test_two_payments_returns_none() -> None:
+    assert (
+        detect(
+            _make_payments([date(2026, 4, 5), date(2026, 5, 5)], 50_000),
+            as_of=date(2026, 5, 10),
+            window_start=date(2026, 1, 1),
+        )
+        is None
+    )
+    # 3 total payments, but only 2 fall inside [window_start, as_of] -> None
+    assert (
+        detect(
+            _make_payments([date(2025, 12, 5), date(2026, 4, 5), date(2026, 5, 5)], 50_000),
+            as_of=date(2026, 5, 10),
+            window_start=date(2026, 1, 1),
+        )
+        is None
+    )
+
+
+def test_confidence_threshold_constants() -> None:
+    assert PROPOSE_CONFIDENCE == 0.9
+    assert PROJECT_CONFIDENCE == 0.999
 
 
 def test_speed_60_payments_800_days() -> None:

@@ -1,4 +1,10 @@
-"""Pure Bayesian calendar-rule detector for recurring payment series."""
+"""Pure Bayesian calendar-rule detector for recurring payment series.
+
+Compares calendar-rule hypotheses against a "no pattern" background modeled as a
+homogeneous Poisson process on the observation window [window_start, as_of] (length T
+days) with fitted MLE rate Lambda = M (over T days), giving unordered-date likelihood
+L0 = (M / (e * T))^M = lambda^M where lambda = M / (e * T).
+"""
 
 from __future__ import annotations
 
@@ -18,7 +24,12 @@ _END_GRID: tuple[float, ...] = (0.02, 0.10)
 _MAX_CANDIDATES = 8
 _NEXT_DATE_HORIZON_DAYS = 400
 _MAX_SAMPLES = 12
+_MIN_PAYMENTS = 3
+_E = 2.718281828459045
 UNRELATED_SHARE: float = 0.1
+# Set from precision on the synthetic households' tuning seeds (arno.engine.personas).
+PROPOSE_CONFIDENCE: float = 0.9
+PROJECT_CONFIDENCE: float = 0.999
 
 # Overflow guard: scaling by 2^-512 shifts only the IEEE-754 binary exponent.
 _SCALE_THRESHOLD = 1e150
@@ -517,12 +528,20 @@ def _dp_likelihood_ratio(
     *,
     q: float,
     c: float,
-    t_days: float,
+    background_scale: float,
     q_j: Sequence[float],
     matches_by_j: Sequence[Sequence[tuple[int, float]]],
     unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[float, int, float]:
     """Compute LR = L / L0 and alive probability for one grid point via exact canonical DP.
+
+    Under "no pattern", payments follow a homogeneous Poisson process on the T-day window with
+    fitted MLE rate Lambda = M, giving unordered-date likelihood L0 = lambda^M where
+    lambda = M / (e * T) = 1 / background_scale. Dividing out lambda^M:
+    - "no pattern" has LR = 1;
+    - each unrelated observation under a rule contributes (u * lambda) / lambda = u;
+    - each matched observation contributes
+      (1 - q) * f(d) / lambda = (1 - q) * f(d) * background_scale.
 
     Canonical counting rule (so every (s, t, labeling) is counted once):
     - Before the first match, all unrelated observations sit in an inactive prefix I[i] = u^(i-1)
@@ -548,7 +567,7 @@ def _dp_likelihood_ratio(
 
     pi_scaled = 1.0 / n
     stay = 1.0 - c
-    match_scale = (1.0 - q) * t_days
+    match_scale = (1.0 - q) * background_scale
 
     a0_prev = 0.0
     s_prev = [0.0] * (m + 1)
@@ -615,7 +634,7 @@ def _viterbi_matched_with_bounds(
     q: float,
     w: int,
     c: float,
-    t_days: float,
+    background_scale: float,
     unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[str, ...]:
     """Find the best alignment's matched movement IDs via max-product canonical DP."""
@@ -645,7 +664,7 @@ def _viterbi_matched_with_bounds(
 
     pi_scaled = 1.0 / n
     stay = 1.0 - c
-    match_scale = (1.0 - q) * t_days
+    match_scale = (1.0 - q) * background_scale
 
     # Backpointer for S[j][i]: (-1, -1, True) = start with match i;
     # (prev_i, prev_j, matched_here: bool)
@@ -774,7 +793,7 @@ def _score_rule_grid(
     *,
     win_start_ord: int,
     as_of_ord: int,
-    t_days: float,
+    background_scale: float,
     unrelated_share: float = UNRELATED_SHARE,
 ) -> tuple[float, int, _GridResult]:
     m = len(payment_ordinals)
@@ -804,7 +823,7 @@ def _score_rule_grid(
                     n,
                     q=q,
                     c=c,
-                    t_days=t_days,
+                    background_scale=background_scale,
                     q_j=q_j,
                     matches_by_j=matches_by_j,
                     unrelated_share=unrelated_share,
@@ -910,7 +929,7 @@ def _detect_with(
         return None
 
     in_window = [p for p in payments if window_start <= p.date <= as_of]
-    if len(in_window) < 2:
+    if len(in_window) < _MIN_PAYMENTS:
         return None
     in_window.sort(key=lambda p: (p.date, p.movement_id))
 
@@ -926,6 +945,7 @@ def _detect_with(
     win_start_ord = window_start.toordinal()
     as_of_ord = as_of.toordinal()
     t_days = float(as_of_ord - win_start_ord + 1)
+    background_scale = _E * t_days / len(in_window)
     payment_ordinals = [p.date.toordinal() for p in in_window]
 
     family_counts = Counter(r.family for r in candidates)
@@ -946,7 +966,7 @@ def _detect_with(
             exp_ords,
             win_start_ord=win_start_ord,
             as_of_ord=as_of_ord,
-            t_days=t_days,
+            background_scale=background_scale,
             unrelated_share=unrelated_share,
         )
         prior = (
@@ -1005,7 +1025,7 @@ def _detect_with(
         q=best_grid.q,
         w=best_grid.w,
         c=best_grid.c,
-        t_days=t_days,
+        background_scale=background_scale,
         unrelated_share=unrelated_share,
     )
     matched_set = set(matched)
@@ -1053,9 +1073,14 @@ def detect(
     calendar: IndiaCalendar | None = None,
     unrelated_share: float = UNRELATED_SHARE,
 ) -> Detection | None:
-    """Detect the most probable calendar rule and its probabilities for one payee."""
+    """Detect the most probable calendar rule and its probabilities for one payee.
+
+    Compares candidate calendar rules against the fitted-rate homogeneous Poisson background
+    (lambda = M / (e * T) on the T-day window). Returns None when fewer than 3 payments fall
+    in [window_start, as_of].
+    """
     in_window = [p for p in payments if window_start <= p.date <= as_of]
-    if len(in_window) < 2:
+    if len(in_window) < _MIN_PAYMENTS:
         return None
     in_window.sort(key=lambda p: (p.date, p.movement_id))
 
