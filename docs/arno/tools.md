@@ -386,21 +386,31 @@ An EMI is the fixed monthly loan payment. Amortization is how each EMI splits in
 principal.
 
 **Description:** "Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a
-loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to
-compare a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
-instead of writing the formula. It returns the schedule, not a card: show it with present."
+loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Without a
+rate, an EMI plus the principal and the months gives the rate. Add prepay to compare a lump-sum
+prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a
+bank's rounding when its statement differs by paise. Use this instead of writing the formula. It
+returns the schedule, not a card: show it with present."
 
 **Input**
 
 ```python
 amortize(loan: str | None = None, principal_paise: int | None = None,
          annual_rate: float | None = None, months: int | None = None,
-         prepay: Prepay | None = None)
+         emi_paise: int | None = None, prepay: Prepay | None = None,
+         conventions: LoanConventions | None = None)
 
 class Prepay:
     amount_paise: int
     at_emi: int = 1                                   # before which EMI, counting from the next one
     reduce: Literal["tenure", "emi"] = "tenure"       # finish sooner, or pay less each month
+
+class LoanConventions:
+    rest: Literal["monthly", "daily"] = "monthly"
+    day_count: Literal["30/360", "actual/365"] = "30/360"
+    interest_unit_paise: int = 1                      # round each month's interest to this unit
+    emi_rounding: Literal["half_up", "up"] = "half_up"
+    emi_unit_paise: int = 1                           # round the EMI to this unit
 ```
 
 **Output**
@@ -418,9 +428,16 @@ class Prepay:
 ```
 if loan: P = loan_terms(): the outstanding balance (the loan account's negated ledger balance),
          its rate, its tenure as the cap, and its EMI schedule's amount. The eval grader reads
-         the same terms
+         the same terms. A rate stored as 0 beside an EMI counts as no rate
 prepay is a typed Prepay; an unknown key is an error, never ignored
+if no rate and an EMI:
+    fit = infer_rate(P, n, emi, conventions): the rate interval whose EMI rounds to this one
+    not exact: ModelRetry(fit.note)
+    rate = the interval's midpoint; an assumption states the interval and that the EMI gave it
+    the stated EMI was evidence for the rate, so the rate computes the EMI; a named loan keeps
+    its real EMI
 else:    r = annual_rate / 1200; emi = P·r·(1+r)^n / ((1+r)^n − 1); if r == 0: emi = P / n
+if both a rate and an EMI: the EMI is the one charged, so a low one runs its real tenure
 if emi <= first month's interest: ModelRetry("this EMI never repays the loan")
 schedule = each month: interest = round(balance·r)
                        principal = min(emi − interest, balance)
@@ -433,10 +450,10 @@ if prepay:
     compare totals
 ```
 
-This runs on the host with `Decimal`. `record_movement` splits a loan payment with
-`ledger.movements.loan_payment_parts`, not with this schedule: one month's interest per loan, booked
-by the first payment in a calendar month (a later payment that month is all principal), at the
-loan's own rate.
+Conventions change the interest and EMI rounding, never the formula. This runs on the host with
+`Decimal`. `record_movement` splits a loan payment with `ledger.movements.loan_payment_parts`, not
+with this schedule: one month's interest per loan, booked by the first payment in a calendar month
+(a later payment that month is all principal), at the loan's own rate.
 
 ### `compound`
 

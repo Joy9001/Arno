@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import cast
 
 import asyncpg
 import pytest
-from pydantic_ai import DeferredToolRequests
+from pydantic_ai import DeferredToolRequests, RunContext
+from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from arno.agent.builder import build_agent
 from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
+from arno.agent.toolset import LoanConventions
+from arno.agent.toolset import amortize as amortize_tool
 from arno.engine.money import Prepay
 from arno.engine.money import amortize as amortize_fn
 from arno.tools import read as read_tools
@@ -507,3 +511,54 @@ async def test_amortize_uses_the_loan_s_real_emi_and_a_strict_prepay(demo_ledger
     rejected = cast(Prepay, {"amount_paise": 5_000_000, "after_months": 12})
     with pytest.raises(ValueError, match="after_months"):
         amortize_fn(**terms, prepay=rejected)
+
+
+def _amortize_ctx() -> RunContext[AgentDeps]:
+    """The amortize tool reads only `ctx.deps`, whose result registry lives in memory."""
+    return cast(RunContext[AgentDeps], SimpleNamespace(deps=AgentDeps(conversation_id="cnv_x")))
+
+
+async def _amortize(**kwargs):
+    return (await amortize_tool(_amortize_ctx(), **kwargs)).return_value
+
+
+async def test_amortize_infers_the_rate_from_the_emi():
+    result = await _amortize(principal_paise=100_000_000, months=240, emi_paise=867_823)
+    assert result["emi"] == {"paise": 867_823, "text": "₹8,678.23"}
+    assert "8.5000% to 8.5000% a year, inferred from the EMI" in result["assumptions"]
+
+
+async def test_amortize_conventions_round_the_emi_like_the_bank():
+    plain = await _amortize(principal_paise=100_000_000, annual_rate=8.5, months=240)
+    rounded = await _amortize(
+        principal_paise=100_000_000,
+        annual_rate=8.5,
+        months=240,
+        conventions=LoanConventions(emi_rounding="up", emi_unit_paise=100),
+    )
+    assert plain["emi"]["paise"] == 867_823
+    assert rounded["emi"]["paise"] == 867_900
+    assert rounded["emi"]["paise"] % 100 == 0
+    assert "EMI rounded up to 100 paise" in rounded["assumptions"]
+
+
+async def test_amortize_refuses_an_emi_that_no_rate_fits():
+    # 867,824 paise sits between two rate units at the default conventions.
+    with pytest.raises(ModelRetry, match="no exact unit match"):
+        await _amortize(principal_paise=100_000_000, months=240, emi_paise=867_824)
+    # Whole-rupee rounding never yields 8,678.23, so these conventions reach the inference.
+    with pytest.raises(ModelRetry, match="no exact unit match"):
+        await _amortize(
+            principal_paise=100_000_000,
+            months=240,
+            emi_paise=867_823,
+            conventions=LoanConventions(emi_rounding="up", emi_unit_paise=100),
+        )
+
+
+async def test_amortize_with_a_rate_is_unchanged():
+    expected = amortize_fn(100_000_000, 8.5, 240)
+    result = await _amortize(principal_paise=100_000_000, annual_rate=8.5, months=240)
+    assert result["emi"] == expected["emi"]
+    assert result["months"] == expected["months"]
+    assert result["total_interest"] == expected["total_interest"]

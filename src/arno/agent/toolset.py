@@ -31,6 +31,7 @@ from arno.db.conn import Connection, connect, quote_ident
 from arno.engine.money import Prepay as PrepayPayload
 from arno.engine.money import amortize as amortize_fn
 from arno.engine.money import compound as compound_fn
+from arno.engine.money import infer_rate as infer_rate_fn
 from arno.engine.money import money
 from arno.ledger.accounts import LoanTermsError, loan_terms
 from arno.ledger.common import today as ledger_today
@@ -84,6 +85,24 @@ class Prepay(BaseModel):
     reduce: Literal["tenure", "emi"] = Field(
         default="tenure", description="tenure: same EMI, finish sooner. emi: lower EMI."
     )
+
+
+class LoanConventions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rest: Literal["monthly", "daily"] = Field(
+        default="monthly", description="Interest on the balance each month, or each day."
+    )
+    day_count: Literal["30/360", "actual/365"] = Field(
+        default="30/360", description="Days in a year, for a daily rest."
+    )
+    interest_unit_paise: int = Field(
+        default=1, gt=0, description="Round each month's interest to this many paise."
+    )
+    emi_rounding: Literal["half_up", "up"] = Field(
+        default="half_up", description="half_up: nearest. up: always up."
+    )
+    emi_unit_paise: int = Field(default=1, gt=0, description="Round the EMI to this many paise.")
 
 
 class ProjectHypothetical(BaseModel):
@@ -348,13 +367,18 @@ async def amortize(
     principal_paise: int | None = None,
     annual_rate: float | None = None,
     months: int | None = None,
+    emi_paise: int | None = None,
     prepay: Prepay | None = None,
+    conventions: LoanConventions | None = None,
 ) -> ToolReturn:
-    """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name
-    to use its outstanding balance, rate, and real EMI, or pass the terms. Add prepay to compare
-    a lump-sum prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Use this
-    instead of writing the formula. It returns the schedule, not a card: show it with present."""
+    """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name to
+    use its outstanding balance, rate, and real EMI, or pass the terms. Without a rate, an EMI plus
+    the principal and the months gives the rate. Add prepay to compare a lump-sum prepayment, for
+    example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a bank's
+    rounding when its statement differs by paise. Use this instead of writing the formula. It
+    returns the schedule, not a card: show it with present."""
     start: date | None = ledger_today()
+    rate: float | None
     if loan:
         async with connect() as conn:
             try:
@@ -365,13 +389,36 @@ async def amortize(
         rate = terms["annual_rate"]
         count = terms["months"]
         emi_paise = terms["emi_paise"]
+        # A loan with no rate stored reads as 0; its EMI then holds the real one.
+        if rate == 0 and emi_paise is not None:
+            rate = None
     else:
-        if principal_paise is None or annual_rate is None or months is None:
-            raise ModelRetry("Pass a loan name, or principal_paise, annual_rate, and months")
+        if principal_paise is None or months is None:
+            raise ModelRetry(
+                "Pass a loan name, or principal_paise and months with a rate or an EMI"
+            )
+        if annual_rate is None and emi_paise is None:
+            raise ModelRetry("Pass annual_rate, or an EMI to infer it from")
         principal = principal_paise
         rate = annual_rate
         count = months
-        emi_paise = None
+
+    conventions_args = conventions.model_dump() if conventions is not None else {}
+    assumptions: list[str] | None = None
+    if rate is None:
+        if emi_paise is None:
+            raise ModelRetry("Pass annual_rate, or an EMI to infer it from")
+        fit = infer_rate_fn(int(principal), int(count), int(emi_paise), **conventions_args)
+        low = fit["low_bps_x100"]
+        high = fit["high_bps_x100"]
+        if not fit["exact"] or low is None or high is None:
+            raise ModelRetry(fit["note"])
+        rate = (low + high) / 2 / 10_000
+        assumptions = [f"{low / 10_000:.4f}% to {high / 10_000:.4f}% a year, inferred from the EMI"]
+        # A stated EMI was evidence for the rate, so the rate now computes the EMI. A named loan
+        # keeps its real EMI, which can take a month more or less than its tenure.
+        if not loan:
+            emi_paise = None
     try:
         # Loan terms come from rows and sandbox calls; normalize them before the maths.
         result = amortize_fn(
@@ -381,6 +428,8 @@ async def amortize(
             emi_paise=emi_paise,
             start_date=start,
             prepay=PrepayPayload(**prepay.model_dump()) if prepay is not None else None,
+            assumptions=assumptions,
+            **conventions_args,
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
