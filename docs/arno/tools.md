@@ -335,14 +335,19 @@ and no goal-slip clause. This section changes as each step lands.
 
 ### `run_query`
 
-**Description:** lists every object `agent_ro` can read in four groups (`Ledger`: `v_legs`,
-`v_accounts`, `v_movement_state`, `v_spending`, `v_balances`, `v_owed`, `movements`, `captures`;
-`Planning`: `schedules`, `schedule_occurrences`, `schedule_payments`, `goals`,
+**Description:** opens by sending the model to the typed tools first (`get_financial_context`
+for balances, goals, who owes what, and schedules; `query_movements` and `summarize_spending` for
+movements and spending). It then lists every object `agent_ro` can read. The six views (`v_legs`,
+`v_spending`, `v_accounts`, `v_balances`, `v_owed`, `v_movement_state`) carry their exact column
+names, because a prose summary made the model guess columns and reach for SQL when a typed tool
+already had the answer. Tables are named with one line each (`Ledger tables`: `movements`,
+`captures`; `Planning`: `schedules`, `schedule_occurrences`, `schedule_payments`, `goals`,
 `scheduled_questions`; `Import`: `imports`, `statement_lines`; `Other`: `payees`, `categories`,
-`category_rules`, `baselines`, `preferences`, `conversations`, `messages`, `settings`) along with
-`acc_*` account IDs, integer paise, sign conventions (`v_accounts` carries each account's current
-`balance_paise`, while `v_balances` holds the per-day balance history), and reversal flags. See
-`src/arno/agent/toolset.py`.
+`category_rules`, `baselines`, `preferences`, `conversations`, `messages`, `settings`), and the
+model is told to read a table's columns from `information_schema.columns` before querying it. The
+description ends with `acc_*` account IDs, integer paise, sign conventions (`v_accounts` carries
+each account's current `balance_paise`, while `v_balances` holds the per-day balance history), and
+reversal flags. See `src/arno/agent/toolset.py`.
 
 **Input:** `run_query(sql: str)`
 

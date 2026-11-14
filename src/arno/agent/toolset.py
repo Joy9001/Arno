@@ -237,17 +237,28 @@ async def recap(ctx: RunContext[AgentDeps], period: str) -> ToolReturn:
 
 
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
-    """Read-only PostgreSQL (2-second timeout) for questions typed tools can't answer, including
-    conversation search. Try query_movements and summarize_spending first.
+    """Read-only PostgreSQL (2-second timeout), only for questions the typed tools can't answer,
+    including conversation search. get_financial_context already returns balances, goals, who owes
+    what, and schedules; query_movements and summarize_spending cover movements and spending.
+    Use the exact view columns below. For a table, read its columns from
+    information_schema.columns before the first query instead of guessing.
 
-    Ledger:
-    - v_legs: transfer legs from -> to with resolved account names, kinds, liquidity flags, labels,
-      and reversal flags
-    - v_accounts: every account with resolved display name and current balance_paise
-    - v_movement_state: per-movement reversal status and effectiveness
-    - v_spending: transfers touching the spending account with category and payee
-    - v_balances: daily cumulative ledger balance history per account in Asia/Kolkata
-    - v_owed: net balance and next Asia/Kolkata expected date per person account
+    Views (prefer these):
+    - v_legs: movement_id, transfer_id, date, movement_kind, description, from_account_id,
+      from_account_name, from_account_kind, from_account_liquid, to_account_id, to_account_name,
+      to_account_kind, to_account_liquid, amount_paise, category_id, category_name, payee_id,
+      payee_name, note, expected_date, is_reversal, is_reversed
+    - v_spending: movement_id, date, description, transfer_id, category_id, category_name,
+      payee_id, payee_name, amount_paise
+    - v_accounts: id, kind, name, institution, last4, liquid, active, balance_paise,
+      statement_balance_paise, statement_balance_as_of, credit_limit_paise, statement_day,
+      due_day, rate_bps, tenure_months, emi_schedule_id
+    - v_balances: account_id, name, kind, liquid, as_of, balance_paise (one row per day)
+    - v_owed: payee_id, display_name, account_id, balance_paise, direction (owes_you, you_owe,
+      settled), next_expected_date
+    - v_movement_state: movement_id, is_reversal, is_reversed, is_effective
+
+    Ledger tables:
     - movements: money events by IST date, kind, and reversal parent link
     - captures: chat, voice, photo, and statement-line evidence linked to movements
 
