@@ -132,6 +132,13 @@ no-verdict check costs 2 to 10 or more such calls, against a 15 s target for a m
 (plan.md §2). A lookup table for the due date is a 20-line fix worth doing regardless of the rest
 of this document.
 
+_Measured on November 14, 2026_, after the schema redesign and the API connection cache: the
+projection is now nearly all of the home page's time. On the demo persona a warm home load takes
+about 1.9 s, of which about 1.8 s is projection CPU. At ten years of synthetic history the home
+page's database work is 36 statements (about 354 ms), while the projection takes 13.8 s. The new
+kernel's target is that the home page's projection stays under 1 s at the ten-year scale, so the
+page is bound by its database work again.
+
 ### 2.11 The whole card balance is paid on the first due date
 
 `CardAccount` carries one `outstanding_paise`, and the walk pays all of it on the first due date
