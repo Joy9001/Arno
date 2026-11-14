@@ -18,6 +18,7 @@ import calendar
 import random
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import NotRequired, Required, TypedDict
 
 DEFAULT_RUNS = 1_000
@@ -393,6 +394,17 @@ def statement_close(card: CardAccount, spend_date: date) -> date:
     return _next_on_or_after(spend_date, card.statement_day)
 
 
+@lru_cache(maxsize=8192)
+def _due_date(statement_day: int, due_day: int, spend_date: date) -> date:
+    # A walk asks for the same few dozen answers hundreds of thousands of times.
+    close = _next_on_or_after(spend_date, statement_day)
+    due = _clamped_day(close.year, close.month, due_day)
+    if due > close:
+        return due
+    next_month = _add_months(date(close.year, close.month, 1), 1)
+    return _clamped_day(next_month.year, next_month.month, due_day)
+
+
 def card_due_date(card: CardAccount, spend_date: date) -> date:
     """The date the bill containing ``spend_date`` is paid in full.
 
@@ -400,12 +412,7 @@ def card_due_date(card: CardAccount, spend_date: date) -> date:
     day after that statement date, which may fall in the following month when the statement day is
     later than the due day, or when a short month clamps the due day onto the close itself.
     """
-    close = statement_close(card, spend_date)
-    due = _clamped_day(close.year, close.month, card.due_day)
-    if due > close:
-        return due
-    next_month = _add_months(date(close.year, close.month, 1), 1)
-    return _clamped_day(next_month.year, next_month.month, card.due_day)
+    return _due_date(card.statement_day, card.due_day, spend_date)
 
 
 def _first_due_on_or_after(card: CardAccount, day: date) -> date:
