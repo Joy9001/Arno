@@ -979,6 +979,7 @@ def _day_pool(
             events=int(rare_mask.sum()),
             exposure_days=count,
             stream=RARE_STREAM,
+            replaces_stream=DAY_STREAM,
         )
     return pool, rare, rare_days
 
@@ -1063,10 +1064,17 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
     sampled: list[str] = []
     flat: list[str] = []
     sampled_ids: set[str] = set()
+    covered_days = (as_of - _coverage_start(inputs, HISTORY_DAYS)).days
+    mature_day_pool = (
+        model.pooling == "day" and len(inputs.spend) > 0 and covered_days >= MIN_REAL_DAYS
+    )
     for category in inputs.categories:
         real = _pools(category)[3]
-        (sampled if real else flat).append(category.name)
-        if real:
+        in_day_pool = real or (
+            mature_day_pool and category.baseline_source == "computed" and len(category.history) > 0
+        )
+        (sampled if in_day_pool else flat).append(category.name)
+        if in_day_pool:
             sampled_ids.add(category.id)
     rare: kernel.Rare | None = None
     rare_days: list[tuple[date, int]] = []

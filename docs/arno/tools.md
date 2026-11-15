@@ -346,10 +346,11 @@ not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal 
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
 
-Steps 1 to 5 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
-projection model, the verdict and plan rules above, and the money conventions. Step 6, pattern
-detection and payment-level attribution, still changes how variable spend is drawn; the tool's
-surface does not change.
+Steps 1 to 6 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
+projection model, the verdict and plan rules above, the money conventions, and pattern detection
+with payment-level attribution. Variable spend now comes from the attributed rows, and a detected
+recurring spend the user has not confirmed is simulated as an outflow; the tool's surface does not
+change.
 
 ### `run_query`
 
@@ -359,10 +360,11 @@ movements and spending). It then lists every object `agent_ro` can read. The six
 `v_spending`, `v_accounts`, `v_balances`, `v_owed`, `v_movement_state`) carry their exact column
 names, because a prose summary made the model guess columns and reach for SQL when a typed tool
 already had the answer. Tables are named with one line each (`Ledger tables`: `movements`,
-`captures`; `Planning`: `schedules`, `schedule_occurrences`, `schedule_payments`, `goals`,
-`scheduled_questions`; `Import`: `imports`, `statement_lines`; `Other`: `payees`, `categories`,
-`category_rules`, `baselines`, `preferences`, `conversations`, `messages`, `settings`), and the
-model is told to read a table's columns from `information_schema.columns` before querying it. The
+`captures`; `Planning`: `schedules`, `schedule_occurrences`, `schedule_payments`,
+`series_detections`, `goals`, `scheduled_questions`; `Import`: `imports`, `statement_lines`;
+`Other`: `payees`, `categories`, `category_rules`, `baselines`, `preferences`, `conversations`,
+`messages`, `settings`), and the model is told to read a table's columns from
+`information_schema.columns` before querying it. The
 description ends with `acc_*` account IDs, integer paise, sign conventions (`v_accounts` carries
 each account's current `balance_paise`, while `v_balances` holds the per-day balance history), and
 reversal flags. See `src/arno/agent/toolset.py`.

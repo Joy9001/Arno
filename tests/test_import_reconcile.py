@@ -10,6 +10,9 @@ from arno.importers.reconcile import insert_lines, reconcile, resolve_line
 from arno.ledger import movements as movements_mod
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import new_id
+from arno.ledger.schedule_payments import link_payment
+from arno.ledger.schedules import create_schedule
+from arno.tools.projection import load_inputs
 
 
 async def _account(conn) -> dict:
@@ -440,4 +443,68 @@ async def test_baselines_are_computed_from_real_rows(ledger):
     row = await ledger.fetchrow("SELECT * FROM baselines WHERE category_id = $1", category["id"])
     assert row["source"] == "computed"
     assert row["amount_per_day_paise"] > 0
-    assert row["window_days"] == 90
+    # The ledger covers March 31 to April 30: 30 days, not the nominal 90.
+    assert row["window_days"] == 30
+
+
+async def test_a_schedule_paid_rent_is_left_out_of_the_baseline(ledger):
+    account = await create_account(
+        ledger,
+        kind="bank",
+        name="Rent bank",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 4, 1),
+    )
+    rent = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Rent'")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="rent",
+        name="House rent",
+        amount_paise=2_800_000,
+        account_id=account["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 4, 5),
+    )
+    paid = await movements_mod.record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=2_800_000,
+        description="House rent",
+        category_id=rent["id"],
+        date=date(2026, 4, 5),
+    )
+    await link_payment(
+        ledger, schedule_id=schedule["id"], due_date=date(2026, 4, 5), movement_id=paid["id"]
+    )
+    for day, amount in ((6, 50_000), (7, 40_000), (8, 30_000)):
+        await movements_mod.record_expense(
+            ledger,
+            account_id=account["id"],
+            amount_paise=amount,
+            description="Flat maintenance",
+            category_id=rent["id"],
+            date=date(2026, 4, day),
+        )
+    repair = await movements_mod.record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=1_200_000,
+        description="Roof repair",
+        category_id=rent["id"],
+        date=date(2026, 4, 12),
+    )
+    await movements_mod.correct_movement(ledger, repair["id"], changes={"one_off": True})
+
+    result = await recompute_baselines(ledger, as_of=date(2026, 4, 30))
+
+    assert result["computed"] == 1
+    row = await ledger.fetchrow("SELECT * FROM baselines WHERE category_id = $1", rent["id"])
+    assert row["source"] == "computed"
+    assert row["window_days"] == 29
+    # Only the 120,000 of maintenance: the rent paid a schedule and the repair is marked one-off.
+    assert row["amount_per_day_paise"] == round(120_000 / 29)
+    # The projection derives its own baseline from the same rows, so the two must agree.
+    inputs = await load_inputs(ledger, as_of=date(2026, 4, 30))
+    simulated = next(category for category in inputs.categories if category.name == "Rent")
+    assert simulated.baseline_per_day_paise == row["amount_per_day_paise"]

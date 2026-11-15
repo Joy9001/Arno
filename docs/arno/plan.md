@@ -50,8 +50,9 @@ old name so that archives written before today still restore.
 **Engine redesign on November 13, 2026.** The projection, affordability, pattern, and money engine
 is rebuilt on one integer scenario matrix, behind a backtest that scores every change against
 baselines before it ships. Design and build order:
-[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Steps 1 to 5 of that build
-order have landed; the pattern engine and the steps after it are still to come.
+[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Steps 1 to 6 of that build
+order have landed, the pattern engine included, and so has the HackerRank adapter (step 8); the
+optional calibration step is still to come.
 
 **App role demoted on November 14, 2026.** The `app` role owns the Arno databases without
 `SUPERUSER` (`LOGIN CREATEDB CREATEROLE`, `pg_signal_backend`, and `ADMIN OPTION` on `agent_ro` and
@@ -491,9 +492,13 @@ local code rather than the review screen, and those two import gaps remain. Deta
 28. Affordability: verdict plus the four tradeoffs, all computed in code.
 29. **Backtest:** the `project()` function run as of past dates over the backfill; median 30-day
     error and band calibration published.
-30. **HackerRank "Buy or Wait":** the engine scored 88.8% on the 25 labeled samples (status 23/25,
-    amount within 5% 21/25, earliest within 3 days 22/25), published in the README. The data stays
-    local and is never committed.
+30. **HackerRank "Buy or Wait":** the shipped engine scores 86.8% on the 25 labeled samples
+    (status 22/25, amount within 5% 21/25, earliest within 3 days 22/25), published in the README.
+    The scorer is an adapter: stream inference is the pattern engine, and the safe amount, the
+    earliest date, and every plan come from `project()`. The dataset's own levers (stopping or
+    reducing one named stream, a merchant's fixed instalment dates) have no product equivalent, so
+    the adapter searches them and checks each with `project()`. The earlier 88.8% came from a
+    parallel implementation and is retired. The data stays local and is never committed.
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
 **L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
@@ -503,7 +508,8 @@ month. A backtest was run against a copy of the live ledger. With no income sche
 every month is unusable as a measurement, so `arno backtest --publish` refused to write and
 milestone 29 stays open until the owner adds a salary schedule. Milestone 30 is done as of November
 12: `arno hackerrank` scores the engine at 88.8% on the 25 externally labeled samples, and the
-README carries the block. On November 15, 2026 the owner allowed the backtest and pattern scoring
+README carries the block. On November 15 the scorer became an adapter over the shipped engine,
+which scores 86.8% (milestone 30). The same day the owner allowed the backtest and pattern scoring
 to run on the development instance's real ledger, reporting aggregate numbers only; nothing is
 committed or published, and a confirmed salary schedule will make its months count. Detail:
 [release-hardening.md](release-hardening.md).
@@ -617,10 +623,9 @@ Answer each when its layer arrives, not before.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
     `data_quality` says so; there is no per-account setting to keep in sync.
-- **L5 redesign:** decided November 13, 2026, and built through step 5 of its build order. The
+- **L5 redesign:** decided November 13, 2026, and built through step 6 of its build order. The
   engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's build
-  order. The L6 recurring-charge thresholds below describe the shipped engine until step 6
-  replaces them. A model change ships only if it beats the one before it on the new backtest.
+  order. A model change ships only if it beats the one before it on the new backtest.
   - **NumPy.** A runtime dependency for the scenario kernel (§3).
   - **Scenario count.** 16,384 at every horizon, replacing 1,000.
   - **Model switches.** Each one was scored on the tuning seeds of the ten synthetic households,
@@ -638,22 +643,34 @@ Answer each when its layer arrives, not before.
   - **Goal slips.** The "no goal slips" clause of a `yes` goes, because it could never fail. A
     goal slips only through the delay-a-goal tradeoff.
   - **Detected series.** A detected recurring charge the user has not confirmed enters the
-    projection as an outflow, labeled in `data_quality`. Detected income never enters the base
-    case; with no confirmed income the projection stays unusable.
+    projection as an outflow when its confidence is at least 0.999, it is spend, and no confirmed
+    schedule covers it. Each scenario keeps it alive or not, skips or pays each expected date,
+    moves the date within its jitter, and draws its amount; the data-quality gap names it and it
+    is cited as a source. Detected income never enters the base case; with no confirmed income the
+    projection stays unusable.
   - **EMI cost.** A card EMI carries interest, fee, and GST. The rate comes from the what-if,
     then the card, then a labeled default of 16% a year; zero only for a stated no-cost offer.
     The 18% GST on interest and the processing fee follows CSB Bank's One credit card EMI terms
     (April 2024).
   - **Pattern thresholds.** Two posterior thresholds, a lower one to propose a series and a
-    higher one to project it, both set from precision on labeled data.
+    higher one to project it. Both come from the synthetic households' tuning seeds: 0.9 held
+    precision and recall at 0.99, and 0.999 held precision at 1.0.
   - **Quantiles.** Order statistics with no interpolation; published numbers shift by a few
     paise.
   - **Short history.** Below 14 real days the pool is topped up with pseudo-days at 0, ½, 1, 1½,
     and 2 times the stated daily estimate, weighted so real days count r : 14 − r. It cut mean
-    CRPS by 3.4%.
-  - **One-off mark.** Decided November 15, 2026, and to be built, because the rare-day stream
-    ships. A payment marked one-off leaves the spend history: it is neither everyday nor rare
-    spend.
+    CRPS by 3.4%. Once the ledger covers 14 days, a category with a computed baseline is drawn
+    from whole days however sparse it is, and the prior is kept for a young ledger or a stated
+    estimate.
+  - **Payment attribution.** A payment that settled a schedule, one a projected series matched,
+    and one marked one-off leave the spend pool, and a category an obligation covers is simulated
+    from what is left instead of dropped. A rare day replaces that day's everyday draw instead of
+    adding to it. With both, step 6 lowered mean CRPS by 5.9% on the tuning seeds, every cell 3%
+    to 10% better; attribution before those two fixes was 0.5% worse.
+  - **One-off mark.** Decided and built on November 15, 2026, because the rare-day stream ships.
+    A payment marked `movements.one_off` leaves the spend history: it is neither everyday nor rare
+    spend. The movement correction tool and the movement dialog both set it, and both are
+    undoable.
   - **Release gate.** Decided November 15, 2026: "shipped" waits for the engine redesign. The four
     weeks of daily use start once the new engine has landed.
 - **L6:** settled in code and recorded here.
@@ -663,10 +680,15 @@ Answer each when its layer arrives, not before.
     schedule that was missed while the machine slept fires once, keyed by its period.
   - **Reminder lead days.** 3 days before a bill, EMI, or card due date. A reminder is keyed by
     the source and due date, so it appears once inside the lead window.
-  - **Recurring-charge thresholds.** At least 3 occurrences, gaps within 3 days of 7, 30, or 365
-    days, and amounts within 10% of the median. An expected occurrence 3 or more days late with no
-    matching payment is a missed charge. Detection runs nightly and after every import, and only
-    proposes; it never writes a schedule.
+  - **Recurring-charge thresholds.** Calendar-rule hypotheses scored by an exact alignment
+    likelihood, not gaps around 7, 30, or 365 days: weekly, fortnightly, four-weekly, twice
+    monthly, monthly on a day, last day, last working day, n-th weekday, quarterly, half-yearly,
+    and yearly. The date-in-month rules are also tried moved to the next and the previous Indian
+    working day, and the last working day is the last day's previous-working-day form. At least 3
+    payments. A series is proposed at confidence 0.9 and projected at 0.999; on the synthetic
+    households' tuning seeds 0.9 held precision and recall at 0.99, and 0.999 held precision at
+    1.0. An expected occurrence 3 or more days late with no matching payment is a missed charge.
+    Detection runs nightly and after every import, and only proposes; it never writes a schedule.
   - **Risk episodes.** The engine's own 90% floor threshold decides a warning. One warning goes
     out per episode when the floor probability falls below it or the first crossing moves earlier;
     the episode re-arms after the probability recovers and the crossing no longer moves earlier.

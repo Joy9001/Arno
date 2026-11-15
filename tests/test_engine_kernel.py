@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from arno.engine import kernel
-from arno.engine.kernel import CardSpec, Pool, SeriesSpec, Settings, Spec
+from arno.engine.kernel import CardSpec, Pool, Rare, SeriesSpec, Settings, Spec
 
 
 def _ref_pick(cumulative: list[int], positions: list[int], value: int) -> int:
@@ -462,3 +462,77 @@ def test_the_reducible_measure_reads_what_was_there_before_the_cut():
     assert (run.paths[:, 18] == 85_000).all()
     assert (run.reducible[:, 0] == 20_000).all()
     assert (run.reducible[:, 1] == 30_000).all()
+
+
+def test_a_rare_day_replaces_its_day_pool_instead_of_adding_onto_it():
+    first_day = 739_000
+    days = 20
+    total = days + 1
+    spec = Spec(
+        start_balance=100_000,
+        days=days,
+        first_day=first_day,
+        classes=np.zeros(total, np.int8),
+        inflow=np.zeros(total, np.int64),
+        obligation=np.zeros(total, np.int64),
+        later=np.zeros(total, np.int64),
+        obligation_days=np.zeros(0, np.int64),
+        unconfirmed=np.zeros(total, np.int64),
+        floor=0,
+        pools=(
+            Pool(
+                columns={"cash": np.array([1_000], dtype=np.int64)},
+                classes=np.array([0], dtype=np.int8),
+                stream=0,
+            ),
+        ),
+        rare=Rare(
+            columns={"cash": np.array([5_000], dtype=np.int64)},
+            events=1,
+            exposure_days=2,
+            stream=999,
+            replaces_stream=0,
+        ),
+    )
+    run = kernel.run(spec, Settings(scenarios=32, seed=4, keep_days=total))
+    assert run.paths is not None
+    drops = run.paths[:, :-1] - run.paths[:, 1:]
+    unique_drops = set(np.unique(drops).tolist())
+    assert unique_drops == {1_000, 5_000}
+
+
+def test_a_rare_day_adds_when_no_pool_matches_replaces_stream():
+    first_day = 739_000
+    days = 20
+    total = days + 1
+    spec = Spec(
+        start_balance=200_000,
+        days=days,
+        first_day=first_day,
+        classes=np.zeros(total, np.int8),
+        inflow=np.zeros(total, np.int64),
+        obligation=np.zeros(total, np.int64),
+        later=np.zeros(total, np.int64),
+        obligation_days=np.zeros(0, np.int64),
+        unconfirmed=np.zeros(total, np.int64),
+        floor=0,
+        pools=(
+            Pool(
+                columns={"cash": np.array([1_000], dtype=np.int64)},
+                classes=np.array([0], dtype=np.int8),
+                stream=1,
+            ),
+        ),
+        rare=Rare(
+            columns={"cash": np.array([5_000], dtype=np.int64)},
+            events=1,
+            exposure_days=2,
+            stream=999,
+            replaces_stream=0,
+        ),
+    )
+    run = kernel.run(spec, Settings(scenarios=32, seed=4, keep_days=total))
+    assert run.paths is not None
+    drops = run.paths[:, :-1] - run.paths[:, 1:]
+    unique_drops = set(np.unique(drops).tolist())
+    assert unique_drops == {1_000, 6_000}

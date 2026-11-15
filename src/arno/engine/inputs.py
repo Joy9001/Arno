@@ -127,16 +127,43 @@ def _events(snapshot: LedgerSnapshot) -> tuple[list[CashEvent], set[str], list[s
     return events, covered, gaps
 
 
+def _derived_baseline(
+    category_id: str,
+    by_day: dict[date, int],
+    rows_by_category: dict[str, int],
+    covered_days: int,
+) -> int | None:
+    """A computed daily rate from the spend rows themselves, once three rows fall on two days.
+
+    The rows already leave out what schedules and projected series pay, so a category that holds
+    its rent never inherits the rent as everyday spend. The divisor is the days the ledger covers,
+    so a new ledger is not averaged over days before it began. A stored computed baseline is never
+    read: it counted every payment in the category.
+    """
+    if rows_by_category.get(category_id, 0) < 3 or len(by_day) < 2:
+        return None
+    return round(sum(by_day.values()) / covered_days)
+
+
 def _spend_categories(
     snapshot: LedgerSnapshot, covered: set[str]
 ) -> tuple[list[SpendCategory], list[BaselineSource], list[str]]:
     window_start = snapshot.as_of - timedelta(days=HISTORY_DAYS)
+    first = (
+        window_start
+        if snapshot.history_start is None
+        else max(window_start, snapshot.history_start)
+    )
+    covered_days = max(1, (snapshot.as_of - first).days)
     daily: dict[str, dict[date, int]] = {}
     by_card: dict[str, dict[str, int]] = {}
     uncategorized = 0
+    rows_by_category: dict[str, int] = {}
     for row in snapshot.spend:
         if row.amount_paise <= 0 or row.date < window_start:
             continue
+        if row.category_id is not None:
+            rows_by_category[row.category_id] = rows_by_category.get(row.category_id, 0) + 1
         if row.category_id is None:
             uncategorized += row.amount_paise
             continue
@@ -164,18 +191,25 @@ def _spend_categories(
             continue
         by_day = daily.get(category.id, {})
         real_days = sum(1 for amount in by_day.values() if amount > 0)
+        derived = _derived_baseline(category.id, by_day, rows_by_category, covered_days)
+        if derived is not None:
+            stated, stated_source = derived, "computed"
+        elif category.baseline_source == "estimated":
+            stated, stated_source = category.baseline_per_day_paise, "estimated"
+        else:
+            stated, stated_source = None, None
         day_label = f"{real_days} real spending day" + ("" if real_days == 1 else "s")
-        if real_days < MIN_REAL_DAYS and category.baseline_per_day_paise is None:
+        if real_days < MIN_REAL_DAYS and stated is None:
             if by_day:
                 gaps.append(
                     f"{category.name} has only {day_label} and no setup estimate, so it is left out"
                 )
             continue
-        if category.baseline_per_day_paise is not None:
-            baseline_per_day = category.baseline_per_day_paise
-            source = category.baseline_source or "estimated"
+        if stated is not None:
+            baseline_per_day = stated
+            source = stated_source or "estimated"
         else:
-            baseline_per_day = round(sum(by_day.values()) / HISTORY_DAYS) if by_day else 0
+            baseline_per_day = round(sum(by_day.values()) / covered_days) if by_day else 0
             source = "computed"
         history = tuple((day, max(0, by_day.get(day, 0))) for day in days)
         total_spend = sum(by_day.values())

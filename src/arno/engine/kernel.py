@@ -93,12 +93,17 @@ class Pool:
 
 @dataclass(frozen=True, slots=True)
 class Rare:
-    """Rare large spending days, resampled at their long-run rate rather than from the pool."""
+    """Rare large spending days, resampled at their long-run rate rather than from the pool.
+
+    Each row is a whole past day split out of the pool on stream ``replaces_stream``, so on a day
+    a rare draw hits it replaces that pool's draw instead of adding to it.
+    """
 
     columns: dict[str, I64]
     events: int
     exposure_days: int
     stream: int
+    replaces_stream: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -659,14 +664,19 @@ def _spend(
         names += _cut_columns(card_count)
     spend = {name: np.zeros((scenarios, width), dtype=np.int64) for name in names}
     classes = spec.classes[begin : begin + width]
+    drawn = rare.rows(keys) if rare is not None and spec.rare is not None else None
+    replaces = spec.rare.replaces_stream if spec.rare is not None else None
     for state in states:
         rows = state.rows(keys, classes)
+        # A rare row is a whole day, so it stands in for the draw of the pool it was split from.
+        everyday = ~drawn[0] if drawn is not None and state.pool.stream == replaces else None
         for name in names:
             column = state.pool.columns.get(name)
             if column is not None:
-                spend[name] += column[rows]
-    if rare is not None and spec.rare is not None:
-        happened, which = rare.rows(keys)
+                values = column[rows]
+                spend[name] += values if everyday is None else np.where(everyday, values, 0)
+    if drawn is not None and spec.rare is not None:
+        happened, which = drawn
         for name in names:
             column = spec.rare.columns.get(name)
             if column is not None:

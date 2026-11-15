@@ -409,18 +409,9 @@ def _persona_detections(ledger: _Ledger, boundary: date) -> tuple[_DetectedPerso
 def _baseline(
     persona: personas_mod.Persona, category: personas_mod.Category, as_of: date
 ) -> tuple[int | None, str | None]:
-    # Mirrors arno.importers.baselines: a computed baseline once the last 90 days hold three
-    # rows on two days, else the estimate typed at setup.
-    start = as_of - timedelta(days=89)
-    rows = [
-        movement
-        for movement in persona.movements
-        if movement.kind == "spend"
-        and movement.category_id == category.id
-        and start <= movement.date <= as_of
-    ]
-    if len(rows) >= 3 and len({row.date for row in rows}) >= 2:
-        return round(sum(row.amount_paise for row in rows) / 90), "computed"
+    # Only the estimate typed at setup is stored: `build_inputs` derives a computed baseline from
+    # the attributed spend rows itself.
+    del as_of
     if category.stated_per_day_paise is not None:
         return category.stated_per_day_paise, "estimated"
     return None, None
@@ -499,6 +490,9 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
     boundary = _detection_boundary(persona.history_start, as_of)
     series_forecasts: list[SeriesForecast] = []
     matched_by_projected: set[str] = set()
+    # Payments after the detection day are not in its alignment yet; production detects nightly,
+    # so a projected series' later payments to the same payee are its own too.
+    projected_payees: set[str] = set()
     for detected in _persona_detections(ledger, boundary):
         if detected.payee_key in confirmed_series_payees:
             continue
@@ -540,6 +534,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
             )
         )
         matched_by_projected.update(detected.detection.matched)
+        projected_payees.add(detected.payee_key)
 
     window = as_of - timedelta(days=RARE_WINDOW_DAYS)
     spend: dict[tuple[date, str | None, str | None], int] = {}
@@ -549,6 +544,8 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
         if movement.series_id in confirmed_series_ids:
             continue
         if movement.id in matched_by_projected:
+            continue
+        if movement.payee_key in projected_payees and movement.date > boundary:
             continue
         card_id = None if movement.account == "bank" else movement.account
         key = (movement.date, movement.category_id, card_id)

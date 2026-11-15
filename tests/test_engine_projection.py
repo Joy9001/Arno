@@ -16,6 +16,7 @@ from arno.engine.projection import (
     Projection,
     ProjectionInput,
     SpendCategory,
+    SpendRow,
     first_full_payment_date,
     project,
     safe_amount_today,
@@ -333,3 +334,75 @@ def test_first_full_payment_date_returns_none_when_a_past_day_already_breaks_the
 def test_curve_length_is_stable_for_any_run_count(runs: int):
     result = project(_inputs(), runs=runs)
     assert len(result["curve"]) == result["horizon_days"] + 1
+
+
+def test_mature_computed_sparse_categories_join_the_day_pool():
+    as_of = date(2026, 1, 1)
+    start = as_of - timedelta(days=90)
+    groceries_history = tuple(
+        (start + timedelta(days=i), 50_000 + (i % 5) * 5_000) for i in range(90)
+    )
+    family_days = {
+        start + timedelta(days=5): 5_000,
+        start + timedelta(days=25): 6_000,
+        start + timedelta(days=45): 5_500,
+        start + timedelta(days=65): 6_850_000,
+    }
+    family_history = tuple(
+        (start + timedelta(days=i), family_days.get(start + timedelta(days=i), 0))
+        for i in range(90)
+    )
+    spend_rows = tuple(
+        [
+            *(
+                SpendRow(day, "food", None, amount)
+                for day, amount in groceries_history
+                if amount > 0
+            ),
+            *(SpendRow(day, "family", None, amount) for day, amount in family_days.items()),
+        ]
+    )
+    inputs = ProjectionInput(
+        as_of=as_of,
+        floor_paise=0,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=10_000_000, as_of=as_of),),
+        categories=(
+            SpendCategory(
+                id="food",
+                name="Groceries",
+                baseline_per_day_paise=60_000,
+                baseline_source="computed",
+                history=groceries_history,
+            ),
+            SpendCategory(
+                id="family",
+                name="Family",
+                baseline_per_day_paise=sum(family_days.values()) // 90,
+                baseline_source="computed",
+                history=family_history,
+            ),
+        ),
+        spend=spend_rows,
+        history_start=start,
+        ask_horizon_days=90,
+    )
+    result = project(inputs, runs=64, seed=3)
+    sim = result["data_quality"]["simulation"]
+    assert "Groceries" in sim["categories_sampled"]
+    assert "Family" in sim["categories_sampled"]
+    assert "Family" not in sim["categories_flat"]
+    assert len(sim["rare_days"]) == 1
+    assert sim["rare_days"][0]["date"] == (start + timedelta(days=65)).isoformat()
+
+    short = ProjectionInput(
+        as_of=as_of,
+        floor_paise=0,
+        liquid=inputs.liquid,
+        categories=inputs.categories,
+        spend=spend_rows,
+        history_start=as_of - timedelta(days=10),
+        ask_horizon_days=90,
+    )
+    short_result = project(short, runs=64, seed=3)
+    assert "Family" in short_result["data_quality"]["simulation"]["categories_flat"]
+    assert "Family" not in short_result["data_quality"]["simulation"]["categories_sampled"]

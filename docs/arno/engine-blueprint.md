@@ -1,19 +1,22 @@
 # Engine blueprint: the next projection, affordability, pattern, and money engine
 
-**Status: decided on November 13, 2026, and being built.** The decisions of section 11 are
-recorded in [`plan.md`](plan.md) §6, which owns them. Written against `src/arno/engine` at
-commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic households the
-shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat balance
-forecasts the end balance better than it does (README, "Projection backtest"). Step 2
-landed the same day: `project()` runs on the scenario kernel, which matches a plain
-day-by-day walk to the paisa and the old walk within its sampling error on card-free inputs.
+**Status: decided on November 13, 2026, and built through step 6 of the build order.** The
+decisions of section 11 are recorded in [`plan.md`](plan.md) §6, which owns them. Written against
+`src/arno/engine` at commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic
+households the shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat
+balance forecasts the end balance better than it does (README, "Projection backtest"). Step 2
+landed the same day: `project()` runs on the scenario kernel, which matches a plain day-by-day walk
+to the paisa and the old walk within its sampling error on card-free inputs.
 Steps 3 to 5 landed on November 15, 2026: the admitted switches ship as
 `Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8))`, which lifts P10-P90
 coverage on the tuning seeds from 25% to 34% under the old engine to 51% to 62%; the 80% target
-waits on step 6, mostly payments not yet attributed to schedules. Affordability reports
-critical-value minimal plans verified by rerun, and the money kernel carries bank conventions,
-rate inversion, cumulative rounding, and allocation; XIRR was not built, because nothing uses it
-and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe steps 1 to 5.
+waits on the backtest's next measurement. Step 6 landed the same day: the calendar-rule detector
+in `engine/series.py`, the pattern job that stores `series_detections` and proposes new spend and
+income series, payment-level attribution in the projection, and the one-off mark. Affordability
+reports critical-value minimal plans verified by rerun, and the money kernel carries bank
+conventions, rate inversion, cumulative rounding, and allocation; XIRR was not built, because
+nothing uses it and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe
+steps 1 to 6.
 Revised the same day after two external reviews; each accepted finding was first checked against
 the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 
@@ -224,6 +227,12 @@ the threshold collapses to zero for anyone who spends on fewer than half of days
 disables the split. Everyday habits need a recent window; rare events need a long one. Fitting a
 parametric tail is rejected: it needs 50 to 100 exceedances and six months gives about 18.
 
+As built (step 6): a rare day is a whole past day, so a rare draw replaces that day's everyday
+draw rather than adding to it, and once the ledger covers 14 days every category with a computed
+baseline joins the whole-day pool however sparse it is; the short-history prior applies only to a
+young ledger or a stated estimate. Before both fixes, attribution scored 0.5% worse than the
+engine without it, because dropping covered categories had been hiding the double count.
+
 ### 4.3 Kernel
 
 - **Randomness.** A counter-based integer hash (the SplitMix64 finalizer over `seed`, stream,
@@ -419,12 +428,14 @@ months old in an 800-day window is scored as 23 skipped payments and never detec
 
 Every weight is an integer over a power of two, and each cell keeps one common denominator, so
 the recursion runs in exact Python integers and the ranking of hypotheses is reproducible to the
-bit. Summing over a small grid of `q`, jitter width, and `λ` gives each rule's marginal
+bit. Deviation: the shipped detector does the same recursion in float64 with only `+`, `−`, `×`,
+and `/` and exact powers of two for scaling, which is bit-reproducible too, because exact integers
+were too slow. Summing over a small grid of `q`, jitter width, and `λ` gives each rule's marginal
 likelihood. "No pattern" is the same recursion with no expected dates, `λ^M`, so a rule with more
 expected dates gets no advantage: each one must be matched or paid for as a skip.
 
 - **Confidence** is one minus the posterior of "no pattern". Three clean monthly payments give
-  about 0.9 under the proposed priors (a hand calculation, to be checked on labeled data).
+  about 0.9 under the priors, which is where the propose threshold sits.
 - **Next date** is the posterior-weighted mixture of each rule's next expected date and jitter.
 - **Still alive** is the share of the likelihood whose end is the last expected date. After `k`
   trailing misses that is `x^k / (x^k + c·(1 + x + … + x^(k−1)))` with `x = (1 − c)·q`. At
@@ -510,6 +521,12 @@ code. The report adds a per-status table and intervals, counts errors as misses 
 denominator, and pins the weights and tolerances in a test. The four-day tail cutoff and the
 message regexes stay in the adapter, labeled as dataset conventions.
 
+As built, the dataset's levers stay in the adapter too. Stopping or reducing one named stream and
+a merchant's fixed instalment dates have no product lever: a product cut trims categories, and a
+detected series never joins the cut. The adapter searches those levers and checks each plan with
+`project()`. The safe amount and the earliest date are `safe_amount_today` and
+`first_full_payment_date`. Score: 86.8% (status 22/25).
+
 ## 9. How the pieces compose
 
 1. The ledger loader hands the pattern engine every payment and receipt.
@@ -569,15 +586,16 @@ Decided on November 13, 2026, and recorded in plan.md §6.
    of 16% a year. The 18% GST on interest and fees was checked against CSB Bank's One credit
    card EMI terms (April 2024) before it was coded.
 9. **Pattern thresholds**: posterior thresholds replace "three occurrences, ±3 days, ±10%". Two
-   of them, a lower one to propose a series and a higher one to put it in the projection, both
-   set from precision on labeled data.
+   of them, a lower one to propose a series and a higher one to put it in the projection, both set
+   from precision on the synthetic households' tuning seeds: 0.9 to propose (precision and recall
+   0.99) and 0.999 to project (precision 1.0).
 10. **Quantile definition**: order statistics without interpolation shift published numbers by a
     few paise.
 11. **Short-history prior**: the pseudo-day multiples of section 4.2 are set by the backtest.
 12. **A one-off mark on a movement** excludes a payment from the spend history. The rare-spend
-    stream shipped on the backtest (step 3), so on November 15, 2026 the mark was decided and is
-    to be built. Without it, one large expense 14 months ago adds about a 19% chance of a repeat
-    inside any 90 days.
+    stream shipped on the backtest (step 3), so on November 15, 2026 the mark was decided and
+    built. Without it, one large expense 14 months ago adds about a 19% chance of a repeat inside
+    any 90 days.
 
 Decided on November 15, 2026: "shipped" (plan.md) waits for this redesign.
 
@@ -586,7 +604,8 @@ Decided on November 15, 2026: "shipped" (plan.md) waits for this redesign.
 - Every latency figure for the new kernel is an operation count.
 - Each model switch is a hypothesis until the backtest scores it. Section 2.1 is a derivation,
   and the 75% result is consistent with it but too small a sample to confirm it.
-- The pattern priors and the 0.9 confidence example are hand calculations.
+- The pattern priors are a design choice, not a measured quantity; only the confidence thresholds
+  were tuned.
 - The NPCI presentation rule for mandates and the ISDA business-day text could not be opened at
   the source; the conventions above are standard but unverified against those documents.
 

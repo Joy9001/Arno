@@ -10,7 +10,7 @@ from datetime import date
 
 import pytest
 
-from arno.importers.baselines import WINDOW_DAYS, recompute_baselines
+from arno.importers.baselines import recompute_baselines
 from arno.importers.commit import undo_import
 from arno.importers.synthetic import seed_committed_statement
 from arno.ledger.accounts import create_account
@@ -230,11 +230,14 @@ async def test_a_corrected_bill_contributes_once_to_its_baseline(ledger):
 
     await recompute_baselines(ledger, as_of=date(2026, 10, 5))
     row = await ledger.fetchrow(
-        "SELECT amount_per_day_paise, source FROM baselines WHERE category_id = $1",
+        "SELECT amount_per_day_paise, source, window_days FROM baselines WHERE category_id = $1",
         groceries,
     )
+    # The ledger covers August 31 to October 5: 35 days.
+    covered_days = (date(2026, 10, 5) - date(2026, 8, 31)).days
     assert row["source"] == "computed"
-    # (225,000 + 100,000 + 50,000) / 90 days. Counting the corrected-away 250,000 as well
-    # would make it 6,944.
-    assert row["amount_per_day_paise"] == round(375_000 / WINDOW_DAYS)
-    assert row["amount_per_day_paise"] == 4_167
+    # (225,000 + 100,000 + 50,000) over the days the ledger covers. Counting the corrected-away
+    # 250,000 as well would make it 17,857.
+    assert row["amount_per_day_paise"] == round(375_000 / covered_days)
+    assert row["amount_per_day_paise"] == 10_714
+    assert row["window_days"] == covered_days

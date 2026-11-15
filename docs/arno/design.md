@@ -417,9 +417,9 @@ agent replies render as plain text ([`platform.md`](platform.md#security)).
 One function in code, seeded so the same inputs always give the same output. No LLM
 involvement—this is the tested arithmetic every affordability verdict comes from.
 
-Steps 1 to 5 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
-admitted model switches, affordability on the kernel, and the money conventions. Step 6, pattern
-detection and payment-level attribution, changes when it lands.
+Steps 1 to 6 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
+admitted model switches, affordability on the kernel, the money conventions, and pattern detection
+with payment-level attribution.
 
 ### Inputs
 
@@ -433,12 +433,15 @@ detection and payment-level attribution, changes when it lands.
   each card together, split into reducible and fixed) from the last 90 days, with weekdays and
   weekends kept apart. A day the household spent far above its usual (the median plus 3 median
   absolute deviations over spending days in the last 365 days) leaves that pool and is drawn as
-  its own stream at its long-run rate. Below 14 real days a category is topped up with five
-  pseudo-days at 0, ½, 1, 1½, and 2 times the stated daily estimate, weighted so real days count
-  r : 14 − r; the prior fades as real days arrive. Attribution is still by category, not by
-  payment, and a category an obligation covers is still dropped with a gap note; step 6 replaces
-  both with matched series. How days are drawn is one switch per change in `projection.Model`, and
-  a switch ships only when it beats the one before it on the backtest.
+  its own stream at its long-run rate; being a whole past day, a rare draw stands in for that
+  day's everyday draw. Once the ledger covers 14 days, every category with a computed baseline is
+  drawn from whole days, however few days it was spent on. Otherwise, below 14 real days, a
+  category is topped up with five pseudo-days at 0, ½, 1, 1½, and 2 times the stated daily
+  estimate, weighted so real days count r : 14 − r; the prior fades as real days arrive.
+  Attribution is by payment: a payment that settled a schedule, one matched by a projected series, and one marked one-off leave the pool, so
+  a category an obligation covers is simulated from what is left rather than dropped. How days are
+  drawn is one switch per change in `projection.Model`, and a switch ships only when it beats the
+  one before it on the backtest.
 - Goal contributions move money into a goal's account; those fenced savings are not spendable.
 - Money owed counts only when its label has an `expected_date`.
 
@@ -537,16 +540,58 @@ has the strongest case for tests in the codebase: pure, seeded, and money depend
 
 ## Pattern detection
 
-Rule-based, in Python, run nightly and after imports. Everything surfaces as a _proposal_ in the
-inbox or chat—"Looks like Netflix ₹649 monthly. Add it as an obligation?"—never a silent write.
+One pure function in `engine/series.py` over the last 800 days of payments. The pattern job in
+`tools/patterns.py`, driven by `jobs/patterns.py`, runs it nightly and after every import.
+Everything surfaces as a _proposal_ in the inbox or chat—"Looks like Netflix ₹649 monthly. Add
+it as an obligation?"—never a silent write.
 
-The detector looks for the following patterns:
+Each candidate is a calendar rule: weekly, fortnightly, four-weekly, twice monthly, monthly on a
+day, the last day, the last working day, the n-th weekday, quarterly, half-yearly, or yearly. The
+date-in-month rules are tried unshifted, moved to the next working day, and moved to the previous
+working day on the Indian bank calendar in `india/workdays.py`, so a second or fourth Saturday and
+a bank holiday both move a date. The weekly rules and the n-th weekday are tried unshifted, and the
+last working day is the previous-working-day form of the last day. At least 3 payments in the
+window are needed before anything is scored.
 
-| Pattern | Rule (thresholds tuned on real data at L6) |
+**Scoring.** A rule is scored by an exact alignment likelihood. Each expected date is paid with
+probability `1 − q`, on a day offset by a jitter distribution; it may be skipped; unrelated
+payments arrive at a background rate. A dynamic program over three active states—not started, on a
+match or skip, on an unrelated payment—sums every labeling of the payments exactly once, and it
+matches a brute-force enumeration to 1e-12. "No pattern" is a Poisson process at its fitted rate
+`λ = M / (e·T)` for `M` payments over `T` days, and an unrelated payment under a rule costs a
+tenth of that, so a merchant with no rhythm does not become a series.
+
+**Arithmetic.** The detector works in float64 without a transcendental function: only `+`, `−`,
+`×`, and `/`, plus exact powers of two for scaling, so its ranking is reproducible to the bit;
+`engine-blueprint.md` §6.2 proposed exact integers, which were too slow.
+
+**Thresholds.** Confidence is one minus the posterior of "no pattern". A series is proposed at
+`PROPOSE_CONFIDENCE = 0.9` and projected at `PROJECT_CONFIDENCE = 0.999`. Both were set on the
+synthetic households' tuning seeds: 0.9 keeps precision and recall at 0.99, and 0.999 keeps
+precision at 1.0. The first spec scored random merchants as series, at precision 0.25; adding the
+cost of an unrelated payment and fitting the background to the payee's own rate brought it to 0.99.
+
+The proposals that reach the inbox are the following:
+
+| Proposal | Rule |
 |---|---|
-| Recurring charge | Same normalized merchant, ≥3 occurrences, interval ~7, 30, or 365 days ±3, amount ±10% |
-| New subscription | A recurring charge that has no matching schedule |
-| Missed recurring | An expected occurrence is 3+ days late |
+| New subscription | A spend series at confidence 0.9 or more whose latest payments no confirmed schedule covers |
+| New income | An income series at confidence 0.9 or more |
+| Missed recurring | An expected occurrence is 3 or more days late with no matching payment |
 | Risk | After any write and nightly, rerun the projection. If the floor probability drops below the threshold (against the floor, or against zero when no floor is set), or a crossing moves earlier, warn once for each episode |
+
+**Where it lands.** `series_detections` (migration `0041`) is rewritten whole by the pattern job,
+in one transaction. It holds each detection's rule, confidence, still-alive probability, skip rate,
+jitter, amount summary, and matched movement IDs. A `new_subscription` proposal carries its
+confidence, rule, and next date. Detected income never enters the projection.
+
+**Attribution.** The best alignment labels each payment as part of the series or not. Spend history
+leaves out the payments that settled a schedule, the ones a projected series matched, and the ones
+marked one-off. A category covered by an obligation is no longer dropped: it is simulated from what
+is left. A computed baseline comes from those attributed rows, over the days the ledger covers.
+
+**One-off mark.** `movements.one_off` takes a payment out of spend history, because a payment that
+will not recur is neither everyday nor rare spend. The movement correction tool and the movement
+dialog both set it, and both are undoable.
 
 Large-transaction and category-spike detection are parked ([`parked.md`](parked.md)).
