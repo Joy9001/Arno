@@ -193,6 +193,29 @@ class AccountSetup(WriteModel):
         ge=0,
         description="Card only, when stated: the EMI's processing fee in paise.",
     )
+    finance_rate_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Card only, when the issuer states it: the card's finance charge in percent a month, "
+            "as the issuer states it (3.5 means 3.5% a month). Leave it out rather than guessing."
+        ),
+    )
+    min_due_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Card only, when the issuer states it: the minimum due in percent of the statement "
+            "balance (5 means 5%)."
+        ),
+    )
+    min_due_floor_paise: int | None = Field(
+        default=None,
+        ge=0,
+        description="Card only, when stated: the minimum-due floor in paise.",
+    )
     rate_percent: Decimal | None = None
     tenure_months: int | None = None
     active: bool | None = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 
@@ -157,6 +158,38 @@ async def test_financial_context_known_zero_card_keeps_zero_outstanding(ledger):
     assert row["known"] is True
     assert row["outstanding"] == {"paise": 0, "text": "₹0"}
     assert row["available_credit"] == {"paise": 10_000_000, "text": "₹1,00,000"}
+
+
+async def test_financial_context_reports_a_card_s_finance_terms(ledger):
+    from arno.ledger.accounts import create_account, update_account
+
+    card = await create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        credit_limit_paise=10_000_000,
+        statement_day=5,
+        due_day=25,
+    )
+
+    context = await read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == card["id"])
+    assert row["finance_rate_bps"] is None
+    assert row["min_due_bps"] is None
+    assert row["min_due_floor"] is None
+
+    await update_account(
+        ledger,
+        card["id"],
+        finance_rate_bps=4_200,
+        min_due_bps=500,
+        min_due_floor_paise=20_000,
+    )
+    context = await read_tools.get_financial_context(ledger)
+    row = next(item for item in context["accounts"] if item["id"] == card["id"])
+    assert row["finance_rate_bps"] == 4_200
+    assert row["min_due_bps"] == 500
+    assert row["min_due_floor"] == {"paise": 20_000, "text": "₹200"}
 
 
 def test_unknown_balance_is_null_not_zero():
@@ -417,6 +450,43 @@ async def test_update_setup_sets_the_floor_and_a_baseline(demo_ledger):
         "WHERE c.name = 'Food & Dining'"
     )
     assert row["amount_per_day_paise"] == 30_000
+
+
+@pytest.mark.parametrize(
+    ("monthly_percent", "annual_bps"), [("3.5", 4_200), ("3.75", 4_500), ("2.99", 3_588)]
+)
+async def test_update_setup_converts_a_monthly_finance_charge_to_annual_basis_points(
+    ledger, monthly_percent, annual_bps
+):
+    saved = await write_tools.update_setup_item(
+        ledger,
+        entity="account",
+        action="add",
+        data={
+            "name": "Slice card",
+            "kind": "card",
+            "credit_limit_rupees": 100_000,
+            "statement_day": 5,
+            "due_day": 25,
+            "finance_rate_percent": Decimal(monthly_percent),
+            "min_due_percent": Decimal("5"),
+            "min_due_floor_paise": 20_000,
+        },
+        message_id=None,
+    )
+    card = saved["result"]
+    assert card["finance_rate_bps"] == annual_bps
+    assert card["min_due_bps"] == 500
+    assert card["min_due_floor_paise"] == 20_000
+
+    updated = await write_tools.update_setup_item(
+        ledger,
+        entity="account",
+        action="update",
+        data={"name": "Slice card", "finance_rate_percent": Decimal(monthly_percent)},
+        message_id=None,
+    )
+    assert updated["result"]["finance_rate_bps"] == annual_bps
 
 
 async def test_amortize_tool_uses_a_loan_from_the_ledger(demo_ledger):

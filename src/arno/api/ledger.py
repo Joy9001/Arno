@@ -57,6 +57,9 @@ class AccountCreate(ApiModel):
     due_day: int | None = Field(default=None, ge=1, le=31)
     emi_rate_bps: int | None = Field(default=None, ge=0, le=10_000)
     emi_fee_paise: int | None = Field(default=None, ge=0)
+    finance_rate_bps: int | None = Field(default=None, ge=0, le=10_000)
+    min_due_bps: int | None = Field(default=None, ge=0, le=10_000)
+    min_due_floor_paise: int | None = Field(default=None, ge=0)
     rate_bps: int | None = Field(default=None, ge=0)
     tenure_months: int | None = Field(default=None, gt=0)
 
@@ -71,6 +74,9 @@ class AccountUpdate(ApiModel):
     due_day: int | None = Field(default=None, ge=1, le=31)
     emi_rate_bps: int | None = Field(default=None, ge=0, le=10_000)
     emi_fee_paise: int | None = Field(default=None, ge=0)
+    finance_rate_bps: int | None = Field(default=None, ge=0, le=10_000)
+    min_due_bps: int | None = Field(default=None, ge=0, le=10_000)
+    min_due_floor_paise: int | None = Field(default=None, ge=0)
     rate_bps: int | None = Field(default=None, ge=0)
     tenure_months: int | None = Field(default=None, gt=0)
     emi_schedule_id: str | None = None

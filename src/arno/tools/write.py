@@ -91,6 +91,11 @@ def _percent_to_bps(value: Any) -> int:
     return int((Decimal(str(value)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def _monthly_percent_to_annual_bps(value: Any) -> int:
+    """An issuer's monthly percent as annual basis points: 3.5% a month is 4,200 a year."""
+    return _percent_to_bps(Decimal(str(value)) * 12)
+
+
 def _date(value: Any) -> date | None:
     if value in (None, ""):
         return None
@@ -901,6 +906,17 @@ async def update_setup_item(
                     else None
                 ),
                 emi_fee_paise=data.get("emi_fee_paise"),
+                finance_rate_bps=(
+                    _monthly_percent_to_annual_bps(data["finance_rate_percent"])
+                    if data.get("finance_rate_percent") is not None
+                    else None
+                ),
+                min_due_bps=(
+                    _percent_to_bps(data["min_due_percent"])
+                    if data.get("min_due_percent") is not None
+                    else None
+                ),
+                min_due_floor_paise=data.get("min_due_floor_paise"),
                 rate_bps=(
                     _percent_to_bps(data["rate_percent"])
                     if data.get("rate_percent") is not None
@@ -946,6 +962,17 @@ async def update_setup_item(
                         else None
                     ),
                     emi_fee_paise=data.get("emi_fee_paise"),
+                    finance_rate_bps=(
+                        _monthly_percent_to_annual_bps(data["finance_rate_percent"])
+                        if data.get("finance_rate_percent") is not None
+                        else None
+                    ),
+                    min_due_bps=(
+                        _percent_to_bps(data["min_due_percent"])
+                        if data.get("min_due_percent") is not None
+                        else None
+                    ),
+                    min_due_floor_paise=data.get("min_due_floor_paise"),
                     rate_bps=(
                         _percent_to_bps(data["rate_percent"])
                         if data.get("rate_percent") is not None

@@ -65,6 +65,7 @@ get today's date here."
                "time_zone": "Asia/Kolkata"},
   "accounts": [{"id", "name", "kind", "liquid", "active", "known": bool, "balance": Money,
                 "as_of", "age_days", "credit_limit", "statement_day", "due_day",
+                "finance_rate_bps", "min_due_bps", "min_due_floor",   # a card's stored terms
                 "available_credit", "outstanding", "rate_bps", "tenure_months",
                 "next_statement_close", "next_bill_due",      # cards with both days set
                 "covered": {"from", "to", "gaps": [...]}}],
@@ -111,7 +112,8 @@ active liquid account is unknown; it is not a complete current cash claim.
 
 ```
 settings   = read settings
-accounts   = every account joined to v_balances, with active, rate_bps, and tenure_months
+accounts   = every account joined to v_balances, with active, rate_bps, tenure_months, and
+             a card's stored finance terms
 for each account: known = statement_balance_paise and statement_balance_as_of are present
                   balance = ledger balance only when known
                   as_of, age_days = balance_anchor(): the later of the last movement and the
@@ -875,12 +877,18 @@ update_setup(entity: Literal["account", "balance", "schedule", "goal", "category
 
 # account:  {name, kind, institution, last4, opening_balance_rupees, liquid,
 #            credit_limit_rupees, statement_day, due_day, emi_rate_percent, emi_fee_paise,
+#            finance_rate_percent, min_due_percent, min_due_floor_paise,
 #            rate_percent, tenure_months, active}
 # balance:  {account, balance_rupees, as_of}
 # schedule: {name, kind, subtype, amount_rupees, account, category, rule, starts, ends, confirmed}
 # goal:     {name, target_rupees, deadline, priority}
 # scheduled_question: {prompt, rule, spend_limit_usd}
 ```
+
+A card's `finance_rate_percent` is the issuer's monthly finance charge, stored as annual basis
+points (3.5 means 3.5% a month, or 4,200 a year). `min_due_percent` is the minimum due as a
+percent of the statement balance, and `min_due_floor_paise` is that minimum's floor in paise.
+Each is recorded only when the issuer states it.
 
 **Output:** `{"status": "saved", "undo_id", "summary", "before", "after"}`. UI: undo card, or the
 confirm card first.

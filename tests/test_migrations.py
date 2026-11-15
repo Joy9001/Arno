@@ -450,6 +450,72 @@ async def test_account_name_kind_check_enforced(db):
     assert getattr(exc_bank.value, "constraint_name", None) == "accounts_name_kind_check"
 
 
+async def test_card_finance_terms_are_bounded_and_card_only(db):
+    from arno.ledger.accounts import create_account
+
+    card = await create_account(
+        db,
+        kind="card",
+        name="Terms card",
+        credit_limit_paise=100_000,
+        statement_day=5,
+        due_day=25,
+    )
+    bank = await create_account(db, kind="bank", name="Terms bank")
+
+    for column, value in (
+        ("finance_rate_bps", -1),
+        ("finance_rate_bps", 10_001),
+        ("min_due_bps", -1),
+        ("min_due_bps", 10_001),
+        ("min_due_floor_paise", -1),
+    ):
+        async with db.transaction():
+            with pytest.raises(asyncpg.CheckViolationError):
+                await db.execute(
+                    f"UPDATE accounts SET {column} = $1 WHERE id = $2", value, card["id"]
+                )
+
+    for column, value in (
+        ("finance_rate_bps", 4_200),
+        ("min_due_bps", 500),
+        ("min_due_floor_paise", 20_000),
+    ):
+        async with db.transaction():
+            with pytest.raises(asyncpg.CheckViolationError) as exc:
+                await db.execute(
+                    f"UPDATE accounts SET {column} = $1 WHERE id = $2", value, bank["id"]
+                )
+        assert getattr(exc.value, "constraint_name", None) == "accounts_finance_terms_card_check"
+
+    await db.execute(
+        "UPDATE accounts SET finance_rate_bps = 4200, min_due_bps = 500, "
+        "min_due_floor_paise = 20000 WHERE id = $1",
+        card["id"],
+    )
+    async with connect(_agent_ro_dsn()) as ro:
+        terms = await ro.fetchrow_required(
+            "SELECT finance_rate_bps, min_due_bps, min_due_floor_paise "
+            "FROM v_accounts WHERE id = $1",
+            card["id"],
+        )
+        bank_terms = await ro.fetchrow_required(
+            "SELECT finance_rate_bps, min_due_bps, min_due_floor_paise "
+            "FROM v_accounts WHERE id = $1",
+            bank["id"],
+        )
+    assert dict(terms) == {
+        "finance_rate_bps": 4_200,
+        "min_due_bps": 500,
+        "min_due_floor_paise": 20_000,
+    }
+    assert dict(bank_terms) == {
+        "finance_rate_bps": None,
+        "min_due_bps": None,
+        "min_due_floor_paise": None,
+    }
+
+
 async def test_subtype_foreign_keys_and_single_user_guard(db):
     cols = {
         (row["table_name"], row["column_name"])

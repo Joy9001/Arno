@@ -168,6 +168,12 @@ async def test_card_fields_are_required_and_only_for_a_card(ledger):
         await create_account(ledger, kind="bank", name="Odd", emi_rate_bps=1_550)
     with pytest.raises(InvalidLedgerError, match="belong only to a card"):
         await create_account(ledger, kind="bank", name="Odd", emi_fee_paise=19_900)
+    with pytest.raises(InvalidLedgerError, match="belong only to a card"):
+        await create_account(ledger, kind="bank", name="Odd", finance_rate_bps=4_200)
+    with pytest.raises(InvalidLedgerError, match="belong only to a card"):
+        await create_account(ledger, kind="bank", name="Odd", min_due_bps=500)
+    with pytest.raises(InvalidLedgerError, match="belong only to a card"):
+        await create_account(ledger, kind="bank", name="Odd", min_due_floor_paise=20_000)
 
 
 async def test_a_card_stores_and_returns_its_emi_terms(ledger):
@@ -189,6 +195,54 @@ async def test_card_emi_terms_are_validated(ledger):
         await _card(ledger, emi_rate_bps=10_001)
     with pytest.raises(InvalidLedgerError, match="processing fee"):
         await _card(ledger, emi_fee_paise=-1)
+    assert await list_accounts(ledger) == []
+
+
+async def test_a_card_stores_and_returns_its_finance_terms(ledger):
+    card = await _card(ledger, finance_rate_bps=4_200, min_due_bps=500, min_due_floor_paise=20_000)
+
+    assert card["finance_rate_bps"] == 4_200
+    assert card["min_due_bps"] == 500
+    assert card["min_due_floor_paise"] == 20_000
+    refreshed = await get_account(ledger, card["id"])
+    assert refreshed["finance_rate_bps"] == 4_200
+    assert refreshed["min_due_bps"] == 500
+    assert refreshed["min_due_floor_paise"] == 20_000
+
+    updated = await update_account(ledger, card["id"], min_due_bps=1_000)
+    assert updated["min_due_bps"] == 1_000
+    assert updated["finance_rate_bps"] == 4_200
+    assert updated["min_due_floor_paise"] == 20_000
+
+
+async def test_a_card_finance_terms_update_is_one_undo_group(ledger):
+    card = await _card(ledger, finance_rate_bps=4_200, min_due_bps=500, min_due_floor_paise=20_000)
+
+    updated = await update_account(
+        ledger, card["id"], finance_rate_bps=4_800, min_due_bps=1_000, min_due_floor_paise=50_000
+    )
+    audits = await ledger.fetch(
+        "SELECT table_name FROM audit_log WHERE group_id = $1", updated["undo_id"]
+    )
+    assert [row["table_name"] for row in audits] == ["accounts"]
+
+    await undo_group(ledger, updated["undo_id"])
+
+    restored = await get_account(ledger, card["id"])
+    assert restored["finance_rate_bps"] == 4_200
+    assert restored["min_due_bps"] == 500
+    assert restored["min_due_floor_paise"] == 20_000
+
+
+async def test_card_finance_terms_are_validated(ledger):
+    with pytest.raises(InvalidLedgerError, match="finance charge"):
+        await _card(ledger, finance_rate_bps=10_001)
+    with pytest.raises(InvalidLedgerError, match="finance charge"):
+        await _card(ledger, finance_rate_bps=-1)
+    with pytest.raises(InvalidLedgerError, match="minimum due"):
+        await _card(ledger, min_due_bps=10_001)
+    with pytest.raises(InvalidLedgerError, match="minimum-due floor"):
+        await _card(ledger, min_due_floor_paise=-1)
     assert await list_accounts(ledger) == []
 
 

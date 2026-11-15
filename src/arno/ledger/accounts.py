@@ -58,6 +58,9 @@ def _validate_account_fields(
     due_day: int | None,
     emi_rate_bps: int | None,
     emi_fee_paise: int | None,
+    finance_rate_bps: int | None,
+    min_due_bps: int | None,
+    min_due_floor_paise: int | None,
     rate_bps: int | None,
     tenure_months: int | None,
 ) -> None:
@@ -95,11 +98,26 @@ def _validate_account_fields(
             raise InvalidLedgerError("A card EMI rate is between 0 and 100 percent")
         if emi_fee_paise is not None and emi_fee_paise < 0:
             raise InvalidLedgerError("A card EMI processing fee cannot be negative")
+        if finance_rate_bps is not None and not 0 <= finance_rate_bps <= 10_000:
+            raise InvalidLedgerError("A card finance charge is between 0 and 100 percent a year")
+        if min_due_bps is not None and not 0 <= min_due_bps <= 10_000:
+            raise InvalidLedgerError("A card minimum due is between 0 and 100 percent")
+        if min_due_floor_paise is not None and min_due_floor_paise < 0:
+            raise InvalidLedgerError("A card minimum-due floor cannot be negative")
     elif any(
         value is not None
-        for value in (credit_limit_paise, statement_day, due_day, emi_rate_bps, emi_fee_paise)
+        for value in (
+            credit_limit_paise,
+            statement_day,
+            due_day,
+            emi_rate_bps,
+            emi_fee_paise,
+            finance_rate_bps,
+            min_due_bps,
+            min_due_floor_paise,
+        )
     ):
-        raise InvalidLedgerError("Credit limit, card days, and EMI terms belong only to a card")
+        raise InvalidLedgerError("Credit limit, card days, and card terms belong only to a card")
     if kind == "loan":
         if rate_bps is not None and rate_bps < 0:
             raise InvalidLedgerError("A loan rate cannot be negative")
@@ -172,6 +190,9 @@ async def _create_account_in_group(
     due_day: int | None = None,
     emi_rate_bps: int | None = None,
     emi_fee_paise: int | None = None,
+    finance_rate_bps: int | None = None,
+    min_due_bps: int | None = None,
+    min_due_floor_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -191,6 +212,9 @@ async def _create_account_in_group(
         due_day=due_day,
         emi_rate_bps=emi_rate_bps,
         emi_fee_paise=emi_fee_paise,
+        finance_rate_bps=finance_rate_bps,
+        min_due_bps=min_due_bps,
+        min_due_floor_paise=min_due_floor_paise,
         rate_bps=rate_bps,
         tenure_months=tenure_months,
     )
@@ -212,9 +236,11 @@ async def _create_account_in_group(
             id, kind, ledger_account_id, name, institution, last4,
             statement_balance_paise, statement_balance_as_of, liquid,
             credit_limit_paise, statement_day, due_day, emi_rate_bps, emi_fee_paise,
+            finance_rate_bps, min_due_bps, min_due_floor_paise,
             rate_bps, tenure_months, emi_schedule_id
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+            $18, $19, $20
         )
         RETURNING *
         """,
@@ -232,6 +258,9 @@ async def _create_account_in_group(
         due_day,
         emi_rate_bps,
         emi_fee_paise,
+        finance_rate_bps,
+        min_due_bps,
+        min_due_floor_paise,
         rate_bps,
         tenure_months,
         emi_schedule_id,
@@ -283,6 +312,9 @@ async def create_account(
     due_day: int | None = None,
     emi_rate_bps: int | None = None,
     emi_fee_paise: int | None = None,
+    finance_rate_bps: int | None = None,
+    min_due_bps: int | None = None,
+    min_due_floor_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -306,6 +338,9 @@ async def create_account(
             due_day=due_day,
             emi_rate_bps=emi_rate_bps,
             emi_fee_paise=emi_fee_paise,
+            finance_rate_bps=finance_rate_bps,
+            min_due_bps=min_due_bps,
+            min_due_floor_paise=min_due_floor_paise,
             rate_bps=rate_bps,
             tenure_months=tenure_months,
             emi_schedule_id=emi_schedule_id,
@@ -339,6 +374,9 @@ async def update_account(
     due_day: int | None = None,
     emi_rate_bps: int | None = None,
     emi_fee_paise: int | None = None,
+    finance_rate_bps: int | None = None,
+    min_due_bps: int | None = None,
+    min_due_floor_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -364,6 +402,9 @@ async def update_account(
         "due_day": due_day,
         "emi_rate_bps": emi_rate_bps,
         "emi_fee_paise": emi_fee_paise,
+        "finance_rate_bps": finance_rate_bps,
+        "min_due_bps": min_due_bps,
+        "min_due_floor_paise": min_due_floor_paise,
         "rate_bps": rate_bps,
         "tenure_months": tenure_months,
         "emi_schedule_id": emi_schedule_id,
@@ -403,6 +444,9 @@ async def update_account(
         due_day=merged["due_day"],
         emi_rate_bps=merged["emi_rate_bps"],
         emi_fee_paise=merged["emi_fee_paise"],
+        finance_rate_bps=merged["finance_rate_bps"],
+        min_due_bps=merged["min_due_bps"],
+        min_due_floor_paise=merged["min_due_floor_paise"],
         rate_bps=merged["rate_bps"],
         tenure_months=merged["tenure_months"],
     )
