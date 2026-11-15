@@ -384,6 +384,9 @@ class SeriesForecast:
     uniformly from ``amounts`` (one value for a fixed charge).
 
     ``name`` must already be display-safe: the loader marks text from outside the conversation.
+
+    ``reducible`` is kept for the loader and ignored: a detected recurring charge happens whether
+    or not spending is cut, so a series never joins the cut columns a spending cut acts on.
     """
 
     id: str
@@ -721,6 +724,8 @@ def _series_spec(
     ]
     amounts = np.maximum(np.array(series.amounts, dtype=np.int64), 0)
     card = card_index.get(series.card_id) if series.card_id is not None else None
+    # Never `reducible=series.reducible`: a spending cut trims categories, not a charge the
+    # household has already committed to, so the series stays out of every cut column.
     return kernel.SeriesSpec(
         ordinals=np.array(ordinals, dtype=np.int64),
         alive_threshold=_probability_threshold(series.alive),
@@ -729,7 +734,6 @@ def _series_spec(
         jitter_cumulative=jitter_cumulative,
         amounts=amounts,
         card=card,
-        reducible=series.reducible,
         stream=stream,
     )
 

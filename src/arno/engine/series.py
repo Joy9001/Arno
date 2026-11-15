@@ -29,6 +29,9 @@ _E = 2.718281828459045
 UNRELATED_SHARE: float = 0.1
 # Set from precision on the synthetic households' tuning seeds (arno.engine.personas).
 PROPOSE_CONFIDENCE: float = 0.9
+# A pattern that stopped matched its own expected dates perfectly, so a proposal also needs the
+# series to still be alive: alive is the probability the pattern has not ended.
+PROPOSE_ALIVE: float = 0.5
 PROJECT_CONFIDENCE: float = 0.999
 
 # Overflow guard: scaling by 2^-512 shifts only the IEEE-754 binary exponent.
@@ -486,13 +489,19 @@ def _censoring_skip_probs(
     w: int,
     f_weights: tuple[float, ...],
 ) -> list[float]:
+    """Each expected date's skip probability, raised where its payment cannot be observed.
+
+    A payment due on ``as_of`` may not have posted yet, so a jitter day on or after ``as_of`` is
+    censored (unobserved) exactly as one before ``window_start`` is: it counts as a skip only when
+    it could have been seen. Both the dynamic program and the Viterbi pass read this grid.
+    """
     one_minus_q = 1.0 - q
     q_j: list[float] = []
     for eo in expected_ordinals:
         censored = 0.0
         for idx, d in enumerate(range(-w, w + 1)):
             day = eo + d
-            if day < win_start_ord or day > as_of_ord:
+            if day < win_start_ord or day >= as_of_ord:
                 censored += f_weights[idx]
         q_j.append(q + one_minus_q * censored)
     return q_j

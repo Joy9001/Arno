@@ -18,6 +18,7 @@ from arno.engine.projection import (
     LiquidAccount,
     Projection,
     ProjectionInput,
+    SeriesForecast,
     SpendCategory,
     Tradeoff,
     project,
@@ -32,6 +33,7 @@ def _inputs(
     cards: tuple[CardAccount, ...] = (),
     goals: tuple[GoalPlan, ...] = (),
     categories: tuple[SpendCategory, ...] = (),
+    series: tuple[SeriesForecast, ...] = (),
 ) -> ProjectionInput:
     return ProjectionInput(
         as_of=date(2026, 1, 1),
@@ -41,6 +43,7 @@ def _inputs(
         cards=cards,
         goals=goals,
         categories=categories,
+        series=series,
         ask_horizon_days=90,
     )
 
@@ -81,6 +84,47 @@ def test_a_later_salary_alone_keeps_the_verdict_no_and_shows_the_wait():
     assert result["verdict"] == "no"
     wait = next(trade for trade in result["tradeoffs"] if trade["kind"] == "wait")
     assert wait["date"] == "2026-02-01"
+
+
+def test_the_wait_date_has_to_meet_an_obligation_too():
+    # Balance 110, a 10 series charge on day 1, a 100 obligation on day 5 and a 500 payday on
+    # day 8. The 5 purchase fits the floor on any date, but paying before the fifth can leave too
+    # little for the obligation, so the first date that passes both is day 5.
+    result = afford(
+        _inputs(
+            start=110,
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 6),
+                    amount_paise=-100,
+                    name="Card bill",
+                    kind="obligation",
+                ),
+                CashEvent(
+                    date=date(2026, 1, 9),
+                    amount_paise=500,
+                    name="Salary",
+                    kind="income_fixed",
+                ),
+            ),
+            series=(
+                SeriesForecast(
+                    id="s1",
+                    name="Gym",
+                    expected=(date(2026, 1, 2),),
+                    jitter=((0, 1.0),),
+                    skip=0.95,
+                    alive=1.0,
+                    amounts=(10,),
+                ),
+            ),
+        ),
+        Hypothetical(amount_paise=5, date=date(2026, 1, 1)),
+        runs=200,
+    )
+    wait = _trade(result, "wait")
+    assert wait["days"] >= 5
+    assert wait["date"] == "2026-01-06"
 
 
 def test_card_float_is_a_yes_but_when_the_bank_balance_is_short():

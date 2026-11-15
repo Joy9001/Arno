@@ -14,6 +14,7 @@ from arno.engine.series import (
     _JITTER_GRID,
     _SKIP_GRID,
     PROJECT_CONFIDENCE,
+    PROPOSE_ALIVE,
     PROPOSE_CONFIDENCE,
     UNRELATED_SHARE,
     Detection,
@@ -69,7 +70,9 @@ def _brute_force_lr(
         cens = Fraction(0)
         for d in range(-w, w + 1):
             day = eo + d
-            if day < win_start_ord or day > as_of_ord:
+            # A payment due on or after as_of may not have posted yet: censored, like one before
+            # the window.
+            if day < win_start_ord or day >= as_of_ord:
                 cens += f_frac(d)
         q_j.append(q_f + one_minus_q * cens)
 
@@ -378,6 +381,44 @@ def test_cancelled_series_low_alive() -> None:
     assert res.alive < 0.2
 
 
+def test_censoring_treats_the_as_of_day_as_unobserved() -> None:
+    # The expected day is as_of itself: it may not have posted yet, so it can never be a skip.
+    expected = date(2026, 6, 15).toordinal()
+    q_j = _censoring_skip_probs(
+        [expected],
+        win_start_ord=expected - 30,
+        as_of_ord=expected,
+        q=0.05,
+        w=0,
+        f_weights=_jitter_weights(0),
+    )
+    assert q_j == [1.0]
+    # The day before as_of was observed, so it is skipped with the plain probability.
+    q_j = _censoring_skip_probs(
+        [expected - 1],
+        win_start_ord=expected - 30,
+        as_of_ord=expected,
+        q=0.05,
+        w=0,
+        f_weights=_jitter_weights(0),
+    )
+    assert q_j == [0.05]
+
+
+def test_a_payment_due_on_as_of_is_not_yet_missed() -> None:
+    # Five monthly payments on the 15th, evaluated on the day the sixth is due: the sixth may not
+    # have posted, so the series is alive, not stopped.
+    dates = [date(2026, month, 15) for month in range(1, 6)]
+    res = detect(
+        _make_payments(dates, 64_900),
+        as_of=date(2026, 6, 15),
+        window_start=date(2025, 1, 1),
+    )
+    assert res is not None
+    assert res.rule.family == "monthly"
+    assert res.alive > 0.9
+
+
 def test_fortnightly_vs_monthly() -> None:
     start = date(2026, 1, 2)  # Friday
     fort_dates = [start + timedelta(days=14 * k) for k in range(10)]
@@ -555,6 +596,7 @@ def test_two_payments_returns_none() -> None:
 
 def test_confidence_threshold_constants() -> None:
     assert PROPOSE_CONFIDENCE == 0.9
+    assert PROPOSE_ALIVE == 0.5
     assert PROJECT_CONFIDENCE == 0.999
 
 

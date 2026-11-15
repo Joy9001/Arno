@@ -9,6 +9,7 @@ from datetime import date, timedelta
 import numpy as np
 
 from arno.engine import kernel
+from arno.engine.affordability import Hypothetical, afford
 from arno.engine.projection import (
     LEGACY_MODEL,
     MODEL,
@@ -22,7 +23,6 @@ from arno.engine.projection import (
     checkpoints_for,
     prepare,
     project,
-    reduce_categories,
     simulate_paths,
 )
 
@@ -287,25 +287,11 @@ def test_card_series_charges_card_up_to_limit_and_bills_on_due_date():
     assert cash_by_date["2026-01-11"] == 490_000
 
 
-def test_reducible_series_responds_to_cuts_and_lever_measurements():
-    card = CardAccount(
-        id="c1",
-        name="Card",
-        statement_day=15,
-        due_day=25,
-        outstanding_paise=0,
-        credit_limit_paise=500_000,
-    )
-    # Dummy reducible category so reduce_categories activates a cut on the spec.
-    dummy_cat = SpendCategory(
-        id="cat1",
-        name="Dining",
-        baseline_per_day_paise=1,
-        reducible=True,
-        history=tuple((AS_OF - timedelta(days=i + 1), 0) for i in range(60)),
-    )
-    cash_reducible = SeriesForecast(
-        id="s_cash_red",
+def test_a_reducible_series_never_joins_the_cut_columns():
+    # A cut is a spending decision over categories; a detected charge is already committed, so
+    # the loader's reducible flag is ignored and the cut leaves the series whole.
+    series = SeriesForecast(
+        id="s1",
         name="Streaming",
         expected=(date(2026, 1, 10),),
         jitter=((0, 1.0),),
@@ -314,70 +300,10 @@ def test_reducible_series_responds_to_cuts_and_lever_measurements():
         amounts=(20_000,),
         reducible=True,
     )
-    cash_fixed = SeriesForecast(
-        id="s_cash_fix",
-        name="Internet",
-        expected=(date(2026, 1, 10),),
-        jitter=((0, 1.0),),
-        skip=0.0,
-        alive=1.0,
-        amounts=(30_000,),
-        reducible=False,
-    )
-    card_reducible = SeriesForecast(
-        id="s_card_red",
-        name="Music",
-        expected=(date(2026, 1, 12),),
-        jitter=((0, 1.0),),
-        skip=0.0,
-        alive=1.0,
-        amounts=(10_000,),
-        card_id="c1",
-        reducible=True,
-    )
-    inputs = _inputs(
-        cash_reducible,
-        cash_fixed,
-        card_reducible,
-        start=500_000,
-        cards=(card,),
-        categories=(dummy_cat,),
-    )
-    baseline_inputs = _inputs(start=500_000, cards=(card,), categories=(dummy_cat,))
-    cut_inputs, _rows = reduce_categories(inputs, 0.5, until=date(2026, 1, 30))
-    cut_baseline, _rows2 = reduce_categories(baseline_inputs, 0.5, until=date(2026, 1, 30))
-    res = project(cut_inputs, runs=32, seed=1)
-    base_res = project(cut_baseline, runs=32, seed=1)
-    by_date = {point["date"]: point["median_paise"] for point in res["curve"]}
-    base_by_date = {point["date"]: point["median_paise"] for point in base_res["curve"]}
-    # Day 9 (Jan 10): cash_reducible halved (10,000) + cash_fixed full (30,000) = 40,000 spent.
-    assert base_by_date["2026-01-10"] - by_date["2026-01-10"] == 40_000
-    # Day 24 (Jan 25): card_reducible halved (5,000) paid on due date.
-    assert base_by_date["2026-01-25"] - by_date["2026-01-25"] == 45_000
+    prepared = prepare(_inputs(series, start=500_000), MODEL)
+    assert prepared.spec.series[0].reducible is False
 
-    # Check reducible measure at checkpoints and exact kernel cut without categories.
-    no_cat_inputs = _inputs(
-        cash_reducible, cash_fixed, card_reducible, start=500_000, cards=(card,)
-    )
-    prepared = prepare(no_cat_inputs, MODEL)
-    cut_spec = kernel.Spec(
-        start_balance=prepared.spec.start_balance,
-        days=prepared.spec.days,
-        first_day=prepared.spec.first_day,
-        classes=prepared.spec.classes,
-        inflow=prepared.spec.inflow,
-        obligation=prepared.spec.obligation,
-        later=prepared.spec.later,
-        obligation_days=prepared.spec.obligation_days,
-        unconfirmed=prepared.spec.unconfirmed,
-        floor=prepared.spec.floor,
-        cards=prepared.spec.cards,
-        pools=prepared.spec.pools,
-        rare=prepared.spec.rare,
-        series=prepared.spec.series,
-        cut_bps=5_000,
-        cut_until=29,
-    )
+    cut_spec = replace(prepared.spec, cut_bps=5_000, cut_until=29)
     run = kernel.run(
         cut_spec,
         kernel.Settings(
@@ -385,10 +311,42 @@ def test_reducible_series_responds_to_cuts_and_lever_measurements():
         ),
     )
     assert run.paths is not None and run.reducible is not None
-    assert (run.paths[:, 9] == 460_000).all()
-    assert (run.paths[:, 24] == 455_000).all()
-    assert (run.reducible[:, 0] == 20_000).all()
-    assert (run.reducible[:, 1] == 30_000).all()
+    assert (run.paths[:, 9] == 480_000).all()
+    assert not run.reducible.any()
+
+
+def test_a_cut_that_only_a_series_would_pay_for_is_not_reported():
+    # The purchase leaves 50,000 and the series takes 60,000 on day 20: a 16.8% cut of that
+    # charge would clear the floor, but the only cuttable category spends 1 paisa a day, so no
+    # cut is offered.
+    dummy = SpendCategory(
+        id="cat1",
+        name="Dining",
+        baseline_per_day_paise=1,
+        reducible=True,
+        history=tuple((AS_OF - timedelta(days=index + 1), 0) for index in range(60)),
+    )
+    series = SeriesForecast(
+        id="s1",
+        name="Gym",
+        expected=(date(2026, 1, 21),),
+        jitter=((0, 1.0),),
+        skip=0.0,
+        alive=1.0,
+        amounts=(60_000,),
+        reducible=True,
+    )
+    inputs = ProjectionInput(
+        as_of=AS_OF,
+        floor_paise=0,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=150_000),),
+        categories=(dummy,),
+        series=(series,),
+        ask_horizon_days=90,
+    )
+    result = afford(inputs, Hypothetical(amount_paise=100_000, date=AS_OF), runs=200, seed=1)
+    assert result["verdict"] == "no"
+    assert all("ratio" not in trade for trade in result["tradeoffs"])
 
 
 def test_checkpoints_still_capture_series_minima():

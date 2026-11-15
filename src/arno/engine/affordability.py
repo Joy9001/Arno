@@ -62,6 +62,9 @@ DEFAULT_EMI_MONTHS = 3
 GOAL_WINDOW_DAYS = 31
 MAX_CUT_BPS = round(MAX_CUT_RATIO * 10_000)
 MAX_PLANS = 4
+# How many later dates the wait tradeoff tests before giving up: a dated payment leaves the floor
+# alone, but an obligation it misses can hold the verdict back for a while.
+MAX_WAIT_ATTEMPTS = 12
 # Rounding can leave a verified cut a half paisa short; one or two basis points more fixes it.
 VERIFY_STEPS = 4
 
@@ -534,6 +537,22 @@ def _describe(
     return trade
 
 
+def _pay_on(inputs: ProjectionInput, amount_paise: int, when: date) -> ProjectionInput:
+    """The inputs with an account payment of ``amount_paise`` on ``when``."""
+    return replace(
+        inputs,
+        events=(
+            *inputs.events,
+            CashEvent(
+                date=when,
+                amount_paise=-amount_paise,
+                name="Hypothetical purchase",
+                kind="hypothetical",
+            ),
+        ),
+    )
+
+
 def _wait_tradeoff(
     inputs: ProjectionInput,
     hypothetical: Hypothetical,
@@ -542,24 +561,37 @@ def _wait_tradeoff(
     seed: int,
     threshold: float,
 ) -> Tradeoff | None:
+    """The earliest later date the purchase passes on, floor and obligations both.
+
+    `first_full_payment_date` reads only the floor, so every date it offers is paid for real and
+    re-projected: a date that still misses an obligation is passed over, searching from the day
+    after it.
+    """
     when = max(hypothetical.date, inputs.as_of)
-    found = first_full_payment_date(
-        inputs,
-        int(hypothetical.amount_paise),
-        start_on=when,
-        runs=runs,
-        seed=seed,
-        threshold=threshold,
-    )
-    if not found or found["date"] == when.isoformat():
-        # Paying on the asked date is the ask, not a tradeoff.
-        return None
-    return {
-        "kind": "wait",
-        "date": found["date"],
-        "days": found["days"],
-        "detail": f"Wait until {found['date']} ({found['days']} days), then pay the full amount.",
-    }
+    amount = int(hypothetical.amount_paise)
+    start = when
+    for _attempt in range(MAX_WAIT_ATTEMPTS):
+        found = first_full_payment_date(
+            inputs, amount, start_on=start, runs=runs, seed=seed, threshold=threshold
+        )
+        if not found:
+            return None
+        found_on = date.fromisoformat(found["date"])
+        paid = project(_pay_on(inputs, amount, found_on), runs=runs, seed=seed)
+        if _passes(paid, threshold=threshold):
+            if found_on == when:
+                # Paying on the asked date is the ask, not a tradeoff.
+                return None
+            return {
+                "kind": "wait",
+                "date": found["date"],
+                "days": found["days"],
+                "detail": (
+                    f"Wait until {found['date']} ({found['days']} days), then pay the full amount."
+                ),
+            }
+        start = found_on + timedelta(days=1)
+    return None
 
 
 def _tradeoffs(

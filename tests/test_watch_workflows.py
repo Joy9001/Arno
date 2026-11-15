@@ -239,6 +239,38 @@ async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(
     )
 
 
+async def test_a_series_that_has_stopped_is_not_proposed(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    gym = await create_payee(ledger, display_name="Iron Gym", kind="merchant")
+    # Five weekly charges that stopped four months before as_of: the pattern is certain, but it
+    # is over.
+    for index in range(5):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=49_900,
+            description="Iron Gym membership",
+            payee_id=gym["id"],
+            date=date(2026, 5, 18) + timedelta(days=7 * index),
+        )
+
+    proposals = await detect(ledger, as_of=date(2026, 10, 15))
+    assert not any(
+        proposal["kind"] == "new_subscription" and proposal["payee_id"] == gym["id"]
+        for proposal in proposals
+    )
+    stored = await ledger.fetchrow(
+        "SELECT alive, confidence FROM series_detections WHERE payee_id = $1", gym["id"]
+    )
+    assert stored is not None
+    assert stored["confidence"] >= 0.9
+    assert stored["alive"] < 0.5
+
+
 async def test_missed_detection_finds_a_late_schedule_and_preserves_the_flag(db):
     await db.execute(
         """

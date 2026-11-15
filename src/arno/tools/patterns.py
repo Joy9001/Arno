@@ -287,7 +287,11 @@ async def detect(
                 )
             )
 
-            if detection.confidence < series.PROPOSE_CONFIDENCE or not matched_payments:
+            if (
+                detection.confidence < series.PROPOSE_CONFIDENCE
+                or detection.alive < series.PROPOSE_ALIVE
+                or not matched_payments
+            ):
                 continue
 
             latest = matched_payments[-1]
