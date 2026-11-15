@@ -1,9 +1,14 @@
 # External MCP servers for Arno
 
 Primary-source review, November 13, 2026. This answers which external servers Arno should connect to
-and which tools would help its users. It supplements the [capability catalog](capability-catalog.md)
-and recommends integrations; `plan.md` still owns approved scope. No server was authenticated,
-installed, or exercised with personal records.
+and which tools would help its users. It supplements the [capability
+catalog](../../arno/capability-catalog.md) and recommends integrations; `plan.md` still owns
+approved scope. No server was authenticated, installed, or exercised with personal records.
+
+On November 15, 2026, the catalog's priority order replaced this selection: research waits on a
+measurement against Pydantic AI's built-in search and fetch, holdings start with the consolidated
+account statement before any broker server, and Fi Money and the market-data servers are not
+selected. The assessment below is kept as evidence.
 
 ## Recommended selection
 

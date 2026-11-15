@@ -5,6 +5,11 @@ capability report](README.md) against the current Arno tree. It is evidence for 
 work, not a catalog and not a product decision. `plan.md` and
 [`completion-checklist.md`](../../arno/completion-checklist.md) still own scope and acceptance.
 
+This audit is a November 12 snapshot. The November 13–15 engine work made parts of it stale:
+recurring charges are no longer detected from 7-, 30-, and 365-day gaps, the HackerRank score is
+published, and a card EMI now carries its fee and GST. The [capability
+catalog](../../arno/capability-catalog.md) holds the current coverage.
+
 I read `AGENTS.md`, `docs/README.md`, and the applicable `docs/arno/` files, then inspected source,
 migrations, tests, and the published README blocks. I did not run tests, models, evals, database
 queries, a live UI, imports, or restores. A test name means what the test asserts in source, not a

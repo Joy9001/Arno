@@ -17,6 +17,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`observability.md`](observability.md) | Operator view: Phoenix tracing, logs, settings, recovery, owner commands |
 | [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 | [`engine-blueprint.md`](engine-blueprint.md) | The engine redesign: what the shipped engine gets wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
+| [`capability-catalog.md`](capability-catalog.md) | Capabilities proposed beyond the built product: acceptance targets, plan rules for external tools, the tool registry, and a proposed priority order. Proposals only; a capability is adopted through §5 |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
 that needs a table, a schema, or three paragraphs of justification goes in a satellite doc

@@ -4,10 +4,13 @@ Research and applied assessment, November 11–12, 2026. This report describes w
 before calling Arno a leading personal finance agent. It is a recommendation, not an amendment
 to [the product plan](../../arno/plan.md). No application behavior changed during this research.
 
-For the detailed specification, read the [capability catalog](capability-catalog.md). It documents
-27 capabilities with descriptions, user benefits, agent actions, exact internal/framework/external
-tool mappings, current coverage, and completion checklists. This assessment explains the judgment;
-the catalog makes each proposed outcome and its evidence requirements inspectable.
+For the detailed specification, read the [capability catalog](../../arno/capability-catalog.md).
+It documents the capabilities with descriptions, user benefits, agent actions, exact
+internal/framework/external tool mappings, current coverage, and completion checklists. This
+assessment explains the judgment; the catalog makes each proposed outcome and its evidence
+requirements inspectable. The catalog moved to `docs/arno/` on November 15, 2026, with refreshed
+coverage, seven added capabilities, and a priority order that supersedes the [recommended
+order](#recommended-order) below.
 
 The November 13 [external MCP server assessment](external-mcp-servers.md) names the recommended
 servers, exact read tools, connection routes, and conditional alternatives. It includes Fi Money
