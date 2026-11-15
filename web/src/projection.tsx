@@ -14,9 +14,12 @@ import {
   YAxis,
 } from "recharts";
 import { TOOLTIP_PROPS } from "./chartTheme";
+import { displayText } from "./chat/display-text";
 import { formatPaise } from "./format";
 import { Orb } from "./Orb";
 import {
+  baselineLowAmount,
+  baselineSafeToSpendAmount,
   dataQualityNotes,
   lowAmount,
   OBLIGATION_WARNING,
@@ -33,6 +36,30 @@ export type SafeToSpend = {
   amount_paise?: number;
   binding: "floor" | "obligation";
   binding_date: string;
+};
+
+export type ScenarioChange = {
+  kind: string;
+  label: string;
+  occurrences: number;
+  amount?: Money;
+  amount_paise?: number;
+};
+
+export type ScenarioBaseline = {
+  floor_probability: number;
+  median_low: { date: string; amount?: Money; paise?: number } | null;
+  first_floor_crossing: string | null;
+  safe_to_spend?: SafeToSpend | null;
+};
+
+export type ProjectionScenario = {
+  changes: ScenarioChange[];
+  assumptions: string[];
+  holds?: boolean;
+  reason?: string;
+  runway_days: number | null;
+  baseline: ScenarioBaseline;
 };
 
 export type ProjectionPoint = {
@@ -129,6 +156,7 @@ export type ProjectionPayload = {
   goal_slips?: { name: string; slips_days: number | null }[];
   hypothetical?: Record<string, unknown>;
   baseline?: { floor_probability: number };
+  scenario?: ProjectionScenario;
 };
 
 function percent(value: number): string {
@@ -312,7 +340,7 @@ function DataQuality({ payload }: { payload: ProjectionPayload }) {
       </summary>
       <ul className="projection-list">
         {notes.map((note) => (
-          <li key={note}>{note}</li>
+          <li key={note}>{displayText(note)}</li>
         ))}
       </ul>
     </details>
@@ -350,15 +378,70 @@ function Citations({ payload }: { payload: ProjectionPayload }) {
   );
 }
 
+function ScenarioBlock({ scenario }: { scenario: ProjectionScenario }) {
+  if (!scenario.changes.length && !scenario.assumptions.length) return null;
+  return (
+    <div className="projection-block">
+      {scenario.changes.length > 0 && (
+        <>
+          <h4>Assumed changes</h4>
+          <ul className="projection-list">
+            {scenario.changes.map((change, index) => (
+              <li key={`${change.kind}-${index}`}>{displayText(change.label)}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {scenario.assumptions.length > 0 && (
+        <ul className="projection-list">
+          {scenario.assumptions.map((note, index) => (
+            <li key={`assumption-${index}`}>{note}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function scenarioRunwayText(payload: ProjectionPayload, scenario: ProjectionScenario): string {
+  return scenario.runway_days !== null
+    ? `Runway: ${scenario.runway_days} days · first crossing ${dateLabel(payload.first_floor_crossing)}`
+    : `Runway: no crossing within ${payload.horizon_days} days`;
+}
+
+function scenarioBaselineText(payload: ProjectionPayload, scenario: ProjectionScenario): string {
+  const parts: string[] = [];
+  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
+  const baseMedian = baselineLowAmount(payload);
+  const baseSafe = baselineSafeToSpendAmount(payload);
+  if (floorSet) {
+    parts.push(
+      `Before: ${percent(scenario.baseline.floor_probability)} above floor · After: ${percent(payload.floor_probability)}`,
+    );
+  }
+  if (baseMedian !== null) {
+    parts.push(`baseline low ${formatPaise(baseMedian)}`);
+  }
+  if (scenario.baseline.first_floor_crossing) {
+    parts.push(`baseline crossing ${dateLabel(scenario.baseline.first_floor_crossing)}`);
+  }
+  if (baseSafe !== null) {
+    parts.push(`baseline safe to spend ${formatPaise(baseSafe)}`);
+  }
+  return parts.join(" · ");
+}
+
 export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const medianLow = lowAmount(payload);
   const safeAmount = safeToSpendAmount(payload);
+  const scenario = payload.scenario;
   const floorText =
     payload.floor?.text ??
     (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
   const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
   const aboveThreshold = payload.floor_probability >= payload.floor_threshold;
+  const baselineSummary = scenario ? scenarioBaselineText(payload, scenario) : "";
   return (
     <>
       <div className="projection-head">
@@ -397,6 +480,15 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
           {dateLabel(payload.safe_to_spend.binding_date)}
         </p>
       )}
+      {scenario && (scenario.holds !== undefined || scenario.reason) && (
+        <p className="projection-facts">
+          {scenario.holds !== undefined ? (scenario.holds ? "Plan holds" : "Plan falls short") : ""}
+          {scenario.holds !== undefined && scenario.reason ? " · " : ""}
+          {scenario.reason ?? ""}
+        </p>
+      )}
+      {scenario && <p className="projection-facts">{scenarioRunwayText(payload, scenario)}</p>}
+      {baselineSummary && <p className="projection-facts">{baselineSummary}</p>}
       {payload.verdict_reason && <p className="fine">{payload.verdict_reason}</p>}
     </>
   );
@@ -408,6 +500,7 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
     return (
       <>
         <p className="empty-inline">{readiness.message}</p>
+        {payload.scenario ? <ScenarioBlock scenario={payload.scenario} /> : null}
         <DataQuality payload={payload} />
         <Citations payload={payload} />
       </>
@@ -416,6 +509,7 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
   return (
     <>
       <ProjectionSummary payload={payload} />
+      {payload.scenario ? <ScenarioBlock scenario={payload.scenario} /> : null}
       <ProjectionChart payload={payload} />
       {payload.tradeoffs?.length ? <Tradeoffs tradeoffs={payload.tradeoffs} /> : null}
       {payload.goals?.length ? <Goals goals={payload.goals} /> : null}
@@ -438,6 +532,9 @@ export function ProjectionCard({
   const title = data.title ? String(data.title) : "Projection";
   const median = lowAmount(payload);
   const safeAmount = safeToSpendAmount(payload);
+  const scenario = payload.scenario;
+  const baselineMedian = baselineLowAmount(payload);
+  const baselineSafe = baselineSafeToSpendAmount(payload);
   const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
   const floorText =
     payload.floor?.text ??
@@ -476,6 +573,16 @@ export function ProjectionCard({
       ) : (
         payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>
       )}
+      {!gated && scenario && (scenario.holds !== undefined || scenario.reason) && (
+        <p className="receipt-note">
+          {scenario.holds !== undefined ? (scenario.holds ? "Plan holds" : "Plan falls short") : ""}
+          {scenario.holds !== undefined && scenario.reason ? " · " : ""}
+          {scenario.reason ?? ""}
+        </p>
+      )}
+      {!gated && scenario && (
+        <p className="receipt-note">{scenarioRunwayText(payload, scenario)}</p>
+      )}
       {!gated && safeAmount !== null && payload.safe_to_spend && (
         <p className="receipt-note">
           {formatPaise(safeAmount)} safe to spend today · binds{" "}
@@ -490,19 +597,59 @@ export function ProjectionCard({
           {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}.
         </p>
       )}
+      {scenario?.changes.length ? (
+        <div className="receipt-note">
+          <h4>Assumed changes</h4>
+          <ul className="projection-list">
+            {scenario.changes.map((change, index) => (
+              <li key={`${change.kind}-${index}`}>{displayText(change.label)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {!gated && (
         <dl className="receipt-metrics">
           <div>
             <dt>Chance above floor</dt>
             <dd>{floorSet ? percent(payload.floor_probability) : "—"}</dd>
-            <span>{percent(payload.floor_threshold)} threshold</span>
+            <span>
+              {percent(payload.floor_threshold)} threshold
+              {scenario && floorSet
+                ? ` · before ${percent(scenario.baseline.floor_probability)}`
+                : ""}
+            </span>
           </div>
           <div>
             <dt>Lowest median balance</dt>
             <dd>{median === null ? "—" : formatPaise(median)}</dd>
-            <span>{dateLabel(payload.median_low.date)}</span>
+            <span>
+              {dateLabel(payload.median_low.date)}
+              {baselineMedian !== null ? ` · before ${formatPaise(baselineMedian)}` : ""}
+            </span>
           </div>
+          {scenario && (
+            <>
+              <div>
+                <dt>Before changes</dt>
+                <dd>{floorSet ? percent(scenario.baseline.floor_probability) : "—"}</dd>
+                <span>
+                  {scenario.baseline.first_floor_crossing
+                    ? `crossing ${dateLabel(scenario.baseline.first_floor_crossing)}`
+                    : "no crossing within horizon"}
+                </span>
+              </div>
+              <div>
+                <dt>Safe to spend</dt>
+                <dd>{safeAmount !== null ? formatPaise(safeAmount) : "—"}</dd>
+                <span>
+                  {baselineSafe !== null
+                    ? `before ${formatPaise(baselineSafe)}`
+                    : "baseline unavailable"}
+                </span>
+              </div>
+            </>
+          )}
         </dl>
       )}
 

@@ -49,6 +49,10 @@ Numbers
 - When they ask how much they can spend or have spare, quote safe_to_spend from project with its
   binding date; never subtract the floor from a balance; if it is null, say which balance is
   unknown.
+- Model a what-if about income, a bill, a schedule, or a goal contribution by passing `changes` to
+  project, never with arithmetic in run_code; if a named schedule is unknown, ask instead of
+  guessing. State each assumed change, say the result is conditional on them, and copy any
+  runway_days or before/after figures from `scenario`.
 
 Scripts
 - Compute in run_code. Scripts read and compute; they can't write.

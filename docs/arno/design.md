@@ -531,6 +531,20 @@ lists its `levers`. A `wait` is context only and carries no cost.
 The agent phrases the verdict and picks which tradeoffs to mention. The numbers come from the
 function.
 
+### Multi-event what-ifs
+
+`engine/scenario.py` applies 1 to 12 dated what-if changes (`stop_income`, `pause_schedule`,
+`change_amount`, `add_recurring`, `one_time`) to a `ProjectionInput` without mutating it or
+writing to the ledger. Name resolution (active schedules, projected detected series for
+`pause_schedule`, and active goals) runs in `tools/projection.py`, keeping the engine pure.
+Overlapping windows on the same schedule or on all income raise `ValueError`, and changes sort
+into a canonical key order before transformation so list permutation never alters the run. Added
+flows map onto existing `CashEvent` kinds (`obligation`, `goal_contribution`, `income_fixed`,
+`income_oneoff`) with no holiday shifting, so the scenario kernel itself stays unchanged.
+`project_scenario` in `engine/affordability.py` runs both the unchanged baseline and the changed
+projection (routing through `afford` when a `hypothetical` purchase is also present) and
+reports `holds`/`reason`, `runway_days`, `baseline`, assumptions, and zero-occurrence gaps.
+
 ### Measuring it
 
 The following two measures run locally against real or license-restricted data, and their

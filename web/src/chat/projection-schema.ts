@@ -13,6 +13,31 @@ const safeToSpend = z
   .refine((value) => value.amount !== undefined || value.amount_paise !== undefined, {
     message: "safe_to_spend requires amount or amount_paise",
   });
+const scenarioChange = z
+  .object({
+    kind: z.string(),
+    label: z.string(),
+    occurrences: number.int().min(0),
+    amount: money.optional(),
+    amount_paise: number.optional(),
+  })
+  .refine((value) => value.amount !== undefined || value.amount_paise !== undefined, {
+    message: "scenario change requires amount or amount_paise",
+  });
+const scenarioBaseline = z.object({
+  floor_probability: number.min(0).max(1),
+  median_low: z.object({ date: z.string(), amount: money.optional(), paise: number.optional() }).nullable(),
+  first_floor_crossing: z.string().nullable().default(null),
+  safe_to_spend: safeToSpend.nullable().optional(),
+});
+const scenario = z.object({
+  changes: z.array(scenarioChange),
+  assumptions: z.array(z.string()),
+  holds: z.boolean().optional(),
+  reason: optionalText,
+  runway_days: number.int().min(0).nullable(),
+  baseline: scenarioBaseline,
+});
 
 /** Validate every field consumed by the receipt, its expanded details, and evidence panel. */
 export const projectionSchema = z.object({
@@ -79,4 +104,5 @@ export const projectionSchema = z.object({
     emi_months: number.nullable().optional(),
   }).loose().optional(),
   baseline: z.object({ floor_probability: number.min(0).max(1) }).optional(),
+  scenario: scenario.optional(),
 }).loose();

@@ -10,6 +10,7 @@ import pytest
 from arno.engine.affordability import (
     Hypothetical,
     afford,
+    project_scenario,
 )
 from arno.engine.projection import (
     CardAccount,
@@ -23,6 +24,7 @@ from arno.engine.projection import (
     Tradeoff,
     project,
 )
+from arno.engine.scenario import ChangeAmount, StopIncome
 
 
 def _inputs(
@@ -428,3 +430,152 @@ def test_the_card_tradeoff_is_not_offered_for_an_unknown_card():
     # The only tradeoff left is waiting for the salary, which keeps the verdict `no`.
     assert result["verdict"] == "no"
     assert all(trade["kind"] == "wait" for trade in result["tradeoffs"])
+
+
+def test_stop_income_reports_first_floor_crossing_and_runway_days():
+    result = project_scenario(
+        _inputs(
+            start=500_000,
+            floor=100_000,
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 15),
+                    amount_paise=1_000_000,
+                    name="Salary",
+                    kind="income_fixed",
+                    source_id="sch_sal",
+                ),
+                CashEvent(
+                    date=date(2026, 1, 20),
+                    amount_paise=-450_000,
+                    name="Rent",
+                    kind="obligation",
+                    source_id="sch_rent",
+                ),
+            ),
+        ),
+        [StopIncome(start=date(2026, 1, 1))],
+        income_source_ids={"sch_sal"},
+        runs=40,
+    )
+    assert result["first_floor_crossing"] == "2026-01-20"
+    assert result["scenario"]["runway_days"] == 19
+    assert result["scenario"]["holds"] is False
+    assert result["scenario"]["baseline"]["first_floor_crossing"] is None
+    assert result["scenario"]["baseline"]["floor_probability"] == 1.0
+
+
+def test_purchase_plus_rent_rise_verifies_tradeoffs_against_changed_inputs():
+    card = CardAccount(
+        id="card_1",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=0,
+        credit_limit_paise=1_000_000,
+    )
+    inputs = _inputs(
+        start=400_000,
+        floor=100_000,
+        cards=(card,),
+        events=(
+            CashEvent(
+                date=date(2026, 1, 10),
+                amount_paise=-200_000,
+                name="Rent",
+                kind="obligation",
+                source_id="sch_rent",
+            ),
+            CashEvent(
+                date=date(2026, 1, 30),
+                amount_paise=1_000_000,
+                name="Salary",
+                kind="income_fixed",
+                source_id="sch_sal",
+            ),
+        ),
+    )
+    # Without rent rise, ₹1,50,000 balance after ₹2,000 rent + ₹1,000 floor: ₹150,000 purchase?
+    # Let's pick numbers where purchase leaves cash short on Jan 10 once rent rises to ₹3,000:
+    # start=400k, floor=100k, rent=200k -> spare 100k before Jan 10. Purchase=150k fails account,
+    # card due Jan 25 still fails before Jan 30 salary, EMI or later wait passes!
+    result = project_scenario(
+        inputs,
+        [
+            ChangeAmount(
+                source_id="sch_rent",
+                amount_paise=300_000,
+                start=date(2026, 1, 1),
+                label_name="Rent",
+            )
+        ],
+        hypothetical=Hypothetical(amount_paise=150_000, date=date(2026, 1, 1), method="account"),
+        income_source_ids={"sch_sal"},
+        runs=40,
+    )
+    assert result["verdict"] in {"yes-but", "no"}
+    assert "holds" not in result["scenario"]
+    assert result["scenario"]["baseline"]["floor_probability"] == 1.0
+    for trade in result["tradeoffs"]:
+        if trade["kind"] == "wait":
+            assert trade["date"] >= "2026-01-30"
+        if trade["kind"] == "pay_by_card":
+            assert trade["method"] in {"card", "emi"}
+
+
+def test_assumed_raise_is_flagged_in_scenario_assumptions():
+    result = project_scenario(
+        _inputs(
+            start=500_000,
+            floor=100_000,
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 31),
+                    amount_paise=500_000,
+                    name="Salary",
+                    kind="income_fixed",
+                    source_id="sch_sal",
+                ),
+            ),
+        ),
+        [
+            ChangeAmount(
+                source_id="sch_sal",
+                amount_paise=800_000,
+                start=date(2026, 1, 1),
+                label_name="Salary",
+            )
+        ],
+        income_source_ids={"sch_sal"},
+        runs=30,
+    )
+    assert result["scenario"]["holds"] is True
+    assert any("assumed" in note.lower() for note in result["scenario"]["assumptions"])
+
+
+def test_tiny_purchase_does_not_raise_when_tradeoffs_consider_card_emi():
+    card = CardAccount(
+        id="card_1",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=0,
+        credit_limit_paise=500_000,
+    )
+    # 1 paisa fails account when floor=100 and start=100, forcing _tradeoffs to evaluate EMI
+    # where the 3-month rounded monthly installment is 0 paise and cannot repay the loan.
+    result = afford(
+        _inputs(start=100, floor=100, cards=(card,)),
+        Hypothetical(amount_paise=1, date=date(2026, 1, 1), method="account"),
+        runs=30,
+    )
+    assert result["verdict"] == "no"
+    assert all(trade.get("method") != "emi" for trade in result["tradeoffs"])
+
+    asked_emi = afford(
+        _inputs(start=100, floor=100, cards=(card,)),
+        Hypothetical(amount_paise=1, date=date(2026, 1, 1), method="emi", emi_months=3),
+        runs=30,
+    )
+    assert asked_emi["hypothetical"]["feasible"] is False
+    assert "repay" in asked_emi["verdict_reason"].lower()

@@ -21,6 +21,7 @@ wait date is shown, but a yes-but needs a change that keeps the date.
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from itertools import combinations
@@ -29,7 +30,7 @@ import numpy as np
 
 from arno.engine import kernel
 from arno.engine import projection as projection_mod
-from arno.engine.money import add_months, card_emi, money
+from arno.engine.money import DEFAULT_GST_BPS, add_months, card_emi, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -44,6 +45,9 @@ from arno.engine.projection import (
     Installment,
     Projection,
     ProjectionInput,
+    Scenario,
+    ScenarioBaseline,
+    ScenarioChange,
     Tradeoff,
     card_due_date,
     checkpoints_for,
@@ -54,10 +58,14 @@ from arno.engine.projection import (
     project,
     reduce_categories,
 )
+from arno.engine.scenario import (
+    ScenarioChangeSpec,
+    apply_changes,
+    scenario_horizon_days,
+)
 
 METHODS = ("account", "card", "emi")
 DEFAULT_EMI_RATE_BPS = 1_600
-GST_BPS = 1_800
 DEFAULT_EMI_MONTHS = 3
 GOAL_WINDOW_DAYS = 31
 MAX_CUT_BPS = round(MAX_CUT_RATIO * 10_000)
@@ -199,9 +207,16 @@ def _apply(inputs: ProjectionInput, hypothetical: Hypothetical) -> _Applied:
         return _Applied(replace(inputs, events=(*inputs.events, event)), meta, None)
 
     rate, fee, gaps = _emi_terms(hypothetical, card)
-    plan = card_emi(
-        amount, annual_rate_bps=rate, months=months, processing_fee_paise=fee, gst_bps=GST_BPS
-    )
+    try:
+        plan = card_emi(
+            amount,
+            annual_rate_bps=rate,
+            months=months,
+            processing_fee_paise=fee,
+            gst_bps=DEFAULT_GST_BPS,
+        )
+    except ValueError as exc:
+        return _Applied(inputs, meta, str(exc))
     installments: list[Installment] = []
     events: list[CashEvent] = []
     for row in plan["schedule"]:
@@ -663,15 +678,7 @@ def _tradeoffs(
     return trades
 
 
-def afford(
-    inputs: ProjectionInput,
-    hypothetical: Hypothetical,
-    *,
-    runs: int = DEFAULT_RUNS,
-    seed: int = DEFAULT_SEED,
-    threshold: float = FLOOR_THRESHOLD,
-) -> Projection:
-    """Return the projection with the purchase applied, a tested verdict, and minimal plans."""
+def _validate_hypothetical(inputs: ProjectionInput, hypothetical: Hypothetical) -> None:
     if hypothetical.amount_paise <= 0:
         raise ValueError("the amount must be positive")
     if hypothetical.method not in METHODS:
@@ -682,6 +689,39 @@ def afford(
             raise ValueError("an EMI tenure is 2 to 48 months")
     if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
+
+
+def _outcome_reason(result: Projection, *, floor_paise: int, threshold: float) -> tuple[bool, str]:
+    if _passes(result, threshold=threshold):
+        return (
+            True,
+            f"{result['floor_probability']:.0%} of simulated futures stay at or above the "
+            "floor and every obligation is met.",
+        )
+    if not result["obligations_met"]:
+        return (
+            False,
+            "An obligation cannot be paid on its date in more than "
+            f"{1 - OBLIGATION_THRESHOLD:.0%} of futures.",
+        )
+    where = "the floor" if floor_paise > 0 else "zero"
+    return (
+        False,
+        f"Only {result['floor_probability']:.0%} of simulated futures stay above "
+        f"{where} at the {threshold:.0%} threshold.",
+    )
+
+
+def afford(
+    inputs: ProjectionInput,
+    hypothetical: Hypothetical,
+    *,
+    runs: int = DEFAULT_RUNS,
+    seed: int = DEFAULT_SEED,
+    threshold: float = FLOOR_THRESHOLD,
+) -> Projection:
+    """Return the projection with the purchase applied, a tested verdict, and minimal plans."""
+    _validate_hypothetical(inputs, hypothetical)
     known_start = any(account.known for account in inputs.liquid)
     applied = _apply(inputs, hypothetical)
     meta = applied.meta
@@ -700,22 +740,9 @@ def afford(
         verdict_reason = applied.reason
     else:
         result = project(applied.inputs, runs=runs, seed=seed)
-        if _passes(result, threshold=threshold):
-            verdict_reason = (
-                f"{result['floor_probability']:.0%} of simulated futures stay at or above the "
-                "floor and every obligation is met."
-            )
-        elif not result["obligations_met"]:
-            verdict_reason = (
-                "An obligation cannot be paid on its date in more than "
-                f"{1 - OBLIGATION_THRESHOLD:.0%} of futures."
-            )
-        else:
-            where = "the floor" if inputs.floor_paise > 0 else "zero"
-            verdict_reason = (
-                f"Only {result['floor_probability']:.0%} of simulated futures stay above "
-                f"{where} at the {threshold:.0%} threshold."
-            )
+        _passed_flag, verdict_reason = _outcome_reason(
+            result, floor_paise=inputs.floor_paise, threshold=threshold
+        )
     feasible = applied.reason is None
     passed = feasible and _passes(result, threshold=threshold)
     tradeoffs: list[Tradeoff] = []
@@ -768,4 +795,91 @@ def afford(
     return result
 
 
-__all__ = ["METHODS", "Hypothetical", "afford"]
+def project_scenario(
+    inputs: ProjectionInput,
+    changes: Sequence[ScenarioChangeSpec],
+    *,
+    hypothetical: Hypothetical | None = None,
+    income_source_ids: Collection[str] = (),
+    runs: int = DEFAULT_RUNS,
+    seed: int = DEFAULT_SEED,
+    threshold: float = FLOOR_THRESHOLD,
+) -> Projection:
+    """Run a multi-event what-if (and optional purchase) against an unchanged baseline."""
+    needed = scenario_horizon_days(
+        inputs.as_of, changes, ask_horizon_days=projection_mod.horizon_days(inputs)
+    )
+    if hypothetical is not None:
+        _validate_hypothetical(inputs, hypothetical)
+        probe = _apply(inputs, hypothetical)
+        last_cash = max(
+            probe.meta.get("last_cash_date") or hypothetical.date.isoformat(),
+            hypothetical.date.isoformat(),
+        )
+        hyp_days = (date.fromisoformat(last_cash) - inputs.as_of).days + 1
+        needed = max(needed, min(MAX_HORIZON_DAYS, hyp_days))
+    base_inputs = replace(inputs, ask_horizon_days=needed)
+    applied = apply_changes(base_inputs, changes, income_source_ids=income_source_ids)
+    unchanged = project(base_inputs, runs=runs, seed=seed)
+    if hypothetical is not None:
+        result = afford(applied.inputs, hypothetical, runs=runs, seed=seed, threshold=threshold)
+    else:
+        result = project(applied.inputs, runs=runs, seed=seed)
+
+    change_rows: list[ScenarioChange] = [
+        {
+            "kind": item.kind,
+            "label": item.label,
+            "occurrences": item.occurrences,
+            "amount_paise": item.amount_paise,
+        }
+        for item in applied.changes
+    ]
+    assumptions: list[str] = [
+        "Existing schedule timing and everyday spend baselines stay unchanged outside the "
+        "listed scenario changes."
+    ]
+    if applied.has_added_flow:
+        assumptions.append("Added flows are dated as asked without bank-holiday adjustment.")
+    if applied.adds_or_raises_inflow:
+        assumptions.append(
+            "This scenario counts added or raised income that is assumed, not confirmed."
+        )
+    crossing = result["first_floor_crossing"]
+    runway_days = (
+        (date.fromisoformat(crossing) - inputs.as_of).days if crossing is not None else None
+    )
+    baseline_row: ScenarioBaseline = {
+        "floor_probability": unchanged["floor_probability"],
+        "median_low": unchanged["median_low"],
+        "first_floor_crossing": unchanged["first_floor_crossing"],
+        "safe_to_spend": unchanged["safe_to_spend"],
+    }
+    scenario_row: Scenario = {
+        "changes": change_rows,
+        "assumptions": assumptions,
+        "runway_days": runway_days,
+        "baseline": baseline_row,
+    }
+    if hypothetical is None:
+        known_start = any(account.known for account in applied.inputs.liquid)
+        if known_start:
+            holds, reason = _outcome_reason(
+                result, floor_paise=applied.inputs.floor_paise, threshold=threshold
+            )
+            scenario_row["holds"] = holds
+            scenario_row["reason"] = reason
+        else:
+            scenario_row["reason"] = (
+                "No liquid account has a known balance, so there is no floor test."
+            )
+    gaps = result["data_quality"].setdefault("gaps", [])
+    gaps.append("this what-if assumes the listed scenario changes, which have not happened")
+    for item in applied.changes:
+        if item.occurrences == 0:
+            gaps.append(f"scenario change matched no occurrence in the horizon: {item.label}")
+    result["scenario"] = scenario_row
+    return result
+
+
+__all__ = ["METHODS", "Hypothetical", "afford", "project_scenario"]

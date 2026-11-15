@@ -135,6 +135,69 @@ def fixtures() -> dict:
             }
         },
     )
+    scenario_native = projection_card(
+        {
+            "as_of": "2026-11-06",
+            "horizon_days": 90,
+            "end": "2027-02-04",
+            "floor_paise": 100_000,
+            "floor_set": True,
+            "floor_probability": 0.62,
+            "floor_threshold": 0.90,
+            "median_low": {"date": "2027-01-05", "paise": 45_000},
+            "p10_low_paise": 0,
+            "first_floor_crossing": "2026-12-20",
+            "curve": [
+                {
+                    "date": "2026-11-06",
+                    "median_paise": 300_000,
+                    "p10_paise": 200_000,
+                    "p90_paise": 400_000,
+                }
+            ],
+            "goals": [],
+            "obligations_met": True,
+            "safe_to_spend": {
+                "amount_paise": 0,
+                "binding": "floor",
+                "binding_date": "2026-12-20",
+            },
+            "data_quality": {
+                "gaps": ["Assumes 1 hypothetical change; nothing in the ledger was modified."],
+                "setup_gaps": [],
+            },
+            "sources": [],
+            "source_ids": cast(SourceIds, {}),
+            "runs": 100,
+            "seed": 42,
+            "optimistic": None,
+            "scenario": {
+                "changes": [
+                    {
+                        "kind": "stop_income",
+                        "label": "Stop all income from 2026-11-10 (3 events, ₹1,20,000.00)",
+                        "occurrences": 3,
+                        "amount_paise": 12_000_000,
+                    }
+                ],
+                "assumptions": ["All income flows stop during the scenario window."],
+                "holds": False,
+                "reason": "Drops below floor in 38% of simulated futures.",
+                "runway_days": 44,
+                "baseline": {
+                    "floor_probability": 0.96,
+                    "median_low": {"date": "2026-11-28", "paise": 210_000},
+                    "first_floor_crossing": None,
+                    "safe_to_spend": {
+                        "amount_paise": 150_000,
+                        "binding": "floor",
+                        "binding_date": "2026-11-28",
+                    },
+                },
+            },
+        }
+    )
+    scenario_reg = registry.register_read("project", {}, context={"card": scenario_native})
     loan = registry.register_calculation("amortize", amortize(1_000_000, 8, 12), {})
     growth = registry.register_calculation("compound", compound(10_000, 8, 12), {})
     resources = [
@@ -143,6 +206,7 @@ def fixtures() -> dict:
         comparison,
         *context.results,
         *projection.results,
+        *scenario_reg.results,
         loan,
         growth,
     ]
@@ -172,6 +236,9 @@ def fixtures() -> dict:
                     for view in ("Summary", "Receipt")
                 ],
             },
+        )[0],
+        "scenario": build_answer(
+            registry, {"_type": "Receipt", "result_id": scenario_reg.primary_id}
         )[0],
     }
     return {

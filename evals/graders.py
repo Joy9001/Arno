@@ -103,6 +103,22 @@ def _has_count(reply: str, count: int | None) -> bool:
     return bool(re.search(rf"(?<!no )(?<!any )(?<!every )\b{word}\b", reply.lower()))
 
 
+def _has_runway_days(reply: str, days: int | None) -> bool:
+    if days is None:
+        return False
+    if any(
+        kind == "bare" and abs(value - days) <= 0.01
+        for kind, value, _unit, _shown in extract(reply)
+    ):
+        return True
+    if re.search(rf"(?<![\w.,/₹$-]){days}-days?\b", reply.lower()):
+        return True
+    word = _count_word(days)
+    if not word:
+        return False
+    return bool(re.search(rf"(?<!no )(?<!any )(?<!every )\b{word}\b", reply.lower()))
+
+
 def _has_percent(reply: str, fraction: float | None) -> bool:
     """A probability stated either way: the engine's 0.9 as "90%" or as "0.9".
 
@@ -654,6 +670,103 @@ async def grade_answers(
                     reason=f"expected binding date {sts['binding_date']} in the reply",
                 )
             )
+    elif check == "scenario":
+        today_iso = ledger_today().isoformat()
+        raw_changes: list[dict[str, Any]] = [
+            {key: (today_iso if val == "today" else val) for key, val in item.items()}
+            for item in expected["changes"]
+        ]
+        hypothetical: dict[str, Any] | None = None
+        if expected.get("amount_paise") is not None:
+            hypothetical = {
+                "amount_paise": int(expected["amount_paise"]),
+                "date": (
+                    today_iso if expected.get("date", "today") == "today" else expected["date"]
+                ),
+                "method": expected.get("method", "account"),
+                "emi_months": expected.get("emi_months"),
+                "account": expected.get("account"),
+            }
+        result = await projection_tools.project(
+            conn, hypothetical=hypothetical, changes=raw_changes
+        )
+        scen = result.get("scenario")
+        if scen is None:
+            results.append(
+                CheckResult(
+                    name="scenario",
+                    passed=False,
+                    reason="engine returned no scenario block",
+                )
+            )
+        else:
+            if hypothetical is not None:
+                results.append(
+                    CheckResult(
+                        name="verdict",
+                        passed=_has_verdict(output.reply, result["verdict"]),
+                        reason=f"expected the {result['verdict']} verdict from the engine",
+                    )
+                )
+            results.append(
+                CheckResult(
+                    name="scenario_floor_probability",
+                    passed=_has_percent(output.reply, result["floor_probability"]),
+                    reason=f"expected {result['floor_probability']:.0%}",
+                )
+            )
+            if expected.get("check_baseline"):
+                results.append(
+                    CheckResult(
+                        name="baseline_floor_probability",
+                        passed=_has_percent(output.reply, scen["baseline"]["floor_probability"]),
+                        reason=(f"expected baseline {scen['baseline']['floor_probability']:.0%}"),
+                    )
+                )
+            if expected.get("assumed_amount_paise") is not None:
+                results.append(
+                    _money_check(
+                        "assumed_amount",
+                        output.reply,
+                        int(expected["assumed_amount_paise"]),
+                    )
+                )
+            if expected.get("check_runway"):
+                runway = scen.get("runway_days")
+                if runway is not None:
+                    results.append(
+                        CheckResult(
+                            name="runway_days",
+                            passed=_has_runway_days(output.reply, int(runway)),
+                            reason=f"expected runway of {int(runway)} days in the reply",
+                        )
+                    )
+                else:
+                    results.append(
+                        CheckResult(
+                            name="runway_days",
+                            passed=_has_any(
+                                output.reply,
+                                [
+                                    "no floor crossing",
+                                    "no crossing",
+                                    "never crosses",
+                                    "does not cross",
+                                    "doesn't cross",
+                                    "will not cross",
+                                    "won't cross",
+                                    "stays above",
+                                    "remains above",
+                                    "remains at or above",
+                                    "stays at or above",
+                                    "never dips below",
+                                    "never drops below",
+                                    "never falls below",
+                                ],
+                            ),
+                            reason="expected no floor crossing inside the horizon",
+                        )
+                    )
     elif check == "affordability_numbers":
         # A what-if without the L5 engine still has concrete numbers from amortize/compound.
         for label, paise in expected.get("values", {}).items():

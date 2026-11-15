@@ -394,6 +394,55 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
             ],
             {"check": "safe_to_spend"},
         ),
+        _case(
+            "ans_whatif_job_loss",
+            "answers",
+            [
+                "What happens to my runway and floor probability if my salary stops from today? "
+                "Give the engine's runway in days and the before and after floor probabilities, "
+                "and state what the forecast assumes."
+            ],
+            {
+                "check": "scenario",
+                "changes": [{"kind": "stop_income", "start": "today", "schedule": "Salary"}],
+                "check_runway": True,
+                "check_baseline": True,
+                "must_say": [
+                    "assum",
+                    "conditional",
+                    "if your salary",
+                    "if salary",
+                    "without your salary",
+                    "hasn't happened",
+                    "has not happened",
+                ],
+            },
+        ),
+        _case(
+            "ans_whatif_purchase_rent_rise",
+            "answers",
+            [
+                "Can I afford a \u20b91,20,000 laptop today from my bank account if my rent rises "
+                "to \u20b935,000 a month from today? Give the engine's verdict, floor probability, "
+                "and state the assumed rent change."
+            ],
+            {
+                "check": "scenario",
+                "amount_paise": 12_000_000,
+                "date": "today",
+                "method": "account",
+                "changes": [
+                    {
+                        "kind": "change_amount",
+                        "schedule": "Rent",
+                        "amount_paise": 3_500_000,
+                        "start": "today",
+                    }
+                ],
+                "assumed_amount_paise": 3_500_000,
+                "must_say": ["rent"],
+            },
+        ),
     ]
 
 
@@ -787,6 +836,21 @@ def _honesty() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
                 ]
             },
             unknown_balance=True,
+        ),
+        _case(
+            "hn_whatif_unknown_schedule",
+            "honesty",
+            ["What if I pause my Gym membership starting today?"],
+            {
+                "must_say": [
+                    *missing,
+                    *not_in_ledger,
+                    "which",
+                    "no gym",
+                    "not found",
+                    "unknown schedule",
+                ]
+            },
         ),
     ]
 

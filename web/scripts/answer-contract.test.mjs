@@ -68,6 +68,7 @@ test("malformed nested receipts are rejected without a render crash", () => {
     (receipt) => { receipt.goals = [{ name: {} }]; },
     (receipt) => { receipt.hypothetical = { amount_paise: {} }; },
     (receipt) => { receipt.tradeoffs = [{ kind: "test", detail: {} }]; },
+    (receipt) => { receipt.scenario = { changes: [{ kind: "stop_income", label: {} }], assumptions: [], runway_days: null, baseline: {} }; },
   ];
   for (const change of changes) {
     const answer = structuredClone(fixtures.answers.receipt);
@@ -417,6 +418,57 @@ test("native chart and projection coverage stays view-sensitive and actionable c
     { type: "tool-call", toolName: "present" },
   ]);
   assert.equal(plan, null);
+});
+
+test("scenario projection cards render assumed changes, holds, runway, and before/after facts", () => {
+  const answer = fixtures.answers.scenario;
+  assert.ok(parseAnswerCard(answer));
+  const html = render(AnswerCard, answer);
+  assert.match(html, /Assumed changes/);
+  assert.match(html, /Stop all income from 2026-11-10/);
+  assert.match(html, /Plan falls short/);
+  assert.match(html, /Drops below floor in 38% of simulated futures/);
+  assert.match(html, /Runway: 44 days/);
+  assert.match(html, /before 96%/);
+  assert.match(html, /before ₹2,100/);
+  assert.match(html, /before ₹1,500/);
+
+  const receipt = structuredClone(answer.results[0].receipt);
+  receipt.scenario.runway_days = null;
+  receipt.scenario.changes[0].label = "Pause <outside>Netflix</outside> from 2026-11-10 (3 events, ₹1,947)";
+  receipt.data_quality.gaps.push(
+    "scenario change matched no occurrence in the horizon: Stopped <outside>Freelance</outside> from 2026-11-10.",
+  );
+  const noCrossing = render(Card, { ...receipt, card: "projection" });
+  assert.match(noCrossing, /no crossing within 90 days/);
+  assert.match(noCrossing, /Pause Netflix from 2026-11-10/);
+  assert.doesNotMatch(noCrossing, /<outside>|<\/outside>/);
+
+  const body = renderToStaticMarkup(React.createElement(ProjectionBody, { payload: receipt }));
+  assert.match(body, /Assumed changes/);
+  assert.match(body, /Pause Netflix from 2026-11-10/);
+  assert.match(body, /Stopped Freelance from 2026-11-10/);
+  assert.match(body, /no crossing within 90 days/);
+  assert.doesNotMatch(body, /<outside>|<\/outside>/);
+
+  const evidence = renderToStaticMarkup(React.createElement(EvidencePanel, { payload: receipt, onClose: () => {} }));
+  assert.match(evidence, /Assumed changes/);
+  assert.match(evidence, /All income flows stop during the scenario window/);
+  assert.match(evidence, /Stopped Freelance from 2026-11-10/);
+  assert.doesNotMatch(evidence, /<outside>|<\/outside>/);
+
+  const unknownReceipt = structuredClone(receipt);
+  unknownReceipt.data_quality.balance_ages = [
+    { account: "Unknown bank", as_of: null, age_days: null, amount_paise: null, known: false },
+  ];
+  const gatedEvidence = renderToStaticMarkup(
+    React.createElement(EvidencePanel, { payload: unknownReceipt, onClose: () => {} }),
+  );
+  assert.doesNotMatch(gatedEvidence, /Runway:/);
+  assert.doesNotMatch(gatedEvidence, /Plan falls short|Plan holds/);
+
+  const legacy = render(AnswerCard, fixtures.answers.receipt);
+  assert.doesNotMatch(legacy, /Assumed changes/);
 });
 
 test("saved result titles, notes and cells strip the envelope without touching the snapshot", () => {

@@ -275,7 +275,11 @@ looks at least 90 days and as far as a goal deadline."
 **Input**
 
 ```python
-project(horizon_days: int | None = None, hypothetical: Hypothetical | None = None)
+project(
+    horizon_days: int | None = None,
+    hypothetical: Hypothetical | None = None,
+    changes: list[Change] | None = None,   # 1..12 dated what-if changes
+)
 
 class Hypothetical:
     amount_paise: int
@@ -292,6 +296,13 @@ An EMI costs the offer's rate and fee, else the card's recorded `emi_rate_bps` a
 `emi_fee_paise`, else a labeled 16% a year; `no_cost` leaves only the fee and its GST. The gap
 that names the assumption is in `data_quality`, and the answer must state it.
 
+Each item in `changes` is discriminated by `kind` (`stop_income`, `pause_schedule`,
+`change_amount`, `add_recurring`, `one_time`), using `YYYY-MM-DD` dates, optional inclusive
+`until`, and positive integer `amount_paise`. `schedule` and `goal` match active records by exact
+case-insensitive name (`pause_schedule` also matches projected detected series); missing or
+ambiguous names raise `ValueError` listing the candidates. Changes cannot start before today,
+exceed the engine's horizon limit, or overlap on the same schedule or all income.
+
 **Output**
 
 ```python
@@ -303,26 +314,32 @@ that names the assumption is in `data_quality`, and the answer must state it.
  "goals": [{"name", "completes_on", "slips_days"}],
  "verdict": "yes" | "yes-but" | "no" | None,
  "tradeoffs": [{"kind", "detail"}],
+ "scenario": {"changes": [...], "assumptions": [...], "holds?": bool,
+              "reason?": str, "runway_days": int | None, "baseline": {...}} | None,
  "data_quality": {"balance_ages", "baseline_sources", "gaps", "setup_gaps"},
  "source_ids": {"accounts", "cards", "schedules", "goals", "categories", "payees"}}
 ```
 
 The daily curve, the full source list, and the verdict card travel as UI metadata; the model sees
 the compact payload above, and both the compact payload and the projection card carry
-`safe_to_spend`. `optimistic` is the unconfirmed-income case and never feeds a verdict.
-`data_quality.balance_ages[]` uses the account summary's one anchor rule (`ledger.common`'s
-`balance_anchor`): `as_of` is the later of the last movement and the stated balance, and `age_days`
-is the age `get_financial_context` reports for the same account. An unknown liquid account keeps
-`known: false` and no balance date; the gap says the projection starts from its recorded net
-change, not a verified bank balance. That provisional input is never presented as known cash. A
-card in credit counts its balance as available credit, in the projection as in the account payload.
+`safe_to_spend` and `scenario` (omitted when `changes` is not passed). Without `hypothetical`,
+`scenario` carries `holds` and `reason`; with it, verdict fields report the changed world while
+`scenario.baseline` holds the unchanged metrics. `optimistic` is the unconfirmed-income case and
+never feeds a verdict. `data_quality.balance_ages[]` uses the account summary's one anchor rule
+(`ledger.common`'s `balance_anchor`): `as_of` is the later of the last movement and the stated
+balance, and `age_days` is the age `get_financial_context` reports for the same account. An unknown
+liquid account keeps `known: false` and no balance date; the gap says the projection starts from
+its recorded net change, not a verified bank balance. That provisional input is never presented as
+known cash. A card in credit counts its balance as available credit, in the projection as in the
+account payload.
 
 UI: daily curve (median and P10-P90), source IDs, projection card.
 
 **Logic**
 
 ```
-horizon = max(90 days, furthest goal deadline, asked horizon)
+horizon = max(90 days, furthest goal deadline, asked horizon,
+              latest change start/date + 90 days, latest change until)  # capped at HORIZON_MAX
 inputs  = liquid balances, expanded schedules, card cycles split at the last statement close,
           goal contributions, money owed with an expected date, baselines
 runs    = 16,384 seeded scenarios; each day apply income, card bills due, obligations,
@@ -334,6 +351,10 @@ obligations_met = every obligation is paid in at least 99% of scenarios
 safe_to_spend = null if no liquid balance is known; else max(0, min(floor headroom, min
                 obligation-day margin)) at the exact scenario ranks that pass the yes rule,
                 paired with the binding constraint and date
+if changes:
+    apply changes in canonical order (filter/replace/append CashEvents; never mutate inputs)
+    baseline = project on unchanged inputs
+    rerun changed inputs (via afford when hypothetical is also set)
 if hypothetical:
     rerun with it
     verdict = yes when floor_probability >= 0.90 and obligations_met   # no goal-slip clause

@@ -11,7 +11,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import date
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import asyncpg
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,7 +39,7 @@ from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
 from arno.tools import recaps as recaps_tools
 from arno.tools import write as write_tools
-from arno.tools.mark import clear_mark, flag_outside_text
+from arno.tools.mark import clear_mark, flag_outside_text, has_mark
 
 logger = logging.getLogger("arno.agent.toolset")
 
@@ -133,6 +133,92 @@ class ProjectHypothetical(BaseModel):
     no_cost: bool = Field(
         default=False, description="True for a no-cost EMI: the merchant pays the interest"
     )
+
+
+class StopIncomeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["stop_income"]
+    start: str = Field(description="First date without income, YYYY-MM-DD.")
+    until: str | None = Field(
+        default=None,
+        description="Inclusive last date without income, YYYY-MM-DD; open-ended if omitted.",
+    )
+    schedule: str | None = Field(
+        default=None,
+        description="One income schedule name to stop; stops all income flows if omitted.",
+    )
+
+
+class PauseScheduleChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["pause_schedule"]
+    schedule: str = Field(description="Active schedule or detected recurring charge name to pause.")
+    start: str = Field(description="First paused date, YYYY-MM-DD.")
+    until: str | None = Field(
+        default=None,
+        description="Inclusive last paused date, YYYY-MM-DD; open-ended if omitted.",
+    )
+
+
+class ChangeAmountChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["change_amount"]
+    schedule: str = Field(description="Active schedule name whose amount changes.")
+    amount_paise: int = Field(gt=0, description="Replacement amount per occurrence, in paise.")
+    start: str = Field(description="First date the new amount applies, YYYY-MM-DD.")
+    until: str | None = Field(
+        default=None,
+        description="Inclusive last date of the new amount, YYYY-MM-DD; open-ended if omitted.",
+    )
+
+
+class AddRecurringChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["add_recurring"]
+    name: str = Field(description="Label for the added recurring flow.")
+    amount_paise: int = Field(gt=0, description="Amount per occurrence, in paise.")
+    direction: Literal["out", "in"] = Field(
+        description="out: a new obligation or goal contribution. in: assumed new income."
+    )
+    start: str = Field(description="First occurrence date, YYYY-MM-DD.")
+    until: str | None = Field(
+        default=None,
+        description="Inclusive last occurrence date, YYYY-MM-DD; open-ended if omitted.",
+    )
+    every: Literal["month", "week", "year"] = Field(
+        default="month",
+        description="Recurrence cadence: month, week, or year.",
+    )
+    goal: str | None = Field(
+        default=None,
+        description="Active goal name when direction=out is a contribution to that goal.",
+    )
+
+
+class OneTimeChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["one_time"]
+    name: str = Field(description="Label for the one-off flow.")
+    amount_paise: int = Field(gt=0, description="One-off amount, in paise.")
+    direction: Literal["out", "in"] = Field(
+        description="out: a one-off bill. in: an assumed one-off inflow such as a bonus."
+    )
+    date: str = Field(description="Date of the one-off flow, YYYY-MM-DD.")
+
+
+ProjectChange = Annotated[
+    StopIncomeChange
+    | PauseScheduleChange
+    | ChangeAmountChange
+    | AddRecurringChange
+    | OneTimeChange,
+    Field(discriminator="kind"),
+]
 
 
 def _card_data(card: dict[str, Any]) -> list[DataChunk]:
@@ -344,28 +430,43 @@ async def project(
     ctx: RunContext[AgentDeps],
     horizon_days: int | None = None,
     hypothetical: ProjectHypothetical | None = None,
+    changes: list[ProjectChange] | None = None,
 ) -> ToolReturn:
     """Forecast the user's cash against their floor (the minimum balance they want to keep).
     Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
     data-quality notes. Also returns safe_to_spend, the largest amount that can be spent today
-    with the forecast still passing, or null when no balance is known. With a hypothetical
-    purchase, also returns the yes, yes-but, or no verdict and the tradeoffs. Never give your own
-    verdict: the engine decides. With no verdict (no liquid account has a known balance), the curve
-    starts from an unknown balance: say what is missing instead of quoting its probabilities or
-    balances. State the data_quality notes in your answer. A rare large day caused by a one-off
-    payment can be marked one-off so the projection stops expecting it again. horizon_days is a
-    minimum; the engine always looks at least 90 days and as far as a goal deadline."""
+    with the forecast still passing, or null when no balance is known. Pass changes, a list of 1
+    to 12 dated what-ifs (stop_income, pause_schedule, change_amount, add_recurring, or one_time),
+    to model income, bill, schedule, or goal-contribution scenarios without saving anything; the
+    result carries a scenario block with each change's label and occurrence count, assumptions,
+    runway_days until the first floor crossing or null, holds and reason when no purchase is
+    passed, and the unchanged baseline figures. Combine changes with hypothetical to judge a
+    purchase under those conditions. With a hypothetical purchase, also returns the yes, yes-but,
+    or no verdict and the tradeoffs. Never give your own verdict: the engine decides. With no
+    verdict (no liquid account has a known balance), the curve starts from an unknown balance:
+    say what is missing instead of quoting its probabilities or balances. State the data_quality
+    notes in your answer. A rare large day caused by a one-off payment can be marked one-off so
+    the projection stops expecting it again. horizon_days is a minimum; the engine always looks at
+    least 90 days, as far as a goal deadline, and at least 90 days past the latest scenario
+    change."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
-    try:
-        async with connect() as conn:
+    async with connect() as conn:
+        try:
             result = await projection_tools.project(
                 conn,
                 horizon_days=horizon_days,
                 hypothetical=(hypothetical.model_dump(exclude_none=True) if hypothetical else None),
+                changes=(
+                    [change.model_dump(exclude_none=True) for change in changes]
+                    if changes is not None
+                    else None
+                ),
             )
-    except ValueError as exc:
-        raise ModelRetry(str(exc)) from exc
+        except ValueError as exc:
+            if has_mark(str(exc)):
+                await flag_outside_text(conn, ctx.deps.conversation_id)
+            raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
     payload["_card"] = projection_tools.card(result)
     return await _finish_read(

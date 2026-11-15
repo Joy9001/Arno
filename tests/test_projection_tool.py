@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 
 import pytest
@@ -14,6 +15,7 @@ from arno.agent import toolset as agent_tools
 from arno.agent.builder import build_agent
 from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
+from arno.db.conn import quote_ident
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
 
@@ -473,3 +475,396 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
 
     early = await projection_tools.load_snapshot(ledger, as_of=date(2026, 9, 25), known_then=True)
     assert early.series == ()
+
+
+async def test_project_changes_resolves_names_and_marks_outside_text(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.goals import create_goal
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedules import create_schedule
+    from arno.tools import patterns
+    from arno.tools.mark import mark
+
+    as_of = date(2026, 10, 1)
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="SBI",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 9, 1),
+    )
+    await create_schedule(
+        ledger,
+        kind="income_fixed",
+        name="Salary",
+        amount_paise=8_000_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=1",
+        starts=date(2026, 9, 1),
+    )
+    await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="rent",
+        name="Rent",
+        amount_paise=2_500_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 9, 5),
+    )
+    outside_sched = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="subscription",
+        name="Outside Club",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=10",
+        starts=date(2026, 9, 10),
+    )
+    await ledger.execute(
+        "UPDATE schedules SET outside_text = true WHERE id = $1", outside_sched["id"]
+    )
+    await create_goal(ledger, name="Goa trip", target_paise=5_000_000)
+
+    # Also create a detected recurring charge with outside_text=True so pause_schedule matches it.
+    cat_id = str(
+        await ledger.fetchval("SELECT id FROM categories WHERE active ORDER BY name LIMIT 1")
+    )
+    netflix = await create_payee(ledger, display_name="Netflix", kind="merchant", outside_text=True)
+    for month in (6, 7, 8, 9):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=64_900,
+            description="Netflix",
+            payee_id=netflix["id"],
+            category_id=cat_id,
+            date=date(2026, month, 1),
+        )
+    await patterns.detect(ledger, as_of=as_of)
+
+    # Case-insensitive exact resolution across schedule, series, and goal.
+    result = await projection_tools.project(
+        ledger,
+        as_of=as_of,
+        runs=20,
+        changes=[
+            {"kind": "stop_income", "schedule": "salary", "start": "2026-10-15"},
+            {
+                "kind": "change_amount",
+                "schedule": "RENT",
+                "amount_paise": 3_000_000,
+                "start": "2026-11-01",
+            },
+            {"kind": "pause_schedule", "schedule": "netflix", "start": "2026-10-15"},
+            {
+                "kind": "add_recurring",
+                "name": "Extra Goa SIP",
+                "amount_paise": 500_000,
+                "direction": "out",
+                "start": "2026-11-05",
+                "goal": "goa TRIP",
+            },
+        ],
+    )
+    scenario = result.get("scenario")
+    assert scenario is not None
+    labels = [item["label"] for item in scenario["changes"]]
+    assert any(str(mark("Netflix")) in label for label in labels)
+
+    # Unknown schedule lists active schedules (marking outside_text) and detected series.
+    with pytest.raises(ValueError, match="unknown schedule") as missing_exc:
+        await projection_tools.project(
+            ledger,
+            as_of=as_of,
+            runs=20,
+            changes=[{"kind": "pause_schedule", "schedule": "Gym", "start": "2026-10-15"}],
+        )
+    msg = str(missing_exc.value)
+    assert str(mark("Outside Club")) in msg
+    assert str(mark("Netflix")) in msg
+    assert "Rent" in msg
+
+    # Unknown goal lists active goals.
+    with pytest.raises(ValueError, match="Goa trip"):
+        await projection_tools.project(
+            ledger,
+            as_of=as_of,
+            runs=20,
+            changes=[
+                {
+                    "kind": "add_recurring",
+                    "name": "SIP",
+                    "amount_paise": 100_000,
+                    "direction": "out",
+                    "start": "2026-11-01",
+                    "goal": "Europe",
+                }
+            ],
+        )
+
+    # Ambiguous schedules fail and list the matches.
+    await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="other",
+        name="SIP",
+        amount_paise=200_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=1",
+        starts=date(2026, 9, 1),
+    )
+    await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="other",
+        name="sip",
+        amount_paise=300_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=15",
+        starts=date(2026, 9, 15),
+    )
+    with pytest.raises(ValueError, match="multiple schedules match"):
+        await projection_tools.project(
+            ledger,
+            as_of=as_of,
+            runs=20,
+            changes=[{"kind": "pause_schedule", "schedule": "SIP", "start": "2026-10-15"}],
+        )
+
+
+async def test_project_changes_summary_card_horizon_and_writes_nothing(demo_ledger):
+    tables = [
+        str(row["table_name"])
+        for row in await demo_ledger.fetch(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+            ORDER BY table_name
+            """
+        )
+    ]
+    before_counts = {
+        table: int(await demo_ledger.fetchval(f"SELECT count(*) FROM {quote_ident(table)}"))
+        for table in tables
+    }
+
+    as_of = date(2026, 11, 1)
+    # Start 60 days after as_of -> horizon must reach at least 60 + 90 = 150 days.
+    result = await projection_tools.project(
+        demo_ledger,
+        as_of=as_of,
+        runs=20,
+        changes=[
+            {"kind": "stop_income", "start": "2026-12-31"},
+            {
+                "kind": "change_amount",
+                "schedule": "Rent",
+                "amount_paise": 3_500_000,
+                "start": "2026-11-15",
+            },
+        ],
+    )
+    assert result["horizon_days"] >= 150
+    assert any(
+        "assumes the listed scenario changes" in gap for gap in result["data_quality"]["gaps"]
+    )
+
+    compact = projection_tools.summary(result)
+    ui_card = projection_tools.card(result)
+    for payload in (compact, ui_card):
+        scen = payload.get("scenario")
+        assert scen is not None
+        assert len(scen["changes"]) == 2
+        assert all(
+            set(item) == {"kind", "label", "occurrences", "amount"}
+            and set(item["amount"]) == {"paise", "text"}
+            for item in scen["changes"]
+        )
+        assert isinstance(scen["assumptions"], list) and scen["assumptions"]
+        assert isinstance(scen["holds"], bool)
+        assert isinstance(scen["reason"], str) and scen["reason"]
+        assert "runway_days" in scen
+        baseline = scen["baseline"]
+        assert set(baseline) == {
+            "floor_probability",
+            "median_low",
+            "first_floor_crossing",
+            "safe_to_spend",
+        }
+
+    # Combined changes + hypothetical returns verdict and omits holds from scenario.
+    combined = await projection_tools.project(
+        demo_ledger,
+        as_of=as_of,
+        runs=20,
+        hypothetical={"amount_paise": 5_000_000, "date": "2026-11-10", "method": "account"},
+        changes=[
+            {
+                "kind": "change_amount",
+                "schedule": "Rent",
+                "amount_paise": 3_500_000,
+                "start": "2026-11-01",
+            }
+        ],
+    )
+    assert combined["verdict"] in {"yes", "yes-but", "no"}
+    assert "holds" not in projection_tools.summary(combined)["scenario"]
+    assert "holds" not in projection_tools.card(combined)["scenario"]
+
+    after_counts = {
+        table: int(await demo_ledger.fetchval(f"SELECT count(*) FROM {quote_ident(table)}"))
+        for table in tables
+    }
+    assert after_counts == before_counts
+
+
+async def test_get_api_projection_with_changes_and_validation(authed_client, demo_ledger):
+    start = ledger_today().isoformat()
+    ok = authed_client.get(
+        "/api/projection",
+        params={"changes": json.dumps([{"kind": "stop_income", "start": start}])},
+    )
+    assert ok.status_code == 200, ok.text
+    payload = ok.json()
+    assert payload["scenario"] is not None
+    assert payload["scenario"]["changes"][0]["kind"] == "stop_income"
+
+    bad_json = authed_client.get("/api/projection", params={"changes": "{bad"})
+    assert bad_json.status_code == 422
+
+    not_list = authed_client.get(
+        "/api/projection",
+        params={"changes": json.dumps({"kind": "stop_income", "start": start})},
+    )
+    assert not_list.status_code == 422
+
+    unknown_sched = authed_client.get(
+        "/api/projection",
+        params={
+            "changes": json.dumps([{"kind": "pause_schedule", "schedule": "Gym", "start": start}])
+        },
+    )
+    assert unknown_sched.status_code == 422
+    assert "unknown schedule" in unknown_sched.json()["detail"].lower()
+
+    empty_every = authed_client.get(
+        "/api/projection",
+        params={
+            "changes": json.dumps(
+                [
+                    {
+                        "kind": "add_recurring",
+                        "name": "Club",
+                        "amount_paise": 100_000,
+                        "direction": "out",
+                        "start": start,
+                        "every": "",
+                    }
+                ]
+            )
+        },
+    )
+    assert empty_every.status_code == 422
+    assert "every" in empty_every.json()["detail"].lower()
+
+
+async def test_project_changes_loads_schedule_two_years_out(demo_ledger):
+    from datetime import timedelta
+
+    as_of = date(2026, 11, 1)
+    far_start = as_of + timedelta(days=700)
+    far_until = as_of + timedelta(days=760)
+    result = await projection_tools.project(
+        demo_ledger,
+        as_of=as_of,
+        runs=20,
+        changes=[
+            {
+                "kind": "change_amount",
+                "schedule": "Rent",
+                "amount_paise": 3_500_000,
+                "start": far_start.isoformat(),
+                "until": far_until.isoformat(),
+            }
+        ],
+    )
+    assert result["horizon_days"] >= 760
+    assert result["scenario"]["changes"][0]["occurrences"] >= 2
+
+
+async def test_agent_project_turns_validation_errors_into_model_retry(demo_ledger):
+    from arno.ledger.schedules import create_schedule
+
+    bank = await demo_ledger.fetchrow_required(
+        "SELECT id FROM accounts WHERE kind = 'bank' AND active ORDER BY name LIMIT 1"
+    )
+    outside_sched = await create_schedule(
+        demo_ledger,
+        kind="obligation",
+        subtype="subscription",
+        name="Outside Stream",
+        amount_paise=50_000,
+        account_id=str(bank["id"]),
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 9, 5),
+    )
+    await demo_ledger.execute(
+        "UPDATE schedules SET outside_text = true WHERE id = $1", outside_sched["id"]
+    )
+    await demo_ledger.execute(
+        "INSERT INTO conversations (id, title) VALUES ('cnv_retry', 'Retry check') "
+        "ON CONFLICT DO NOTHING"
+    )
+
+    seen_retry: list[str] = []
+    calls = {"n": 0}
+
+    def script(messages, info: AgentInfo) -> ModelResponse:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "project",
+                        {
+                            "changes": [
+                                {
+                                    "kind": "pause_schedule",
+                                    "schedule": "Gym",
+                                    "start": ledger_today().isoformat(),
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        if calls["n"] == 2:
+            for msg in messages:
+                for part in getattr(msg, "parts", ()):
+                    if getattr(part, "part_kind", None) in {"retry-prompt", "tool-return"}:
+                        seen_retry.append(str(part.content))
+            return ModelResponse(parts=[ToolCallPart("project", {"changes": []})])
+        for msg in messages:
+            for part in getattr(msg, "parts", ()):
+                if getattr(part, "part_kind", None) in {"retry-prompt", "tool-return"}:
+                    seen_retry.append(str(part.content))
+        return ModelResponse(parts=[TextPart("Which schedule did you mean?")])
+
+    agent = Agent(
+        FunctionModel(script),
+        deps_type=AgentDeps,
+        retries=2,
+        toolsets=[FunctionToolset(tools=[agent_tools.project])],
+    )
+    result = await agent.run("Pause my Gym schedule", deps=AgentDeps(conversation_id="cnv_retry"))
+    assert result.output == "Which schedule did you mean?"
+    assert any("unknown schedule" in msg.lower() for msg in seen_retry)
+    assert any("1 to 12 items" in msg.lower() for msg in seen_retry)
+    flagged = await demo_ledger.fetchval(
+        "SELECT outside_text_at FROM conversations WHERE id = 'cnv_retry'"
+    )
+    assert flagged is not None

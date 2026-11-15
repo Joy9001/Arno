@@ -8,12 +8,12 @@ shares, and hands back source IDs for every underlying account, schedule, goal, 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, timedelta
-from typing import Any, cast
+from datetime import date, datetime, timedelta
+from typing import Any, Literal, cast
 
 from arno.db.conn import Connection
 from arno.engine import series
-from arno.engine.affordability import Hypothetical, afford
+from arno.engine.affordability import Hypothetical, afford, project_scenario
 from arno.engine.inputs import (
     CategoryRow,
     ConfiguredSchedule,
@@ -31,6 +31,7 @@ from arno.engine.patterns import (
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
+    MAX_HORIZON_DAYS,
     RARE_WINDOW_DAYS,
     BalanceAge,
     CardAccount,
@@ -41,6 +42,7 @@ from arno.engine.projection import (
     Projection,
     ProjectionInput,
     SafeToSpend,
+    Scenario,
     SeriesForecast,
     SourceRef,
     SpendRow,
@@ -48,6 +50,16 @@ from arno.engine.projection import (
 )
 from arno.engine.projection import (
     project as run_projection,
+)
+from arno.engine.scenario import (
+    MAX_CHANGES,
+    AddRecurring,
+    ChangeAmount,
+    OneTime,
+    PauseSchedule,
+    ScenarioChangeSpec,
+    StopIncome,
+    scenario_horizon_days,
 )
 from arno.india.workdays import calendar_for
 from arno.ledger import schedules as schedules_mod
@@ -813,21 +825,424 @@ def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical
     )
 
 
+def _parse_change_date(value: Any, *, field: str, today: date) -> date:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if value == "today":
+        return today
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a YYYY-MM-DD date")
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a YYYY-MM-DD date") from exc
+
+
+def _positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _nonempty_str(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def _parse_raw_changes(
+    raw_changes: Sequence[dict[str, Any]], *, as_of: date
+) -> list[dict[str, Any]]:
+    if isinstance(raw_changes, (str, bytes)) or not isinstance(raw_changes, Sequence):
+        raise ValueError("changes must be a list of 1 to 12 items")
+    if not 1 <= len(raw_changes) <= MAX_CHANGES:
+        raise ValueError(f"changes must contain 1 to {MAX_CHANGES} items")
+    allowed_fields: dict[str, set[str]] = {
+        "stop_income": {"kind", "start", "until", "schedule"},
+        "pause_schedule": {"kind", "schedule", "start", "until"},
+        "change_amount": {"kind", "schedule", "amount_paise", "start", "until"},
+        "add_recurring": {
+            "kind",
+            "name",
+            "amount_paise",
+            "direction",
+            "start",
+            "until",
+            "every",
+            "goal",
+        },
+        "one_time": {"kind", "name", "amount_paise", "direction", "date"},
+    }
+    parsed: list[dict[str, Any]] = []
+    max_offset = MAX_HORIZON_DAYS - 30
+    for item in raw_changes:
+        if not isinstance(item, dict):
+            raise ValueError("each change must be an object with a kind")
+        kind = item.get("kind")
+        if not isinstance(kind, str) or kind not in allowed_fields:
+            supported = ", ".join(sorted(allowed_fields))
+            raise ValueError(f"change kind must be one of {supported}")
+        unknown = set(item) - allowed_fields[kind]
+        if unknown:
+            raise ValueError(f"{kind} does not accept {', '.join(sorted(unknown))}")
+
+        if kind == "one_time":
+            name = _nonempty_str(item.get("name"), field="one_time.name")
+            amount_paise = _positive_int(item.get("amount_paise"), field="one_time.amount_paise")
+            direction_raw = _nonempty_str(item.get("direction"), field="one_time.direction")
+            if direction_raw not in ("out", "in"):
+                raise ValueError("one_time.direction must be 'out' or 'in'")
+            when = _parse_change_date(item.get("date"), field="one_time.date", today=as_of)
+            if when < as_of:
+                raise ValueError(
+                    f"change date {when.isoformat()} cannot be before {as_of.isoformat()}"
+                )
+            if (when - as_of).days > max_offset:
+                raise ValueError("change date is beyond the projection horizon")
+            parsed.append(
+                {
+                    "kind": kind,
+                    "name": name,
+                    "amount_paise": amount_paise,
+                    "direction": direction_raw,
+                    "date": when,
+                }
+            )
+            continue
+
+        start = _parse_change_date(item.get("start"), field=f"{kind}.start", today=as_of)
+        if start < as_of:
+            raise ValueError(
+                f"change start {start.isoformat()} cannot be before {as_of.isoformat()}"
+            )
+        if (start - as_of).days > max_offset:
+            raise ValueError("change date is beyond the projection horizon")
+        raw_until = item.get("until")
+        until = (
+            _parse_change_date(raw_until, field=f"{kind}.until", today=as_of)
+            if raw_until is not None
+            else None
+        )
+        if until is not None:
+            if until < start:
+                raise ValueError(
+                    f"change until {until.isoformat()} must be on or after start "
+                    f"{start.isoformat()}"
+                )
+            if (until - as_of).days > max_offset:
+                raise ValueError("change date is beyond the projection horizon")
+
+        if kind == "stop_income":
+            raw_sched = item.get("schedule")
+            schedule = (
+                _nonempty_str(raw_sched, field="stop_income.schedule")
+                if raw_sched is not None
+                else None
+            )
+            parsed.append({"kind": kind, "start": start, "until": until, "schedule": schedule})
+        elif kind == "pause_schedule":
+            schedule = _nonempty_str(item.get("schedule"), field="pause_schedule.schedule")
+            parsed.append({"kind": kind, "schedule": schedule, "start": start, "until": until})
+        elif kind == "change_amount":
+            schedule = _nonempty_str(item.get("schedule"), field="change_amount.schedule")
+            amount_paise = _positive_int(
+                item.get("amount_paise"), field="change_amount.amount_paise"
+            )
+            parsed.append(
+                {
+                    "kind": kind,
+                    "schedule": schedule,
+                    "amount_paise": amount_paise,
+                    "start": start,
+                    "until": until,
+                }
+            )
+        else:
+            name = _nonempty_str(item.get("name"), field="add_recurring.name")
+            amount_paise = _positive_int(
+                item.get("amount_paise"), field="add_recurring.amount_paise"
+            )
+            direction_raw = _nonempty_str(item.get("direction"), field="add_recurring.direction")
+            if direction_raw not in ("out", "in"):
+                raise ValueError("add_recurring.direction must be 'out' or 'in'")
+            raw_every = item.get("every")
+            every_raw = "month" if raw_every is None else raw_every
+            if not isinstance(every_raw, str) or every_raw not in ("month", "week", "year"):
+                raise ValueError("add_recurring.every must be 'month', 'week', or 'year'")
+            raw_goal = item.get("goal")
+            goal = (
+                _nonempty_str(raw_goal, field="add_recurring.goal")
+                if raw_goal is not None
+                else None
+            )
+            if goal is not None and direction_raw != "out":
+                raise ValueError("goal contributions must have direction 'out'")
+            parsed.append(
+                {
+                    "kind": kind,
+                    "name": name,
+                    "amount_paise": amount_paise,
+                    "direction": direction_raw,
+                    "start": start,
+                    "until": until,
+                    "every": every_raw,
+                    "goal": goal,
+                }
+            )
+    return parsed
+
+
+def _raw_horizon_days(
+    as_of: date, parsed: Sequence[dict[str, Any]], *, ask_horizon_days: int | None
+) -> int:
+    specs: list[ScenarioChangeSpec] = []
+    for item in parsed:
+        kind = item["kind"]
+        if kind == "one_time":
+            specs.append(OneTime(name="x", amount_paise=1, direction="out", date=item["date"]))
+        else:
+            specs.append(StopIncome(start=item["start"], until=item["until"]))
+    return scenario_horizon_days(as_of, specs, ask_horizon_days=ask_horizon_days)
+
+
+def _display_name(name: str, outside_text: bool) -> str:
+    return cast(str, mark(name) if outside_text else name)
+
+
+def _candidate_names(rows: Sequence[Any], name_key: str, outside_key: str | None) -> str:
+    if not rows:
+        return "none"
+    return ", ".join(
+        _display_name(str(row[name_key]), bool(row[outside_key]) if outside_key else False)
+        for row in rows
+    )
+
+
+async def _resolve_changes(
+    conn: Connection,
+    inputs: ProjectionInput,
+    parsed: Sequence[dict[str, Any]],
+    *,
+    as_of: date,
+    known_then: bool,
+) -> tuple[list[ScenarioChangeSpec], set[str]]:
+    schedule_rows = await conn.fetch(
+        """
+        SELECT id, name, kind, outside_text
+        FROM schedules
+        WHERE active
+          AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+        ORDER BY name, id
+        """,
+        as_of,
+        known_then,
+    )
+    income_schedules = [row for row in schedule_rows if str(row["kind"]).startswith("income")]
+    income_source_ids = {str(row["id"]) for row in income_schedules}
+
+    series_rows: list[Any] = []
+    if inputs.series:
+        series_rows = list(
+            await conn.fetch(
+                """
+                SELECT d.id, p.display_name, p.outside_text
+                FROM series_detections d
+                JOIN payees p ON p.id = d.payee_id
+                WHERE d.id = ANY(ARRAY(SELECT unnest($1::text[])))
+                ORDER BY p.display_name, d.id
+                """,
+                [item.id for item in inputs.series],
+            )
+        )
+
+    goal_rows: list[Any] = []
+    if any(item.get("goal") is not None for item in parsed):
+        goal_rows = list(
+            await conn.fetch(
+                """
+                SELECT id, name
+                FROM goals
+                WHERE status = 'active'
+                  AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
+                ORDER BY name, id
+                """,
+                as_of,
+                known_then,
+            )
+        )
+
+    resolved: list[ScenarioChangeSpec] = []
+    for item in parsed:
+        kind = item["kind"]
+        if kind == "stop_income":
+            target = item["schedule"]
+            if target is None:
+                resolved.append(StopIncome(start=item["start"], until=item["until"]))
+                continue
+            key = target.lower()
+            matches = [row for row in income_schedules if str(row["name"]).strip().lower() == key]
+            if len(matches) == 1:
+                row = matches[0]
+                resolved.append(
+                    StopIncome(
+                        start=item["start"],
+                        until=item["until"],
+                        source_id=str(row["id"]),
+                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                    )
+                )
+            elif len(matches) > 1:
+                cands = _candidate_names(matches, "name", "outside_text")
+                raise ValueError(f"multiple income schedules match {target!r}: {cands}")
+            else:
+                non_income = [
+                    row for row in schedule_rows if str(row["name"]).strip().lower() == key
+                ]
+                cands = _candidate_names(income_schedules, "name", "outside_text")
+                if non_income:
+                    raise ValueError(
+                        f"{target!r} is not an income schedule; active income schedules: {cands}"
+                    )
+                raise ValueError(
+                    f"unknown income schedule {target!r}; active income schedules: {cands}"
+                )
+
+        elif kind == "pause_schedule":
+            target = item["schedule"]
+            key = target.lower()
+            sched_matches = [
+                row for row in schedule_rows if str(row["name"]).strip().lower() == key
+            ]
+            if len(sched_matches) == 1:
+                row = sched_matches[0]
+                resolved.append(
+                    PauseSchedule(
+                        start=item["start"],
+                        until=item["until"],
+                        source_id=str(row["id"]),
+                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                    )
+                )
+            elif len(sched_matches) > 1:
+                cands = _candidate_names(sched_matches, "name", "outside_text")
+                raise ValueError(f"multiple schedules match {target!r}: {cands}")
+            else:
+                series_matches = [
+                    row for row in series_rows if str(row["display_name"]).strip().lower() == key
+                ]
+                if len(series_matches) == 1:
+                    row = series_matches[0]
+                    resolved.append(
+                        PauseSchedule(
+                            start=item["start"],
+                            until=item["until"],
+                            series_id=str(row["id"]),
+                            label_name=_display_name(
+                                str(row["display_name"]), bool(row["outside_text"])
+                            ),
+                        )
+                    )
+                elif len(series_matches) > 1:
+                    cands = _candidate_names(series_matches, "display_name", "outside_text")
+                    raise ValueError(f"multiple recurring charges match {target!r}: {cands}")
+                else:
+                    sched_cands = _candidate_names(schedule_rows, "name", "outside_text")
+                    series_cands = _candidate_names(series_rows, "display_name", "outside_text")
+                    raise ValueError(
+                        f"unknown schedule or recurring charge {target!r}; "
+                        f"active schedules: {sched_cands}; "
+                        f"projected recurring charges: {series_cands}"
+                    )
+
+        elif kind == "change_amount":
+            target = item["schedule"]
+            key = target.lower()
+            matches = [row for row in schedule_rows if str(row["name"]).strip().lower() == key]
+            if len(matches) == 1:
+                row = matches[0]
+                resolved.append(
+                    ChangeAmount(
+                        source_id=str(row["id"]),
+                        amount_paise=item["amount_paise"],
+                        start=item["start"],
+                        until=item["until"],
+                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                    )
+                )
+            elif len(matches) > 1:
+                cands = _candidate_names(matches, "name", "outside_text")
+                raise ValueError(f"multiple schedules match {target!r}: {cands}")
+            else:
+                cands = _candidate_names(schedule_rows, "name", "outside_text")
+                raise ValueError(f"unknown schedule {target!r}; active schedules: {cands}")
+
+        elif kind == "add_recurring":
+            goal_id: str | None = None
+            goal_name: str | None = None
+            target_goal = item["goal"]
+            if target_goal is not None:
+                key = target_goal.lower()
+                goal_matches = [row for row in goal_rows if str(row["name"]).strip().lower() == key]
+                if len(goal_matches) == 1:
+                    goal_id = str(goal_matches[0]["id"])
+                    goal_name = str(goal_matches[0]["name"])
+                elif len(goal_matches) > 1:
+                    cands = _candidate_names(goal_matches, "name", None)
+                    raise ValueError(f"multiple goals match {target_goal!r}: {cands}")
+                else:
+                    cands = _candidate_names(goal_rows, "name", None)
+                    raise ValueError(f"unknown goal {target_goal!r}; active goals: {cands}")
+            direction: Literal["out", "in"] = "out" if item["direction"] == "out" else "in"
+            every: Literal["month", "week", "year"] = (
+                "month"
+                if item["every"] == "month"
+                else "week"
+                if item["every"] == "week"
+                else "year"
+            )
+            resolved.append(
+                AddRecurring(
+                    name=item["name"],
+                    amount_paise=item["amount_paise"],
+                    direction=direction,
+                    start=item["start"],
+                    until=item["until"],
+                    every=every,
+                    goal_id=goal_id,
+                    goal_name=goal_name,
+                )
+            )
+
+        else:
+            direction = "out" if item["direction"] == "out" else "in"
+            resolved.append(
+                OneTime(
+                    name=item["name"],
+                    amount_paise=item["amount_paise"],
+                    direction=direction,
+                    date=item["date"],
+                )
+            )
+    return resolved, income_source_ids
+
+
 async def project(
     conn: Connection,
     *,
     horizon_days: int | None = None,
     hypothetical: dict[str, Any] | Hypothetical | None = None,
+    changes: Sequence[dict[str, Any]] | None = None,
     as_of: date | None = None,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     known_then: bool = False,
 ) -> Projection:
     """The full projection or affordability result, including the daily curve and sources."""
+    base = as_of or ledger_today()
     purchase = _hypothetical(hypothetical)
+    parsed_changes = _parse_raw_changes(changes, as_of=base) if changes is not None else None
     load_horizon = horizon_days
     if purchase is not None:
-        base = as_of or ledger_today()
         last = purchase.date
         if purchase.method == "emi":
             last = _add_months(purchase.date, (purchase.emi_months or 3) - 1)
@@ -836,7 +1251,24 @@ async def project(
             last += timedelta(days=62)
         needed = max(0, (last - base).days + 1)
         load_horizon = max(load_horizon or 0, needed)
-    inputs = await load_inputs(conn, as_of=as_of, horizon_days=load_horizon, known_then=known_then)
+    if parsed_changes is not None:
+        load_horizon = max(
+            load_horizon or 0,
+            _raw_horizon_days(base, parsed_changes, ask_horizon_days=horizon_days),
+        )
+    inputs = await load_inputs(conn, as_of=base, horizon_days=load_horizon, known_then=known_then)
+    if parsed_changes is not None:
+        specs, income_source_ids = await _resolve_changes(
+            conn, inputs, parsed_changes, as_of=base, known_then=known_then
+        )
+        return project_scenario(
+            inputs,
+            specs,
+            hypothetical=purchase,
+            income_source_ids=income_source_ids,
+            runs=runs,
+            seed=seed,
+        )
     if purchase is not None:
         return afford(inputs, purchase, runs=runs, seed=seed)
     return run_projection(inputs, runs=runs, seed=seed)
@@ -856,6 +1288,34 @@ def _safe_to_spend(row: SafeToSpend | None) -> dict[str, Any] | None:
         "binding": row["binding"],
         "binding_date": row["binding_date"],
     }
+
+
+def _scenario(row: Scenario) -> dict[str, Any]:
+    baseline = row["baseline"]
+    payload: dict[str, Any] = {
+        "changes": [
+            {
+                "kind": item["kind"],
+                "label": item["label"],
+                "occurrences": item["occurrences"],
+                "amount": money(int(item["amount_paise"])),
+            }
+            for item in row["changes"]
+        ],
+        "assumptions": list(row["assumptions"]),
+        "runway_days": row["runway_days"],
+        "baseline": {
+            "floor_probability": baseline["floor_probability"],
+            "median_low": _money_low(baseline["median_low"]),
+            "first_floor_crossing": baseline["first_floor_crossing"],
+            "safe_to_spend": _safe_to_spend(baseline["safe_to_spend"]),
+        },
+    }
+    if "holds" in row:
+        payload["holds"] = row["holds"]
+    if "reason" in row:
+        payload["reason"] = row["reason"]
+    return payload
 
 
 def summary(result: Projection) -> dict[str, Any]:
@@ -902,6 +1362,9 @@ def summary(result: Projection) -> dict[str, Any]:
         payload["goal_slips"] = result.get("goal_slips", [])
         payload["hypothetical"] = result["hypothetical"]
         payload["baseline"] = result.get("baseline")
+    scenario = result.get("scenario")
+    if scenario is not None:
+        payload["scenario"] = _scenario(scenario)
     return payload
 
 
@@ -950,6 +1413,9 @@ def card(result: Projection) -> dict[str, Any]:
                 "baseline": result.get("baseline"),
             }
         )
+    scenario = result.get("scenario")
+    if scenario is not None:
+        payload["scenario"] = _scenario(scenario)
     return payload
 
 

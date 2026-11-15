@@ -266,6 +266,35 @@ class SafeToSpend(TypedDict):
     binding_date: str
 
 
+class ScenarioChange(TypedDict):
+    """One applied what-if change, in canonical order, with its template label and total moved."""
+
+    kind: str
+    label: str
+    occurrences: int
+    amount_paise: int
+
+
+class ScenarioBaseline(TypedDict):
+    """The unchanged world at the same horizon, for before/after comparison."""
+
+    floor_probability: float
+    median_low: MedianLow
+    first_floor_crossing: str | None
+    safe_to_spend: SafeToSpend | None
+
+
+class Scenario(TypedDict):
+    """Multi-event what-if metadata: present only when scenario changes were supplied."""
+
+    changes: list[ScenarioChange]
+    assumptions: list[str]
+    holds: NotRequired[bool]
+    reason: NotRequired[str]
+    runway_days: int | None
+    baseline: ScenarioBaseline
+
+
 class Projection(TypedDict):
     """One projection run: the balance band, the floor odds, and every citation behind them."""
 
@@ -297,6 +326,7 @@ class Projection(TypedDict):
     goal_slips: NotRequired[list[GoalSlip]]
     hypothetical: NotRequired[HypotheticalMeta]
     baseline: NotRequired[Baseline]
+    scenario: NotRequired[Scenario]
 
 
 @dataclass(frozen=True, slots=True)
@@ -554,7 +584,7 @@ def goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
         saved = goal.saved_paise
         completes: date | None = inputs.as_of if saved >= goal.target_paise else None
         for event in sorted(contributions.get(goal.id, []), key=lambda item: item.date):
-            if event.date <= inputs.as_of:
+            if event.date <= inputs.as_of and not event.at_start:
                 continue
             saved += abs(event.amount_paise)
             if completes is None and saved >= goal.target_paise:
@@ -1572,6 +1602,9 @@ __all__ = [
     "GoalPlan",
     "LiquidAccount",
     "ProjectionInput",
+    "Scenario",
+    "ScenarioBaseline",
+    "ScenarioChange",
     "SpendCategory",
     "SeriesForecast",
     "SpendRow",

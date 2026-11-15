@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date as Date
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -596,6 +597,7 @@ async def get_projection(
     method: Literal["account", "card", "emi"] | None = None,
     emi_months: int | None = Query(default=None, ge=2, le=48),
     account: str | None = None,
+    changes: str | None = Query(default=None),
 ) -> Projection:
     """The read-only projection panel and the inline projection card share this payload."""
     hypothetical = None
@@ -609,9 +611,21 @@ async def get_projection(
             "emi_months": emi_months,
             "account": account,
         }
+    parsed_changes: list[dict[str, Any]] | None = None
+    if changes is not None:
+        try:
+            loaded = json.loads(changes)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail=f"invalid changes JSON: {exc}") from exc
+        if not isinstance(loaded, list):
+            raise HTTPException(status_code=422, detail="changes must be a JSON array")
+        parsed_changes = loaded
     try:
         return await projection_tools.project(
-            conn, horizon_days=horizon_days, hypothetical=hypothetical
+            conn,
+            horizon_days=horizon_days,
+            hypothetical=hypothetical,
+            changes=parsed_changes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -1,6 +1,7 @@
 import { Fragment, useState } from "react";
 import { Button, IconButton } from "@radix-ui/themes";
 import { ArrowUpRight, MessageCircle, X } from "lucide-react";
+import { displayText } from "./chat/display-text";
 import { formatDate, formatPaise } from "./format";
 import {
   ProjectionChart,
@@ -203,8 +204,35 @@ export function EvidencePanel({
             {payload.obligations_met === false && (
               <li>{OBLIGATION_WARNING}</li>
             )}
+            {readiness.ready && payload.scenario && (
+              <li>
+                {payload.scenario.runway_days !== null
+                  ? `Runway: ${payload.scenario.runway_days} days`
+                  : `Runway: no crossing within ${payload.horizon_days} days`}
+              </li>
+            )}
+            {readiness.ready && payload.scenario?.holds !== undefined && (
+              <li>
+                {payload.scenario.holds ? "Plan holds" : "Plan falls short"}
+                {payload.scenario.reason ? ` · ${payload.scenario.reason}` : ""}
+              </li>
+            )}
+            {payload.scenario?.assumptions.map((note, index) => (
+              <li key={`scenario-assumption-${index}`}>{note}</li>
+            ))}
           </ul>
         </section>
+
+        {payload.scenario?.changes.length ? (
+          <section className="evidence-section">
+            <h3>Assumed changes</h3>
+            <ul className="evidence-list">
+              {payload.scenario.changes.map((change, index) => (
+                <li key={`${change.kind}-${index}`}>{displayText(change.label)}</li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
 
 
@@ -213,7 +241,7 @@ export function EvidencePanel({
             <h3>Data quality</h3>
             <ul className="evidence-list">
               {notes.map((note) => (
-                <li key={note}>{note}</li>
+                <li key={note}>{displayText(note)}</li>
               ))}
             </ul>
           </section>

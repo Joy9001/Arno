@@ -17,6 +17,22 @@ export function safeToSpendAmount(payload: ProjectionPayload): number | null {
   return null;
 }
 
+export function baselineLowAmount(payload: ProjectionPayload): number | null {
+  const low = payload.scenario?.baseline.median_low;
+  if (!low) return null;
+  if (low.amount?.paise !== undefined) return low.amount.paise;
+  if (low.paise !== undefined) return low.paise;
+  return null;
+}
+
+export function baselineSafeToSpendAmount(payload: ProjectionPayload): number | null {
+  const safe = payload.scenario?.baseline.safe_to_spend;
+  if (!safe?.binding_date) return null;
+  if (safe.amount?.paise !== undefined) return safe.amount.paise;
+  if (safe.amount_paise !== undefined) return safe.amount_paise;
+  return null;
+}
+
 export function paymentMethodLabel(method: string | undefined): string {
   if (!method) return "";
   if (method === "account") return "from an account";
