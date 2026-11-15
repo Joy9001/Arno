@@ -171,6 +171,35 @@ async def test_correction_endpoint_edits_labels_without_a_reversal(authed_client
     assert authed_client.get(f"/api/accounts/{bank['id']}").json()["balance_paise"] == 9_900_000
 
 
+async def test_correction_endpoint_marks_a_movement_one_off(authed_client):
+    bank = authed_client.post(
+        "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}
+    ).json()
+    food = _category(authed_client, "Food & Dining")
+    movement = authed_client.post(
+        "/api/movements",
+        json={
+            "kind": "expense",
+            "account_id": bank["id"],
+            "amount_paise": 4_000_000,
+            "description": "Hospital bill",
+            "category_id": food["id"],
+        },
+    ).json()
+    assert movement["one_off"] is False
+
+    corrected = authed_client.post(
+        f"/api/movements/{movement['id']}/correct", json={"one_off": True}
+    )
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["movement"]["one_off"] is True
+
+    detail = authed_client.get(f"/api/movements/{movement['id']}").json()
+    assert detail["one_off"] is True
+    listed = authed_client.get("/api/movements?kind=expense").json()
+    assert listed["items"][0]["one_off"] is True
+
+
 async def test_schedules_goals_and_settings_endpoints(authed_client):
     # Relative to today so the next occurrence never goes stale with the calendar.
     today = ledger_today()

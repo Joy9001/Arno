@@ -219,6 +219,7 @@ def _assemble_movement_payload(
         "reverses_id": movement["reverses_id"],
         "reversed_by": state.get("reversed_by"),
         "reversed": bool(state.get("reversed")),
+        "one_off": bool(movement["one_off"]),
         "amount_paise": sum(int(row["amount_paise"]) for row in transfers),
         "category_name": category,
         "payee_name": payee,
@@ -1324,18 +1325,14 @@ async def correct_movement(
         for key in ("category_id", "payee_id", "expected_date", "note")
         if key in changes
     }
+    movement_updates = {
+        key: changes[key]
+        for key in ("date", "one_off")
+        if key in changes and changes[key] is not None
+    }
 
     async with write_group(conn, actor=actor, message_id=message_id) as group:
         if label_only:
-            if changes.get("date") is not None:
-                before = movement
-                after = await conn.fetchrow_required(
-                    "UPDATE movements SET date = $1 WHERE id = $2 RETURNING *",
-                    changes["date"],
-                    movement_id,
-                )
-                group.record_updated("movements", movement_id, before, after)
-                rows_changed = 1
             if label_changes:
                 rows_changed += await _update_labels(conn, group, movement_id, label_changes)
             result_movement_id = movement_id
@@ -1364,9 +1361,28 @@ async def correct_movement(
                     description=movement["description"],
                     kind=movement["kind"],
                     transfers=corrected,
+                    one_off=bool(movement["one_off"]),
                 )
                 result_movement_id = record.id
             rows_changed = 1
+
+        if movement_updates and not changes.get("delete"):
+            before = movement if label_only else await _movement_row(conn, result_movement_id)
+            columns = list(movement_updates)
+            assignments = ", ".join(
+                f"{column} = ${index}" for index, column in enumerate(columns, start=1)
+            )
+            statement = (
+                f"UPDATE movements SET {assignments} "
+                f"WHERE id = ${len(columns) + 1} RETURNING *"  # noqa: S608 - columns are constants
+            )
+            after = await conn.fetchrow_required(
+                statement,
+                *[movement_updates[column] for column in columns],
+                result_movement_id,
+            )
+            group.record_updated("movements", result_movement_id, before, after)
+            rows_changed += 1
 
         if scope != "this":
             correction = await _apply_payee_correction_in_group(

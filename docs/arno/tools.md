@@ -266,8 +266,9 @@ keep). Returns the median path, the P10-P90 band, the floor probability, goal co
 data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict and
 the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid account
 has a known balance), the curve starts from an unknown balance: say what is missing instead of
-quoting its probabilities or balances. State the data_quality notes in your answer. horizon_days is
-a minimum; the engine always looks at least 90 days and as far as a goal deadline."
+quoting its probabilities or balances. State the data_quality notes in your answer. A rare large day
+caused by a one-off payment can be marked one-off so the projection stops expecting it again.
+horizon_days is a minimum; the engine always looks at least 90 days and as far as a goal deadline."
 
 **Input**
 
@@ -756,7 +757,7 @@ queue the risk check
 **Tier:** always instant, with an undo card, including `scope="all"`
 ([decided in step 1](system-design.md#retroactive-payee-corrections)).
 
-**Description:** "Fix a logged movement: category, payee, note, expected date, date, amount,
+**Description:** "Fix a logged movement: category, payee, note, expected date, date, one-off, amount,
 account, or delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
 category or payee, scope sets how far it goes: this row, this row and future ones, or all rows past
 and future ('ramesh@okaxis is my landlord')."
@@ -772,6 +773,7 @@ class Changes:
     payee: str | None
     note: str | None
     expected_date: str | None
+    one_off: bool | None                            # true: the payment won't recur
     date: str | None
     amount_rupees: Decimal | None
     my_share_rupees: Decimal | None                  # a split's new share of mine
@@ -791,7 +793,7 @@ m = load(id) FOR UPDATE (in write_group for reversals), else ModelRetry
 if m is already reversed (movement_reversal_state): ModelRetry
 write_group:
     category, payee, note, expected date → edit movement_legs     # ledger untouched
-    date → edit movements.date                                    # ledger untouched
+    date, one_off → edit movements                                # ledger untouched
     amount or account → new movement, reverses_id = m:
                         opposite transfers + corrected transfers, one batch
     delete → new movement, reverses_id = m: opposite transfers only

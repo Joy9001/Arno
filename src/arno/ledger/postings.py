@@ -81,6 +81,7 @@ async def create_movement_in_group(
     transfers: list[TransferSpec],
     reverses_id: str | None = None,
     idempotency_key: str | None = None,
+    one_off: bool = False,
     capture: dict[str, Any] | None = None,
     accounts: dict[str, dict[str, Any]] | None = None,
 ) -> MovementRecord:
@@ -121,8 +122,8 @@ async def create_movement_in_group(
     movement_id = await new_id(conn, "mov")
     movement = await conn.fetchrow(
         """
-        INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key, one_off)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
         """,
@@ -132,6 +133,7 @@ async def create_movement_in_group(
         kind,
         reverses_id,
         idempotency_key,
+        one_off,
     )
     if movement is None:
         # A concurrent call with the same key committed first: return its movement, not a second.

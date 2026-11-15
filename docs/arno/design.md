@@ -106,6 +106,7 @@ The following table lists its fields:
 | `description`, `kind` | `kind` is descriptive, for the UI: `expense`, `income`, `transfer`, `split`, `loan`, `refund`, `settlement`, `adjustment`, `reversal` |
 | `reverses_id` | The movement this one reverses. Undo, or fixing an amount, writes the opposite transfers in one batch. Reversing a reversal restores the original |
 | `idempotency_key` | The message ID plus the tool call ID, also passed to pgledger, so a retried call returns the transfers already written |
+| `one_off` | A payment that will not recur, such as a hospital bill or a fridge; editable, and the projection leaves it out of spend history and its rare-day resampling |
 
 **Reversal state:** the PostgreSQL function `movement_reversal_state(as_of date DEFAULT NULL)` holds
 the single definition of whether a movement is effectively reversed. Over the `reverses_id` tree

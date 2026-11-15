@@ -262,6 +262,33 @@ async def test_date_correction_edits_the_movement_date_and_undoes(ledger):
     assert (await get_movement(ledger, movement["id"]))["date"] == "2026-10-31"
 
 
+async def test_one_off_correction_round_trips_and_undoes(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger, "Food & Dining")
+    movement = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=4_000_000,
+        description="Hospital bill",
+        category_id=food,
+    )
+    assert movement["one_off"] is False
+
+    marked = await correct_movement(ledger, movement["id"], changes={"one_off": True})
+    assert marked["movement"]["one_off"] is True
+    assert (await get_movement(ledger, movement["id"]))["one_off"] is True
+    assert await _spending(ledger) == 4_000_000
+
+    unmarked = await correct_movement(ledger, movement["id"], changes={"one_off": False})
+    assert unmarked["movement"]["one_off"] is False
+
+    await undo_group(ledger, unmarked["undo_id"])
+    assert (await get_movement(ledger, movement["id"]))["one_off"] is True
+
+    corrected = await correct_movement(ledger, movement["id"], changes={"amount_paise": 3_500_000})
+    assert corrected["movement"]["one_off"] is True
+
+
 async def test_idempotency_key_returns_the_same_movement(ledger):
     bank = await _bank(ledger)
     food = await _category(ledger, "Food & Dining")

@@ -63,6 +63,7 @@ export type Movement = {
   reverses_id: string | null;
   reversed_by: string | null;
   reversed: boolean;
+  one_off: boolean;
   amount_paise: number;
   category_name: string | null;
   payee_name: string | null;

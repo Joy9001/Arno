@@ -443,9 +443,9 @@ async def _restore_movement(
             "reverses_id": before.get("reverses_id"),
         },
     )
-    # A categorizer changes these too, so restoring them is part of the same undo. An audit row
-    # written before they existed has no value to put back.
-    for column in ("category_rule_id", "category_hint"):
+    # A categorizer changes the first two, and a one-off mark is an edit like them. An audit row
+    # written before a column existed has no value to put back.
+    for column in ("category_rule_id", "category_hint", "one_off"):
         if column in before:
             values[column] = before[column]
     await _update_row(conn, group, "movements", movement_id, values)

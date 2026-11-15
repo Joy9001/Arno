@@ -156,6 +156,80 @@ function MovementRow({
   );
 }
 
+function OneOffControl({
+  movement,
+  onChanged,
+}: {
+  movement: Movement;
+  onChanged: (value: boolean) => void;
+}) {
+  const [checked, setChecked] = useState(movement.one_off);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [undoId, setUndoId] = useState<string | null>(null);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    setError(null);
+    setUndoId(null);
+    try {
+      const result = await api<{ undo_id: string }>(`/api/movements/${movement.id}/correct`, {
+        method: "POST",
+        body: JSON.stringify({ one_off: next }),
+      });
+      setChecked(next);
+      setUndoId(result.undo_id);
+      onChanged(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function undo() {
+    if (!undoId) return;
+    setError(null);
+    try {
+      await api(`/api/undo/${undoId}`, { method: "POST" });
+      setUndoId(null);
+      setChecked(!checked);
+      onChanged(!checked);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  return (
+    <div className="act-oneoff">
+      <label>
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={busy}
+          onChange={(event) => void toggle(event.target.checked)}
+        />
+        <span>
+          One-off (won't recur)
+          <span className="fine">
+            Leaves it out of the projection's spend history, so it won't be expected again.
+          </span>
+        </span>
+      </label>
+      {undoId && (
+        <button type="button" className="inline-link" onClick={() => void undo()}>
+          Undo
+        </button>
+      )}
+      {error && (
+        <p className="act-field-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function LedgerSkeleton() {
   return (
     <div className="act-skel" aria-busy="true" aria-label="Loading movements">
@@ -740,6 +814,12 @@ export function LedgerPanel() {
                     : "none"}
                 </dd>
               </dl>
+              <OneOffControl
+                movement={openMovement}
+                onChanged={(value) =>
+                  setOpenMovement((current) => (current ? { ...current, one_off: value } : current))
+                }
+              />
               <h3 className="section-title">Recorded from</h3>
               {detailLoading && <p className="fine">Opening the source row…</p>}
               {detailError && (

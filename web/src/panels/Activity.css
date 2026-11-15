@@ -356,6 +356,12 @@
 .act-dialog .detail-grid { grid-template-columns: 100px minmax(0, 1fr); }
 .act-dialog .statement-text { padding: 12px; border-radius: 14px; background: var(--surface-2); }
 
+.act-oneoff { margin: 16px 0 4px; }
+.act-oneoff label { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; }
+.act-oneoff input { margin: 3px 0 0; accent-color: var(--lime); }
+.act-oneoff .fine { display: block; margin-top: 2px; }
+.act-oneoff .inline-link { margin-top: 6px; }
+
 @media (max-width: 620px) {
   .movement-dialog.act-dialog { inset: 8px; width: auto; padding: 22px; }
 }

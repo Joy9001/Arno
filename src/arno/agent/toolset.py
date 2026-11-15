@@ -351,8 +351,9 @@ async def project(
     and the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid
     account has a known balance), the curve starts from an unknown balance: say what is missing
     instead of quoting its probabilities or balances. State the data_quality
-    notes in your answer. horizon_days is a minimum; the engine always looks at least 90 days and
-    as far as a goal deadline."""
+    notes in your answer. A rare large day caused by a one-off payment can be marked one-off so the
+    projection stops expecting it again. horizon_days is a minimum; the engine always looks at
+    least 90 days and as far as a goal deadline."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
     try:
@@ -722,8 +723,8 @@ async def correct_movement(
     changes: MovementChanges,
     scope: Literal["this", "future", "all"] = "this",
 ) -> ToolReturn:
-    """Fix a logged movement: category, payee, note, expected date, date, amount, account, or
-    delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
+    """Fix a logged movement: category, payee, note, expected date, date, one-off, amount, account,
+    or delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
     category or payee, scope sets how far it goes: this row, this row and future ones, or all rows
     past and future ('ramesh@okaxis is my landlord')."""
     payload = await _call_write(

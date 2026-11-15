@@ -269,6 +269,34 @@ async def test_correct_movement_learns_a_user_rule(demo_ledger):
     assert rule["category_id"] == category["id"]
 
 
+async def test_correct_movement_marks_a_payment_one_off(demo_ledger):
+    movement = await write_tools.record_movement(
+        demo_ledger,
+        {
+            "kind": "expense",
+            "amount_rupees": 40_000,
+            "payee": "Swiggy",
+            "account": "SBI Salary",
+            "category": "Food & Dining",
+        },
+        message_id=None,
+        conversation_id=None,
+    )
+    result = await write_tools.correct_movement(
+        demo_ledger,
+        movement_id=movement["movement_id"],
+        changes={"one_off": True},
+        scope="this",
+        message_id=None,
+    )
+    assert result["movement"]["one_off"] is True
+    assert result["card"]["card"] == "correction"
+    row = await demo_ledger.fetchrow(
+        "SELECT one_off FROM movements WHERE id = $1", movement["movement_id"]
+    )
+    assert row["one_off"] is True
+
+
 async def test_preference_remember_and_forget(demo_ledger):
     remembered = await write_tools.preference(
         demo_ledger,

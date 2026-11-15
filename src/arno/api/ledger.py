@@ -180,6 +180,7 @@ class Correction(ApiModel):
     payee_id: str | None = None
     note: str | None = None
     expected_date: Date | None = None
+    one_off: bool | None = None
     date: Date | None = None
     amount_paise: int | None = Field(default=None, gt=0)
     account_id: str | None = None

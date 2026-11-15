@@ -120,6 +120,13 @@ class MovementChanges(WriteModel):
     payee: str | None = Field(default=None, description="New payee name.")
     note: str | None = Field(default=None, description="New note.")
     expected_date: Date | None = Field(default=None, description="New expected date.")
+    one_off: bool | None = Field(
+        default=None,
+        description=(
+            "true for a payment that won't recur, such as a medical bill or an appliance, so "
+            "the projection stops expecting it again"
+        ),
+    )
     date: Date | None = Field(default=None, description="New movement date.")
     amount_rupees: Decimal | None = Field(default=None, description="New amount in rupees.")
     my_share_rupees: Decimal | None = Field(
