@@ -97,30 +97,30 @@ CRPS is the forecast's distance from the outcome in rupees (lower is better); sk
 
 | Target | Days | Forecaster | CRPS | Skill (p) | P10-P90 coverage | Width | Breach Brier |
 |---|---|---|---|---|---|---|---|
-| end | 7 | flat | ₹53,393.29 | -781.3% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 7 | schedule | ₹9,263.57 | -52.9% (0.00) | 0% (0%-1%) | ₹0 | - |
-| end | 7 | schedule_mean | ₹6,058.30 | - | 0% (0%-0%) | ₹0 | - |
-| end | 7 | engine | ₹4,780.14 | +21.1% (0.00) | 68% (65%-71%) | ₹7,348.57 | - |
-| lowest | 7 | flat | ₹28,045.89 | -668.0% (0.00) | 4% (3%-6%) | ₹0 | 0.011 |
-| lowest | 7 | schedule | ₹6,262.51 | -71.5% (0.00) | 3% (2%-5%) | ₹0 | 0.013 |
-| lowest | 7 | schedule_mean | ₹3,651.66 | - | 2% (1%-3%) | ₹0 | 0.016 |
-| lowest | 7 | engine | ₹2,442.04 | +33.1% (0.00) | 70% (67%-72%) | ₹6,632.52 | 0.008 |
-| end | 30 | flat | ₹21,278.19 | -5.9% (0.52) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule | ₹37,803.03 | -88.2% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule_mean | ₹20,087.55 | - | 0% (0%-0%) | ₹0 | - |
-| end | 30 | engine | ₹16,036.76 | +20.2% (0.00) | 61% (56%-65%) | ₹18,610.43 | - |
-| lowest | 30 | flat | ₹51,121.18 | -320.1% (0.00) | 2% (1%-3%) | ₹0 | 0.044 |
-| lowest | 30 | schedule | ₹18,683.25 | -53.5% (0.00) | 2% (1%-2%) | ₹0 | 0.078 |
-| lowest | 30 | schedule_mean | ₹12,169.87 | - | 1% (0%-2%) | ₹0 | 0.120 |
-| lowest | 30 | engine | ₹9,064.82 | +25.5% (0.00) | 62% (57%-66%) | ₹13,722.73 | 0.086 |
-| end | 90 | flat | ₹35,192.98 | +38.0% (0.01) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule | ₹1,49,708.04 | -163.7% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule_mean | ₹56,778.67 | - | 0% (0%-0%) | ₹0 | - |
-| end | 90 | engine | ₹46,430.09 | +18.2% (0.00) | 49% (42%-57%) | ₹51,770.89 | - |
-| lowest | 90 | flat | ₹64,795.94 | -82.8% (0.00) | 1% (1%-2%) | ₹0 | 0.177 |
-| lowest | 90 | schedule | ₹39,814.85 | -12.3% (0.23) | 1% (0%-1%) | ₹0 | 0.246 |
-| lowest | 90 | schedule_mean | ₹35,450.38 | - | 1% (0%-1%) | ₹0 | 0.224 |
-| lowest | 90 | engine | ₹29,718.14 | +16.2% (0.00) | 57% (50%-64%) | ₹31,861.08 | 0.190 |
+| end | 7 | flat | ₹53,393.29 | -763.6% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 7 | schedule | ₹8,075.49 | -30.6% (0.00) | 0% (0%-1%) | ₹0 | - |
+| end | 7 | schedule_mean | ₹6,182.94 | - | 0% (0%-0%) | ₹0 | - |
+| end | 7 | engine | ₹4,559.26 | +26.3% (0.00) | 70% (67%-73%) | ₹6,805.71 | - |
+| lowest | 7 | flat | ₹28,045.89 | -647.5% (0.00) | 4% (3%-6%) | ₹0 | 0.011 |
+| lowest | 7 | schedule | ₹5,223.26 | -39.2% (0.00) | 3% (2%-4%) | ₹0 | 0.013 |
+| lowest | 7 | schedule_mean | ₹3,752.08 | - | 2% (1%-3%) | ₹0 | 0.018 |
+| lowest | 7 | engine | ₹2,237.19 | +40.4% (0.00) | 72% (69%-75%) | ₹6,117.69 | 0.008 |
+| end | 30 | flat | ₹21,278.19 | +0.6% (0.95) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule | ₹32,994.63 | -54.2% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule_mean | ₹21,399.76 | - | 0% (0%-0%) | ₹0 | - |
+| end | 30 | engine | ₹15,521.22 | +27.5% (0.00) | 65% (60%-69%) | ₹20,036.55 | - |
+| lowest | 30 | flat | ₹51,121.18 | -287.0% (0.00) | 2% (1%-3%) | ₹0 | 0.044 |
+| lowest | 30 | schedule | ₹16,813.54 | -27.3% (0.00) | 2% (1%-2%) | ₹0 | 0.083 |
+| lowest | 30 | schedule_mean | ₹13,208.55 | - | 1% (0%-1%) | ₹0 | 0.130 |
+| lowest | 30 | engine | ₹8,797.24 | +33.4% (0.00) | 65% (60%-69%) | ₹14,414.43 | 0.082 |
+| end | 90 | flat | ₹35,192.98 | +37.4% (0.01) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule | ₹1,34,436.08 | -139.1% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule_mean | ₹56,226.14 | - | 0% (0%-0%) | ₹0 | - |
+| end | 90 | engine | ₹43,530.75 | +22.6% (0.00) | 60% (53%-67%) | ₹54,241.13 | - |
+| lowest | 90 | flat | ₹64,795.94 | -73.3% (0.00) | 1% (1%-2%) | ₹0 | 0.177 |
+| lowest | 90 | schedule | ₹39,119.43 | -4.6% (0.61) | 1% (0%-1%) | ₹0 | 0.246 |
+| lowest | 90 | schedule_mean | ₹37,396.24 | - | 1% (0%-1%) | ₹0 | 0.230 |
+| lowest | 90 | engine | ₹29,311.29 | +21.6% (0.00) | 65% (58%-72%) | ₹36,431.88 | 0.183 |
 <!-- backtest:end -->
 
 ### HackerRank "Buy or Wait"
@@ -129,11 +129,19 @@ The scorer replays the challenge's 25 labeled samples through the engine. The da
 license, so it is never committed.
 
 <!-- hackerrank:start -->
-HackerRank 'Buy or Wait' samples: 25
-Combined score: 88.80%
-Affordability status: 92%
-amount_safe_to_pay within 5% of requested: 84%
-Earliest full-payment date within 3 days: 88%
+HackerRank 'Buy or Wait' samples: 25 (errors: 0)
+Combined score: 86.80% (95% CI 68.6%-95.2%, n=25)
+Affordability status: 88% (22/25, 95% CI 70.0%-95.8%, n=25)
+amount_safe_to_pay within 5% of requested: 84% (21/25, 95% CI 65.3%-93.6%, n=25)
+Earliest full-payment date within 3 days: 88% (22/25, 95% CI 70.0%-95.8%, n=25)
+
+| Status | Expected | Predicted |
+|---|---:|---:|
+| affordable_now | 3 | 4 |
+| affordable_with_plan | 9 | 6 |
+| affordable_later | 6 | 8 |
+| not_affordable | 7 | 7 |
+
 source: private/hackerrank-orchestrate-september26/dataset (local, not committed)
 <!-- hackerrank:end -->
 
