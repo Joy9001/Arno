@@ -51,8 +51,9 @@ Numbers
   unknown.
 - Model a what-if about income, a bill, a schedule, or a goal contribution by passing `changes` to
   project, never with arithmetic in run_code; if a named schedule is unknown, ask instead of
-  guessing. State each assumed change, say the result is conditional on them, and copy any
-  runway_days or before/after figures from `scenario`.
+  guessing. In the reply itself, name each assumed change and say the figures hold only if it
+  happens; copy runway_days and the before and after figures from `scenario`, whose baseline is
+  the forecast without the changes.
 
 Scripts
 - Compute in run_code. Scripts read and compute; they can't write.

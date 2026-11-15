@@ -267,13 +267,19 @@ return groups, total, cov                          # complete = false when part 
 **Description:** "Forecast the user's cash against their floor (the minimum balance they want to
 keep). Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
 data-quality notes. Also returns safe_to_spend, the largest amount that can be spent today with the
-forecast still passing, or null when no balance is known. With a hypothetical purchase, also
-returns the yes, yes-but, or no verdict and the tradeoffs. Never give your own verdict: the engine
-decides. With no verdict (no liquid account has a known balance), the curve starts from an unknown
-balance: say what is missing instead of quoting its probabilities or balances. State the
-data_quality notes in your answer. A rare large day caused by a one-off payment can be marked
-one-off so the projection stops expecting it again. horizon_days is a minimum; the engine always
-looks at least 90 days and as far as a goal deadline."
+forecast still passing, or null when no balance is known. Pass changes, a list of 1 to 12 dated
+what-ifs (stop_income, pause_schedule, change_amount, add_recurring, or one_time), to model income,
+bill, schedule, or goal-contribution scenarios without saving anything; the result's scenario key
+holds changes (each change's label and occurrence count), assumptions, runway_days until the first
+floor crossing or null, holds and reason when no purchase is passed, and baseline, the same forecast
+without the changes, so the before figures need no second call. Combine changes with hypothetical to
+judge a purchase under those conditions. With a hypothetical purchase, also returns the yes,
+yes-but, or no verdict and the tradeoffs. Never give your own verdict: the engine decides. With no
+verdict (no liquid account has a known balance), the curve starts from an unknown balance: say what
+is missing instead of quoting its probabilities or balances. State the data_quality notes in your
+answer. A rare large day caused by a one-off payment can be marked one-off so the projection stops
+expecting it again. horizon_days is a minimum; the engine always looks at least 90 days, as far as a
+goal deadline, and at least 90 days past the latest scenario change."
 
 **Input**
 
@@ -519,13 +525,13 @@ with this schedule: one month's interest per loan, booked by the first payment i
 
 What carrying a credit card balance costs: paying only the minimum due, or a fixed monthly amount.
 
-**Description:** "Credit card payoff maths: months to clear, total finance charge, GST, cost of
-carrying, payoff date, and the monthly schedule. Pass a card account's name to use its ledger
-balance and stored terms, or pass balance_paise and monthly_rate_percent in percent a month. Any
-term passed here overrides the card's stored term. Leave payment_paise unset to model paying only
-the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
-minimum_percent and minimum_floor_paise. Use this instead of writing the formula. It returns the
-schedule, not a card: show it with present."
+**Description:** "Credit card payoff maths: months to clear, total finance charge, GST, payoff date,
+the monthly schedule, and cost_of_carrying, the finance charge plus GST, which is what carrying the
+balance costs. Pass a card account's name to use its ledger balance and stored terms, or pass
+balance_paise and monthly_rate_percent in percent a month. Any term passed here overrides the card's
+stored term. Leave payment_paise unset to model paying only the minimum due, or pass a fixed monthly
+payment in paise. Override the minimum-due rule with minimum_percent and minimum_floor_paise. Use
+this instead of writing the formula. It returns the schedule, not a card: show it with present."
 
 **Input**
 

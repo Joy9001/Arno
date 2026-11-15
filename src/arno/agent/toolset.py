@@ -147,7 +147,8 @@ class StopIncomeChange(BaseModel):
     )
     schedule: str | None = Field(
         default=None,
-        description="One income schedule name to stop; stops all income flows if omitted.",
+        description="The income schedule that stops, by name, such as the salary. Omit it only "
+        "when every income stops.",
     )
 
 
@@ -435,23 +436,23 @@ async def project(
     hypothetical: ProjectHypothetical | None = None,
     changes: list[ProjectChange] | None = None,
 ) -> ToolReturn:
-    """Forecast the user's cash against their floor (the minimum balance they want to keep).
-    Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
-    data-quality notes. Also returns safe_to_spend, the largest amount that can be spent today
-    with the forecast still passing, or null when no balance is known. Pass changes, a list of 1
-    to 12 dated what-ifs (stop_income, pause_schedule, change_amount, add_recurring, or one_time),
-    to model income, bill, schedule, or goal-contribution scenarios without saving anything; the
-    result carries a scenario block with each change's label and occurrence count, assumptions,
-    runway_days until the first floor crossing or null, holds and reason when no purchase is
-    passed, and the unchanged baseline figures. Combine changes with hypothetical to judge a
-    purchase under those conditions. With a hypothetical purchase, also returns the yes, yes-but,
-    or no verdict and the tradeoffs. Never give your own verdict: the engine decides. With no
-    verdict (no liquid account has a known balance), the curve starts from an unknown balance:
-    say what is missing instead of quoting its probabilities or balances. State the data_quality
-    notes in your answer. A rare large day caused by a one-off payment can be marked one-off so
-    the projection stops expecting it again. horizon_days is a minimum; the engine always looks at
-    least 90 days, as far as a goal deadline, and at least 90 days past the latest scenario
-    change."""
+    """Forecast the user's cash against their floor (the minimum balance they want to keep). Returns
+    the median path, the P10-P90 band, the floor probability, goal completion, and the data-quality
+    notes. Also returns safe_to_spend, the largest amount that can be spent today with the forecast
+    still passing, or null when no balance is known. Pass changes, a list of 1 to 12 dated what-ifs
+    (stop_income, pause_schedule, change_amount, add_recurring, or one_time), to model income, bill,
+    schedule, or goal-contribution scenarios without saving anything; the result's scenario key
+    holds changes (each change's label and occurrence count), assumptions, runway_days until the
+    first floor crossing or null, holds and reason when no purchase is passed, and baseline, the
+    same forecast without the changes, so the before figures need no second call. Combine changes
+    with hypothetical to judge a purchase under those conditions. With a hypothetical purchase, also
+    returns the yes, yes-but, or no verdict and the tradeoffs. Never give your own verdict: the
+    engine decides. With no verdict (no liquid account has a known balance), the curve starts from
+    an unknown balance: say what is missing instead of quoting its probabilities or balances. State
+    the data_quality notes in your answer. A rare large day caused by a one-off payment can be
+    marked one-off so the projection stops expecting it again. horizon_days is a minimum; the engine
+    always looks at least 90 days, as far as a goal deadline, and at least 90 days past the latest
+    scenario change."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
     async with connect() as conn:
@@ -577,8 +578,9 @@ async def card_payoff(
     minimum_percent: float | None = None,
     minimum_floor_paise: int | None = None,
 ) -> ToolReturn:
-    """Credit card payoff maths: months to clear, total finance charge, GST, cost of carrying,
-    payoff date, and the monthly schedule. Pass a card account's name to use its ledger balance and
+    """Credit card payoff maths: months to clear, total finance charge, GST, payoff date, the
+    monthly schedule, and cost_of_carrying, the finance charge plus GST, which is what carrying
+    the balance costs. Pass a card account's name to use its ledger balance and
     stored terms, or pass balance_paise and monthly_rate_percent in percent a month. Any term
     passed here overrides the card's stored term. Leave payment_paise unset to model paying only
     the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
