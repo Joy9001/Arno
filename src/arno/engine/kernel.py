@@ -116,6 +116,10 @@ class CardSpec:
     bills: dict[int, int] = field(default_factory=dict)
     obligation: I64 | None = None
     other: I64 | None = None
+    # False when resampled spend keeps the card it was paid with: the history already shows spend
+    # moving to cash while the card was full, so only new charges (``other``, ``obligation``, and
+    # detected series) are held to the limit.
+    limit_spend: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -518,6 +522,10 @@ def run(spec: Spec, settings: Settings) -> Run:
         obligation_overflow = np.zeros((scenarios, width), dtype=np.int64)
         for k, card in enumerate(spec.cards):
             charges = spend[f"card{k}"]
+            loose = None
+            if not card.limit_spend:
+                charges = spend[f"card{k}_series"]
+                loose = spend[f"card{k}"] - charges
             if card.other is not None:
                 charges = charges + card.other[None, begin:end]
             obligation = card.obligation[begin:end] if card.obligation is not None else None
@@ -529,6 +537,7 @@ def run(spec: Spec, settings: Settings) -> Run:
                 bills[k],
                 due_sets[k],
                 charges,
+                loose,
                 obligation,
                 obligation_overflow,
                 bill_paid,
@@ -663,6 +672,10 @@ def _spend(
     if with_cut:
         names += _cut_columns(card_count)
     spend = {name: np.zeros((scenarios, width), dtype=np.int64) for name in names}
+    # A detected series is a forecast charge, not a resampled day, so it is always held to the
+    # card limit; its share of each card column is kept apart.
+    for k in range(card_count):
+        spend[f"card{k}_series"] = np.zeros((scenarios, width), dtype=np.int64)
     classes = spec.classes[begin : begin + width]
     drawn = rare.rows(keys) if rare is not None and spec.rare is not None else None
     replaces = spec.rare.replaces_stream if spec.rare is not None else None
@@ -689,12 +702,14 @@ def _spend(
         col = f"card{card}" if card is not None and 0 <= card < card_count else "cash"
         coords = (scen_idx, days - begin)
         np.add.at(spend[col], coords, vals)
+        if col != "cash":
+            np.add.at(spend[f"{col}_series"], coords, vals)
         if with_cut and series_state.series.reducible:
             np.add.at(spend[f"{col}_cut"], coords, vals)
     if begin == 0:
         # Day zero is today: its spend is already in the balance.
-        for name in names:
-            spend[name][:, 0] = 0
+        for column in spend.values():
+            column[:, 0] = 0
     return spend
 
 
@@ -729,16 +744,18 @@ def _charge(
     bills: dict[int, I64],
     due_set: set[int],
     charges: I64,
+    loose: I64 | None,
     obligation: I64 | None,
     obligation_overflow: I64,
     bill_paid: I64,
     begin: int,
 ) -> tuple[I64, bool]:
-    """Charge one card for a chunk; return the part that leaves cash and whether it ever did.
+    """Charge one card for a chunk; return the cash part and whether any charge passed the limit.
 
     Days are split where a bill is due. Within a piece used credit only rises, so the amount
     charged so far is min(cumulative charges, headroom at the piece start), and the rest is cash.
-    ``used`` and ``bills`` are updated in place.
+    ``loose`` charges are never held to the limit; they take what headroom is left after
+    ``charges`` in each piece. ``used`` and ``bills`` are updated in place.
     """
     scenarios, width = charges.shape
     overflow = np.zeros_like(charges)
@@ -767,6 +784,13 @@ def _charge(
                 owed = obligation[None, start:stop]
                 obligation_overflow[:, start:stop] += np.clip(before + owed - card.limit, 0, owed)
         used += charged[:, -1]
+        if loose is not None:
+            # ponytail: new charges claim the piece's headroom first; exact for a purchase on day
+            # zero, slightly generous to an EMI that falls later in the same billing piece.
+            kept = loose[:, start:stop]
+            used += kept.sum(axis=1)
+            increments = increments + kept
+            exceeded |= bool((used > card.limit).any())
         dues = card.due_of_day[day : begin + stop]
         _add_to_bills(bills, increments, dues)
     return overflow, exceeded

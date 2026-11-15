@@ -143,7 +143,8 @@ def model_from_name(name: str) -> Model:
     ``resample`` gives each scenario its own resampled history, ``L2`` and ``L3`` draw blocks of
     about that many days, ``hl60`` weights history with a 60-day half-life, ``rare4`` splits off
     days above the median plus four median absolute deviations, and ``prior`` (or ``prior:0,4,8``,
-    quarters of the estimate) tops up a short history with pseudo-days.
+    quarters of the estimate) tops up a short history with pseudo-days. ``keepcard`` lets
+    resampled spend keep its card past the limit, holding only new charges to it.
     """
     model = LEGACY_MODEL
     for token in name.split("+"):
@@ -159,6 +160,8 @@ def model_from_name(name: str) -> Model:
             model = replace(model, recency_half_life_days=int(token[2:]))
         elif token.startswith("rare") and token[4:].isdigit():
             model = replace(model, rare_mad_multiple=int(token[4:]))
+        elif token == "keepcard":
+            model = replace(model, limit_spend=False)
         elif token == "prior":
             model = replace(model, prior_quarters=DEFAULT_PRIOR)
         elif token.startswith("prior:"):

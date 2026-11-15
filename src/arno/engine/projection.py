@@ -587,13 +587,17 @@ class Model:
     recency_half_life_days: int | None = None
     rare_mad_multiple: int | None = None
     prior_quarters: tuple[int, ...] | None = None
+    # False: resampled spend keeps the card it was paid with, and only new charges are held to the
+    # limit, because the history already shows spend moving to cash while a card was full.
+    limit_spend: bool = True
 
 
 LEGACY_MODEL = Model()
 # Admitted on the tuning seeds, one switch at a time, each lowering the mean CRPS by at
 # least 1% with no cell significantly worse: whole days (3.6%), the short-history prior
-# (3.4%), and rare days (1.0%). Blocks, recency weights, and pool resampling did not pass.
-MODEL = Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8))
+# (3.4%), rare days (1.0%), and spend that keeps its card (1.2%). Blocks, recency weights,
+# and pool resampling did not pass.
+MODEL = Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8), limit_spend=False)
 OBLIGATION_THRESHOLD = 0.99
 CROSSING_SHARE = 0.10
 _OBLIGATION_KINDS = frozenset({"obligation", "instalment", "owed_payment"})
@@ -614,7 +618,9 @@ def last_statement_close(statement_day: int, as_of: date) -> date:
     return _clamped_day(previous.year, previous.month, statement_day)
 
 
-def _card_spec(card: CardAccount, as_of: date, days: int, total: int) -> kernel.CardSpec:
+def _card_spec(
+    card: CardAccount, as_of: date, days: int, total: int, *, limit_spend: bool = True
+) -> kernel.CardSpec:
     due_of_day = np.fromiter(
         (
             _day_index(as_of, card_due_date(card, as_of + timedelta(days=t)), days)
@@ -650,6 +656,7 @@ def _card_spec(card: CardAccount, as_of: date, days: int, total: int) -> kernel.
         bills=bills,
         obligation=np.zeros(total, dtype=np.int64),
         other=np.zeros(total, dtype=np.int64),
+        limit_spend=limit_spend,
     )
 
 
@@ -1012,7 +1019,9 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
     unconfirmed = np.zeros(total, dtype=np.int64)
     obligation_days: set[int] = set()
     card_index = {card.id: index for index, card in enumerate(inputs.cards)}
-    cards = [_card_spec(card, as_of, days, total) for card in inputs.cards]
+    cards = [
+        _card_spec(card, as_of, days, total, limit_spend=model.limit_spend) for card in inputs.cards
+    ]
 
     for event in inputs.events:
         start = event.at_start or event.date <= as_of
@@ -1188,6 +1197,9 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
     if run.credit_exceeded:
         gaps.append(
             "projected card spend exceeds the card limit; the excess is treated as cash spend"
+            if prepared.model.limit_spend
+            else "projected card spend exceeds the card limit; a new charge past it is treated "
+            "as cash spend"
         )
     if low < FLOOR_THRESHOLD <= high:
         gaps.append(

@@ -536,3 +536,48 @@ def test_a_rare_day_adds_when_no_pool_matches_replaces_stream():
     drops = run.paths[:, :-1] - run.paths[:, 1:]
     unique_drops = set(np.unique(drops).tolist())
     assert unique_drops == {1_000, 6_000}
+
+
+@pytest.mark.parametrize("limit_spend", [True, False])
+def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limit_spend):
+    days = 6
+    total = days + 1
+    other = np.zeros(total, np.int64)
+    other[1] = 5_000
+    card = CardSpec(
+        limit=10_000,
+        used=9_000,
+        due_of_day=np.full(total, -1, np.int64),
+        other=other,
+        limit_spend=limit_spend,
+    )
+    spec = Spec(
+        start_balance=100_000,
+        days=days,
+        first_day=739_000,
+        classes=np.zeros(total, np.int8),
+        inflow=np.zeros(total, np.int64),
+        obligation=np.zeros(total, np.int64),
+        later=np.zeros(total, np.int64),
+        obligation_days=np.zeros(0, np.int64),
+        unconfirmed=np.zeros(total, np.int64),
+        floor=0,
+        cards=(card,),
+        pools=(
+            Pool(
+                columns={"card0": np.array([2_000], dtype=np.int64)},
+                classes=np.array([0], dtype=np.int8),
+                stream=0,
+            ),
+        ),
+    )
+    run = kernel.run(spec, Settings(scenarios=4, seed=1, keep_days=total))
+    assert run.paths is not None
+    drops = (run.paths[:, :-1] - run.paths[:, 1:])[0].tolist()
+    assert run.credit_exceeded
+    if limit_spend:
+        # The day's spend and the purchase share the last 1,000 of headroom; the rest is cash.
+        assert drops == [6_000, 2_000, 2_000, 2_000, 2_000, 2_000]
+    else:
+        # The purchase takes the headroom first; spend the history paid by card stays on it.
+        assert drops == [4_000, 0, 0, 0, 0, 0]
