@@ -1446,8 +1446,9 @@ The test found four things the build must handle:
   option for a VPS.
 - **Phoenix:** loopback by default. Tailnet access means its login on, and a `tailscale serve` on another
   port.
-- **Updates:** `docker compose pull`, then `up -d`. The API runs `pg_dump` before any migration, and
-  migrations run in a transaction.
+- **Updates:** `docker compose pull api backup db`, then `up -d`, then `up -d --build phoenix`
+  for the locally built image. The API runs `pg_dump` before any migration, and migrations run in a
+  transaction.
 - **Postgres major upgrades:** a documented dump and restore, the same path as the restore drill.
 - **Secrets and logs:** API keys stay in `.env`; ChatGPT sign-in credentials live in the protected
   database table and encrypted whole-database backups. They are excluded from ledger JSON/CSV

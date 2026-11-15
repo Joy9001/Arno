@@ -387,7 +387,7 @@ docker compose ps
 For a published release, select the intended `ARNO_VERSION` in `.env`, then run:
 
 ```bash
-docker compose pull
+docker compose pull api backup db
 docker compose up -d
 docker compose up -d --build phoenix
 docker compose ps

@@ -261,7 +261,7 @@ A deployment works as follows:
 - Access is through Tailscale on the host: `tailscale serve --bg` proxies HTTPS on the tailnet to the
   API, which Compose publishes on loopback only. A sidecar stays an option for a VPS
   ([step 10](system-design.md#running-it)).
-- Updating is `docker compose pull`, `up -d`, then `up -d --build phoenix` (and
+- Updating is `docker compose pull api backup db`, `up -d`, then `up -d --build phoenix` (and
   `up -d --build whisper` when the optional `local-stt` profile is in use). `compose.yaml` pins
   `ghcr.io/joy9001/arno:$ARNO_VERSION` (and the matching backup image), and the release
   workflow pushes the version tag. Phoenix is built locally from its pinned context. The API runs `pg_dump` before any migration and writes it to the

@@ -108,7 +108,8 @@ Tailscale admin console. It looks like `mini-pc.tail1234.ts.net`.
 ### 2.3 Start
 
 ```bash
-docker compose up -d --build
+docker compose pull api backup db
+docker compose up -d      # Phoenix has no published image, so this builds it on first start
 docker compose logs -f api
 ```
 
@@ -522,7 +523,7 @@ and its volume private. Restic archives are encrypted; pre-migration SQL dumps a
 ### 6.4 Update
 
 ```bash
-docker compose pull
+docker compose pull api backup db      # the published ones; Phoenix is built below
 docker compose up -d
 docker compose up -d --build phoenix   # build the pinned supplied-cost image
 ```
@@ -792,7 +793,7 @@ The operator journey, settings, recovery, and owner commands are in
 | `/api/health` says the database is unreachable | `docker compose ps`; the API waits for `pg_isready`; then `docker compose logs db` |
 | The enrollment link does not work | Open it on the exact `ARNO_RP_ORIGIN`; a passkey made on `localhost` will not work on `*.ts.net` |
 | Passkey login fails after a hostname change | Set the new `ARNO_RP_ID`/`ARNO_RP_ORIGIN`, then `docker compose exec api arno passkeys reset` and register again |
-| Backups stopped | Settings → Backup status; `docker compose logs backup`; test `restic snapshots` |
+| Backups stopped | Settings → Backup status; `docker compose logs backup`; test `docker compose run --rm --no-deps --entrypoint restic backup snapshots` |
 | A restore refuses | The target has tables; use a fresh database, or `--force` if replacement is intended |
 | The UI is blank | Check the CSP console; the supported build has no inline scripts. Rebuild with `docker compose build api` |
 | Telemetry is missing or degraded | `docker compose ps`; `docker compose logs api` for an exporter error; confirm `PHOENIX_COLLECTOR_ENDPOINT` and `PHOENIX_PROJECT_NAME`; a 401 fails export only; the default bearer credential is `PHOENIX_ADMIN_SECRET`, and `PHOENIX_API_KEY` overrides it; Phoenix is loopback-only; `arno cost-replay` recovers journaled costs |

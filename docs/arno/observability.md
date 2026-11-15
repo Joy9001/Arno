@@ -105,7 +105,7 @@ The normal processor remains the standard batch processor; no custom delivery se
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `PHOENIX_COLLECTOR_ENDPOINT` | Compose: `http://phoenix:6006/v1/traces`; host: `http://127.0.0.1:6006/v1/traces` | Phoenix OTLP/HTTP endpoint. |
+| `PHOENIX_COLLECTOR_ENDPOINT` | unset, so tracing is off; Compose sets `http://phoenix:6006/v1/traces` | Phoenix OTLP/HTTP endpoint. With no endpoint set, nothing is registered or exported. A host CLI or eval that should export sets `http://127.0.0.1:6006/v1/traces`. |
 | `PHOENIX_PROJECT_NAME` | `arno` | Phoenix project that receives the spans. |
 | `PHOENIX_API_KEY` | Compose: falls back to `PHOENIX_ADMIN_SECRET` | Bearer credential for Phoenix export. Set it to use a real Phoenix API key; the fallback keeps the normal start working without one. An unauthenticated external Phoenix does not need one. |
 | `OTEL_SDK_DISABLED` | `false` | Standard OpenTelemetry kill switch. `true` disables export and agent instrumentation. |

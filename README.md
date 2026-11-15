@@ -156,9 +156,14 @@ protects the database at rest. To use Arno from your phone, the host also needs
 ```bash
 git clone https://github.com/Joy9001/Arno.git && cd Arno
 cp .env.example .env      # fill in the secrets and your chat model; .env.example explains each
-docker compose pull && docker compose up -d
+docker compose pull api backup db   # the published images
+docker compose up -d      # Phoenix has no published image, so this builds it locally on first start
 docker compose logs api   # prints a one-time enrollment link and a QR code
 ```
+
+Phoenix needs all four of `PHOENIX_PASSWORD`, `PHOENIX_SECRET`, `PHOENIX_ADMIN_SECRET`, and
+`PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD`. Leave one empty and Phoenix restart-loops while the app
+keeps working.
 
 Open <http://localhost:8000>, follow the link, and create a passkey. Tell Arno your balances,
 salary day, and card dues, and it can answer from the first conversation. To try it on sample data
@@ -178,7 +183,8 @@ Ollama), what each provider receives, ports, backups and restore, updates, and
 <details>
 <summary>The <code>arno</code> command</summary>
 
-Inside Compose, prefix each command with `docker compose exec api`.
+Inside Compose, prefix each command with `docker compose exec api`. Restore is the exception: the
+default backups volume is root-owned, so it takes the form shown in the list.
 
 ```bash
 arno migrate                    # apply pending SQL migrations
@@ -187,7 +193,7 @@ arno export --format json       # json, csv, or sql
 arno setup                      # print a fresh enrollment link
 arno passkeys reset             # delete every passkey and session, then reopen setup
 arno demo seed                  # load the synthetic persona into an empty instance
-arno restore                    # restore the newest backup and verify every table
+docker compose run --rm --no-deps --user root api arno restore   # newest backup, verified
 arno repair-openings --dry-run  # for ledgers that imported statements before 0.2.0
 arno eval --model X             # run the agent evals (calls the model, so it costs money)
 ```
