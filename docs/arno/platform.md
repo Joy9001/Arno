@@ -229,7 +229,9 @@ down, the briefing goes out as a plain template—the numbers still arrive.
 at first run) sends a contentless ping—"Your weekly briefing is ready"—so no financial content
 passes through the browser vendor's push service. Tapping an inbox item opens a new chat seeded
 with that item, so a follow-up or accepting a proposal goes through the agent and the normal write
-rules.
+rules. Pattern items are the new recurring charges and income, a missed occurrence, and a recurring
+charge whose amount stepped to a new level; each step alerts once, keyed by its first new payment,
+and a later step alerts again.
 
 ---
 

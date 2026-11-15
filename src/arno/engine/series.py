@@ -25,6 +25,10 @@ _MAX_CANDIDATES = 8
 _NEXT_DATE_HORIZON_DAYS = 400
 _MAX_SAMPLES = 12
 _MIN_PAYMENTS = 3
+# A price step needs at least this many payments at the old level immediately before it.
+_MIN_FIXED_RUN = 3
+# Amounts belong to one level when they stay within 2% of its median (50 * diff <= median).
+_LEVEL_TOLERANCE = 50
 _E = 2.718281828459045
 UNRELATED_SHARE: float = 0.1
 # Set from precision on the synthetic households' tuning seeds (arno.engine.personas).
@@ -112,6 +116,13 @@ class Amounts:
     high_paise: int
     coverage: float
     samples: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PriceStep:
+    old_paise: int
+    new_paise: int
+    index: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -864,11 +875,16 @@ def _median_paise(values: Sequence[int]) -> int:
     return (ordered[mid - 1] + ordered[mid]) // 2
 
 
+def _same_level(value: int, level: int) -> bool:
+    """Whether an amount stays within the 2% tolerance of a level."""
+    return _LEVEL_TOLERANCE * abs(value - level) <= level
+
+
 def _is_fixed_run(values: Sequence[int]) -> tuple[bool, int]:
     med = _median_paise(values)
     if med <= 0:
         return False, med
-    return all(50 * abs(v - med) <= med for v in values), med
+    return all(_same_level(v, med) for v in values), med
 
 
 def _summarize_amounts(amounts: Sequence[int]) -> Amounts:
@@ -901,7 +917,7 @@ def _summarize_amounts(amounts: Sequence[int]) -> Amounts:
             run2 = amounts[split:]
             ok1, med1 = _is_fixed_run(run1)
             ok2, med2 = _is_fixed_run(run2)
-            if ok1 and ok2 and 50 * abs(med2 - med1) > med1:
+            if ok1 and ok2 and not _same_level(med2, med1):
                 r2_len = len(run2)
                 return Amounts(
                     kind="stepped",
@@ -921,6 +937,47 @@ def _summarize_amounts(amounts: Sequence[int]) -> Amounts:
         coverage=(s_len - 1) / (s_len + 1),
         samples=samples,
     )
+
+
+def stepped_level(values: Sequence[int], *, from_paise: int) -> int | None:
+    """The common level of amounts that all stepped off ``from_paise``, or None.
+
+    Every amount must differ from the old level by more than the 2% tolerance, in one direction,
+    and the amounts must agree with each other.
+    """
+    if len(values) == 0 or from_paise <= 0:
+        return None
+    fixed, level = _is_fixed_run(values)
+    if not fixed:
+        return None
+    if not all(
+        (value > from_paise) == (values[0] > from_paise) and not _same_level(value, from_paise)
+        for value in values
+    ):
+        return None
+    return level
+
+
+def price_step(amounts: Sequence[int]) -> PriceStep | None:
+    """The most recent step to a new amount level in a series, or None.
+
+    The payments just before the step must hold a fixed run of at least 3 at the old level, and
+    every payment from the step on must sit at one new level, so a single odd payment followed by
+    a return to the old level is not a step. Ordinary variation never yields one.
+    """
+    for split in range(len(amounts) - 1, _MIN_FIXED_RUN - 1, -1):
+        old_paise = None
+        for start in range(0, split - _MIN_FIXED_RUN + 1):
+            fixed, level = _is_fixed_run(amounts[start:split])
+            if fixed:
+                old_paise = level
+                break
+        if old_paise is None:
+            continue
+        new_paise = stepped_level(amounts[split:], from_paise=old_paise)
+        if new_paise is not None:
+            return PriceStep(old_paise=old_paise, new_paise=new_paise, index=split)
+    return None
 
 
 def _detect_with(

@@ -27,6 +27,8 @@ from arno.engine.series import (
     _precompute_matches,
     detect,
     normalize,
+    price_step,
+    stepped_level,
     upcoming,
 )
 from arno.india.workdays import calendar_for
@@ -347,6 +349,77 @@ def test_price_change_stepped_amounts() -> None:
     assert res.amounts.low_paise == 24_900
     assert res.amounts.high_paise == 24_900
     assert abs(res.amounts.coverage - (4 - 1) / (4 + 1)) < 1e-12
+
+
+def test_a_price_step_is_reported_at_the_first_new_payment() -> None:
+    step = price_step([19_900, 19_900, 19_900, 24_900, 24_900])
+    assert step is not None
+    assert (step.old_paise, step.new_paise, step.index) == (19_900, 24_900, 3)
+
+
+def test_a_price_fall_is_reported_the_same_way() -> None:
+    step = price_step([29_900, 29_900, 29_900, 24_900])
+    assert step is not None
+    assert (step.old_paise, step.new_paise, step.index) == (29_900, 24_900, 3)
+
+
+def test_one_odd_payment_that_returns_to_the_old_level_is_not_a_step() -> None:
+    assert price_step([19_900, 19_900, 19_900, 24_900, 19_900]) is None
+
+
+def test_a_variable_bill_is_never_a_step() -> None:
+    # An electricity bill: no fixed run, so ordinary variation is not a price change.
+    assert price_step([32_000, 41_000, 28_000, 37_000, 45_000, 30_000]) is None
+
+
+def test_two_payments_at_the_old_level_are_not_a_step() -> None:
+    assert price_step([19_900, 19_900, 24_900, 24_900]) is None
+
+
+def test_a_change_of_two_percent_or_less_is_not_a_step() -> None:
+    # 2% of ₹199 is ₹3.98, so this move is inside the amount tolerance.
+    assert price_step([19_900, 19_900, 19_900, 20_298, 20_298]) is None
+
+
+def test_the_latest_of_two_price_steps_is_reported() -> None:
+    step = price_step([19_900, 19_900, 19_900, 24_900, 24_900, 24_900, 29_900])
+    assert step is not None
+    assert (step.old_paise, step.new_paise, step.index) == (24_900, 29_900, 6)
+
+
+def test_price_step_boundaries_directions_and_medians() -> None:
+    assert price_step([]) is None
+    assert price_step([19_900]) is None
+    assert price_step([19_900, 19_900, 19_900, 19_900]) is None
+    assert price_step([0, 0, 0, 19_900]) is None
+    assert stepped_level([19_900], from_paise=0) is None
+    assert stepped_level([19_900], from_paise=-100) is None
+
+    # Exact 2% is ignored on both rises and falls; 1 paisa past 2% steps.
+    assert price_step([10_000, 10_000, 10_000, 9_800]) is None
+    fall = price_step([10_000, 10_000, 10_000, 9_799])
+    assert fall is not None and (fall.old_paise, fall.new_paise, fall.index) == (10_000, 9_799, 3)
+    rise = price_step([19_900, 19_900, 19_900, 20_299])
+    assert rise is not None and (rise.old_paise, rise.new_paise, rise.index) == (19_900, 20_299, 3)
+
+    # New payments moving in opposite directions or not forming a fixed run are rejected.
+    assert price_step([19_900, 19_900, 19_900, 24_900, 14_900]) is None
+    assert price_step([19_900, 19_900, 19_900, 24_900, 29_900]) is None
+
+    # Even-length runs use integer floor median matching Amounts.
+    even = price_step([10_000, 10_100, 10_000, 10_100, 12_000, 12_200])
+    assert even is not None
+    assert (even.old_paise, even.new_paise, even.index) == (10_050, 12_100, 4)
+    det = detect(
+        _make_payments(
+            [date(2026, m, 5) for m in range(1, 7)],
+            [10_000, 10_100, 10_000, 10_100, 12_000, 12_200],
+        ),
+        as_of=date(2026, 6, 20),
+        window_start=date(2025, 12, 1),
+    )
+    assert det is not None and det.amounts.kind == "stepped"
+    assert det.amounts.level_paise == even.new_paise
 
 
 def test_recent_subscription_in_800_day_window() -> None:

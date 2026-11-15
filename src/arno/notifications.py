@@ -31,6 +31,7 @@ PUSH_BODIES = {
     "new_subscription": "A recurring charge is ready to review",
     "new_income": "A recurring income stream is ready to review",
     "missed_recurring": "A missed recurring charge is ready to review",
+    "price_change": "A recurring charge changed price",
     "scheduled_question": "Your scheduled question has an answer",
     "backup_stale": "Arno needs a backup check",
     "job_failed": "A background job needs attention",
@@ -296,6 +297,9 @@ def seed_chat_text(notification: dict[str, Any]) -> tuple[str, bool]:
         text += f"\n\nSuggested schedule rule: {data['suggested_rule']}"
     if data.get("expected_date"):
         text += f"\n\nExpected date: {data['expected_date']}"
+    movement_ids = data.get("movement_ids")
+    if isinstance(movement_ids, list) and movement_ids:
+        text += "\n\nPayments behind it: " + ", ".join(str(item) for item in movement_ids)
     text += "\n\nHelp me with this."
     return text, outside
 

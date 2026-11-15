@@ -97,6 +97,24 @@ def _missed(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     return title, body, key, proposal
 
 
+def _price_change(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
+    old = format_paise(int(proposal["old_paise"]))
+    new = format_paise(int(proposal["new_paise"]))
+    ask = (
+        "Update the schedule to the new amount?"
+        if proposal.get("schedule_id")
+        else "Was this expected?"
+    )
+    title = f"Price change: {proposal['merchant']}"
+    body = (
+        f"{proposal['merchant']} moved from {old} to {new}, first charged at the new amount on "
+        f"{proposal['step_date']}. {ask}"
+    )
+    identity = proposal.get("schedule_id") or proposal["payee_id"]
+    key = f"pattern:price:{identity}:{proposal['step_date']}"
+    return title, body, key, proposal
+
+
 async def run_pattern_detection(
     conn: Connection,
     *,
@@ -110,6 +128,9 @@ async def run_pattern_detection(
         elif proposal["kind"] == "new_income":
             title, body, key, data = _new_income(proposal)
             kind = "new_income"
+        elif proposal["kind"] == "price_change":
+            title, body, key, data = _price_change(proposal)
+            kind = "price_change"
         else:
             title, body, key, data = _missed(proposal)
             kind = "missed_recurring"
@@ -130,7 +151,7 @@ async def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
     del payload
     async with connect() as conn:
         rows = await run_pattern_detection(conn)
-        for kind in ("new_subscription", "new_income", "missed_recurring"):
+        for kind in ("new_subscription", "new_income", "missed_recurring", "price_change"):
             if any(row["kind"] == kind for row in rows):
                 await send_push_for_kind(conn, kind)
         return {"created": len(rows), "ids": [row["id"] for row in rows]}

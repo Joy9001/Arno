@@ -2,8 +2,9 @@
 
 Spend and income payments over the last 800 days are grouped by payee and passed to the pure
 Bayesian detector in ``arno.engine.series``. Detections replace ``series_detections`` in one
-transaction; high-confidence uncovered spend detections become ``new_subscription`` proposals, and
-high-confidence income detections become ``new_income`` proposals.
+transaction; high-confidence uncovered spend detections become ``new_subscription`` proposals,
+high-confidence income detections become ``new_income`` proposals, and a spend charge that steps
+to a new amount level is proposed as a ``price_change``, once per step.
 """
 
 from __future__ import annotations
@@ -28,9 +29,12 @@ from arno.engine.patterns import (
 from arno.india.workdays import calendar_for
 from arno.ledger import schedules as schedules_mod
 from arno.ledger.common import today as ledger_today
+from arno.ledger.schedule_payments import payment_evidence_for_schedules
 
 DetectionKind = Literal["spend", "income"]
 _NEXT_DATE_LOOKAHEAD_DAYS = 400
+# How far back an alert may look: older missed occurrences and price steps are history, not news.
+_ALERT_WINDOW_DAYS = 90
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +154,19 @@ async def _load_confirmed_schedules(conn: Connection) -> list[KnownSchedule]:
     ]
 
 
+async def _load_confirmed_schedule_movements(conn: Connection) -> set[str]:
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT sp.movement_id
+        FROM schedule_payments sp
+        JOIN schedule_occurrences o ON o.id = sp.occurrence_id
+        JOIN schedules s ON s.id = o.schedule_id
+        WHERE s.active AND s.confirmed
+        """
+    )
+    return {str(row["movement_id"]) for row in rows}
+
+
 def _most_common_card(payments: Sequence[PaymentRow]) -> str | None:
     if not payments:
         return None
@@ -170,10 +187,91 @@ def _most_common_category(payments: Sequence[PaymentRow]) -> str | None:
     return best_cat
 
 
+def _series_price_change(matched: Sequence[PaymentRow], step: series.PriceStep) -> dict[str, Any]:
+    """A proposal for a detected spend series that stepped to a new level."""
+    new_run = matched[step.index :]
+    return {
+        "kind": "price_change",
+        "payee_id": new_run[0].payee_id,
+        "merchant": matched[-1].merchant,
+        "outside_text": any(item.outside_text for item in matched),
+        "old_paise": step.old_paise,
+        "new_paise": step.new_paise,
+        "step_date": new_run[0].date.isoformat(),
+        "movement_ids": [item.movement_id for item in new_run],
+    }
+
+
+def _counted_payments(
+    evidence: dict[date, dict[str, Any]], *, stated_paise: int, as_of: date
+) -> list[tuple[date, int, dict[str, Any]]]:
+    """Paid occurrences that are evidence of a price, not a partial payment still in progress."""
+    counted: list[tuple[date, int, dict[str, Any]]] = []
+    for due_date in sorted(evidence):
+        item = evidence[due_date]
+        paid_paise = int(item["paid_paise"])
+        if paid_paise <= 0:
+            continue
+        # A payment below the stated amount may still be topped up until the missed-charge grace.
+        if paid_paise <= stated_paise and (as_of - due_date).days < MISSED_AFTER_DAYS:
+            continue
+        counted.append((due_date, paid_paise, item))
+    return counted
+
+
+async def _schedule_price_changes(conn: Connection, *, as_of: date) -> list[dict[str, Any]]:
+    """Paid occurrences that stepped away from a confirmed outflow schedule's stated amount."""
+    rows = await conn.fetch(
+        """
+        SELECT id, name, amount_paise, outside_text FROM schedules
+        WHERE active AND confirmed AND amount_paise IS NOT NULL AND amount_paise > 0
+          AND kind IN ('obligation', 'instalment')
+        ORDER BY name
+        """
+    )
+    evidence = await payment_evidence_for_schedules(
+        conn,
+        [str(row["id"]) for row in rows],
+        as_of - timedelta(days=HISTORY_DAYS),
+        as_of,
+        as_of=as_of,
+    )
+    proposals: list[dict[str, Any]] = []
+    for row in rows:
+        stated_paise = int(row["amount_paise"])
+        counted = _counted_payments(
+            evidence[str(row["id"])], stated_paise=stated_paise, as_of=as_of
+        )
+        for length in range(len(counted), 0, -1):
+            run = counted[-length:]
+            level = series.stepped_level([paid for _, paid, _ in run], from_paise=stated_paise)
+            if level is None:
+                continue
+            payments = [
+                payment for _, _, item in run for payment in item["payments"] if payment["active"]
+            ]
+            payments.sort(key=lambda payment: (payment["date"], payment["movement_id"]))
+            movement_ids = list(dict.fromkeys(str(payment["movement_id"]) for payment in payments))
+            proposals.append(
+                {
+                    "kind": "price_change",
+                    "schedule_id": str(row["id"]),
+                    "merchant": str(row["name"]),
+                    "outside_text": bool(row["outside_text"]),
+                    "old_paise": stated_paise,
+                    "new_paise": level,
+                    "step_date": str(payments[0]["date"]),
+                    "movement_ids": movement_ids,
+                }
+            )
+            break
+    return proposals
+
+
 async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
     """Expected obligation occurrences three or more days old with no payment evidence."""
     day = as_of or ledger_today()
-    start = day - timedelta(days=90)
+    start = day - timedelta(days=_ALERT_WINDOW_DAYS)
     end = day - timedelta(days=MISSED_AFTER_DAYS)
     proposals: list[dict[str, Any]] = []
     rows = await conn.fetch(
@@ -229,6 +327,7 @@ async def detect(
     spend_rows = await _load_spend_payments(conn, day)
     income_rows = await _load_income_payments(conn, day)
     schedules = await _load_confirmed_schedules(conn)
+    linked_movements = await _load_confirmed_schedule_movements(conn)
 
     to_store: list[tuple[Any, ...]] = []
     proposals: list[dict[str, Any]] = []
@@ -296,16 +395,33 @@ async def detect(
 
             latest = matched_payments[-1]
             interval_days = family_interval_days(detection.rule.family)
+            covered = False
             if kind == "spend":
                 categories = {item.category_id for item in matched_payments if item.category_id}
-                if is_covered(
+                linked = any(item.movement_id in linked_movements for item in matched_payments)
+                covered = linked or is_covered(
                     normalized=latest.normalized,
                     categories=categories,
                     amount_paise=detection.amounts.level_paise,
                     interval_days=interval_days,
                     schedules=schedules,
-                ):
-                    continue
+                )
+                step = series.price_step([item.amount_paise for item in matched_payments])
+                # A schedule that already covers the new level needs nothing, and one that covers
+                # the old level or linked payments owns the change through
+                # `_schedule_price_changes`, so the same charge is never reported twice.
+                if step is not None and not covered:
+                    covered = is_covered(
+                        normalized=latest.normalized,
+                        categories=categories,
+                        amount_paise=step.old_paise,
+                        interval_days=interval_days,
+                        schedules=schedules,
+                    )
+                    if not covered:
+                        proposals.append(_series_price_change(matched_payments, step))
+            if covered:
+                continue
 
             upcoming_dates = series.upcoming(
                 detection,
@@ -355,7 +471,15 @@ async def detect(
                     to_store,
                 )
 
+    proposals.extend(await _schedule_price_changes(conn, as_of=day))
     proposals.extend(await detect_missed(conn, as_of=day))
+    alert_start = day - timedelta(days=_ALERT_WINDOW_DAYS)
+    proposals = [
+        proposal
+        for proposal in proposals
+        if proposal["kind"] != "price_change"
+        or date.fromisoformat(proposal["step_date"]) >= alert_start
+    ]
     proposals.sort(key=lambda item: (item["kind"], item["merchant"]))
     return proposals
 

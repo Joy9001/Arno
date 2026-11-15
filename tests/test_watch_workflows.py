@@ -239,6 +239,413 @@ async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(
     )
 
 
+async def test_a_price_step_notifies_once_and_rearms_on_the_next_step(ledger):
+    from arno.jobs.patterns import run_pattern_detection
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    cloud = await create_payee(
+        ledger, display_name="Cloud Storage", kind="merchant", outside_text=True
+    )
+    for month, amount in (
+        (3, 49_900),
+        (4, 49_900),
+        (5, 49_900),
+        (6, 59_900),
+        (7, 59_900),
+        (8, 59_900),
+    ):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Cloud Storage",
+            payee_id=cloud["id"],
+            date=date(2026, month, 5),
+        )
+
+    from arno.notifications import seed_chat_text
+
+    first = await run_pattern_detection(ledger, as_of=date(2026, 8, 20))
+    changes = [row for row in first if row["kind"] == "price_change"]
+    assert len(changes) == 1
+    row = changes[0]
+    assert row["title"] == "Price change: Cloud Storage"
+    assert "₹499.00" in row["body"]
+    assert "₹599.00" in row["body"]
+    assert "2026-06-05" in row["body"]
+    assert row["data"]["step_date"] == "2026-06-05"
+    assert row["dedupe_key"] == f"pattern:price:{cloud['id']}:2026-06-05"
+
+    text, outside = seed_chat_text(row)
+    assert outside is True
+    assert "<outside>Cloud Storage</outside>" in text
+
+    again = await run_pattern_detection(ledger, as_of=date(2026, 8, 20))
+    assert not [item for item in again if item["kind"] == "price_change"]
+    assert (
+        await ledger.fetchval("SELECT count(*) FROM notifications WHERE kind = 'price_change'") == 1
+    )
+
+    # Three payments at the new level, then a second step: it alerts at its own date.
+    for when in (date(2026, 9, 5), date(2026, 10, 5)):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=69_900,
+            description="Cloud Storage",
+            payee_id=cloud["id"],
+            date=when,
+        )
+    later = await run_pattern_detection(ledger, as_of=date(2026, 10, 20))
+    changes = [item for item in later if item["kind"] == "price_change"]
+    assert len(changes) == 1
+    assert changes[0]["data"]["step_date"] == "2026-09-05"
+    assert changes[0]["data"]["new_paise"] == 69_900
+    assert (
+        await ledger.fetchval("SELECT count(*) FROM notifications WHERE kind = 'price_change'") == 2
+    )
+
+
+async def test_a_price_step_alerts_only_inside_the_alert_window(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    cloud = await create_payee(ledger, display_name="Cloud Storage", kind="merchant")
+    for month, amount in (
+        (5, 49_900),
+        (6, 49_900),
+        (7, 49_900),
+        (8, 59_900),
+        (9, 59_900),
+        (10, 59_900),
+    ):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Cloud Storage",
+            payee_id=cloud["id"],
+            date=date(2026, month, 5),
+        )
+
+    # The step is 90 days old: still news.
+    inside = await detect(ledger, as_of=date(2026, 11, 3))
+    assert [p["step_date"] for p in inside if p["kind"] == "price_change"] == ["2026-08-05"]
+
+    # One day later the same step is history, so a backfill cannot raise it.
+    outside = await detect(ledger, as_of=date(2026, 11, 4))
+    assert not [p for p in outside if p["kind"] == "price_change"]
+
+
+async def test_an_income_price_step_never_raises_a_price_change(ledger):
+    from arno.jobs.patterns import run_pattern_detection
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_income
+    from arno.ledger.payees import create_payee
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=1_000_000)
+    employer = await create_payee(ledger, display_name="Acme Corp", kind="organization")
+    for month, amount in (
+        (3, 5_000_000),
+        (4, 5_000_000),
+        (5, 5_000_000),
+        (6, 6_000_000),
+        (7, 6_000_000),
+        (8, 6_000_000),
+    ):
+        await record_income(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Salary",
+            payee_id=employer["id"],
+            date=date(2026, month, 1),
+        )
+
+    rows = await run_pattern_detection(ledger, as_of=date(2026, 8, 20))
+    assert not [row for row in rows if row["kind"] == "price_change"]
+
+
+async def test_a_linked_schedule_with_another_name_and_no_category_is_not_reported_twice(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    insurer = await create_payee(ledger, display_name="Star Health", kind="merchant")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="Medical Cover",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+    )
+    for month, amount in ((6, 100_000), (7, 100_000), (8, 100_000)):
+        payment = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Star Health premium",
+            payee_id=insurer["id"],
+            date=date(2026, month, 5),
+        )
+        await link_payment(
+            ledger,
+            schedule_id=schedule["id"],
+            due_date=date(2026, month, 5),
+            movement_id=payment["id"],
+        )
+
+    # Split one payment across two consecutive occurrences so movement_ids must be deduplicated.
+    split_payment = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=240_000,
+        description="Star Health two months",
+        payee_id=insurer["id"],
+        date=date(2026, 9, 5),
+    )
+    await link_payment(
+        ledger,
+        schedule_id=schedule["id"],
+        due_date=date(2026, 9, 5),
+        movement_id=split_payment["id"],
+        amount_paise=120_000,
+    )
+    await link_payment(
+        ledger,
+        schedule_id=schedule["id"],
+        due_date=date(2026, 10, 5),
+        movement_id=split_payment["id"],
+        amount_paise=120_000,
+    )
+
+    proposals = await detect(ledger, as_of=date(2026, 10, 20))
+    changes = [p for p in proposals if p["kind"] == "price_change"]
+    assert len(changes) == 1
+    assert changes[0]["schedule_id"] == schedule["id"]
+    assert changes[0]["movement_ids"] == [split_payment["id"]]
+    assert not any(p["kind"] == "new_subscription" for p in proposals)
+
+
+async def test_a_reversed_schedule_payment_is_not_counted_as_a_price_change(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import correct_movement, record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    insurer = await create_payee(ledger, display_name="Star Health", kind="merchant")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="Star Health",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+    )
+    july_real = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=100_000,
+        description="Star Health",
+        payee_id=insurer["id"],
+        date=date(2026, 7, 5),
+    )
+    july_dup = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=50_000,
+        description="Star Health duplicate",
+        payee_id=insurer["id"],
+        date=date(2026, 7, 5),
+    )
+    await link_payment(
+        ledger,
+        schedule_id=schedule["id"],
+        due_date=date(2026, 7, 5),
+        movement_id=july_real["id"],
+    )
+    await link_payment(
+        ledger,
+        schedule_id=schedule["id"],
+        due_date=date(2026, 7, 5),
+        movement_id=july_dup["id"],
+    )
+    await correct_movement(ledger, july_dup["id"], changes={"delete": True})
+
+    proposals = await detect(ledger, as_of=date(2026, 7, 20))
+    assert not [p for p in proposals if p["kind"] == "price_change"]
+
+
+async def test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing(ledger):
+    from arno.jobs.patterns import run_pattern_detection
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+    from arno.notifications import mark_read, seed_chat_text
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    insurer = await create_payee(
+        ledger, display_name="Star Health", kind="merchant", outside_text=True
+    )
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="Star Health",
+        amount_paise=1_200_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+        outside_text=True,
+    )
+    payments = []
+    for month, amount in ((6, 1_200_000), (7, 1_200_000), (8, 1_500_000), (9, 1_500_000)):
+        payment = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Star Health premium",
+            payee_id=insurer["id"],
+            date=date(2026, month, 5),
+        )
+        await link_payment(
+            ledger,
+            schedule_id=schedule["id"],
+            due_date=date(2026, month, 5),
+            movement_id=payment["id"],
+        )
+        payments.append(payment)
+
+    first = await run_pattern_detection(ledger, as_of=date(2026, 9, 20))
+    # The schedule owns the charge, so nothing else is raised for it.
+    assert [item["kind"] for item in first] == ["price_change"]
+    row = first[0]
+    assert row["title"] == "Price change: Star Health"
+    assert "₹12,000.00" in row["body"]
+    assert "₹15,000.00" in row["body"]
+    assert row["data"]["schedule_id"] == schedule["id"]
+    assert row["dedupe_key"] == f"pattern:price:{schedule['id']}:2026-08-05"
+
+    text, outside = seed_chat_text(row)
+    assert outside is True
+    assert "<outside>Star Health</outside>" in text
+    assert payments[2]["id"] in text
+
+    again = await run_pattern_detection(ledger, as_of=date(2026, 9, 20))
+    assert not [item for item in again if item["kind"] == "price_change"]
+
+    audit_rows = await ledger.fetchval("SELECT count(*) FROM audit_log")
+    before = await ledger.fetchrow(
+        "SELECT amount_paise, updated_at FROM schedules WHERE id = $1", schedule["id"]
+    )
+    await mark_read(ledger, row["id"])
+    assert await ledger.fetchval("SELECT count(*) FROM audit_log") == audit_rows
+    after = await ledger.fetchrow(
+        "SELECT amount_paise, updated_at FROM schedules WHERE id = $1", schedule["id"]
+    )
+    assert after == before
+
+
+async def test_a_schedule_price_step_alerts_only_inside_the_alert_window(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    insurer = await create_payee(ledger, display_name="Star Health", kind="merchant")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="Star Health",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 5, 5),
+    )
+    for month, amount in (
+        (5, 100_000),
+        (6, 100_000),
+        (7, 100_000),
+        (8, 120_000),
+        (9, 120_000),
+        (10, 120_000),
+    ):
+        payment = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Star Health premium",
+            payee_id=insurer["id"],
+            date=date(2026, month, 5),
+        )
+        await link_payment(
+            ledger,
+            schedule_id=schedule["id"],
+            due_date=date(2026, month, 5),
+            movement_id=payment["id"],
+        )
+
+    # The step is 90 days old: still news.
+    inside = await detect(ledger, as_of=date(2026, 11, 3))
+    changes = [p for p in inside if p["kind"] == "price_change"]
+    assert [p["step_date"] for p in changes] == ["2026-08-05"]
+
+    # One day later the same step is history, so a backfill cannot raise it.
+    outside = await detect(ledger, as_of=date(2026, 11, 4))
+    assert not [p for p in outside if p["kind"] == "price_change"]
+
+
+async def test_a_price_change_pushes_a_contentless_ping(ledger, monkeypatch):
+    from arno.jobs import patterns as jobs_patterns
+
+    async def fake_detect(conn, *, as_of=None, write=True):
+        del conn, as_of, write
+        return [
+            {
+                "kind": "price_change",
+                "payee_id": "pay_1",
+                "merchant": "Netflix",
+                "outside_text": False,
+                "old_paise": 64_900,
+                "new_paise": 79_900,
+                "step_date": "2026-11-01",
+                "movement_ids": ["mov_1"],
+            }
+        ]
+
+    pushed: list[str] = []
+
+    async def record(conn, kind):
+        del conn
+        pushed.append(kind)
+
+    monkeypatch.setattr(jobs_patterns.patterns, "detect", fake_detect)
+    monkeypatch.setattr(jobs_patterns, "send_push_for_kind", record)
+    result = await jobs_patterns.handle_pattern_detection({})
+    assert result["created"] == 1
+    assert pushed == ["price_change"]
+
+
 async def test_a_series_that_has_stopped_is_not_proposed(ledger):
     from arno.ledger.accounts import create_account
     from arno.ledger.movements import record_expense

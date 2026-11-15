@@ -436,6 +436,131 @@ async def test_series_detection_proposes_subscription_and_income_and_skips_rando
     )
 
 
+async def test_a_stepped_spend_series_is_proposed_as_a_price_change(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.tools import patterns
+
+    bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
+    cloud = await create_payee(
+        ledger, display_name="Cloud Storage", kind="merchant", outside_text=True
+    )
+    for index, amount in enumerate([49_900, 49_900, 49_900, 59_900, 59_900, 59_900]):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="Cloud Storage",
+            payee_id=cloud["id"],
+            date=date(2026, 6 + index, 5),
+        )
+
+    proposals = await patterns.detect(ledger, as_of=date(2026, 11, 20))
+    changes = [p for p in proposals if p["kind"] == "price_change"]
+    assert len(changes) == 1
+    change = changes[0]
+    assert change["payee_id"] == cloud["id"]
+    assert change["merchant"] == "Cloud Storage"
+    assert change["outside_text"] is True
+    assert (change["old_paise"], change["new_paise"]) == (49_900, 59_900)
+    assert change["step_date"] == "2026-09-05"
+    assert len(change["movement_ids"]) == 3
+
+
+async def test_a_schedule_paid_at_a_new_level_is_proposed_once_as_a_price_change(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+    from arno.tools import patterns
+
+    bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
+    insurer = await create_payee(ledger, display_name="HDFC Life", kind="merchant")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="HDFC Life",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+    )
+    for month, amount in ((6, 100_000), (7, 100_000), (8, 120_000), (9, 120_000)):
+        payment = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="HDFC Life premium",
+            payee_id=insurer["id"],
+            date=date(2026, month, 5),
+        )
+        await link_payment(
+            ledger,
+            schedule_id=schedule["id"],
+            due_date=date(2026, month, 5),
+            movement_id=payment["id"],
+        )
+
+    proposals = await patterns.detect(ledger, as_of=date(2026, 9, 20))
+    changes = [p for p in proposals if p["kind"] == "price_change"]
+    # The schedule owns the charge, so its series is not reported as well.
+    assert len(changes) == 1
+    assert changes[0]["schedule_id"] == schedule["id"]
+    assert (changes[0]["old_paise"], changes[0]["new_paise"]) == (100_000, 120_000)
+    assert changes[0]["step_date"] == "2026-08-05"
+    assert len(changes[0]["movement_ids"]) == 2
+    assert not any(p["kind"] == "new_subscription" for p in proposals)
+
+
+async def test_a_partial_payment_in_progress_is_not_a_price_drop(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+    from arno.tools import patterns
+
+    bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
+    insurer = await create_payee(ledger, display_name="HDFC Life", kind="merchant")
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="insurance",
+        name="HDFC Life",
+        amount_paise=100_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+    )
+    for month, amount in ((6, 100_000), (7, 60_000)):
+        payment = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amount,
+            description="HDFC Life premium",
+            payee_id=insurer["id"],
+            date=date(2026, month, 5),
+        )
+        await link_payment(
+            ledger,
+            schedule_id=schedule["id"],
+            due_date=date(2026, month, 5),
+            movement_id=payment["id"],
+        )
+
+    # Two days past due, the short payment may still be topped up.
+    early = await patterns.detect(ledger, as_of=date(2026, 7, 7))
+    assert not [p for p in early if p["kind"] == "price_change"]
+    # Past the missed-charge grace it is evidence of a lower level.
+    late = await patterns.detect(ledger, as_of=date(2026, 7, 9))
+    changes = [p for p in late if p["kind"] == "price_change"]
+    assert len(changes) == 1
+    assert (changes[0]["old_paise"], changes[0]["new_paise"]) == (100_000, 60_000)
+
+
 # --- e3 F5 / e1 F11: the demo persona's own data is internally consistent ---------------------
 
 

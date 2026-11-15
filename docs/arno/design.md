@@ -584,7 +584,22 @@ The proposals that reach the inbox are the following:
 | New subscription | A spend series at confidence 0.9 or more whose latest payments no confirmed schedule covers |
 | New income | An income series at confidence 0.9 or more |
 | Missed recurring | An expected occurrence is 3 or more days late with no matching payment |
+| Price change | A spend charge moves to a new amount level and stays there |
 | Risk | After any write and nightly, rerun the projection. If the floor probability drops below the threshold (against the floor, or against zero when no floor is set), or a crossing moves earlier, warn once for each episode |
+
+**Price steps.** A step is reported at the first payment at the new level, once per step:
+`price_step` in `engine/series.py` needs a fixed run of at least 3 payments at the old level
+immediately before the step, and every payment from the step on at one new level in the same
+direction, reaching the latest payment. Ordinary variation, and one odd payment that returns to
+the old level, are not steps. A charge a confirmed schedule states is compared the other way:
+its stated amount is the old level, and the most recent run of consecutive paid occurrences that
+agree with each other and differ from it in one direction is the new level. A payment below the
+stated amount counts only once the missed-charge grace has passed, so a partial payment still in
+progress is not read as a price drop. A step is proposed only when its first new-level payment is
+at most 90 days before the run's `as_of` day, so the first run after a statement backfill does not
+raise changes from months ago. A `price_change` carries both levels, the first new date,
+and the movement IDs behind it; the inbox keys one item per series or schedule and step date, so a
+rerun does not repeat it and a later step alerts again.
 
 **Where it lands.** `series_detections` (migration `0041`) is rewritten whole by the pattern job,
 in one transaction. It holds each detection's rule, confidence, still-alive probability, skip rate,

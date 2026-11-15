@@ -8,6 +8,7 @@ export const KIND_LABELS: Record<string, string> = {
   risk_warning: "Risk check",
   new_subscription: "Needs your call",
   missed_recurring: "Missed",
+  price_change: "Price change",
   backup_stale: "Backup",
   scheduled_question: "Scheduled answer",
   job_failed: "Job",
