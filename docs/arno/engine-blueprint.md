@@ -19,7 +19,8 @@ nothing uses it and `plan.md` keeps investment returns out. `design.md` and `too
 steps 1 to 6. Step 8 landed the same day: the HackerRank scorer is an adapter over the shipped
 engine. Step 7 was measured and not shipped (section 4.6): with the backtest scoring the base case
 on the income it was given and resampled card spend kept on its card, coverage on the tuning seeds
-is 74% to 77%, and a calibration map raised it without lowering CRPS.
+is 74% to 77% (66% to 74% on the held-out seeds, where the engine now beats every baseline in
+every cell), and a calibration map raised it without lowering CRPS.
 Revised the same day after two external reviews; each accepted finding was first checked against
 the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 

@@ -498,7 +498,11 @@ local code rather than the review screen, and those two import gaps remain. Deta
     earliest date, and every plan come from `project()`. The dataset's own levers (stopping or
     reducing one named stream, a merchant's fixed instalment dates) have no product equivalent, so
     the adapter searches them and checks each with `project()`. The earlier 88.8% came from a
-    parallel implementation and is retired. The data stays local and is never committed.
+    parallel implementation and is retired. The three status misses are all plans that stop or
+    reduce a stream: the adapter's estimate of variable-amount streams before the next salary
+    differs from the label's, by under 3% of the ask in two and 13% in one, which crosses the
+    threshold. Tuning that estimate on the 25 scored samples would fit the test set, so the
+    adapter keeps the pattern engine's estimate. The data stays local and is never committed.
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
 **L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
@@ -511,8 +515,12 @@ milestone 29 stays open until the owner adds a salary schedule. Milestone 30 is 
 README carries the block. On November 15 the scorer became an adapter over the shipped engine,
 which scores 86.8% (milestone 30). The same day the owner allowed the backtest and pattern scoring
 to run on the development instance's real ledger, reporting aggregate numbers only; nothing is
-committed or published, and a confirmed salary schedule will make its months count. Detail:
-[release-hardening.md](release-hardening.md).
+committed or published, and a confirmed salary schedule will make its months count. The owner
+confirmed one on November 13, after the ledger's last scoreable origin, and a real-ledger origin
+also needs that salary's payments linked (§6, "Backtest outcome"), so the real ledger becomes a
+measurement once 90 days follow a confirmed, linked salary. The synthetic households' held-out
+backtest is published: the engine beats every baseline in every cell, and its P10-P90 band holds
+66% to 74% of outcomes. Detail: [release-hardening.md](release-hardening.md).
 
 ### L6: Watch
 
