@@ -1,19 +1,25 @@
-"""HackerRank "Buy or Wait" scorer.
+"""HackerRank "Buy or Wait" adapter over Arno's production projection and detection engine.
 
-The 25 solved sample requests have externally written answers, so they check the affordability
-logic against someone else's labels. The dataset has no license, so it is read only from a
-git-ignored local path and never committed. When that path is absent, `score` says so plainly
-instead of inventing a number.
+The 25 solved sample requests have externally written answers, so they check the shipped engine
+against independent labels. The dataset has no license, so it is read only from a git-ignored
+local path and never committed. When that path is absent, `score` says so plainly instead of
+inventing a number.
 
-The forecast is deterministic: recurring streams inferred from settled history (split by category,
-and by description where a stable commitment repeats on its own cadence), confirmed scheduled and
-pending debits, income anchored on the next confirmed salary, structural changes parsed from
-messages, and image amounts for blank rows. No number in the dataset is hardcoded; image amounts
-come from an optional `image_amounts.json` beside the CSVs.
+Dataset conventions that live here in the adapter:
+- the ~185-day history window (`DATASET_HISTORY_DAYS`) and 4-day horizon tail cutoff (`TAIL_DAYS`);
+- category-first debit grouping with independent stable merchant sub-series;
+- regular N-day cadence fallback (`round(median gap)`) outside production rule families;
+- income consolidation by category and dominant day-of-month, `\bfinal\b` drop rule, explicit
+  future `scheduled` anchoring (`MIN_INCOME_OCCURRENCES = 2`), and `1.5 * period` freshness;
+- deterministic `CashEvent` emission with day-0 inclusion when
+  `(request_date - last).days >= period - 3`;
+- profile `payment_methods_user_will_consider`, merchant installments, `allows_partial_payment`, and
+  discrete `stoppable`/`reducible` stream adjustments;
+- structural message regexes (`_parse_message`) and foreign-currency / `image_amounts.json` loading.
 
-The walk itself is `arno.engine.projection`: every flow becomes a `CashEvent` on a one-account
-`ProjectionInput` with no `SpendCategory` pools, so `project`, `safe_amount_today`, and
-`first_full_payment_date` are the real engine, and `runs=1` is exact because nothing is sampled.
+Rule inference delegates to `arno.engine.series` (`detect`, `upcoming`, and `PROJECT_CONFIDENCE`),
+and plan evaluation delegates to `arno.engine.projection` (`project`, `safe_amount_today`, and
+`first_full_payment_date`).
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import calendar
 import csv
 import itertools
 import json
+import math
 import os
 import re
 import statistics
@@ -30,7 +37,10 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
+from arno.engine import patterns, scoring, series
+from arno.engine.money import add_months
 from arno.engine.projection import (
+    DEFAULT_RUNS,
     DEFAULT_SEED,
     FLOOR_THRESHOLD,
     CashEvent,
@@ -40,18 +50,35 @@ from arno.engine.projection import (
     project,
     safe_amount_today,
 )
+from arno.india.workdays import IndiaCalendar, calendar_for
 
 DATASET_ENV = "ARNO_HACKERRANK_DATASET"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED = ("affordable_now", "affordable_with_plan", "affordable_later", "not_affordable")
 HORIZON_DAYS = 90
-# A projected recurring occurrence in the final days is too uncertain to fail a later payment date,
-# while confirmed flows still count on every day, so projected occurrences stop short of the
-# horizon's end. The sample labels use the same convention.
+# Dataset convention: settled history spans roughly six months (~185 days), not 800 days.
+DATASET_HISTORY_DAYS = 185
+# Dataset convention: an inferred recurring occurrence in the final days is too uncertain to fail a
+# later payment date, while confirmed scheduled flows keep the full window.
 TAIL_DAYS = 4
 DEDUPE_DAYS = 3
 MIN_DEBIT_OCCURRENCES = 3
+# Dataset convention: income streams require at least 2 occurrences (counting future scheduled).
 MIN_INCOME_OCCURRENCES = 2
+
+WEIGHTS: tuple[float, float, float] = (0.5, 0.3, 0.2)
+AMOUNT_TOLERANCE_RATIO = 0.05
+AMOUNT_MIN_TOLERANCE = 1.0
+DATE_TOLERANCE_DAYS = 3
+
+# Dataset convention: strip month names, 4-digit years, and quarters when grouping descriptions.
+_PERIOD = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
+    r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|"
+    r"\d{4}|q[1-4])\b",
+    re.IGNORECASE,
+)
+_FINAL_MARKER = re.compile(r"\bfinal\b", re.IGNORECASE)
 
 
 def find_dataset() -> Path | None:
@@ -99,20 +126,13 @@ def _split(value: str | None) -> set[str]:
     return {item.strip() for item in (value or "").split("|") if item.strip()}
 
 
-def _add_months(day: date, months: int) -> date:
-    index = day.month - 1 + months
-    year = day.year + index // 12
-    month = index % 12 + 1
-    last_day = calendar.monthrange(year, month)[1]
-    return date(year, month, min(day.day, last_day))
-
-
 def _median_gap(dates: list[date]) -> float:
     gaps = [(later - earlier).days for earlier, later in zip(dates, dates[1:], strict=False)]
     return statistics.median(gaps) if gaps else 0.0
 
 
 def _regular(dates: list[date]) -> bool:
+    """Dataset convention: gaps within max(2, 25% of median) days count as regular."""
     gaps = [(later - earlier).days for earlier, later in zip(dates, dates[1:], strict=False)]
     if not gaps:
         return False
@@ -124,6 +144,7 @@ def _regular(dates: list[date]) -> bool:
 
 
 def _stable(amounts: list[int]) -> bool:
+    """Dataset convention: merchant sub-series amounts within a 5% spread count as stable."""
     if len(amounts) < 2:
         return False
     mean = statistics.fmean(amounts)
@@ -151,15 +172,8 @@ def _day_of_month(dates: list[date]) -> int:
     return max(tied)
 
 
-_PERIOD = re.compile(
-    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
-    r"aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|"
-    r"\d{4}|q[1-4])\b",
-    re.IGNORECASE,
-)
-
-
 def _norm_description(text: str) -> str:
+    """Dataset convention: normalize merchant descriptions without splitting on month/year."""
     return re.sub(r"\s+", " ", _PERIOD.sub(" ", (text or "").strip().lower())).strip()
 
 
@@ -271,21 +285,6 @@ def _load_messages(dataset: Path) -> dict[str, list[dict[str, str]]]:
     return grouped
 
 
-@dataclass(frozen=True, slots=True)
-class _Stream:
-    category: str
-    direction: str
-    description: str
-    amount_paise: int
-    last: date
-    cadence_days: int
-    monthly: bool
-    event_id: str
-    flexibility: str
-    minimum_allowed_paise: int
-    next_date: date | None = None
-
-
 def _is_income(row: dict[str, str]) -> bool:
     if row.get("direction") != "credit":
         return False
@@ -326,235 +325,388 @@ def _row_paise(
     return _convert_paise(native, row.get("currency") or home, home, on, rates)
 
 
-def _settled_rows(
+@dataclass(frozen=True, slots=True)
+class _SettledFlow:
+    event_id: str
+    when: date
+    amount_paise: int
+    direction: str
+    category: str
+    description: str
+    flexibility: str
+    minimum_allowed_paise: int
+
+
+@dataclass(frozen=True, slots=True)
+class _InferredStream:
+    kind: str  # "spend" or "income"
+    key: str
+    name: str
+    category: str
+    last: date
+    level_paise: int
+    period_days: int
+    monthly: bool
+    event_id: str
+    flexibility: str
+    minimum_allowed_paise: int
+    detection: series.Detection | None
+    next_date: date | None = None
+    anchored: bool = False
+
+
+def _settled_flows(
     user_events: list[dict[str, str]],
     request_date: date,
     *,
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+) -> list[_SettledFlow]:
+    window_start = request_date - timedelta(days=DATASET_HISTORY_DAYS)
+    flows: list[_SettledFlow] = []
     for row in user_events:
-        if row.get("status") != "settled" or row.get("direction") not in {"debit", "credit"}:
+        if row.get("status") != "settled":
+            continue
+        direction = row.get("direction") or ""
+        if direction not in {"debit", "credit"}:
+            continue
+        if direction == "credit" and not _is_income(row):
             continue
         when = _day(row.get("event_date"))
-        if when is None or when > request_date:
+        if when is None or when < window_start or when > request_date:
             continue
-        if _row_paise(row, home=home, rates=rates, images=images) is None:
+        amount = _row_paise(row, home=home, rates=rates, images=images)
+        if amount is None or amount <= 0:
             continue
-        rows.append(row)
-    return rows
+        flows.append(
+            _SettledFlow(
+                event_id=row.get("event_id") or "",
+                when=when,
+                amount_paise=amount,
+                direction=direction,
+                category=row.get("category") or "",
+                description=row.get("description") or row.get("category") or "",
+                flexibility=row.get("flexibility") or "",
+                minimum_allowed_paise=_paise(row.get("minimum_allowed_amount")),
+            )
+        )
+    return flows
 
 
-def _debit_streams(
-    rows: list[dict[str, str]],
+def _detect_rule(
+    items: list[_SettledFlow],
     *,
-    home: str,
-    rates: tuple[_Rate, ...],
-    images: dict[str, int],
-) -> list[_Stream]:
-    grouped: dict[str, list[dict[str, str]]] = {}
-    for row in rows:
-        if row.get("direction") == "debit" and row.get("category"):
-            grouped.setdefault(row["category"], []).append(row)
-    streams: list[_Stream] = []
-    for category in sorted(grouped):
-        members = sorted(grouped[category], key=lambda row: row.get("event_date") or "")
+    as_of: date,
+    window_start: date,
+    calendar: IndiaCalendar,
+) -> series.Detection | None:
+    if len(items) < MIN_DEBIT_OCCURRENCES:
+        return None
+    payments = [
+        series.Payment(movement_id=item.event_id, date=item.when, amount_paise=item.amount_paise)
+        for item in items
+    ]
+    detection = series.detect(
+        payments,
+        as_of=as_of,
+        window_start=window_start,
+        calendar=calendar,
+    )
+    if detection is None or detection.confidence < series.PROJECT_CONFIDENCE:
+        return None
+    return detection
+
+
+def _is_monthly_family(family: str) -> bool:
+    return family in {"monthly", "last_day", "last_working_day", "nth_weekday"}
+
+
+def _detect_debit_streams(
+    flows: list[_SettledFlow],
+    request_date: date,
+    window_start: date,
+    cal: IndiaCalendar,
+) -> list[_InferredStream]:
+    """Detect recurring outflows with category-first grouping and N-day interval fallback."""
+    # Dataset convention: group settled outflows by category first because discretionary categories
+    # rotate across merchants; keep stable merchant sub-series when independent ones exist.
+    by_category: dict[str, list[_SettledFlow]] = {}
+    for flow in flows:
+        if flow.direction == "debit" and flow.category:
+            by_category.setdefault(flow.category, []).append(flow)
+
+    streams: list[_InferredStream] = []
+    for category in sorted(by_category):
+        members = sorted(by_category[category], key=lambda item: (item.when, item.event_id))
         if len(members) < MIN_DEBIT_OCCURRENCES:
             continue
-        descriptions: dict[str, list[dict[str, str]]] = {}
-        for row in members:
-            descriptions.setdefault(_norm_description(row.get("description") or ""), []).append(row)
-        qualified: list[list[dict[str, str]]] = []
-        for key in sorted(descriptions):
-            subset = descriptions[key]
-            dates = [when for row in subset if (when := _day(row.get("event_date"))) is not None]
-            amounts = [
-                value
-                for row in subset
-                if (value := _row_paise(row, home=home, rates=rates, images=images)) is not None
-            ]
+        descriptions: dict[str, list[_SettledFlow]] = {}
+        for item in members:
+            descriptions.setdefault(_norm_description(item.description), []).append(item)
+        qualified: list[list[_SettledFlow]] = []
+        for desc_key in sorted(descriptions):
+            subset = descriptions[desc_key]
+            dates = [item.when for item in subset]
+            amounts = [item.amount_paise for item in subset]
             if len(subset) >= MIN_DEBIT_OCCURRENCES and _regular(dates) and _stable(amounts):
                 qualified.append(subset)
-        all_dates = [when for row in members if (when := _day(row.get("event_date"))) is not None]
+        all_dates = [item.when for item in members]
         chosen = (
             qualified
             if len(qualified) >= 2 or (len(qualified) == 1 and not _regular(all_dates))
             else [members]
         )
-        for subset in chosen:
+        for index, subset in enumerate(chosen):
             if len(subset) < MIN_DEBIT_OCCURRENCES:
                 continue
-            dates = sorted(
-                when for row in subset if (when := _day(row.get("event_date"))) is not None
+            detection = _detect_rule(
+                subset, as_of=request_date, window_start=window_start, calendar=cal
             )
-            amounts = [
-                value
-                for row in subset
-                if (value := _row_paise(row, home=home, rates=rates, images=images)) is not None
-            ]
-            median = _median_gap(dates)
-            monthly = 28 <= median <= 31
-            if not monthly and len(dates) >= 3 and median >= 28 and _same_day_of_month(dates):
-                monthly = True
             latest = subset[-1]
+            if detection is not None:
+                matched_ids = set(detection.matched)
+                matched = [item for item in subset if item.event_id in matched_ids] or subset
+                matched_dates = [item.when for item in matched]
+                family = detection.rule.family
+                monthly = _is_monthly_family(family)
+                period = patterns.family_interval_days(family) or max(
+                    1, int(round(_median_gap(matched_dates)))
+                )
+                last = matched[-1].when
+                level = detection.amounts.level_paise
+                name = matched[-1].description or category
+            else:
+                # Dataset convention: for cadences outside production rule families (5-, 10-, and
+                # 21-day cycles), fall back to a regular N-day interval: round(median gap).
+                dates = [item.when for item in subset]
+                if not _regular(dates):
+                    continue
+                median = _median_gap(dates)
+                period = max(1, int(round(median)))
+                monthly = 28 <= median <= 31 or (
+                    len(dates) >= 3 and median >= 28 and _same_day_of_month(dates)
+                )
+                if monthly:
+                    period = 30
+                last = dates[-1]
+                level = int(round(statistics.fmean(item.amount_paise for item in subset)))
+                name = latest.description or category
             streams.append(
-                _Stream(
+                _InferredStream(
+                    kind="spend",
+                    key=f"{category}:{index}" if len(chosen) > 1 else category,
+                    name=name,
                     category=category,
-                    direction="debit",
-                    description=latest.get("description") or category,
-                    amount_paise=int(round(statistics.fmean(amounts))),
-                    last=dates[-1],
-                    cadence_days=max(1, int(round(median))),
+                    last=last,
+                    level_paise=level,
+                    period_days=period,
                     monthly=monthly,
-                    event_id=latest.get("event_id") or "",
-                    flexibility=latest.get("flexibility") or "",
-                    minimum_allowed_paise=_paise(latest.get("minimum_allowed_amount")),
+                    event_id=latest.event_id,
+                    flexibility=latest.flexibility,
+                    minimum_allowed_paise=latest.minimum_allowed_paise,
+                    detection=detection,
                 )
             )
     return streams
 
 
-def _income_streams(
-    rows: list[dict[str, str]],
-    future_income: list[dict[str, str]],
+def _detect_income_streams(
+    flows: list[_SettledFlow],
+    user_events: list[dict[str, str]],
     request_date: date,
+    window_start: date,
+    cal: IndiaCalendar,
     *,
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
-) -> list[_Stream]:
-    grouped: dict[str, list[dict[str, str]]] = {}
-    for row in rows:
-        if _is_income(row):
-            grouped.setdefault(row.get("category") or "", []).append(row)
-    for row in future_income:
-        grouped.setdefault(row.get("category") or "", [])
-    streams: list[_Stream] = []
-    for category in sorted(grouped):
-        history = sorted(grouped[category], key=lambda row: row.get("event_date") or "")
+) -> list[_InferredStream]:
+    """Detect income via category/day consolidation, final marker, and scheduled anchor."""
+    by_category: dict[str, list[_SettledFlow]] = {}
+    for flow in flows:
+        if flow.direction == "credit":
+            by_category.setdefault(flow.category, []).append(flow)
+
+    # Dataset convention: future scheduled income rows anchor inferred income with >= 2 occurrences.
+    future_income: list[tuple[date, dict[str, str], int]] = []
+    for row in user_events:
+        if row.get("status") != "scheduled":
+            continue
+        when = _day(row.get("event_date"))
+        if when is None or when <= request_date or not _is_income(row):
+            continue
+        amount = _row_paise(row, home=home, rates=rates, images=images)
+        if amount is None:
+            continue
+        future_income.append((when, row, amount))
+
+    streams: list[_InferredStream] = []
+    for category in sorted(by_category):
+        history = sorted(by_category[category], key=lambda item: (item.when, item.event_id))
         if not history:
             continue
         scheduled = sorted(
-            (row for row in future_income if row.get("category") == category),
-            key=lambda row: row.get("event_date") or "",
+            (entry for entry in future_income if (entry[1].get("category") or "") == category),
+            key=lambda entry: (entry[0], entry[1].get("event_id") or ""),
         )
-        newest = max(history + scheduled, key=lambda row: row.get("event_date") or "")
-        if re.search(r"\bfinal\b", newest.get("description") or "", re.IGNORECASE):
+        # Dataset convention: drop an income category whose newest event carries a \bfinal\b marker.
+        newest_history = history[-1]
+        newest_desc = newest_history.description
+        if scheduled and scheduled[-1][0] >= newest_history.when:
+            newest_desc = scheduled[-1][1].get("description") or ""
+        if _FINAL_MARKER.search(newest_desc):
             continue
-        descriptions: dict[str, list[dict[str, str]]] = {}
-        for row in history:
-            descriptions.setdefault(_norm_description(row.get("description") or ""), []).append(row)
+
+        # Dataset convention: consolidate settled income rows by category and dominant day-of-month.
+        descriptions: dict[str, list[_SettledFlow]] = {}
+        for item in history:
+            descriptions.setdefault(_norm_description(item.description), []).append(item)
         qualified: list[tuple[str, int]] = []
-        for key in sorted(descriptions):
-            subset = sorted(descriptions[key], key=lambda row: row.get("event_date") or "")
-            dates = [when for row in subset if (when := _day(row.get("event_date"))) is not None]
+        for desc_key in sorted(descriptions):
+            subset = sorted(descriptions[desc_key], key=lambda item: (item.when, item.event_id))
+            dates = [item.when for item in subset]
             if len(subset) >= MIN_INCOME_OCCURRENCES and 28 <= _median_gap(dates) <= 31:
-                qualified.append((key, _day_of_month(dates)))
-        groups: dict[str, list[dict[str, str]]]
+                qualified.append((desc_key, _day_of_month(dates)))
+
+        groups: dict[str, list[_SettledFlow]]
         if qualified:
-            by_day: dict[int, list[dict[str, str]]] = {}
-            for key, day in qualified:
-                by_day.setdefault(day, []).extend(descriptions[key])
-            for key in sorted(descriptions):
-                if any(key == qualified_key for qualified_key, _day_value in qualified):
+            qualified_keys = {key for key, _day_val in qualified}
+            by_day: dict[int, list[_SettledFlow]] = {}
+            for desc_key, dom_day in qualified:
+                by_day.setdefault(dom_day, []).extend(descriptions[desc_key])
+            for desc_key in sorted(descriptions):
+                if desc_key in qualified_keys:
                     continue
-                for row in descriptions[key]:
-                    when = _day(row.get("event_date"))
-                    if when is not None and when.day in by_day:
-                        by_day[when.day].append(row)
+                for item in descriptions[desc_key]:
+                    if item.when.day in by_day:
+                        by_day[item.when.day].append(item)
             groups = {
-                str(day): sorted(members, key=lambda row: row.get("event_date") or "")
-                for day, members in by_day.items()
+                str(dom_day): sorted(members, key=lambda item: (item.when, item.event_id))
+                for dom_day, members in by_day.items()
             }
         else:
             groups = {"": history}
+
         keys = list(groups)
         principal = max(
             keys,
-            key=lambda key: (len(groups[key]), groups[key][-1].get("event_date") or ""),
+            key=lambda key: (len(groups[key]), groups[key][-1].when),
         )
         anchor = scheduled[-1] if scheduled else None
+
         for key in keys:
             members = groups[key]
-            if (
-                len(members) + (1 if anchor is not None and key == principal else 0)
-                < MIN_INCOME_OCCURRENCES
-            ):
+            use_anchor = anchor is not None and key == principal
+            total_occurrences = len(members) + (1 if use_anchor else 0)
+            if total_occurrences < MIN_INCOME_OCCURRENCES:
                 continue
-            newest_row = anchor if anchor is not None and key == principal else members[-1]
-            dates = sorted(
-                when
-                for row in (members + ([anchor] if anchor is not None and key == principal else []))
-                if (when := _day(row.get("event_date"))) is not None
+
+            combined_flows = list(members)
+            if use_anchor and anchor is not None:
+                anchor_when, anchor_row, anchor_amount = anchor
+                combined_flows.append(
+                    _SettledFlow(
+                        event_id=anchor_row.get("event_id") or "scheduled_anchor",
+                        when=anchor_when,
+                        amount_paise=anchor_amount,
+                        direction="credit",
+                        category=category,
+                        description=anchor_row.get("description") or category,
+                        flexibility=anchor_row.get("flexibility") or "",
+                        minimum_allowed_paise=0,
+                    )
+                )
+            combined_flows.sort(key=lambda item: (item.when, item.event_id))
+            dates = [item.when for item in combined_flows]
+            newest_flow = combined_flows[-1]
+            detect_as_of = max(request_date, newest_flow.when)
+            detection = _detect_rule(
+                combined_flows, as_of=detect_as_of, window_start=window_start, calendar=cal
             )
-            median = _median_gap(dates) if len(dates) > 1 else 30.0
-            monthly = 28 <= median <= 31
-            if not monthly and len(dates) >= 3 and median >= 28 and _same_day_of_month(dates):
-                monthly = True
-            amount = _row_paise(newest_row, home=home, rates=rates, images=images)
-            if amount is None:
-                continue
-            last = _day(newest_row.get("event_date"))
-            if last is None:
-                continue
+            if detection is not None:
+                family = detection.rule.family
+                monthly = _is_monthly_family(family)
+                period = patterns.family_interval_days(family) or max(
+                    1, int(round(_median_gap(dates)))
+                )
+            else:
+                # Dataset convention: infer income from >= 2 occurrences (with explicit future
+                # scheduled anchor), falling back to round(median gap) when below series.detect's
+                # 3-payment minimum or outside production rule families.
+                if len(dates) >= 3 and not _regular(dates) and not _same_day_of_month(dates):
+                    continue
+                median = _median_gap(dates) if len(dates) > 1 else 30.0
+                if median <= 0:
+                    continue
+                monthly = 28 <= median <= 31 or (
+                    len(dates) >= 3 and median >= 28 and _same_day_of_month(dates)
+                )
+                period = 30 if monthly else max(1, int(round(median)))
+
+            last = newest_flow.when
             if monthly:
+                dom = _day_of_month(dates)
                 last = date(
                     last.year,
                     last.month,
-                    min(_day_of_month(dates), calendar.monthrange(last.year, last.month)[1]),
+                    min(dom, calendar.monthrange(last.year, last.month)[1]),
                 )
             streams.append(
-                _Stream(
+                _InferredStream(
+                    kind="income",
+                    key=f"{category}:{key}" if key else category,
+                    name=newest_flow.description or category,
                     category=category,
-                    direction="credit",
-                    description=newest_row.get("description") or category,
-                    amount_paise=amount,
                     last=last,
-                    cadence_days=max(1, int(round(median))),
+                    level_paise=newest_flow.amount_paise,
+                    period_days=period,
                     monthly=monthly,
-                    event_id=newest_row.get("event_id") or "",
-                    flexibility=newest_row.get("flexibility") or "",
+                    event_id=newest_flow.event_id,
+                    flexibility=newest_flow.flexibility,
                     minimum_allowed_paise=0,
+                    detection=detection,
+                    anchored=use_anchor,
                 )
             )
     return streams
 
 
-def _fresh(streams: list[_Stream], request_date: date) -> list[_Stream]:
-    fresh: list[_Stream] = []
-    for stream in streams:
-        period = 30 if stream.monthly else stream.cadence_days
-        if (request_date - stream.last).days > 1.5 * period:
-            continue
-        fresh.append(stream)
-    return fresh
-
-
-def _build_streams(
+def _detect_streams(
+    flows: list[_SettledFlow],
     user_events: list[dict[str, str]],
     request_date: date,
+    cal: IndiaCalendar,
     *,
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
-) -> list[_Stream]:
-    rows = _settled_rows(user_events, request_date, home=home, rates=rates, images=images)
-    future_income = [
-        row
-        for row in user_events
-        if row.get("status") == "scheduled"
-        and (when := _day(row.get("event_date"))) is not None
-        and when > request_date
-        and _is_income(row)
-        and _row_paise(row, home=home, rates=rates, images=images) is not None
-    ]
-    streams = _debit_streams(rows, home=home, rates=rates, images=images)
+) -> list[_InferredStream]:
+    """Detect recurring spend and income streams and apply the dataset's freshness rule."""
+    window_start = request_date - timedelta(days=DATASET_HISTORY_DAYS)
+    streams = _detect_debit_streams(flows, request_date, window_start, cal)
     streams.extend(
-        _income_streams(rows, future_income, request_date, home=home, rates=rates, images=images)
+        _detect_income_streams(
+            flows,
+            user_events,
+            request_date,
+            window_start,
+            cal,
+            home=home,
+            rates=rates,
+            images=images,
+        )
     )
-    return _fresh(streams, request_date)
+    # Dataset convention: enforce freshness `(request_date - last).days <= 1.5 * period` instead
+    # of the detector's `alive` posterior.
+    return [
+        stream
+        for stream in streams
+        if (request_date - stream.last).days <= 1.5 * stream.period_days
+    ]
+
+
+# --- Dataset message conventions ---------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -572,7 +724,7 @@ _PERCENT = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 
 def _parse_message(text: str) -> _Amendment | None:
-    """Structural amendments only; the text itself is untrusted data."""
+    """Dataset convention: structural amendments parsed from sample messages; text is untrusted."""
     lowered = text.lower()
     match = _AMOUNT.search(text)
     currency = match.group(1) if match else ""
@@ -618,17 +770,110 @@ def _parse_message(text: str) -> _Amendment | None:
     return None
 
 
+def _step_dates(
+    anchor: date,
+    *,
+    monthly: bool,
+    period_days: int,
+    start_index: int,
+    min_date: date,
+    until: date,
+) -> list[date]:
+    dates: list[date] = []
+    index = start_index
+    while True:
+        when = (
+            add_months(anchor, index) if monthly else anchor + timedelta(days=period_days * index)
+        )
+        if when > until:
+            break
+        if when >= min_date:
+            dates.append(when)
+        index += 1
+    return dates
+
+
+def _stream_dates(
+    stream: _InferredStream,
+    *,
+    request_date: date,
+    until: date,
+    calendar: IndiaCalendar,
+) -> list[date]:
+    """Generate deterministic occurrence dates up to `until`."""
+    if stream.next_date is not None:
+        return _step_dates(
+            stream.next_date,
+            monthly=stream.monthly,
+            period_days=stream.period_days,
+            start_index=0,
+            min_date=request_date,
+            until=until,
+        )
+    # Dataset convention: include day 0 when `(request_date - last).days >= period - 3` so an
+    # unposted cycle counts without double-counting a cycle settled right before request_date.
+    include_day0 = (request_date - stream.last).days >= stream.period_days - 3
+    min_date = request_date if include_day0 else request_date + timedelta(days=1)
+
+    if stream.anchored:
+        if stream.detection is not None:
+            near_anchor = series.upcoming(
+                stream.detection,
+                after=stream.last - timedelta(days=DEDUPE_DAYS + 1),
+                until=stream.last + timedelta(days=DEDUPE_DAYS),
+                calendar=calendar,
+            )
+            if near_anchor:
+                return [
+                    when
+                    for when in series.upcoming(
+                        stream.detection,
+                        after=max(stream.last, min_date - timedelta(days=1)),
+                        until=until,
+                        calendar=calendar,
+                    )
+                    if when >= min_date
+                ]
+        return _step_dates(
+            stream.last,
+            monthly=stream.monthly,
+            period_days=stream.period_days,
+            start_index=1,
+            min_date=min_date,
+            until=until,
+        )
+
+    if stream.detection is not None:
+        return series.upcoming(
+            stream.detection,
+            after=min_date - timedelta(days=1),
+            until=until,
+            calendar=calendar,
+        )
+
+    return _step_dates(
+        stream.last,
+        monthly=stream.monthly,
+        period_days=stream.period_days,
+        start_index=1,
+        min_date=min_date,
+        until=until,
+    )
+
+
 def _apply_messages(
-    streams: list[_Stream],
+    streams: list[_InferredStream],
     messages: list[dict[str, str]],
     request_date: date,
     *,
     home: str,
     rates: tuple[_Rate, ...],
-) -> tuple[list[_Stream], list[tuple[date, int]]]:
-    """Salary, rent, and confirmed invoice changes. Pending credits never add income."""
+    calendar: IndiaCalendar,
+) -> tuple[list[_InferredStream], list[tuple[date, int]]]:
+    """Dataset convention: apply message-stated salary, rent, and one-off invoice updates."""
     amended = list(streams)
     extras: list[tuple[date, int]] = []
+    projected_end = request_date + timedelta(days=HORIZON_DAYS - TAIL_DAYS)
     dated: list[tuple[date, dict[str, str]]] = []
     for message in messages:
         sent = message.get("sent_at") or ""
@@ -636,6 +881,7 @@ def _apply_messages(
         if sent_date is not None and sent_date > request_date:
             continue
         dated.append((sent_date or request_date, message))
+
     for _sent, message in sorted(dated, key=lambda item: item[0]):
         text = (message.get("message_text") or "").replace("\u2019", "'")
         amendment = _parse_message(text)
@@ -651,78 +897,78 @@ def _apply_messages(
                 rates,
             )
         credits = sorted(
-            (stream for stream in amended if stream.direction == "credit"),
+            (stream for stream in amended if stream.kind == "income"),
             key=lambda stream: stream.last,
         )
         if amendment.kind == "income_end":
-            amended = [stream for stream in amended if stream.direction != "credit"]
+            amended = [stream for stream in amended if stream.kind != "income"]
         elif amendment.kind == "income_remaining" and amount is not None:
             for stream in credits[:-1]:
                 amended.remove(stream)
             if credits:
                 amended = [
-                    replace(stream, amount_paise=amount) if stream is credits[-1] else stream
+                    replace(stream, level_paise=amount) if stream is credits[-1] else stream
                     for stream in amended
                 ]
         elif amendment.kind == "income_base" and amount is not None:
             amended = [
                 stream
                 for stream in amended
-                if not (stream.direction == "credit" and "commission" in stream.description.lower())
+                if not (stream.kind == "income" and "commission" in stream.name.lower())
             ]
             remaining = sorted(
-                (stream for stream in amended if stream.direction == "credit"),
-                key=lambda stream: stream.amount_paise,
+                (stream for stream in amended if stream.kind == "income"),
+                key=lambda stream: stream.level_paise,
             )
             if remaining:
                 target = remaining[-1]
                 amended = [
-                    replace(stream, amount_paise=amount) if stream is target else stream
+                    replace(stream, level_paise=amount) if stream is target else stream
                     for stream in amended
                 ]
         elif amendment.kind == "income_change" and amount is not None:
             if credits:
-                target = max(credits, key=lambda stream: stream.amount_paise)
+                target = max(credits, key=lambda stream: stream.level_paise)
                 amended = [
-                    replace(stream, amount_paise=amount) if stream is target else stream
+                    replace(stream, level_paise=amount) if stream is target else stream
                     for stream in amended
                 ]
         elif (
             amendment.kind == "income_resume" and amount is not None and amendment.when is not None
         ):
-            amended = [stream for stream in amended if stream.direction != "credit"]
+            amended = [stream for stream in amended if stream.kind != "income"]
             amended.append(
-                _Stream(
+                _InferredStream(
+                    kind="income",
+                    key="confirmed_salary",
+                    name="confirmed salary",
                     category="salary",
-                    direction="credit",
-                    description="confirmed salary",
-                    amount_paise=amount,
                     last=amendment.when,
-                    cadence_days=30,
+                    level_paise=amount,
+                    period_days=30,
                     monthly=True,
                     event_id=message.get("message_id") or "",
                     flexibility="fixed",
                     minimum_allowed_paise=0,
+                    detection=None,
                     next_date=amendment.when,
                 )
             )
         elif amendment.kind == "income_temporary" and amount is not None:
             amended = [
-                replace(stream, amount_paise=amount) if stream.direction == "credit" else stream
+                replace(stream, level_paise=amount) if stream.kind == "income" else stream
                 for stream in amended
             ]
         elif amendment.kind == "income_shift" and amendment.when is not None:
             amended = [
-                replace(stream, next_date=amendment.when)
-                if stream.direction == "credit"
-                else stream
+                replace(stream, next_date=amendment.when) if stream.kind == "income" else stream
                 for stream in amended
             ]
         elif amendment.kind == "rent_change" and amendment.percent is not None:
             factor = 1 + amendment.percent / 100
             amended = [
-                replace(stream, amount_paise=int(round(stream.amount_paise * factor)))
-                if stream.category == "rent"
+                replace(stream, level_paise=int(round(stream.level_paise * factor)))
+                if stream.kind == "spend" and stream.category == "rent"
                 else stream
                 for stream in amended
             ]
@@ -730,206 +976,193 @@ def _apply_messages(
             if not message.get("related_event_id"):
                 extras.append((amendment.when, amount))
         elif amendment.kind == "arrears" and amount is not None and credits:
-            for when in _occurrences(
-                credits[-1], request_date, request_date + timedelta(days=HORIZON_DAYS)
+            for when in _stream_dates(
+                credits[-1],
+                request_date=request_date,
+                until=projected_end,
+                calendar=calendar,
             ):
                 extras.append((when, amount))
                 break
     return amended, extras
 
 
-def _occurrences(stream: _Stream, start: date, end: date) -> list[date]:
-    anchor = stream.next_date
-    found: list[date] = []
-    if anchor is not None:
-        index = 0
-        while True:
-            when = (
-                _add_months(anchor, index)
-                if stream.monthly
-                else anchor + timedelta(days=stream.cadence_days * index)
-            )
-            if when > end:
-                break
-            if when >= start:
-                found.append(when)
-            index += 1
-        return found
-    first = stream.last
-    if stream.monthly:
-        index = 1
-        while True:
-            when = _add_months(first, index)
-            if when > end:
-                break
-            if when >= start:
-                found.append(when)
-            index += 1
-    else:
-        index = 1
-        while True:
-            when = first + timedelta(days=stream.cadence_days * index)
-            if when > end:
-                break
-            if when >= start:
-                found.append(when)
-            index += 1
-    return found
+# --- Production ProjectionInput builder --------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _Flow:
-    when: date
-    amount_paise: int
-    category: str
-    label: str
-    source_id: str
-    projected: bool
-
-
-def _explicit_flows(
+def _explicit_events(
     user_events: list[dict[str, str]],
+    streams: list[_InferredStream],
+    extras: list[tuple[date, int]],
     request_date: date,
     *,
-    streams: list[_Stream],
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
-) -> list[_Flow]:
+) -> tuple[list[CashEvent], list[tuple[str, date, str]]]:
+    """Scheduled/pending rows and message extras as confirmed CashEvents."""
     end = request_date + timedelta(days=HORIZON_DAYS)
-    flows: list[_Flow] = []
+    events: list[CashEvent] = []
+    explicit_keys: list[tuple[str, date, str]] = []
     for row in user_events:
         if row.get("status") not in {"scheduled", "pending"}:
             continue
-        if row.get("direction") not in {"debit", "credit"}:
+        direction = row.get("direction") or ""
+        if direction not in {"debit", "credit"}:
             continue
         when = _day(row.get("settlement_date"))
         if when is None or when < request_date or when > end:
             continue
-        if row.get("direction") == "credit" and not _is_income(row):
+        if direction == "credit" and not _is_income(row):
             continue
         amount = _row_paise(row, home=home, rates=rates, images=images)
+        stream_kind = "income" if direction == "credit" else "spend"
+        category = row.get("category") or ""
         if amount is None:
-            # Never read a blank amount as zero: borrow the category's stream amount, else skip.
             matching = [
                 stream
                 for stream in streams
-                if stream.category == row.get("category")
-                and stream.direction == row.get("direction")
+                if stream.kind == stream_kind and stream.category == category
             ]
-            amount = max((stream.amount_paise for stream in matching), default=None)
+            amount = max((stream.level_paise for stream in matching), default=None)
         if amount is None or amount <= 0:
             continue
-        signed = -amount if row.get("direction") == "debit" else amount
-        flows.append(
-            _Flow(
-                when=when,
-                amount_paise=signed,
-                category=row.get("category") or "",
-                label=row.get("description") or row.get("event_type") or "",
-                source_id=row.get("event_id") or "",
-                projected=False,
+        name = row.get("description") or row.get("event_type") or category
+        source_id = row.get("event_id") or None
+        if direction == "credit":
+            events.append(
+                CashEvent(
+                    date=when,
+                    amount_paise=amount,
+                    name=name,
+                    kind="income_fixed",
+                    source_id=source_id,
+                    confirmed=True,
+                )
+            )
+            explicit_keys.append(("income", when, category))
+        else:
+            kind = (
+                "obligation"
+                if category in {"expense", "subscription", "debt_payment"}
+                else "owed_payment"
+            )
+            events.append(
+                CashEvent(
+                    date=when,
+                    amount_paise=-amount,
+                    name=name,
+                    kind=kind,
+                    source_id=source_id,
+                    confirmed=True,
+                )
+            )
+            explicit_keys.append(("spend", when, category))
+    for when, amount in extras:
+        if when < request_date or when > end or amount == 0:
+            continue
+        events.append(
+            CashEvent(
+                date=when,
+                amount_paise=amount,
+                name="message",
+                kind="income_fixed" if amount > 0 else "obligation",
+                source_id="message",
+                confirmed=True,
             )
         )
-    return flows
+    return events, explicit_keys
 
 
-def _flows(
+def _near_explicit(
+    when: date,
+    *,
+    kind: str,
+    category: str,
+    explicit_keys: list[tuple[str, date, str]],
+) -> bool:
+    return any(
+        exp_kind == kind and exp_cat == category and abs((exp_date - when).days) <= DEDUPE_DAYS
+        for exp_kind, exp_date, exp_cat in explicit_keys
+    )
+
+
+def _build_projection_input(
     user_events: list[dict[str, str]],
-    streams: tuple[_Stream, ...],
-    extras: tuple[tuple[date, int], ...],
+    streams: list[_InferredStream],
+    extras: list[tuple[date, int]],
     request_date: date,
     *,
+    profile: dict[str, str],
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
-) -> list[_Flow]:
+    calendar: IndiaCalendar,
+) -> ProjectionInput:
+    """Build deterministic `CashEvent`s on a one-account `ProjectionInput`."""
     end = request_date + timedelta(days=HORIZON_DAYS)
-    # A projected occurrence near the horizon's end would fail a plan on the strength of a single
-    # inferred recurrence, so projections stop short of it; confirmed flows keep the full window.
+    # Dataset convention: projected occurrences stop short of the horizon's final TAIL_DAYS.
     projected_end = end - timedelta(days=TAIL_DAYS)
-    explicit = _explicit_flows(
+    events, explicit_keys = _explicit_events(
         user_events,
+        streams,
+        extras,
         request_date,
-        streams=list(streams),
         home=home,
         rates=rates,
         images=images,
     )
-    flows = list(explicit)
+
     for stream in streams:
-        for when in _occurrences(stream, request_date, projected_end):
-            duplicate = False
-            for other in explicit:
-                if other.category != stream.category:
-                    continue
-                if (other.amount_paise >= 0) != (stream.direction == "credit"):
-                    continue
-                if stream.direction == "debit" and not stream.monthly:
-                    continue
-                if abs((other.when - when).days) <= DEDUPE_DAYS:
-                    duplicate = True
-                    break
-            if duplicate:
-                continue
-            flows.append(
-                _Flow(
-                    when=when,
-                    amount_paise=stream.amount_paise
-                    if stream.direction == "credit"
-                    else -stream.amount_paise,
-                    category=stream.category,
-                    label=stream.description,
-                    source_id=f"{stream.category}:{stream.direction}",
-                    projected=True,
-                )
-            )
-    for when, amount in extras:
-        if when < request_date or when > end:
+        if stream.level_paise <= 0:
             continue
-        flows.append(
-            _Flow(
-                when=when,
-                amount_paise=amount,
-                category="salary" if amount > 0 else "other",
-                label="message",
-                source_id="message",
-                projected=False,
-            )
+        dates = _stream_dates(
+            stream,
+            request_date=request_date,
+            until=projected_end,
+            calendar=calendar,
         )
-    return sorted(flows, key=lambda flow: (flow.when, flow.amount_paise))
+        for when in dates:
+            if stream.kind == "income":
+                if _near_explicit(
+                    when,
+                    kind="income",
+                    category=stream.category,
+                    explicit_keys=explicit_keys,
+                ):
+                    continue
+                # Dataset convention: inferred recurring flows are deterministic confirmed events.
+                events.append(
+                    CashEvent(
+                        date=when,
+                        amount_paise=stream.level_paise,
+                        name=stream.name,
+                        kind="income_fixed",
+                        source_id=f"{stream.category}:credit" if stream.category else stream.key,
+                        confirmed=True,
+                    )
+                )
+            else:
+                if stream.monthly and _near_explicit(
+                    when,
+                    kind="spend",
+                    category=stream.category,
+                    explicit_keys=explicit_keys,
+                ):
+                    continue
+                # Dataset convention: inferred recurring outflows are deterministic obligations.
+                events.append(
+                    CashEvent(
+                        date=when,
+                        amount_paise=-stream.level_paise,
+                        name=stream.name,
+                        kind="obligation",
+                        source_id=f"{stream.category}:debit" if stream.category else stream.key,
+                        confirmed=True,
+                    )
+                )
 
-
-def _cash_events(flows: list[_Flow]) -> tuple[CashEvent, ...]:
-    """Every flow as the cash event the engine's walk applies on its date.
-
-    All of them are confirmed: the projection reserves unconfirmed for variable income it may only
-    show optimistically, while every flow here belongs in this forecast's base case.
-    """
-    events: list[CashEvent] = []
-    for flow in flows:
-        if flow.amount_paise > 0:
-            kind = "income_fixed"
-        elif flow.projected or flow.category in {"expense", "subscription", "debt_payment"}:
-            kind = "obligation"
-        else:
-            kind = "owed_payment"
-        events.append(
-            CashEvent(
-                date=flow.when,
-                amount_paise=flow.amount_paise,
-                name=flow.label,
-                kind=kind,
-                source_id=flow.source_id or None,
-            )
-        )
-    return tuple(events)
-
-
-def _inputs(
-    profile: dict[str, str], request_date: date, events: tuple[CashEvent, ...]
-) -> ProjectionInput:
-    """One liquid account and no spend categories: the walk is exact, so one run is the answer."""
+    events.sort(key=lambda event: (event.date, event.amount_paise))
     return ProjectionInput(
         as_of=request_date,
         floor_paise=_paise(profile.get("minimum_balance_to_keep")),
@@ -940,9 +1173,81 @@ def _inputs(
                 balance_paise=_paise(profile.get("current_available_balance")),
             ),
         ),
-        events=events,
+        events=tuple(events),
         ask_horizon_days=HORIZON_DAYS,
     )
+
+
+def _prepare_scenario(
+    user_events: list[dict[str, str]],
+    request_date: date,
+    *,
+    messages: list[dict[str, str]] | None = None,
+    home: str = "INR",
+    rates: tuple[_Rate, ...] = (),
+    images: dict[str, int] | None = None,
+) -> tuple[list[_InferredStream], list[tuple[date, int]], IndiaCalendar]:
+    image_amounts = images or {}
+    window_start = request_date - timedelta(days=DATASET_HISTORY_DAYS)
+    end = request_date + timedelta(days=HORIZON_DAYS)
+    cal = calendar_for(window_start - timedelta(days=21), end + timedelta(days=21))
+    settled = _settled_flows(
+        user_events, request_date, home=home, rates=rates, images=image_amounts
+    )
+    detected = _detect_streams(
+        settled,
+        user_events,
+        request_date,
+        cal,
+        home=home,
+        rates=rates,
+        images=image_amounts,
+    )
+    streams, extras = _apply_messages(
+        detected,
+        messages or [],
+        request_date,
+        home=home,
+        rates=rates,
+        calendar=cal,
+    )
+    return streams, extras, cal
+
+
+def _inputs_for(
+    user_events: list[dict[str, str]],
+    request_date: date,
+    *,
+    profile: dict[str, str] | None = None,
+    messages: list[dict[str, str]] | None = None,
+    home: str = "INR",
+    rates: tuple[_Rate, ...] = (),
+    images: dict[str, int] | None = None,
+) -> ProjectionInput:
+    """Build production `ProjectionInput` (confirmed `CashEvent`s) for one sample."""
+    image_amounts = images or {}
+    streams, extras, cal = _prepare_scenario(
+        user_events,
+        request_date,
+        messages=messages,
+        home=home,
+        rates=rates,
+        images=image_amounts,
+    )
+    return _build_projection_input(
+        user_events,
+        streams,
+        extras,
+        request_date,
+        profile=profile or {},
+        home=home,
+        rates=rates,
+        images=image_amounts,
+        calendar=cal,
+    )
+
+
+# --- Dataset plan search via production projection ---------------------------------------------
 
 
 def _installment(
@@ -955,6 +1260,7 @@ def _installment(
     runs: int,
     seed: int,
 ) -> tuple[int, date, int] | None:
+    """Dataset convention: evaluate a merchant installment plan with production `project()`."""
     try:
         count = int(option.get("number_of_payments") or 0)
         frequency = int(option.get("payment_frequency_days") or 0)
@@ -979,6 +1285,7 @@ def _installment(
             amount_paise=-each,
             name="HackerRank installment",
             kind="instalment",
+            confirmed=True,
         )
         for index in range(count)
     )
@@ -990,25 +1297,26 @@ def _installment(
 
 
 def _spending_changes(
-    inputs: ProjectionInput,
-    streams: tuple[_Stream, ...],
-    extras: tuple[tuple[date, int], ...],
+    streams: list[_InferredStream],
+    extras: list[tuple[date, int]],
     user_events: list[dict[str, str]],
     profile: dict[str, str],
+    request_date: date,
     *,
     requested: int,
     home: str,
     rates: tuple[_Rate, ...],
     images: dict[str, int],
+    calendar: IndiaCalendar,
     runs: int,
     seed: int,
-) -> list[tuple[_Stream, int]] | None:
-    """The smallest stop/reduce set that makes the full request safe today."""
+) -> list[tuple[_InferredStream, int]] | None:
+    """Dataset convention: smallest stop/reduce stream set making `safe_amount_today` cover ask."""
     reduce_categories = _split(profile.get("expense_categories_user_is_willing_to_reduce"))
     stop_categories = _split(profile.get("expense_categories_user_is_willing_to_stop"))
-    candidates: list[tuple[_Stream, int]] = []
+    candidates: list[tuple[_InferredStream, int]] = []
     for stream in streams:
-        if stream.direction != "debit" or stream.amount_paise <= 0:
+        if stream.kind != "spend" or stream.level_paise <= 0 or not stream.event_id:
             continue
         if stream.category in stop_categories and stream.flexibility in {
             "stoppable",
@@ -1018,33 +1326,35 @@ def _spending_changes(
         if (
             stream.category in reduce_categories
             and stream.flexibility in {"reducible", "reducible_or_stoppable"}
-            and 0 < stream.minimum_allowed_paise < stream.amount_paise
+            and 0 < stream.minimum_allowed_paise < stream.level_paise
         ):
             candidates.append((stream, stream.minimum_allowed_paise))
+
     for size in (1, 2, 3):
-        feasible: list[tuple[int, list[tuple[_Stream, int]]]] = []
+        feasible: list[tuple[int, list[tuple[_InferredStream, int]]]] = []
         for combo in itertools.combinations(candidates, size):
             if len({item[0].event_id for item in combo}) != size:
                 continue
             overrides = {item[0].event_id: item[1] for item in combo}
-            adjusted = tuple(
-                replace(stream, amount_paise=overrides[stream.event_id])
-                if stream.event_id in overrides
+            adjusted = [
+                replace(stream, level_paise=overrides[stream.event_id])
+                if stream.kind == "spend" and stream.event_id in overrides
                 else stream
                 for stream in streams
-            )
-            flows = _flows(
+            ]
+            planned = _build_projection_input(
                 user_events,
                 adjusted,
                 extras,
-                inputs.as_of,
+                request_date,
+                profile=profile,
                 home=home,
                 rates=rates,
                 images=images,
+                calendar=calendar,
             )
-            planned = replace(inputs, events=_cash_events(flows))
             if safe_amount_today(planned, runs=runs, seed=seed) >= requested:
-                saving = sum(stream.amount_paise - new for stream, new in combo)
+                saving = sum(stream.level_paise - new for stream, new in combo)
                 feasible.append((saving, list(combo)))
         if feasible:
             feasible.sort(key=lambda item: -item[0])
@@ -1061,7 +1371,7 @@ def _predict(
     messages: list[dict[str, str]],
     images: dict[str, int],
     rates: tuple[_Rate, ...],
-    runs: int = 1,
+    runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
     request_date = _day(request.get("request_date"))
@@ -1070,42 +1380,32 @@ def _predict(
     home = profile.get("home_currency") or "INR"
     requested = _paise(request.get("requested_amount"))
     desired = _day(request.get("desired_completion_date"))
+    # Dataset convention: honor `payment_methods_user_will_consider` for status and plan search.
     methods = _split(profile.get("payment_methods_user_will_consider"))
 
-    scenario, extras = _scenario(
-        user_events, request_date, messages=messages, home=home, rates=rates, images=images
+    streams, extras, cal = _prepare_scenario(
+        user_events,
+        request_date,
+        messages=messages,
+        home=home,
+        rates=rates,
+        images=images,
     )
-    flows = _flows(
-        user_events, scenario, extras, request_date, home=home, rates=rates, images=images
+    inputs = _build_projection_input(
+        user_events,
+        streams,
+        extras,
+        request_date,
+        profile=profile,
+        home=home,
+        rates=rates,
+        images=images,
+        calendar=cal,
     )
-    inputs = _inputs(profile, request_date, _cash_events(flows))
     safe = min(safe_amount_today(inputs, runs=runs, seed=seed), requested)
     first = first_full_payment_date(inputs, requested, start_on=request_date, runs=runs, seed=seed)
     earliest = _day(first["date"]) if first is not None else None
-    max_months = None
-    if profile.get("max_installment_months"):
-        try:
-            max_months = int(profile["max_installment_months"])
-        except ValueError:
-            max_months = None
 
-    changes: list[tuple[_Stream, int]] | None = None
-    if "full_payment" in methods and safe < requested:
-        changes = _spending_changes(
-            inputs,
-            scenario,
-            extras,
-            user_events,
-            profile,
-            requested=requested,
-            home=home,
-            rates=rates,
-            images=images,
-            runs=runs,
-            seed=seed,
-        )
-
-    candidates: list[tuple[int, int, date, int, str, str, str]] = []
     if safe >= requested and "full_payment" in methods:
         return {
             "request_id": request["request_id"],
@@ -1115,6 +1415,32 @@ def _predict(
             "earliest_date_for_full_payment": request_date.isoformat(),
             "spending_changes_needed": "none",
         }
+
+    max_months: int | None = None
+    if profile.get("max_installment_months"):
+        try:
+            max_months = int(profile["max_installment_months"])
+        except ValueError:
+            max_months = None
+
+    changes: list[tuple[_InferredStream, int]] | None = None
+    if "full_payment" in methods and safe < requested:
+        changes = _spending_changes(
+            streams,
+            extras,
+            user_events,
+            profile,
+            request_date,
+            requested=requested,
+            home=home,
+            rates=rates,
+            images=images,
+            calendar=cal,
+            runs=runs,
+            seed=seed,
+        )
+
+    candidates: list[tuple[int, int, date, int, str, str, str]] = []
     if changes is not None and "full_payment" in methods:
         parts: list[str] = []
         for stream, new_amount in changes:
@@ -1148,12 +1474,12 @@ def _predict(
             )
             if plan is None:
                 continue
-            total, first, count = plan
+            total, first_pay, count = plan
             candidates.append(
                 (
                     0,
                     total,
-                    first,
+                    first_pay,
                     count,
                     option.get("payment_option_id") or "",
                     "affordable_with_plan:installments",
@@ -1178,6 +1504,7 @@ def _predict(
                 "none",
             )
         )
+
     if candidates:
         candidates.sort(key=lambda item: item[:5])
         chosen = candidates[0]
@@ -1209,69 +1536,8 @@ def _predict(
     }
 
 
-def _scenario(
-    user_events: list[dict[str, str]],
-    request_date: date,
-    *,
-    messages: list[dict[str, str]] | None = None,
-    home: str = "INR",
-    rates: tuple[_Rate, ...] = (),
-    images: dict[str, int] | None = None,
-) -> tuple[tuple[_Stream, ...], tuple[tuple[date, int], ...]]:
-    """The recurring streams the settled history implies, and the dated credits a message adds."""
-    streams = _build_streams(user_events, request_date, home=home, rates=rates, images=images or {})
-    amended, credits = _apply_messages(
-        streams, messages or [], request_date, home=home, rates=rates
-    )
-    return tuple(amended), tuple(credits)
-
-
-def _events_for(
-    user_events: list[dict[str, str]],
-    request_date: date,
-    *,
-    messages: list[dict[str, str]] | None = None,
-    home: str = "INR",
-    rates: tuple[_Rate, ...] = (),
-    images: dict[str, int] | None = None,
-) -> tuple[list[CashEvent], set[str], list[dict[str, Any]]]:
-    """The projected events for one user, the categories they cover, and their sources."""
-    image_amounts = images or {}
-    streams, extras = _scenario(
-        user_events,
-        request_date,
-        messages=messages,
-        home=home,
-        rates=rates,
-        images=image_amounts,
-    )
-    flows = _flows(
-        user_events,
-        streams,
-        extras,
-        request_date,
-        home=home,
-        rates=rates,
-        images=image_amounts,
-    )
-    events = _cash_events(flows)
-    covered: set[str] = {flow.category for flow in flows if flow.amount_paise < 0}
-    sources: list[dict[str, Any]] = [
-        {
-            "kind": "event" if not flow.projected else "stream",
-            "id": flow.source_id,
-            "name": flow.label,
-            "detail": f"{'debit' if flow.amount_paise < 0 else 'credit'} · "
-            f"{flow.category} · {flow.when.isoformat()}",
-            "amount_paise": abs(flow.amount_paise),
-        }
-        for flow in flows
-    ]
-    return list(events), covered, sources
-
-
 def _amount_ok(predicted: float, expected: float, requested: float) -> bool:
-    tolerance = max(requested * 0.05, 1.0)
+    tolerance = max(requested * AMOUNT_TOLERANCE_RATIO, AMOUNT_MIN_TOLERANCE)
     return abs(predicted - expected) <= tolerance
 
 
@@ -1281,9 +1547,23 @@ def _dates_ok(predicted: str, expected: str) -> bool:
     if not predicted or not expected:
         return False
     try:
-        return abs((date.fromisoformat(predicted) - date.fromisoformat(expected)).days) <= 3
+        return (
+            abs((date.fromisoformat(predicted) - date.fromisoformat(expected)).days)
+            <= DATE_TOLERANCE_DAYS
+        )
     except ValueError:
         return False
+
+
+def _wilson_rate(rate: float, n: int) -> tuple[float, float]:
+    """The 95% Wilson score interval for a rate in [0, 1] over ``n`` samples."""
+    if n == 0:
+        return 0.0, 1.0
+    p = max(0.0, min(1.0, rate))
+    z2 = scoring.Z95 * scoring.Z95
+    centre = (p + z2 / (2 * n)) / (1 + z2 / n)
+    half = scoring.Z95 * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / (1 + z2 / n)
+    return max(0.0, centre - half), min(1.0, centre + half)
 
 
 def _display_dataset(dataset: Path) -> str:
@@ -1296,14 +1576,10 @@ def _display_dataset(dataset: Path) -> str:
 def score(
     dataset: Path | None = None,
     *,
-    runs: int = 1,
+    runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
 ) -> dict[str, Any]:
-    """Score with the real engine walk.
-
-    The walk has no spend-category pools, so every run is the same curve and one run is exact;
-    `runs` and `seed` exist so the sample can be pushed through the sampled walk unchanged.
-    """
+    """Score the shipped engine on the local HackerRank dataset."""
     dataset = dataset or find_dataset()
     if dataset is None:
         return {
@@ -1327,8 +1603,19 @@ def score(
     samples = _read_csv(dataset / "sample_requests.csv")
     rows: list[dict[str, Any]] = []
     for sample in samples:
+        expected_status = sample.get("affordability_status") or ""
         profile = profiles.get(sample["user_id"])
         if profile is None:
+            rows.append(
+                {
+                    "request_id": sample.get("request_id") or "",
+                    "expected_status": expected_status,
+                    "error": "profile is missing",
+                    "status_match": False,
+                    "amount_match": False,
+                    "earliest_match": False,
+                }
+            )
             continue
         try:
             predicted = _predict(
@@ -1346,6 +1633,7 @@ def score(
             rows.append(
                 {
                     "request_id": sample["request_id"],
+                    "expected_status": expected_status,
                     "error": str(exc),
                     "status_match": False,
                     "amount_match": False,
@@ -1353,7 +1641,7 @@ def score(
                 }
             )
             continue
-        status_match = predicted["affordability_status"] == sample["affordability_status"]
+        status_match = predicted["affordability_status"] == expected_status
         amount_match = _amount_ok(
             float(predicted["amount_safe_to_pay"]),
             float(sample["amount_safe_to_pay"]),
@@ -1366,7 +1654,7 @@ def score(
         rows.append(
             {
                 **predicted,
-                "expected_status": sample["affordability_status"],
+                "expected_status": expected_status,
                 "expected_amount_safe_to_pay": float(sample["amount_safe_to_pay"]),
                 "expected_earliest_date": sample["earliest_date_for_full_payment"],
                 "status_match": status_match,
@@ -1374,38 +1662,114 @@ def score(
                 "earliest_match": earliest_match,
             }
         )
-    scored = [row for row in rows if "error" not in row]
-    n = len(scored)
+
+    n = len(rows)
     if n == 0:
         return {"available": False, "reason": "no scorable samples", "score": None}
-    status_accuracy = sum(1 for row in scored if row["status_match"]) / n
-    amount_accuracy = sum(1 for row in scored if row["amount_match"]) / n
-    earliest_accuracy = sum(1 for row in scored if row["earliest_match"]) / n
+
+    status_hits = sum(1 for row in rows if row["status_match"])
+    amount_hits = sum(1 for row in rows if row["amount_match"])
+    earliest_hits = sum(1 for row in rows if row["earliest_match"])
+    errors = sum(1 for row in rows if "error" in row)
+
+    status_accuracy = status_hits / n
+    amount_accuracy = amount_hits / n
+    earliest_accuracy = earliest_hits / n
+    combined = (
+        WEIGHTS[0] * status_accuracy + WEIGHTS[1] * amount_accuracy + WEIGHTS[2] * earliest_accuracy
+    )
+
+    status_ci = scoring.wilson(status_hits, n)
+    amount_ci = scoring.wilson(amount_hits, n)
+    earliest_ci = scoring.wilson(earliest_hits, n)
+    combined_ci = _wilson_rate(combined, n)
+
+    status_counts = {
+        status: {
+            "expected": sum(1 for row in rows if row.get("expected_status") == status),
+            "predicted": sum(1 for row in rows if row.get("affordability_status") == status),
+        }
+        for status in EXPECTED
+    }
+
     return {
         "available": True,
         "dataset": _display_dataset(dataset),
         "samples": n,
-        "score": round(0.5 * status_accuracy + 0.3 * amount_accuracy + 0.2 * earliest_accuracy, 4),
+        "errors": errors,
+        "score": round(combined, 4),
         "status_accuracy": round(status_accuracy, 4),
         "amount_accuracy": round(amount_accuracy, 4),
         "earliest_accuracy": round(earliest_accuracy, 4),
+        "hits": {
+            "status": status_hits,
+            "amount": amount_hits,
+            "earliest": earliest_hits,
+        },
+        "intervals": {
+            "combined": [round(combined_ci[0], 4), round(combined_ci[1], 4)],
+            "status": [round(status_ci[0], 4), round(status_ci[1], 4)],
+            "amount": [round(amount_ci[0], 4), round(amount_ci[1], 4)],
+            "earliest": [round(earliest_ci[0], 4), round(earliest_ci[1], 4)],
+        },
+        "status_counts": status_counts,
         "rows": rows,
     }
+
+
+def _fmt_interval(bounds: list[float] | tuple[float, float]) -> str:
+    return f"{bounds[0]:.1%}-{bounds[1]:.1%}"
 
 
 def format_report(result: dict[str, Any]) -> str:
     if not result.get("available"):
         return f"HackerRank sample score: not run. {result['reason']}."
-    return "\n".join(
-        [
-            f"HackerRank 'Buy or Wait' samples: {result['samples']}",
-            f"Combined score: {result['score']:.2%}",
-            f"Affordability status: {result['status_accuracy']:.0%}",
-            f"amount_safe_to_pay within 5% of requested: {result['amount_accuracy']:.0%}",
-            f"Earliest full-payment date within 3 days: {result['earliest_accuracy']:.0%}",
-            f"source: {result['dataset']} (local, not committed)",
-        ]
-    )
+    n = int(result["samples"])
+    errors = int(result.get("errors", 0))
+    hits = result.get("hits") or {}
+    intervals = result.get("intervals") or {}
+    status_counts = result.get("status_counts") or {}
+    lines = [
+        f"HackerRank 'Buy or Wait' samples: {n} (errors: {errors})",
+        (
+            f"Combined score: {result['score']:.2%} "
+            f"(95% CI {_fmt_interval(intervals['combined'])}, n={n})"
+            if "combined" in intervals
+            else f"Combined score: {result['score']:.2%}"
+        ),
+        (
+            f"Affordability status: {result['status_accuracy']:.0%} "
+            f"({hits.get('status', 0)}/{n}, 95% CI {_fmt_interval(intervals['status'])}, n={n})"
+            if "status" in intervals
+            else f"Affordability status: {result['status_accuracy']:.0%}"
+        ),
+        (
+            f"amount_safe_to_pay within 5% of requested: {result['amount_accuracy']:.0%} "
+            f"({hits.get('amount', 0)}/{n}, 95% CI {_fmt_interval(intervals['amount'])}, n={n})"
+            if "amount" in intervals
+            else f"amount_safe_to_pay within 5% of requested: {result['amount_accuracy']:.0%}"
+        ),
+        (
+            f"Earliest full-payment date within 3 days: {result['earliest_accuracy']:.0%} "
+            f"({hits.get('earliest', 0)}/{n}, 95% CI {_fmt_interval(intervals['earliest'])}, n={n})"
+            if "earliest" in intervals
+            else f"Earliest full-payment date within 3 days: {result['earliest_accuracy']:.0%}"
+        ),
+    ]
+    if status_counts:
+        lines.extend(
+            [
+                "",
+                "| Status | Expected | Predicted |",
+                "|---|---:|---:|",
+            ]
+        )
+        for status in EXPECTED:
+            counts = status_counts.get(status, {"expected": 0, "predicted": 0})
+            lines.append(f"| {status} | {counts['expected']} | {counts['predicted']} |")
+    lines.append("")
+    lines.append(f"source: {result['dataset']} (local, not committed)")
+    return "\n".join(lines)
 
 
 def publish_report(result: dict[str, Any], readme: Path) -> None:
@@ -1424,8 +1788,12 @@ def publish_report(result: dict[str, Any], readme: Path) -> None:
 
 
 __all__ = [
+    "AMOUNT_MIN_TOLERANCE",
+    "AMOUNT_TOLERANCE_RATIO",
     "DATASET_ENV",
+    "DATE_TOLERANCE_DAYS",
     "EXPECTED",
+    "WEIGHTS",
     "find_dataset",
     "format_report",
     "publish_report",

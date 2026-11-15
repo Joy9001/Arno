@@ -492,7 +492,7 @@ def test_backtest_summary_scores_each_forecaster_with_an_interval():
 
 
 def test_a_month_end_recurrence_keeps_its_day_of_month():
-    from arno.engine.hackerrank import _events_for
+    from arno.engine.hackerrank import _inputs_for
 
     def settled(day: str) -> dict[str, str]:
         return {
@@ -507,16 +507,18 @@ def test_a_month_end_recurrence_keeps_its_day_of_month():
             "description": "Streaming",
         }
 
-    events, _covered, _sources = _events_for(
+    inputs = _inputs_for(
         [settled("2025-11-30"), settled("2025-12-30"), settled("2026-01-30")],
         date(2026, 2, 1),
     )
     # Projected occurrences stop short of the horizon's last days; confirmed ones would not.
-    assert [event.date.isoformat() for event in events] == [
+    assert inputs.series == ()
+    assert [event.date.isoformat() for event in inputs.events] == [
         "2026-02-28",
         "2026-03-30",
     ]
-    assert all(event.amount_paise == -64_900 for event in events)
+    assert all(event.confirmed for event in inputs.events)
+    assert all(event.amount_paise == -64_900 for event in inputs.events)
 
 
 # --- jobs: recurring phase -----------------------------------------------------------------

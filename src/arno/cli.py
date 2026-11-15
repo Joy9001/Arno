@@ -621,17 +621,17 @@ def hackerrank_command(
     publish: bool = typer.Option(
         True, "--publish/--no-publish", help="Replace the README HackerRank section."
     ),
-    runs: int = typer.Option(
-        1,
+    runs: int | None = typer.Option(
+        None,
         "--runs",
         min=1,
-        help="Seeded scenarios. The sample has no spend pools, so every scenario is the same.",
+        help="Seeded scenarios. Defaults to the production projection count.",
     ),
 ) -> None:
     """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""
     from arno.engine.hackerrank import format_report, publish_report, score
 
-    result = score(dataset, runs=runs)
+    result = score(dataset) if runs is None else score(dataset, runs=runs)
     typer.echo(format_report(result))
     if publish:
         publish_report(result, REPO_ROOT / "README.md")
