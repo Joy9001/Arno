@@ -9,11 +9,14 @@ from fractions import Fraction
 import pytest
 
 from arno.engine.money import (
+    CardPayoff,
     _add_months,
+    _compute_apr,
     add_months,
     allocate,
     amortize,
     card_emi,
+    card_payoff,
     compound,
     infer_rate,
     scale_cumulative,
@@ -477,3 +480,356 @@ def test_card_emi_fee_no_cost_and_validation():
         card_emi(100_000, annual_rate_bps=1500, months=1)
     with pytest.raises(ValueError, match="2 and 48"):
         card_emi(100_000, annual_rate_bps=1500, months=49)
+
+
+def _pv_at_bps_x100(payments: list[int], bps_x100: int) -> Fraction:
+    monthly_rate = Fraction(bps_x100, 12_000_000)
+    one_plus_r = 1 + monthly_rate
+    pv = Fraction(0)
+    for payment in reversed(payments):
+        pv = (pv + payment) / one_plus_r
+    return pv
+
+
+def test_amortize_fee_and_apr_hand_computed():
+    # ₹1,000 (100,000 paise), 12% p.a. (1% per month), 1 month, ₹10 (1,000 paise) fee, 18% GST:
+    #   month 1 interest = 100,000 * 1% = 1,000; EMI = 101,000 (paid at month 1)
+    #   fee GST = 1,000 * 18% = 180; total fee = 1,180
+    #   net disbursed = 100,000 - 1,180 = 98,820
+    #   total cost = 1,000 + 1,180 = 2,180
+    #   monthly IRR r = 101,000 / 98,820 - 1 = 2,180 / 98,820 = 109 / 4,941
+    #   annual APR = 12 * r * 100% = 130,800 / 4,941 = 26.472374...% (264,723 to 264,724 bps_x100)
+    one_month = amortize(
+        100_000,
+        12.0,
+        1,
+        processing_fee_paise=1_000,
+    )
+    assert one_month["processing_fee"] == {"paise": 1_000, "text": "₹10"}
+    assert one_month["fee_gst"] == {"paise": 180, "text": "₹1.80"}
+    assert one_month["total_fee"] == {"paise": 1_180, "text": "₹11.80"}
+    assert one_month["net_disbursed"] == {"paise": 98_820, "text": "₹988.20"}
+    assert one_month["total_cost"] == {"paise": 2_180, "text": "₹21.80"}
+    assert one_month["emi"]["paise"] == 101_000
+    assert one_month["apr"]["low_bps_x100"] == 264_723
+    assert one_month["apr"]["high_bps_x100"] == 264_724
+    assert one_month["apr"]["exact"] is False
+    assert any("deducted at disbursal" in note for note in one_month["assumptions"])
+
+    # 12-month loan with a rounded last payment: ₹1,000 at 12% for 12 months has
+    # 11 EMIs of 8,885 and a final payment of 8,884 (total_paid = 106,619).
+    # With ₹20 (2,000 paise) fee + 18% GST (360) = 2,360 total fee, net disbursed = 97,640.
+    # total cost = 6,619 + 2,360 = 8,979.
+    twelve_month = amortize(100_000, 12.0, 12, processing_fee_paise=2_000)
+    assert twelve_month["total_fee"]["paise"] == 2_360
+    assert twelve_month["net_disbursed"]["paise"] == 97_640
+    assert twelve_month["total_cost"]["paise"] == 8_979
+    assert twelve_month["apr"]["low_bps_x100"] is not None
+    assert twelve_month["apr"]["low_bps_x100"] > 120_000
+
+
+def test_amortize_fee_apr_above_100_percent_and_zero_gst():
+    # ₹1,000 at 0% for one month with a ₹100 fee and no GST: the EMI is 100,000,
+    # net disbursed is 90,000, so r = 10,000 / 90,000 = 1/9 a month and
+    # APR = 12/9 = 133.3333...% a year (1,333,333.33 bps_x100).
+    no_gst = amortize(100_000, 0.0, 1, processing_fee_paise=10_000, gst_bps=0)
+    assert no_gst["fee_gst"] == {"paise": 0, "text": "₹0"}
+    assert no_gst["total_fee"]["paise"] == 10_000
+    assert no_gst["net_disbursed"]["paise"] == 90_000
+    assert no_gst["total_cost"]["paise"] == 10_000
+    assert no_gst["apr"]["low_bps_x100"] == 1_333_333
+    assert no_gst["apr"]["high_bps_x100"] == 1_333_334
+    assert no_gst["apr"]["exact"] is False
+    assert "133.3333%" in no_gst["apr"]["note"]
+
+    # Fee one paisa below the principal: net is 1 paisa and the EMI is 100,000, so
+    # 1 + r = 100,000, r = 99,999 a month, and APR = 12 * 99,999 = 1,199,988 = 119,998,800%
+    # a year exactly, on unit 1,199,988,000,000.
+    one_paisa = amortize(100_000, 0.0, 1, processing_fee_paise=99_999, gst_bps=0)
+    assert one_paisa["net_disbursed"]["paise"] == 1
+    assert one_paisa["apr"]["low_bps_x100"] == 1_199_988_000_000
+    assert one_paisa["apr"]["high_bps_x100"] == 1_199_988_000_000
+    assert one_paisa["apr"]["exact"] is True
+    assert "119998800.0000%" in one_paisa["apr"]["note"]
+
+
+def test_amortize_zero_fee_leaves_return_unchanged_and_zero_fee_apr_matches_rate():
+    baseline = amortize(1_000_000_00, 8.5, 240, start_date=date(2026, 1, 1))
+    explicit_zero = amortize(
+        1_000_000_00,
+        8.5,
+        240,
+        start_date=date(2026, 1, 1),
+        processing_fee_paise=0,
+    )
+    assert set(explicit_zero.keys()) == set(baseline.keys())
+    assert explicit_zero == baseline
+    assert set(baseline.keys()) == {
+        "emi",
+        "months",
+        "total_interest",
+        "total_paid",
+        "payoff_date",
+        "schedule",
+        "prepay",
+        "assumptions",
+    }
+
+    # Internal APR helper on a zero-fee schedule matches the loan rate within schedule rounding.
+    payments = [row["interest_paise"] + row["principal_paise"] for row in baseline["schedule"]]
+    zero_fee_apr = _compute_apr(1_000_000_00, payments)
+    assert zero_fee_apr["low_bps_x100"] is not None
+    assert zero_fee_apr["high_bps_x100"] is not None
+    assert abs(zero_fee_apr["low_bps_x100"] - 85_000) <= 1
+
+    zero_rate = amortize(120_000_00, 0.0, 12)
+    zero_payments = [
+        row["interest_paise"] + row["principal_paise"] for row in zero_rate["schedule"]
+    ]
+    zero_apr = _compute_apr(120_000_00, zero_payments)
+    assert zero_apr["low_bps_x100"] == 0
+    assert zero_apr["high_bps_x100"] == 0
+    assert zero_apr["exact"] is True
+
+
+def test_amortize_fee_validation_repricing_monotone_and_prepay():
+    with pytest.raises(ValueError, match="negative"):
+        amortize(100_000, 12.0, 12, processing_fee_paise=-1)
+    with pytest.raises(ValueError, match="negative"):
+        amortize(100_000, 12.0, 12, processing_fee_paise=1_000, gst_bps=-1)
+    # 85,000 + 18% GST (15,300) = 100,300 > 100,000 principal
+    with pytest.raises(ValueError, match="less than principal"):
+        amortize(100_000, 12.0, 12, processing_fee_paise=85_000)
+    # Exact equality: 100,000 + 0% GST == 100,000 principal
+    with pytest.raises(ValueError, match="less than principal"):
+        amortize(100_000, 12.0, 12, processing_fee_paise=100_000, gst_bps=0)
+
+    # Repricing & monotonicity across fees (including uneven last payment and prepay baseline).
+    prev_low = 0
+    for fee in (100_00, 500_00, 2_500_00, 10_000_00):
+        res = amortize(5_000_000_00, 8.5, 240, processing_fee_paise=fee)
+        payments = [row["interest_paise"] + row["principal_paise"] for row in res["schedule"]]
+        apr = res["apr"]
+        net = res["net_disbursed"]["paise"]
+        assert apr["low_bps_x100"] is not None and apr["high_bps_x100"] is not None
+        assert apr["high_bps_x100"] - apr["low_bps_x100"] <= 1
+        assert _pv_at_bps_x100(payments, apr["low_bps_x100"]) >= Fraction(net)
+        assert _pv_at_bps_x100(payments, apr["high_bps_x100"]) <= Fraction(net)
+        assert apr["low_bps_x100"] > prev_low
+        prev_low = apr["low_bps_x100"]
+
+    # With prepay given, APR describes the baseline schedule only.
+    base_fee = amortize(1_000_000_00, 9.0, 60, processing_fee_paise=10_000_00)
+    prepay_fee = amortize(
+        1_000_000_00,
+        9.0,
+        60,
+        processing_fee_paise=10_000_00,
+        prepay={"amount_paise": 200_000_00, "at_emi": 12, "reduce": "tenure"},
+    )
+    assert prepay_fee["apr"] == base_fee["apr"]
+    assert prepay_fee["prepay"] is not None
+    assert prepay_fee["prepay"]["months_saved"] > 0
+
+
+def _assert_card_payoff_invariants(balance_paise: int, res: CardPayoff) -> None:
+    schedule = res["schedule"]
+    assert res["months"] == len(schedule)
+    assert len(schedule) > 0
+    assert schedule[0]["opening_paise"] == balance_paise
+    assert schedule[-1]["closing_paise"] == 0
+    for idx, row in enumerate(schedule):
+        assert row["n"] == idx + 1
+        assert (
+            row["closing_paise"]
+            == row["opening_paise"]
+            + row["finance_charge_paise"]
+            + row["gst_paise"]
+            - row["payment_paise"]
+        )
+        if idx + 1 < len(schedule):
+            assert row["closing_paise"] == schedule[idx + 1]["opening_paise"]
+    total_fc = sum(row["finance_charge_paise"] for row in schedule)
+    total_gst = sum(row["gst_paise"] for row in schedule)
+    total_paid = sum(row["payment_paise"] for row in schedule)
+    assert res["total_finance_charge"]["paise"] == total_fc
+    assert res["total_gst"]["paise"] == total_gst
+    assert res["cost_of_carrying"]["paise"] == total_fc + total_gst
+    assert res["total_paid"]["paise"] == total_paid
+    assert total_paid == balance_paise + total_fc + total_gst
+
+
+def test_card_payoff_three_month_minimum_due_hand_computed():
+    # Balance ₹500 (50,000 paise), 36% p.a. (3,600 bps -> 3%/month), GST 18% (1,800 bps),
+    # default minimum due: max(ceil(5% of statement), ₹200 = 20,000 paise), start 2026-01-15.
+    # Month 1 (2026-02-15):
+    #   opening = 50,000
+    #   finance_charge = round_half_up(50,000 * 3,600 / 120,000) = 1,500
+    #   gst = round_half_up(1,500 * 1,800 / 10,000) = 270
+    #   statement = 50,000 + 1,500 + 270 = 51,770
+    #   pct_due = ceil(51,770 * 500 / 10,000) = ceil(2,588.5) = 2,589
+    #   payment = min(max(2,589, 20,000), 51,770) = 20,000
+    #   closing = 51,770 - 20,000 = 31,770
+    # Month 2 (2026-03-15):
+    #   opening = 31,770
+    #   finance_charge = round_half_up(31,770 * 3,600 / 120,000) = round_half_up(953.1) = 953
+    #   gst = round_half_up(953 * 1,800 / 10,000) = round_half_up(171.54) = 172
+    #   statement = 31,770 + 953 + 172 = 32,895
+    #   pct_due = ceil(32,895 * 500 / 10,000) = ceil(1,644.75) = 1,645
+    #   payment = min(max(1,645, 20,000), 32,895) = 20,000
+    #   closing = 32,895 - 20,000 = 12,895
+    # Month 3 (2026-04-15):
+    #   opening = 12,895
+    #   finance_charge = round_half_up(12,895 * 3,600 / 120,000) = round_half_up(386.85) = 387
+    #   gst = round_half_up(387 * 1,800 / 10,000) = round_half_up(69.66) = 70
+    #   statement = 12,895 + 387 + 70 = 13,352
+    #   pct_due = ceil(13,352 * 500 / 10,000) = ceil(667.6) = 668
+    #   payment = min(max(668, 20,000), 13,352) = 13,352
+    #   closing = 13,352 - 13,352 = 0
+    # Totals: fc = 2,840; gst = 512; carrying cost = 3,352; total paid = 53,352.
+    res = card_payoff(
+        50_000,
+        annual_rate_bps=3600,
+        payment="minimum",
+        start_date=date(2026, 1, 15),
+    )
+    _assert_card_payoff_invariants(50_000, res)
+    assert res["months"] == 3
+    assert res["payoff_date"] == "2026-04-15"
+    assert res["schedule"] == [
+        {
+            "n": 1,
+            "date": "2026-02-15",
+            "opening_paise": 50_000,
+            "finance_charge_paise": 1_500,
+            "gst_paise": 270,
+            "payment_paise": 20_000,
+            "closing_paise": 31_770,
+        },
+        {
+            "n": 2,
+            "date": "2026-03-15",
+            "opening_paise": 31_770,
+            "finance_charge_paise": 953,
+            "gst_paise": 172,
+            "payment_paise": 20_000,
+            "closing_paise": 12_895,
+        },
+        {
+            "n": 3,
+            "date": "2026-04-15",
+            "opening_paise": 12_895,
+            "finance_charge_paise": 387,
+            "gst_paise": 70,
+            "payment_paise": 13_352,
+            "closing_paise": 0,
+        },
+    ]
+    assert res["total_finance_charge"]["paise"] == 2_840
+    assert res["total_gst"]["paise"] == 512
+    assert res["cost_of_carrying"]["paise"] == 3_352
+    assert res["total_paid"]["paise"] == 53_352
+    assert any("minimum due assumed" in note for note in res["assumptions"])
+    assert any("monthly approximation" in note for note in res["assumptions"])
+    assert any("no interest-free period" in note for note in res["assumptions"])
+
+
+def test_card_payoff_fixed_payment_and_floor_vs_percentage():
+    # Fixed payment example: ₹1,000 (100,000 paise) at 36% p.a., fixed ₹600/month (60,000 paise):
+    # Month 1: fc = 3,000, gst = 540, stmt = 103,540, pay = 60,000, close = 43,540
+    # Month 2: fc = 1,306, gst = 235, stmt = 45,081, pay = 45,081, close = 0
+    fixed = card_payoff(100_000, annual_rate_bps=3600, payment=60_000)
+    _assert_card_payoff_invariants(100_000, fixed)
+    assert fixed["months"] == 2
+    assert fixed["payoff_date"] is None
+    assert fixed["schedule"][0]["date"] is None
+    assert fixed["total_finance_charge"]["paise"] == 4_306
+    assert fixed["total_gst"]["paise"] == 775
+    assert fixed["total_paid"]["paise"] == 105_081
+    assert not any("minimum due assumed" in note for note in fixed["assumptions"])
+
+    # Larger balance where 5% minimum due beats the ₹200 floor initially, then floor finishes it:
+    # ₹25,000 (2,500,000 paise) at 42% p.a. (4,200 bps).
+    revolving = card_payoff(
+        2_500_000,
+        annual_rate_bps=4200,
+        payment="minimum",
+        minimum_bps=500,
+        minimum_floor_paise=20_000,
+    )
+    _assert_card_payoff_invariants(2_500_000, revolving)
+    assert revolving["months"] < 1_200
+    # Month 1 pays 5% of statement (> 20,000 floor); penultimate month pays 20,000 floor.
+    assert revolving["schedule"][0]["payment_paise"] > 20_000
+    assert revolving["schedule"][-2]["payment_paise"] == 20_000
+    assert not any("assumed" in note for note in revolving["assumptions"])
+
+
+def test_card_payoff_zero_rate_edges_and_errors():
+    # Zero rate divides the balance cleanly with zero carrying cost.
+    zero = card_payoff(50_000, annual_rate_bps=0, payment=20_000)
+    _assert_card_payoff_invariants(50_000, zero)
+    assert [row["payment_paise"] for row in zero["schedule"]] == [20_000, 20_000, 10_000]
+    assert zero["cost_of_carrying"]["paise"] == 0
+    assert zero["total_paid"]["paise"] == 50_000
+
+    # 1 paisa balance
+    tiny = card_payoff(1, annual_rate_bps=3600, payment="minimum")
+    _assert_card_payoff_invariants(1, tiny)
+    assert tiny["months"] == 1
+    assert tiny["total_paid"]["paise"] == 1
+
+    # Very large balance (10^25 paise) keeps integers exact beyond 28 Decimal digits
+    huge_balance = 10**25
+    huge_rate = 3600  # 3%/month -> fc = 3 * 10^23, gst = 5.4 * 10^22
+    huge_payment = 5 * 10**24
+    huge = card_payoff(huge_balance, annual_rate_bps=huge_rate, payment=huge_payment)
+    _assert_card_payoff_invariants(huge_balance, huge)
+    assert huge["schedule"][0]["finance_charge_paise"] == 3 * 10**23
+    assert huge["schedule"][0]["gst_paise"] == 54 * 10**21
+
+    # Errors
+    with pytest.raises(ValueError, match="balance must be positive"):
+        card_payoff(0, annual_rate_bps=3600, payment="minimum")
+    with pytest.raises(ValueError, match="balance must be positive"):
+        card_payoff(-100, annual_rate_bps=3600, payment="minimum")
+    with pytest.raises(ValueError, match="negative"):
+        card_payoff(10_000, annual_rate_bps=-1, payment="minimum")
+    with pytest.raises(ValueError, match="negative"):
+        card_payoff(10_000, annual_rate_bps=3600, payment="minimum", gst_bps=-1)
+    with pytest.raises(ValueError, match="minimum_bps"):
+        card_payoff(10_000, annual_rate_bps=3600, payment="minimum", minimum_bps=0)
+    with pytest.raises(ValueError, match="minimum_floor_paise"):
+        card_payoff(10_000, annual_rate_bps=3600, payment="minimum", minimum_floor_paise=0)
+    # Never-repaying fixed payment (<= first month's finance charge + GST: 3,000 + 540 = 3,540)
+    with pytest.raises(ValueError, match="never clears"):
+        card_payoff(100_000, annual_rate_bps=3600, payment=3_540)
+    with pytest.raises(ValueError, match="never clears"):
+        card_payoff(100_000, annual_rate_bps=3600, payment=0)
+    # Hard loop cap (1,200 months) when balance grows or shrinks slower than 1,200 months
+    with pytest.raises(ValueError, match="1200"):
+        card_payoff(
+            1_000_000,
+            annual_rate_bps=7200,
+            payment="minimum",
+            minimum_bps=100,
+            minimum_floor_paise=20_000,
+        )
+
+
+def test_card_payoff_property_conservation_and_termination():
+    rng = random.Random(20261115)
+    for _ in range(100):
+        balance = rng.randint(1, 10_000_000)
+        rate_bps = rng.choice([0, rng.randint(100, 4800)])
+        gst_bps = rng.choice([0, 1800])
+        if rng.random() < 0.5:
+            res = card_payoff(balance, annual_rate_bps=rate_bps, payment="minimum", gst_bps=gst_bps)
+        else:
+            first_fc = (2 * balance * rate_bps + 120_000) // (2 * 120_000)
+            first_gst = (2 * first_fc * gst_bps + 10_000) // (2 * 10_000)
+            min_pay = first_fc + first_gst + max(balance // 24, 1)
+            fixed_pay = rng.randint(min_pay, min_pay + balance)
+            res = card_payoff(balance, annual_rate_bps=rate_bps, payment=fixed_pay, gst_bps=gst_bps)
+        _assert_card_payoff_invariants(balance, res)
+        assert res["months"] <= 1_200

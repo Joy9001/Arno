@@ -10,14 +10,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
-from typing import Literal, TypedDict, overload
+from typing import Literal, NotRequired, TypedDict, overload
 
 from arno.india.formatting import format_paise
 
 HUNDRED = Decimal(100)
 MONTHS_IN_YEAR = 12
+DEFAULT_GST_BPS = 1800
+DEFAULT_MINIMUM_BPS = 500
+DEFAULT_MINIMUM_FLOOR_PAISE = 20_000
 _RATE_UNIT_SCALE = Decimal(10_000)
+_APR_MONTHLY_SCALE = Decimal(12_000_000)  # 0.0001% a year / 12 months
 _MAX_RATE_UNIT = 1_000_000  # 100.0000% a year in 0.0001% (bps_x100) units
+_MAX_CARD_PAYOFF_MONTHS = 1_200
 
 
 def _paise(value: Decimal | float | int) -> int:
@@ -69,6 +74,15 @@ class PrepayResult(TypedDict):
     months_saved: int
 
 
+class RateFit(TypedDict):
+    """Bracketing interval for an inferred annual rate in 0.0001% (bps x 100) units."""
+
+    low_bps_x100: int | None
+    high_bps_x100: int | None
+    exact: bool
+    note: str
+
+
 class Amortization(TypedDict):
     """An EMI plan: the schedule, its totals, and the prepayment if one was asked for."""
 
@@ -80,6 +94,12 @@ class Amortization(TypedDict):
     schedule: list[ScheduleRow]
     prepay: PrepayResult | None
     assumptions: list[str]
+    processing_fee: NotRequired[Money]
+    fee_gst: NotRequired[Money]
+    total_fee: NotRequired[Money]
+    net_disbursed: NotRequired[Money]
+    total_cost: NotRequired[Money]
+    apr: NotRequired[RateFit]
 
 
 class YearlyRow(TypedDict):
@@ -97,15 +117,6 @@ class CompoundResult(TypedDict):
     growth: Money
     yearly: list[YearlyRow]
     assumptions: list[str]
-
-
-class RateFit(TypedDict):
-    """Bracketing interval for an inferred annual rate in 0.0001% (bps x 100) units."""
-
-    low_bps_x100: int | None
-    high_bps_x100: int | None
-    exact: bool
-    note: str
 
 
 class CardEmiRow(TypedDict):
@@ -132,6 +143,31 @@ class CardEmi(TypedDict):
     fee_paise: int
     cost_paise: int
     total_paise: int
+
+
+class CardPayoffRow(TypedDict):
+    """One month of a revolving credit card payoff schedule."""
+
+    n: int
+    date: str | None
+    opening_paise: int
+    finance_charge_paise: int
+    gst_paise: int
+    payment_paise: int
+    closing_paise: int
+
+
+class CardPayoff(TypedDict):
+    """Revolving credit card payoff schedule, totals, and carrying cost."""
+
+    months: int
+    total_finance_charge: Money
+    total_gst: Money
+    total_paid: Money
+    cost_of_carrying: Money
+    payoff_date: str | None
+    schedule: list[CardPayoffRow]
+    assumptions: list[str]
 
 
 @overload
@@ -335,6 +371,63 @@ def _walk(
     )
 
 
+def _schedule_pv(payments: Sequence[int], unit: int) -> Decimal:
+    if unit == 0:
+        return Decimal(sum(payments))
+    monthly_rate = Decimal(unit) / _APR_MONTHLY_SCALE
+    one_plus_r = Decimal(1) + monthly_rate
+    pv = Decimal(0)
+    for payment in reversed(payments):
+        pv = (pv + Decimal(payment)) / one_plus_r
+    return pv
+
+
+def _compute_apr(net_disbursed_paise: int, payments: Sequence[int]) -> RateFit:
+    if net_disbursed_paise <= 0:
+        raise ValueError("net disbursed amount must be positive")
+    if len(payments) == 0 or any(payment <= 0 for payment in payments):
+        raise ValueError("schedule payments must be positive")
+
+    target = Decimal(net_disbursed_paise)
+    if _schedule_pv(payments, 0) == target:
+        return {
+            "low_bps_x100": 0,
+            "high_bps_x100": 0,
+            "exact": True,
+            "note": "exact APR 0.0000% a year",
+        }
+
+    hi = _MAX_RATE_UNIT
+    while _schedule_pv(payments, hi) > target:
+        hi *= 2
+
+    # Largest integer rate unit whose present value is at least the net disbursed amount.
+    lo = 0
+    right = hi
+    while lo < right:
+        mid = (lo + right + 1) // 2
+        if _schedule_pv(payments, mid) >= target:
+            lo = mid
+        else:
+            right = mid - 1
+
+    if _schedule_pv(payments, lo) == target:
+        return {
+            "low_bps_x100": lo,
+            "high_bps_x100": lo,
+            "exact": True,
+            "note": f"exact APR {lo / 10_000:.4f}% a year",
+        }
+
+    high_unit = lo + 1
+    return {
+        "low_bps_x100": lo,
+        "high_bps_x100": high_unit,
+        "exact": False,
+        "note": f"bracketed between {lo / 10_000:.4f}% and {high_unit / 10_000:.4f}% a year",
+    }
+
+
 def amortize(
     principal_paise: int,
     annual_rate: float,
@@ -351,12 +444,17 @@ def amortize(
     emi_unit_paise: int = 1,
     rate_changes: Sequence[tuple[int, float]] = (),
     reset: Literal["tenure", "emi"] = "tenure",
+    processing_fee_paise: int = 0,
+    gst_bps: int = DEFAULT_GST_BPS,
 ) -> Amortization:
     """EMI, total interest, payoff date, and a monthly schedule, optionally with a prepayment.
 
     ``annual_rate`` is a percentage (8.5 means 8.5% a year). A prepayment is applied before EMI
     number ``at_emi`` (counting from the next one) and either keeps the EMI and shortens the tenure
-    or keeps the EMIs the loan has left and lowers the EMI.
+    or keeps the EMIs the loan has left and lowers the EMI. When ``processing_fee_paise`` is
+    positive, the fee plus GST is treated as deducted at disbursal and the result includes the
+    effective annual percentage rate (APR) on the baseline schedule only, even if ``prepay`` is
+    given.
     """
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
@@ -364,6 +462,17 @@ def amortize(
         raise ValueError("months must be positive")
     if annual_rate < 0:
         raise ValueError("rate cannot be negative")
+    if processing_fee_paise < 0:
+        raise ValueError("processing_fee_paise cannot be negative")
+    if gst_bps < 0:
+        raise ValueError("gst_bps cannot be negative")
+    fee_gst_paise = 0
+    total_fee_paise = 0
+    if processing_fee_paise > 0:
+        fee_gst_paise = _round_half_up_div(processing_fee_paise * gst_bps, 10_000)
+        total_fee_paise = processing_fee_paise + fee_gst_paise
+        if total_fee_paise >= principal_paise:
+            raise ValueError("processing fee and GST must be less than principal")
     _validate_amortize_conventions(
         rest=rest,
         day_count=day_count,
@@ -454,6 +563,7 @@ def amortize(
         notes.append(f"this EMI takes {len(walk.principal)} months, not {months}")
 
     total_interest = sum(walk.interest, Decimal(0))
+    schedule_rows = schedule(walk)
     result: Amortization = {
         "emi": money(int(emi)),
         "months": len(walk.principal),
@@ -462,10 +572,26 @@ def amortize(
         "payoff_date": add_months(start_date, len(walk.principal)).isoformat()
         if start_date is not None
         else None,
-        "schedule": schedule(walk),
+        "schedule": schedule_rows,
         "prepay": None,
         "assumptions": notes,
     }
+
+    if processing_fee_paise > 0:
+        net_disbursed_paise = principal_paise - total_fee_paise
+        total_cost_paise = int(total_interest) + total_fee_paise
+        payments = [row["interest_paise"] + row["principal_paise"] for row in schedule_rows]
+        fee_text = money(processing_fee_paise)["text"]
+        notes.append(
+            f"processing fee of {fee_text} plus {gst_bps / 100:g}% GST treated as deducted at "
+            "disbursal"
+        )
+        result["processing_fee"] = money(processing_fee_paise)
+        result["fee_gst"] = money(fee_gst_paise)
+        result["total_fee"] = money(total_fee_paise)
+        result["net_disbursed"] = money(net_disbursed_paise)
+        result["total_cost"] = money(total_cost_paise)
+        result["apr"] = _compute_apr(net_disbursed_paise, payments)
 
     if prepay is not None and len(prepay) > 0:
         unknown = sorted(set(prepay) - {"amount_paise", "at_emi", "reduce"})
@@ -713,7 +839,7 @@ def card_emi(
     annual_rate_bps: int,
     months: int,
     processing_fee_paise: int = 0,
-    gst_bps: int = 1800,
+    gst_bps: int = DEFAULT_GST_BPS,
 ) -> CardEmi:
     """Monthly reducing-balance credit card EMI schedule with GST on interest and fee.
 
@@ -798,6 +924,137 @@ def card_emi(
     }
 
 
+def card_payoff(
+    balance_paise: int,
+    *,
+    annual_rate_bps: int,
+    payment: Literal["minimum"] | int,
+    minimum_bps: int | None = None,
+    minimum_floor_paise: int | None = None,
+    gst_bps: int = DEFAULT_GST_BPS,
+    start_date: date | None = None,
+) -> CardPayoff:
+    """Monthly revolving credit card payoff schedule, totals, and carrying cost.
+
+    Each month runs in five steps: (1) finance charge = opening balance * annual rate / 12,
+    rounded half-up to whole paise; (2) GST = finance charge * GST rate, rounded half-up to whole
+    paise; (3) statement balance = opening + finance charge + GST; (4) payment = for
+    ``"minimum"``, the larger of ``minimum_bps`` of the statement balance (rounded up to a whole
+    paisa) and ``minimum_floor_paise``, capped at the statement balance, or for a fixed integer
+    payment, that amount capped at the statement balance; (5) closing balance = statement balance -
+    payment. Stops when closing reaches zero. Assumes no new spending and no interest-free period
+    while a balance is carried.
+    """
+    if balance_paise <= 0:
+        raise ValueError("balance must be positive")
+    if annual_rate_bps < 0:
+        raise ValueError("rate cannot be negative")
+    if gst_bps < 0:
+        raise ValueError("gst_bps cannot be negative")
+
+    effective_minimum_bps = DEFAULT_MINIMUM_BPS if minimum_bps is None else minimum_bps
+    effective_minimum_floor = (
+        DEFAULT_MINIMUM_FLOOR_PAISE if minimum_floor_paise is None else minimum_floor_paise
+    )
+    if effective_minimum_bps <= 0:
+        raise ValueError("minimum_bps must be positive")
+    if effective_minimum_floor <= 0:
+        raise ValueError("minimum_floor_paise must be positive")
+
+    is_minimum = payment == "minimum"
+    fixed_payment = 0
+    if not is_minimum:
+        if not isinstance(payment, int) or isinstance(payment, bool):
+            raise ValueError("payment must be 'minimum' or a positive integer amount in paise")
+        fixed_payment = payment
+        first_charge = _round_half_up_div(balance_paise * annual_rate_bps, 120_000)
+        first_gst = _round_half_up_div(first_charge * gst_bps, 10_000)
+        if fixed_payment <= first_charge + first_gst:
+            raise ValueError("this payment never clears the balance")
+
+    balance = balance_paise
+    schedule: list[CardPayoffRow] = []
+    total_finance_charge = 0
+    total_gst = 0
+    total_paid = 0
+
+    for month in range(1, _MAX_CARD_PAYOFF_MONTHS + 1):
+        if balance <= 0:
+            break
+        finance_charge = _round_half_up_div(balance * annual_rate_bps, 120_000)
+        gst = _round_half_up_div(finance_charge * gst_bps, 10_000)
+        statement = balance + finance_charge + gst
+        if is_minimum:
+            pct_due = (statement * effective_minimum_bps + 9_999) // 10_000
+            due = max(pct_due, effective_minimum_floor)
+        else:
+            due = fixed_payment
+        paid = min(due, statement)
+        closing = statement - paid
+        schedule.append(
+            {
+                "n": month,
+                "date": add_months(start_date, month).isoformat()
+                if start_date is not None
+                else None,
+                "opening_paise": balance,
+                "finance_charge_paise": finance_charge,
+                "gst_paise": gst,
+                "payment_paise": paid,
+                "closing_paise": closing,
+            }
+        )
+        total_finance_charge += finance_charge
+        total_gst += gst
+        total_paid += paid
+        balance = closing
+    else:
+        if balance > 0:
+            raise ValueError(
+                f"card payoff exceeds maximum horizon of {_MAX_CARD_PAYOFF_MONTHS} months"
+            )
+
+    notes: list[str] = [
+        f"{annual_rate_bps / 100:g}% a year ({annual_rate_bps} bps) finance charge, with "
+        f"{gst_bps / 100:g}% GST on the finance charge",
+        "monthly approximation: finance charge is applied once per month on the opening balance "
+        "(issuers typically accrue daily)",
+    ]
+    if is_minimum and (minimum_bps is None or minimum_floor_paise is None):
+        if minimum_bps is None and minimum_floor_paise is None:
+            floor_text = money(effective_minimum_floor)["text"]
+            notes.append(
+                f"minimum due assumed at {effective_minimum_bps / 100:g}% of statement balance "
+                f"or {floor_text} floor (issuers differ)"
+            )
+        elif minimum_bps is None:
+            notes.append(
+                f"minimum due percentage assumed at {effective_minimum_bps / 100:g}% of "
+                "statement balance (issuers differ)"
+            )
+        else:
+            floor_text = money(effective_minimum_floor)["text"]
+            notes.append(f"minimum due floor assumed at {floor_text} (issuers differ)")
+    notes.append(
+        "assumes no new spending on the card; while a balance is carried, new purchases get "
+        "no interest-free period"
+    )
+
+    months = len(schedule)
+    return {
+        "months": months,
+        "total_finance_charge": money(total_finance_charge),
+        "total_gst": money(total_gst),
+        "total_paid": money(total_paid),
+        "cost_of_carrying": money(total_finance_charge + total_gst),
+        "payoff_date": add_months(start_date, months).isoformat()
+        if start_date is not None
+        else None,
+        "schedule": schedule,
+        "assumptions": notes,
+    }
+
+
 def compound(
     monthly_paise: int,
     annual_rate: float,
@@ -843,6 +1100,8 @@ __all__ = [
     "Amortization",
     "CardEmi",
     "CardEmiRow",
+    "CardPayoff",
+    "CardPayoffRow",
     "CompoundResult",
     "Money",
     "Prepay",
@@ -854,6 +1113,7 @@ __all__ = [
     "allocate",
     "amortize",
     "card_emi",
+    "card_payoff",
     "compound",
     "infer_rate",
     "money",
