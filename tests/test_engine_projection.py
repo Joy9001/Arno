@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import pytest
 
 from arno.engine.projection import (
+    LEGACY_MODEL,
     CardAccount,
     CashEvent,
     CurvePoint,
@@ -234,7 +235,7 @@ def test_unconfirmed_variable_income_is_only_an_optimistic_case():
     assert optimistic["income"][0]["name"] == "Freelance"
 
 
-def test_a_category_with_too_few_real_days_falls_back_to_a_flat_estimate():
+def test_a_category_with_too_few_real_days_gets_a_spread_around_its_estimate():
     sparse = SpendCategory(
         id="cat",
         name="Food",
@@ -248,7 +249,13 @@ def test_a_category_with_too_few_real_days_falls_back_to_a_flat_estimate():
     result = project(_inputs(categories=(sparse,)), runs=20)
     assert "Food" in result["data_quality"]["simulation"]["categories_flat"]
     assert result["data_quality"]["simulation"]["categories_sampled"] == []
-    assert _by_date(result)["2026-01-02"]["median_paise"] == 990_000
+    # Three real days of 10,000 and pseudo-days at 0 to 2 times the 10,000 estimate: the first
+    # day's spend is uncertain, not a flat 10,000, and the band shows it.
+    first = _by_date(result)["2026-01-02"]
+    assert first["p10_paise"] < first["median_paise"] < first["p90_paise"]
+    assert 980_000 <= first["p10_paise"] and first["p90_paise"] <= 1_000_000
+    legacy = project(_inputs(categories=(sparse,)), runs=20, model=LEGACY_MODEL)
+    assert _by_date(legacy)["2026-01-02"]["median_paise"] == 990_000
 
 
 def test_weekend_history_is_resampled_from_weekend_days():

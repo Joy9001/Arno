@@ -164,6 +164,32 @@ async def test_card_fields_are_required_and_only_for_a_card(ledger):
         await create_account(ledger, kind="card", name="Broken card", statement_day=5, due_day=25)
     with pytest.raises(InvalidLedgerError, match="belong only to a card"):
         await create_account(ledger, kind="bank", name="Odd", credit_limit_paise=1000)
+    with pytest.raises(InvalidLedgerError, match="belong only to a card"):
+        await create_account(ledger, kind="bank", name="Odd", emi_rate_bps=1_550)
+    with pytest.raises(InvalidLedgerError, match="belong only to a card"):
+        await create_account(ledger, kind="bank", name="Odd", emi_fee_paise=19_900)
+
+
+async def test_a_card_stores_and_returns_its_emi_terms(ledger):
+    card = await _card(ledger, emi_rate_bps=1_550, emi_fee_paise=19_900)
+
+    assert card["emi_rate_bps"] == 1_550
+    assert card["emi_fee_paise"] == 19_900
+    refreshed = await get_account(ledger, card["id"])
+    assert refreshed["emi_rate_bps"] == 1_550
+    assert refreshed["emi_fee_paise"] == 19_900
+
+    updated = await update_account(ledger, card["id"], emi_rate_bps=1_400)
+    assert updated["emi_rate_bps"] == 1_400
+    assert updated["emi_fee_paise"] == 19_900
+
+
+async def test_card_emi_terms_are_validated(ledger):
+    with pytest.raises(InvalidLedgerError, match="EMI rate"):
+        await _card(ledger, emi_rate_bps=10_001)
+    with pytest.raises(InvalidLedgerError, match="processing fee"):
+        await _card(ledger, emi_fee_paise=-1)
+    assert await list_accounts(ledger) == []
 
 
 async def test_card_missing_fields_are_reported_together_and_write_nothing(ledger):

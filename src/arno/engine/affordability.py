@@ -1,41 +1,69 @@
-"""Affordability: the yes, yes-but, or no verdict and its four tradeoffs.
+"""Affordability: the yes, yes-but, or no verdict, and the smallest changes that make it a yes.
 
-The verdict is never prose from a model. It is a rerun of the tested projection: pay as asked,
-then test whether the floor probability stays at the settled 90% threshold, no obligation is
-missed, and no goal is pushed past where it was. When the answer is "yes-but", each listed
-tradeoff was computed by rerunning the same engine with that change applied. A later date alone
-stays a "no": the wait date is shown as a tradeoff, but yes-but needs a change that keeps the date.
+The verdict is never prose from a model. The purchase is applied as asked and the scenario kernel
+walks every future once: it passes when the floor probability reaches the threshold and every
+obligation is met. When it does not, each lever is a known change to each scenario's balances at
+the checkpoints, the only days a minimum can fall on:
+
+- paying by card or card EMI moves the cash onto bill due dates (one kernel run per method);
+- skipping a goal's contributions adds them back from their dates;
+- cutting reducible spend by a share frees that share of the reducible spend that has left cash
+  by each checkpoint (card spend only once its bill is paid).
+
+For a lever where more is always at least as safe, each scenario has a critical value, the least
+setting at which it passes, and the least setting that passes a share p of scenarios is the
+ceil(p*N)-th smallest critical value. Plans combine a method, a set of skipped goals, and the
+least cut; a plan is kept only when no other passing plan of that method skips a subset of its
+goals with a cut no larger. Every reported plan is applied to the inputs and rerun on the same
+scenarios, and every number shown comes from that rerun. A later date alone stays a "no": the
+wait date is shown, but a yes-but needs a change that keeps the date.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from itertools import combinations
 
-from arno.engine.money import money
+import numpy as np
+
+from arno.engine import kernel
+from arno.engine import projection as projection_mod
+from arno.engine.money import add_months, card_emi, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
     FLOOR_THRESHOLD,
     MAX_CUT_RATIO,
     MAX_HORIZON_DAYS,
+    OBLIGATION_THRESHOLD,
     CardAccount,
     CashEvent,
     GoalRow,
-    GoalSlip,
     HypotheticalMeta,
     Installment,
     Projection,
     ProjectionInput,
     Tradeoff,
     card_due_date,
+    checkpoints_for,
     first_full_payment_date,
+    goal_rows,
+    order_rank,
+    prepare,
     project,
     reduce_categories,
 )
 
 METHODS = ("account", "card", "emi")
+DEFAULT_EMI_RATE_BPS = 1_600
+GST_BPS = 1_800
+DEFAULT_EMI_MONTHS = 3
+GOAL_WINDOW_DAYS = 31
+MAX_CUT_BPS = round(MAX_CUT_RATIO * 10_000)
+MAX_PLANS = 4
+# Rounding can leave a verified cut a half paisa short; one or two basis points more fixes it.
+VERIFY_STEPS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,12 +73,11 @@ class Hypothetical:
     method: str = "account"
     emi_months: int | None = None
     account: str | None = None
-
-
-def _month_add(day: date, months: int) -> date:
-    from arno.engine.money import _add_months  # noqa: PLC0415 - shared date arithmetic
-
-    return _add_months(day, months)
+    # An EMI's annual rate in basis points and its processing fee, when the offer states them.
+    emi_rate_bps: int | None = None
+    emi_fee_paise: int | None = None
+    # A no-cost EMI: the merchant pays the interest, so only the fee and its GST remain.
+    no_cost: bool = False
 
 
 def _pick_card(inputs: ProjectionInput, account: str | None) -> CardAccount | None:
@@ -67,15 +94,50 @@ def _pick_card(inputs: ProjectionInput, account: str | None) -> CardAccount | No
     )
 
 
-def _hypothetical_inputs(
-    inputs: ProjectionInput, hypothetical: Hypothetical
-) -> tuple[ProjectionInput, HypotheticalMeta, str | None]:
+@dataclass(frozen=True, slots=True)
+class _Applied:
+    """The inputs with the purchase applied, what the purchase was, and why it cannot happen."""
+
+    inputs: ProjectionInput
+    meta: HypotheticalMeta
+    reason: str | None
+    cost_paise: int = 0
+    gaps: tuple[str, ...] = ()
+
+
+def _emi_terms(hypothetical: Hypothetical, card: CardAccount) -> tuple[int, int, list[str]]:
+    """The EMI's rate and fee: the offer's, else the card's, else a labeled default."""
+    gaps: list[str] = []
+    if hypothetical.no_cost:
+        rate = 0
+    elif hypothetical.emi_rate_bps is not None:
+        rate = hypothetical.emi_rate_bps
+    elif card.emi_rate_bps is not None:
+        rate = card.emi_rate_bps
+    else:
+        # An unknown rate assumed to be zero is the one value known to be wrong the unsafe way.
+        rate = DEFAULT_EMI_RATE_BPS
+        gaps.append(
+            f"the EMI's cost assumes {DEFAULT_EMI_RATE_BPS / 100:g}% a year plus 18% GST on the "
+            f"interest; {card.name}'s EMI rate is not recorded"
+        )
+    if hypothetical.emi_fee_paise is not None:
+        fee = hypothetical.emi_fee_paise
+    elif card.emi_fee_paise is not None:
+        fee = card.emi_fee_paise
+    else:
+        fee = 0
+        gaps.append("no EMI processing fee is assumed")
+    return rate, fee, gaps
+
+
+def _apply(inputs: ProjectionInput, hypothetical: Hypothetical) -> _Applied:
     """Apply the purchase and return the new inputs, its metadata, and an infeasible reason."""
     amount = int(hypothetical.amount_paise)
     if amount <= 0:
-        return inputs, {}, "the amount must be positive"
+        return _Applied(inputs, {}, "the amount must be positive")
     if hypothetical.method not in METHODS:
-        return inputs, {}, "method is account, card, or emi"
+        return _Applied(inputs, {}, "method is account, card, or emi")
     when = max(hypothetical.date, inputs.as_of)
     at_start = hypothetical.date <= inputs.as_of
     name = "Hypothetical purchase"
@@ -90,32 +152,28 @@ def _hypothetical_inputs(
     if hypothetical.method == "account":
         meta["last_cash_date"] = when.isoformat()
         event = CashEvent(
-            date=when,
-            amount_paise=-amount,
-            name=name,
-            kind="hypothetical",
-            at_start=at_start,
+            date=when, amount_paise=-amount, name=name, kind="hypothetical", at_start=at_start
         )
-        return replace(inputs, events=inputs.events + (event,)), meta, None
+        return _Applied(replace(inputs, events=(*inputs.events, event)), meta, None)
 
-    months = hypothetical.emi_months if hypothetical.emi_months is not None else 3
+    months = hypothetical.emi_months if hypothetical.emi_months is not None else DEFAULT_EMI_MONTHS
     if hypothetical.method == "emi":
         if not 2 <= months <= 48:
-            return inputs, meta, "an EMI tenure is 2 to 48 months"
+            return _Applied(inputs, meta, "an EMI tenure is 2 to 48 months")
         meta["emi_months"] = months
 
     card = _pick_card(inputs, hypothetical.account)
     if card is None:
-        return inputs, meta, "no card with available credit was found"
+        return _Applied(inputs, meta, "no card with available credit was found")
     if not card.known:
-        return (
+        return _Applied(
             inputs,
             meta,
-            (f"{card.name} has no known outstanding balance, so its available credit is unknown."),
+            f"{card.name} has no known outstanding balance, so its available credit is unknown.",
         )
     if amount > card.available_credit_paise:
         available = money(card.available_credit_paise)["text"]
-        return (
+        return _Applied(
             inputs,
             {**meta, "available_credit_paise": card.available_credit_paise},
             f"{card.name} has only {available} of available credit",
@@ -135,30 +193,39 @@ def _hypothetical_inputs(
             card_id=card.id,
             at_start=at_start,
         )
-        return replace(inputs, events=inputs.events + (event,)), meta, None
+        return _Applied(replace(inputs, events=(*inputs.events, event)), meta, None)
 
-    base = amount // months
-    remainder = amount - base * months
+    rate, fee, gaps = _emi_terms(hypothetical, card)
+    plan = card_emi(
+        amount, annual_rate_bps=rate, months=months, processing_fee_paise=fee, gst_bps=GST_BPS
+    )
     installments: list[Installment] = []
     events: list[CashEvent] = []
-    for index in range(months):
-        part = base + (remainder if index == months - 1 else 0)
-        due_day = _month_add(when, index)
-        installments.append({"date": due_day.isoformat(), "amount_paise": part})
+    for row in plan["schedule"]:
+        due_day = add_months(when, row["n"] - 1)
+        installments.append({"date": due_day.isoformat(), "amount_paise": row["total_paise"]})
         events.append(
             CashEvent(
                 date=due_day,
-                amount_paise=-part,
-                name=f"{name} instalment {index + 1}",
+                amount_paise=-row["total_paise"],
+                name=f"{name} instalment {row['n']}",
                 kind="hypothetical_emi",
                 card_id=card.id,
                 at_start=due_day <= inputs.as_of,
             )
         )
     meta["installments"] = installments
-    meta["total_paise"] = amount
-    meta["last_cash_date"] = card_due_date(card, _month_add(when, months - 1)).isoformat()
-    return replace(inputs, events=inputs.events + tuple(events)), meta, None
+    meta["total_paise"] = plan["total_paise"]
+    meta["emi_rate_bps"] = rate
+    meta["emi_cost_paise"] = plan["cost_paise"]
+    meta["last_cash_date"] = card_due_date(card, add_months(when, months - 1)).isoformat()
+    return _Applied(
+        replace(inputs, events=(*inputs.events, *events)),
+        meta,
+        None,
+        cost_paise=plan["cost_paise"],
+        gaps=tuple(gaps),
+    )
 
 
 def _extend_horizon(inputs: ProjectionInput, meta: HypotheticalMeta) -> ProjectionInput:
@@ -172,176 +239,156 @@ def _extend_horizon(inputs: ProjectionInput, meta: HypotheticalMeta) -> Projecti
     return inputs
 
 
-def _goal_slips(before: list[GoalRow], after: list[GoalRow]) -> list[GoalSlip]:
-    old = {goal["id"]: goal for goal in before}
-    slips: list[GoalSlip] = []
-    for goal in after:
-        previous = old.get(goal["id"])
-        if previous is None:
-            continue
-        old_date = previous.get("completes_on")
-        new_date = goal.get("completes_on")
-        if old_date and new_date:
-            days = (date.fromisoformat(new_date) - date.fromisoformat(old_date)).days
-            if days > 0:
-                slips.append(
-                    {
-                        "id": goal["id"],
-                        "name": goal["name"],
-                        "slips_days": days,
-                        "completes_on": new_date,
-                    }
-                )
-        elif old_date and not new_date:
-            slips.append(
-                {
-                    "id": goal["id"],
-                    "name": goal["name"],
-                    "slips_days": None,
-                    "completes_on": None,
-                }
-            )
-    return slips
-
-
 def _passes(result: Projection, *, threshold: float) -> bool:
-    floor_ok = float(result["floor_probability"]) >= threshold
-    return floor_ok and bool(result["obligations_met"])
+    return float(result["floor_probability"]) >= threshold and bool(result["obligations_met"])
 
 
-def _verdict(tradeoffs: list[Tradeoff]) -> str:
-    """Paying on a later date is a caveat, not a way to afford the purchase as asked."""
-    return "yes-but" if any(trade["kind"] != "wait" for trade in tradeoffs) else "no"
+# --- The levers on one scenario matrix --------------------------------------------------------
 
 
-def _wait_tradeoff(
-    inputs: ProjectionInput,
-    hypothetical: Hypothetical,
-    *,
-    runs: int,
-    seed: int,
-) -> Tradeoff | None:
-    when = max(hypothetical.date, inputs.as_of)
-    found = first_full_payment_date(
-        inputs,
-        int(hypothetical.amount_paise),
-        start_on=when,
-        runs=runs,
+@dataclass(frozen=True, slots=True)
+class _Matrix:
+    """One method's scenario balances at the checkpoints, and what a cut frees by each."""
+
+    method: str
+    applied: _Applied
+    marks: tuple[int, ...]
+    balances: kernel.I64  # (scenarios, checkpoints)
+    reducible: kernel.I64 | None  # cash-realized reducible spend, same shape
+    capped: bool  # a card went past its limit in some scenario, so a cut frees cash sooner
+
+
+def _matrix(method: str, applied: _Applied, *, cut_until: int, runs: int, seed: int) -> _Matrix:
+    model = projection_mod.MODEL
+    prepared = prepare(applied.inputs, model)
+    marks = checkpoints_for(prepared.spec)
+    settings = kernel.Settings(
+        scenarios=runs,
         seed=seed,
+        block_length=model.block_length,
+        checkpoints=marks,
+        reducible_until=cut_until,
     )
-    if not found:
-        return None
-    if found["date"] == when.isoformat():
-        # Paying on the asked date is the ask, not a tradeoff.
-        return None
-    return {
-        "kind": "wait",
-        "date": found["date"],
-        "days": found["days"],
-        "detail": (f"Wait until {found['date']} ({found['days']} days), then pay the full amount."),
-    }
+    run = kernel.run(prepared.spec, settings)
+    assert run.checkpoints is not None
+    return _Matrix(
+        method=method,
+        applied=applied,
+        marks=marks,
+        balances=run.checkpoints,
+        reducible=run.reducible,
+        capped=run.capped is not None and bool(run.capped.any()),
+    )
 
 
-def _card_tradeoff(
-    inputs: ProjectionInput,
-    hypothetical: Hypothetical,
-    *,
-    runs: int,
-    seed: int,
-    threshold: float,
-) -> Tradeoff | None:
-    for method in ("card", "emi"):
-        if hypothetical.method == method:
-            continue
-        candidate = replace(
-            hypothetical,
-            method=method,
-            emi_months=(hypothetical.emi_months or 3) if method == "emi" else None,
-        )
-        card = _pick_card(inputs, candidate.account)
-        if card is None or not card.known:
-            continue
-        modified, meta, reason = _hypothetical_inputs(inputs, candidate)
-        if reason is not None:
-            continue
-        result = project(_extend_horizon(modified, meta), runs=runs, seed=seed)
-        if not _passes(result, threshold=threshold):
-            continue
-        if method == "card":
-            detail = (
-                f"Put it on {meta['card_name']} and pay the bill on {meta['due_date']}; "
-                "the available limit covers it."
-            )
+def _goal_relief(
+    inputs: ProjectionInput, goal_ids: tuple[str, ...], when: date
+) -> tuple[ProjectionInput, list[tuple[int, int]]]:
+    """Skip these goals' contributions in the month after the purchase.
+
+    Returns the inputs without them and each removed contribution as (day index, amount).
+    """
+    window_end = when + timedelta(days=GOAL_WINDOW_DAYS)
+    kept: list[CashEvent] = []
+    removed: list[tuple[int, int]] = []
+    for event in inputs.events:
+        if (
+            event.kind == "goal_contribution"
+            and event.goal_id in goal_ids
+            and when <= event.date <= window_end
+        ):
+            removed.append((max(0, (event.date - inputs.as_of).days), -event.amount_paise))
         else:
-            count = len(meta.get("installments") or [])
-            detail = (
-                f"Split it into {count} card instalments of about "
-                f"{money(meta['amount_paise'] // count)['text']} each, starting {meta['date']}."
-            )
-        return {
-            "kind": "pay_by_card",
-            "method": method,
-            "account": meta.get("card_name"),
-            "due_date": meta.get("due_date"),
-            "installments": meta.get("installments"),
-            "detail": detail,
-        }
-    return None
+            kept.append(event)
+    return replace(inputs, events=tuple(kept)), removed
 
 
-def _delay_goal_tradeoff(
-    inputs: ProjectionInput,
-    hypothetical: Hypothetical,
+def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> kernel.I64:
+    """The cash a set of skipped contributions leaves in hand at each checkpoint."""
+    days = np.array(marks, dtype=np.int64)
+    shift = np.zeros(len(marks), dtype=np.int64)
+    for day, amount in removed:
+        shift += np.where(days >= day, amount, 0)
+    return shift
+
+
+def _least_cut(
+    balances: kernel.I64, reducible: kernel.I64 | None, floor: int, needed: int
+) -> int | None:
+    """The least cut in basis points that lets ``needed`` scenarios clear the floor.
+
+    A scenario clears it at cut b when every checkpoint has balance + b/10,000 * reducible >=
+    floor, so its critical value is the largest ceil(10,000 * (floor - balance) / reducible) over
+    its short checkpoints, compared in whole integers. None when no cut up to the cap does.
+    """
+    short = floor - balances
+    if reducible is None:
+        clearing = int(np.count_nonzero((short <= 0).all(axis=1)))
+        return 0 if clearing >= needed else None
+    impossible = (short > 0) & (reducible <= 0)
+    bps = np.where(short > 0, -((-10_000 * short) // np.maximum(reducible, 1)), 0)
+    critical = np.where(impossible.any(axis=1), np.iinfo(np.int64).max, bps.max(axis=1))
+    least = int(np.partition(critical, needed - 1)[needed - 1])
+    return least if least <= MAX_CUT_BPS else None
+
+
+# --- Plans -------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _Plan:
+    method: str  # "asked", "card", or "emi"
+    goals: tuple[str, ...]
+    cut_bps: int
+    cost_paise: int
+
+    @property
+    def levers(self) -> int:
+        return int(self.method != "asked") + len(self.goals) + int(self.cut_bps > 0)
+
+
+def _plans(
+    matrices: list[_Matrix],
+    goals: tuple[str, ...],
+    when: date,
     *,
-    runs: int,
-    seed: int,
-    threshold: float,
-    baseline_goals: list[GoalRow],
-) -> Tradeoff | None:
-    when = max(hypothetical.date, inputs.as_of)
-    window_end = when + timedelta(days=31)
-    for goal in sorted(inputs.goals, key=lambda item: (item.priority, item.name)):
-        removed = tuple(
-            event
-            for event in inputs.events
-            if not (
-                event.kind == "goal_contribution"
-                and event.goal_id == goal.id
-                and when <= event.date <= window_end
-            )
-        )
-        if len(removed) == len(inputs.events):
-            continue
-        modified_goal = replace(inputs, events=removed)
-        with_purchase, _meta, reason = _hypothetical_inputs(modified_goal, hypothetical)
-        if reason is not None:
-            continue
-        result = project(with_purchase, runs=runs, seed=seed)
-        if not _passes(result, threshold=threshold):
-            continue
-        slips = _goal_slips(baseline_goals, result["goals"])
-        delay = next((slip for slip in slips if slip["id"] == goal.id), None)
-        if delay is None:
-            continue
-        if delay["slips_days"] is None:
-            detail = (
-                f"Delay the {goal.name} contribution until after the purchase; "
-                "the goal no longer completes within the projection."
-            )
-        else:
-            detail = (
-                f"Delay the {goal.name} contribution until after the purchase; "
-                f"the goal completes {delay['slips_days']} days later."
-            )
-        return {
-            "kind": "delay_goal",
-            "goal": goal.name,
-            "goal_id": goal.id,
-            "slips_days": delay["slips_days"],
-            "completes_on": delay["completes_on"],
-            "detail": detail,
-        }
-    return None
+    floor: int,
+    needed: int,
+    spend_paise: int,
+) -> list[_Plan]:
+    """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest."""
+    found: list[_Plan] = []
+    for matrix in matrices:
+        clearing: dict[tuple[str, ...], int] = {}
+        for size in range(len(goals) + 1):
+            for subset in combinations(goals, size):
+                _skipped, removed = _goal_relief(matrix.applied.inputs, subset, when)
+                shifted = matrix.balances + _shift(matrix.marks, removed)[None, :]
+                cut = _least_cut(shifted, matrix.reducible, floor, needed)
+                if cut is None:
+                    continue
+                if any(set(other) < set(subset) and clearing[other] <= cut for other in clearing):
+                    continue
+                clearing[subset] = cut
+                cost = matrix.applied.cost_paise + cut * spend_paise // 10_000
+                found.append(_Plan(matrix.method, subset, cut, cost))
+    found = [plan for plan in found if plan.levers > 0]
+    # Across methods too: a plan that changes no more, skips a subset of the goals, cuts no more,
+    # and costs no more leaves the other nothing to offer (card float beside a paid EMI).
+    kept = [plan for plan in found if not any(_dominates(other, plan) for other in found)]
+    kept.sort(key=lambda plan: (plan.levers, plan.cost_paise, plan.method, plan.goals))
+    return kept
+
+
+def _dominates(better: _Plan, plan: _Plan) -> bool:
+    if better == plan:
+        return False
+    return (
+        int(better.method != "asked") <= int(plan.method != "asked")
+        and set(better.goals) <= set(plan.goals)
+        and better.cut_bps <= plan.cut_bps
+        and better.cost_paise <= plan.cost_paise
+    )
 
 
 def _next_payday(inputs: ProjectionInput, when: date) -> date | None:
@@ -356,58 +403,232 @@ def _next_payday(inputs: ProjectionInput, when: date) -> date | None:
     return income_days[0] if income_days else None
 
 
-def _cut_category_tradeoff(
+@dataclass(frozen=True, slots=True)
+class _Verified:
+    plan: _Plan
+    result: Projection
+    inputs: ProjectionInput
+    meta: HypotheticalMeta
+
+
+def _with_plan(
+    applied: _Applied, plan: _Plan, cut: int, when: date, until: date
+) -> ProjectionInput:
+    inputs, _removed = _goal_relief(applied.inputs, plan.goals, when)
+    if cut > 0:
+        inputs, _rows = reduce_categories(inputs, cut / 10_000, until=until)
+    return inputs
+
+
+def _verify(
+    plan: _Plan,
+    matrix: _Matrix,
+    *,
+    when: date,
+    until: date,
+    runs: int,
+    seed: int,
+    threshold: float,
+) -> _Verified | None:
+    """Apply the plan, rerun the kernel, and keep it only if it passes there.
+
+    Rounding can leave the cut a half paisa short, so a failing cut rises a basis point at a
+    time. Where a card limit binds, a cut frees cash sooner than its bill date, so the critical
+    value is an upper bound; the least passing cut below it is then found by bisection.
+    """
+    applied = matrix.applied
+
+    def attempt(cut: int) -> _Verified | None:
+        inputs = _with_plan(applied, plan, cut, when, until)
+        result = project(inputs, runs=runs, seed=seed)
+        if not _passes(result, threshold=threshold):
+            return None
+        return _Verified(replace(plan, cut_bps=cut), result, inputs, applied.meta)
+
+    cut = plan.cut_bps
+    verified: _Verified | None = None
+    for _step in range(VERIFY_STEPS):
+        verified = attempt(cut)
+        if verified is not None or cut == 0 or cut >= MAX_CUT_BPS:
+            break
+        cut += 1
+    if verified is None or not matrix.capped or cut == 0:
+        return verified
+    low, high = 0, cut
+    while low < high:
+        middle = (low + high) // 2
+        better = attempt(middle)
+        if better is None:
+            low = middle + 1
+        else:
+            high, verified = middle, better
+    return verified
+
+
+def _describe(
+    verified: _Verified, inputs: ProjectionInput, baseline_goals: list[GoalRow], until: date
+) -> Tradeoff:
+    plan = verified.plan
+    meta = verified.meta
+    parts: list[str] = []
+    kinds: list[str] = []
+    trade: Tradeoff = {"kind": "", "detail": ""}
+    if plan.method != "asked":
+        kinds.append("pay_by_card")
+        trade["method"] = str(meta.get("method"))
+        trade["account"] = meta.get("card_name")
+        trade["due_date"] = meta.get("due_date")
+        trade["installments"] = meta.get("installments")
+        if meta.get("method") == "card":
+            parts.append(
+                f"put it on {meta.get('card_name')} and pay the bill on {meta.get('due_date')}"
+            )
+        else:
+            count = len(meta.get("installments") or [])
+            cost = money(int(meta.get("emi_cost_paise") or 0))["text"]
+            parts.append(
+                f"split it into {count} {meta.get('card_name')} instalments, which cost {cost} in "
+                "interest, GST, and fees"
+            )
+    if plan.goals:
+        kinds.append("delay_goal")
+        rows = {row["id"]: row for row in goal_rows(verified.inputs)}
+        before = {row["id"]: row for row in baseline_goals}
+        skipped: list[str] = []
+        for goal_id in plan.goals:
+            row = rows[goal_id]
+            old = before[goal_id]["completes_on"] if goal_id in before else None
+            new = row["completes_on"]
+            slip: int | None = None
+            if old is not None and new is not None:
+                slip = max(0, (date.fromisoformat(new) - date.fromisoformat(old)).days)
+            trade["goal"] = row["name"]
+            trade["goal_id"] = goal_id
+            trade["slips_days"] = slip
+            trade["completes_on"] = new
+            if new is None:
+                status = "no longer completes within the projection"
+            elif slip:
+                status = f"completes {slip} days later"
+            else:
+                status = "still completes on time"
+            skipped.append(f"skip the next {row['name']} contribution (the goal {status})")
+        parts.append("; ".join(skipped))
+    if plan.cut_bps > 0:
+        kinds.append("cut_category")
+        _reduced, rows_cut = reduce_categories(inputs, plan.cut_bps / 10_000, until=until)
+        trade["until"] = until.isoformat()
+        trade["ratio"] = round(plan.cut_bps / 10_000, 4)
+        trade["categories"] = rows_cut
+        names = ", ".join(row["category"] for row in rows_cut)
+        parts.append(
+            f"cut {names} by {plan.cut_bps / 100:g}% until {until.isoformat()}, then spend as usual"
+        )
+    trade["kind"] = kinds[0] if len(kinds) == 1 else "combined"
+    if len(kinds) > 1:
+        trade["levers"] = kinds
+    trade["cost_paise"] = plan.cost_paise
+    trade["floor_probability"] = verified.result["floor_probability"]
+    detail = "; and ".join(parts)
+    trade["detail"] = detail[:1].upper() + detail[1:] + "."
+    return trade
+
+
+def _wait_tradeoff(
     inputs: ProjectionInput,
     hypothetical: Hypothetical,
     *,
     runs: int,
     seed: int,
     threshold: float,
-    with_purchase: Projection,
 ) -> Tradeoff | None:
-    floor = inputs.floor_paise
-    headroom = int(with_purchase.get("p10_low_paise") or 0) - floor
-    if headroom >= 0:
+    when = max(hypothetical.date, inputs.as_of)
+    found = first_full_payment_date(
+        inputs,
+        int(hypothetical.amount_paise),
+        start_on=when,
+        runs=runs,
+        seed=seed,
+        threshold=threshold,
+    )
+    if not found or found["date"] == when.isoformat():
+        # Paying on the asked date is the ask, not a tradeoff.
         return None
-    shortfall = -headroom
+    return {
+        "kind": "wait",
+        "date": found["date"],
+        "days": found["days"],
+        "detail": f"Wait until {found['date']} ({found['days']} days), then pay the full amount.",
+    }
+
+
+def _tradeoffs(
+    inputs: ProjectionInput,
+    hypothetical: Hypothetical,
+    applied: _Applied,
+    baseline_goals: list[GoalRow],
+    *,
+    runs: int,
+    seed: int,
+    threshold: float,
+) -> list[Tradeoff]:
     when = max(hypothetical.date, inputs.as_of)
     payday = _next_payday(inputs, when) or (when + timedelta(days=30))
-    days = max(1, (payday - when).days)
-    needed_daily = math.ceil(shortfall / days)
-    reducible = [
-        category
-        for category in inputs.categories
-        if category.reducible
-        and category.baseline_per_day_paise > 0
-        and not category.covered_by_obligation
+    reducible = any(
+        category.reducible and category.baseline_per_day_paise > 0 for category in inputs.categories
+    )
+    cut_until = (payday - inputs.as_of).days if reducible else -1
+    needed = runs - order_rank(runs, 1 - threshold)
+
+    variants: list[tuple[str, _Applied]] = [("asked", applied)]
+    for method in ("card", "emi"):
+        if method == hypothetical.method:
+            continue
+        alternative = replace(
+            hypothetical,
+            method=method,
+            emi_months=(hypothetical.emi_months or DEFAULT_EMI_MONTHS) if method == "emi" else None,
+        )
+        other = _apply(inputs, alternative)
+        if other.reason is None:
+            extended = replace(other, inputs=_extend_horizon(other.inputs, other.meta))
+            variants.append((method, extended))
+    matrices = [
+        _matrix(name, variant, cut_until=cut_until, runs=runs, seed=seed)
+        for name, variant in variants
     ]
-    total_daily = sum(category.baseline_per_day_paise for category in reducible)
-    if total_daily <= 0:
-        return None
-    if needed_daily > total_daily * MAX_CUT_RATIO:
-        return None
-    start_ratio = min(max(needed_daily / total_daily, 0.0), MAX_CUT_RATIO)
-    for step in range(6):
-        ratio = min(MAX_CUT_RATIO, start_ratio + step * 0.02)
-        reduced, rows = reduce_categories(inputs, ratio, until=payday)
-        purchase_inputs, _meta, reason = _hypothetical_inputs(reduced, hypothetical)
-        if reason is not None:
-            continue
-        result = project(purchase_inputs, runs=runs, seed=seed)
-        if not _passes(result, threshold=threshold):
-            continue
-        names = ", ".join(row["category"] for row in rows)
-        return {
-            "kind": "cut_category",
-            "until": payday.isoformat(),
-            "ratio": round(ratio, 4),
-            "categories": rows,
-            "detail": (
-                f"Cut {names} by about {round(ratio * 100)}% until {payday.isoformat()}, "
-                f"then back to normal spending, to free the shortfall."
-            ),
-        }
-    return None
+    goals = tuple(
+        goal.id
+        for goal in sorted(inputs.goals, key=lambda item: (item.priority, item.name))
+        if any(
+            event.kind == "goal_contribution"
+            and event.goal_id == goal.id
+            and when <= event.date <= when + timedelta(days=GOAL_WINDOW_DAYS)
+            for event in inputs.events
+        )
+    )
+    first = matrices[0]
+    spend = int(np.median(first.reducible[:, -1])) if first.reducible is not None else 0
+    plans = _plans(
+        matrices, goals, when, floor=inputs.floor_paise, needed=needed, spend_paise=spend
+    )
+    by_method = {matrix.method: matrix for matrix in matrices}
+    trades: list[Tradeoff] = []
+    for plan in plans:
+        if len(trades) >= MAX_PLANS:
+            break
+        verified = _verify(
+            plan,
+            by_method[plan.method],
+            when=when,
+            until=payday,
+            runs=runs,
+            seed=seed,
+            threshold=threshold,
+        )
+        if verified is not None:
+            trades.append(_describe(verified, inputs, baseline_goals, payday))
+    return trades
 
 
 def afford(
@@ -418,7 +639,7 @@ def afford(
     seed: int = DEFAULT_SEED,
     threshold: float = FLOOR_THRESHOLD,
 ) -> Projection:
-    """Return the projection with the purchase applied and a tested verdict and tradeoffs."""
+    """Return the projection with the purchase applied, a tested verdict, and minimal plans."""
     if hypothetical.amount_paise <= 0:
         raise ValueError("the amount must be positive")
     if hypothetical.method not in METHODS:
@@ -430,102 +651,85 @@ def afford(
     if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
     known_start = any(account.known for account in inputs.liquid)
-    modified, meta, reason = _hypothetical_inputs(inputs, hypothetical)
+    applied = _apply(inputs, hypothetical)
+    meta = applied.meta
     meta["last_cash_date"] = max(
         meta.get("last_cash_date") or hypothetical.date.isoformat(),
         hypothetical.date.isoformat(),
     )
     inputs = _extend_horizon(inputs, meta)
-    modified = _extend_horizon(modified, meta) if reason is None else inputs
+    applied = replace(
+        applied,
+        inputs=_extend_horizon(applied.inputs, meta) if applied.reason is None else inputs,
+    )
     baseline = project(inputs, runs=runs, seed=seed)
-    if reason is not None:
+    if applied.reason is not None:
         result = baseline
-        slips: list[GoalSlip] = []
-        tradeoffs: list[Tradeoff] = []
-        wait = _wait_tradeoff(inputs, hypothetical, runs=runs, seed=seed)
-        if wait:
-            tradeoffs.append(wait)
-        result["verdict"] = _verdict(tradeoffs)
-        result["verdict_reason"] = reason
-        result["hypothetical"] = {**meta, "feasible": False}
-        result["tradeoffs"] = tradeoffs
-        result["goal_slips"] = slips
-        result["floor_threshold"] = threshold
-        result["baseline"] = {
-            "floor_probability": baseline["floor_probability"],
-            "median_low": baseline["median_low"],
-            "first_floor_crossing": baseline["first_floor_crossing"],
-        }
+        verdict_reason = applied.reason
     else:
-        result = project(modified, runs=runs, seed=seed)
-        slips = _goal_slips(baseline["goals"], result["goals"])
-        approved = _passes(result, threshold=threshold) and not slips and result["obligations_met"]
-        if approved:
-            verdict = "yes"
-            tradeoffs: list[Tradeoff] = []
+        result = project(applied.inputs, runs=runs, seed=seed)
+        if _passes(result, threshold=threshold):
             verdict_reason = (
-                f"{result['floor_probability']:.0%} of simulated futures "
-                "stay at or above the floor, no obligation is missed, and no goal slips."
+                f"{result['floor_probability']:.0%} of simulated futures stay at or above the "
+                "floor and every obligation is met."
+            )
+        elif not result["obligations_met"]:
+            verdict_reason = (
+                "An obligation cannot be paid on its date in more than "
+                f"{1 - OBLIGATION_THRESHOLD:.0%} of futures."
             )
         else:
-            tradeoffs = []
-            wait = _wait_tradeoff(inputs, hypothetical, runs=runs, seed=seed)
-            if wait:
-                tradeoffs.append(wait)
-            card = _card_tradeoff(inputs, hypothetical, runs=runs, seed=seed, threshold=threshold)
-            if card:
-                tradeoffs.append(card)
-            delayed = _delay_goal_tradeoff(
-                inputs,
-                hypothetical,
-                runs=runs,
-                seed=seed,
-                threshold=threshold,
-                baseline_goals=baseline["goals"],
+            where = "the floor" if inputs.floor_paise > 0 else "zero"
+            verdict_reason = (
+                f"Only {result['floor_probability']:.0%} of simulated futures stay above "
+                f"{where} at the {threshold:.0%} threshold."
             )
-            if delayed:
-                tradeoffs.append(delayed)
-            cut = _cut_category_tradeoff(
-                inputs,
-                hypothetical,
-                runs=runs,
-                seed=seed,
-                threshold=threshold,
-                with_purchase=result,
-            )
-            if cut:
-                tradeoffs.append(cut)
-            verdict = _verdict(tradeoffs)
-            if slips:
-                verdict_reason = "A goal would slip past its current completion date."
-            elif not result["obligations_met"]:
-                verdict_reason = "An obligation cannot be met on its date in some futures."
-            else:
-                where = "the floor" if inputs.floor_paise > 0 else "zero"
-                verdict_reason = (
-                    f"Only {result['floor_probability']:.0%} of simulated futures stay above "
-                    f"{where} at the {threshold:.0%} threshold."
+    feasible = applied.reason is None
+    passed = feasible and _passes(result, threshold=threshold)
+    tradeoffs: list[Tradeoff] = []
+    if known_start and not passed:
+        wait = _wait_tradeoff(inputs, hypothetical, runs=runs, seed=seed, threshold=threshold)
+        if wait is not None:
+            tradeoffs.append(wait)
+        if feasible:
+            tradeoffs.extend(
+                _tradeoffs(
+                    inputs,
+                    hypothetical,
+                    applied,
+                    baseline["goals"],
+                    runs=runs,
+                    seed=seed,
+                    threshold=threshold,
                 )
-        result["verdict"] = verdict
-        result["verdict_reason"] = verdict_reason
-        result["hypothetical"] = {**meta, "feasible": True}
-        result["tradeoffs"] = tradeoffs
-        result["goal_slips"] = slips
-        result["floor_threshold"] = threshold
-        result["baseline"] = {
-            "floor_probability": baseline["floor_probability"],
-            "median_low": baseline["median_low"],
-            "first_floor_crossing": baseline["first_floor_crossing"],
-        }
+            )
+    if passed:
+        result["verdict"] = "yes"
+    else:
+        same_day = any(trade["kind"] != "wait" for trade in tradeoffs)
+        result["verdict"] = "yes-but" if same_day else "no"
+    result["verdict_reason"] = verdict_reason
+    result["hypothetical"] = {**meta, "feasible": feasible}
+    result["tradeoffs"] = tradeoffs
+    # A goal slips only through a delay-a-goal plan, which reports its own slip days.
+    result["goal_slips"] = []
+    result["floor_threshold"] = threshold
     result["verdict_threshold"] = threshold
+    result["baseline"] = {
+        "floor_probability": baseline["floor_probability"],
+        "median_low": baseline["median_low"],
+        "first_floor_crossing": baseline["first_floor_crossing"],
+    }
+    gaps = result["data_quality"].setdefault("gaps", [])
+    gaps.extend(applied.gaps)
     if not known_start:
-        # There is no starting balance to test, so there is no verdict to issue.
+        # There is no starting balance to test, so there is no verdict and no lever runs.
         result.pop("verdict", None)
         result["tradeoffs"] = []
-        result["verdict_reason"] = reason or (
+        result["verdict_reason"] = applied.reason or (
             "No liquid account has a known balance, so there is no affordability verdict."
         )
-    result["data_quality"]["gaps"].append(
+    gaps.append(
         f"the verdict uses {runs:,} seeded scenarios at a {threshold:.0%} floor probability "
         "threshold"
     )

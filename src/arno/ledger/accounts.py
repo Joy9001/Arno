@@ -56,6 +56,8 @@ def _validate_account_fields(
     credit_limit_paise: int | None,
     statement_day: int | None,
     due_day: int | None,
+    emi_rate_bps: int | None,
+    emi_fee_paise: int | None,
     rate_bps: int | None,
     tenure_months: int | None,
 ) -> None:
@@ -89,8 +91,15 @@ def _validate_account_fields(
             raise InvalidLedgerError(
                 "A card needs " + ", ".join(problems[:-1]) + " and " + problems[-1]
             )
-    elif any(value is not None for value in (credit_limit_paise, statement_day, due_day)):
-        raise InvalidLedgerError("Credit limit and card days belong only to a card")
+        if emi_rate_bps is not None and not 0 <= emi_rate_bps <= 10_000:
+            raise InvalidLedgerError("A card EMI rate is between 0 and 100 percent")
+        if emi_fee_paise is not None and emi_fee_paise < 0:
+            raise InvalidLedgerError("A card EMI processing fee cannot be negative")
+    elif any(
+        value is not None
+        for value in (credit_limit_paise, statement_day, due_day, emi_rate_bps, emi_fee_paise)
+    ):
+        raise InvalidLedgerError("Credit limit, card days, and EMI terms belong only to a card")
     if kind == "loan":
         if rate_bps is not None and rate_bps < 0:
             raise InvalidLedgerError("A loan rate cannot be negative")
@@ -161,6 +170,8 @@ async def _create_account_in_group(
     credit_limit_paise: int | None = None,
     statement_day: int | None = None,
     due_day: int | None = None,
+    emi_rate_bps: int | None = None,
+    emi_fee_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -178,6 +189,8 @@ async def _create_account_in_group(
         credit_limit_paise=credit_limit_paise,
         statement_day=statement_day,
         due_day=due_day,
+        emi_rate_bps=emi_rate_bps,
+        emi_fee_paise=emi_fee_paise,
         rate_bps=rate_bps,
         tenure_months=tenure_months,
     )
@@ -198,9 +211,11 @@ async def _create_account_in_group(
         INSERT INTO accounts (
             id, kind, ledger_account_id, name, institution, last4,
             statement_balance_paise, statement_balance_as_of, liquid,
-            credit_limit_paise, statement_day, due_day, rate_bps, tenure_months,
-            emi_schedule_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            credit_limit_paise, statement_day, due_day, emi_rate_bps, emi_fee_paise,
+            rate_bps, tenure_months, emi_schedule_id
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        )
         RETURNING *
         """,
         account_id,
@@ -215,6 +230,8 @@ async def _create_account_in_group(
         credit_limit_paise,
         statement_day,
         due_day,
+        emi_rate_bps,
+        emi_fee_paise,
         rate_bps,
         tenure_months,
         emi_schedule_id,
@@ -264,6 +281,8 @@ async def create_account(
     credit_limit_paise: int | None = None,
     statement_day: int | None = None,
     due_day: int | None = None,
+    emi_rate_bps: int | None = None,
+    emi_fee_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -285,6 +304,8 @@ async def create_account(
             credit_limit_paise=credit_limit_paise,
             statement_day=statement_day,
             due_day=due_day,
+            emi_rate_bps=emi_rate_bps,
+            emi_fee_paise=emi_fee_paise,
             rate_bps=rate_bps,
             tenure_months=tenure_months,
             emi_schedule_id=emi_schedule_id,
@@ -316,6 +337,8 @@ async def update_account(
     credit_limit_paise: int | None = None,
     statement_day: int | None = None,
     due_day: int | None = None,
+    emi_rate_bps: int | None = None,
+    emi_fee_paise: int | None = None,
     rate_bps: int | None = None,
     tenure_months: int | None = None,
     emi_schedule_id: str | None = None,
@@ -339,6 +362,8 @@ async def update_account(
         "credit_limit_paise": credit_limit_paise,
         "statement_day": statement_day,
         "due_day": due_day,
+        "emi_rate_bps": emi_rate_bps,
+        "emi_fee_paise": emi_fee_paise,
         "rate_bps": rate_bps,
         "tenure_months": tenure_months,
         "emi_schedule_id": emi_schedule_id,
@@ -376,6 +401,8 @@ async def update_account(
         credit_limit_paise=merged["credit_limit_paise"],
         statement_day=merged["statement_day"],
         due_day=merged["due_day"],
+        emi_rate_bps=merged["emi_rate_bps"],
+        emi_fee_paise=merged["emi_fee_paise"],
         rate_bps=merged["rate_bps"],
         tenure_months=merged["tenure_months"],
     )
@@ -580,7 +607,8 @@ class LoanTermsError(InvalidLedgerError):
 async def loan_terms(conn: Connection, name: str) -> dict[str, Any]:
     """The terms `amortize` uses for a named loan: today's outstanding balance, its rate, its
     tenure as the cap, and the EMI its schedule really charges. The eval grader reads the same
-    terms, so an expected value can't drift from what the tool computes."""
+    terms, so an expected value can't drift from what the tool computes. The rate is None when
+    none is recorded, which is not the same as a 0% loan."""
     row = await conn.fetchrow(
         "SELECT * FROM v_accounts WHERE lower(name) = lower($1) AND kind = 'loan' LIMIT 1",
         name,
@@ -602,7 +630,7 @@ async def loan_terms(conn: Connection, name: str) -> dict[str, Any]:
         emi = int(schedule["amount_paise"]) if schedule else None
     return {
         "principal_paise": principal,
-        "annual_rate": (row["rate_bps"] or 0) / 100,
+        "annual_rate": row["rate_bps"] / 100 if row["rate_bps"] is not None else None,
         "months": int(row["tenure_months"]),
         "emi_paise": emi,
     }

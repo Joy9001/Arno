@@ -8,6 +8,7 @@ import pytest
 
 from arno.engine.backtest import Score, format_report, summarize
 from arno.engine.projection import (
+    LEGACY_MODEL,
     CurvePoint,
     LiquidAccount,
     Projection,
@@ -118,7 +119,8 @@ def _flat_category_inputs() -> ProjectionInput:
 def test_a_category_cut_applies_only_until_its_date():
     inputs = _flat_category_inputs()
     reduced, rows = reduce_categories(inputs, 0.5, until=date(2026, 1, 11))
-    curve = _curve(project(reduced, runs=3))
+    # The legacy model spends a flat estimate exactly, so the cut's arithmetic is visible.
+    curve = _curve(project(reduced, runs=3, model=LEGACY_MODEL))
 
     assert curve["2026-01-06"]["median_paise"] == 1_000_000 - 5 * 5_000
     assert curve["2026-01-11"]["median_paise"] == 1_000_000 - 10 * 5_000
@@ -128,14 +130,14 @@ def test_a_category_cut_applies_only_until_its_date():
 
     # Without a date the cut runs to the end of the horizon, which is what the old code did.
     permanent, _rows = reduce_categories(inputs, 0.5)
-    curve = _curve(project(permanent, runs=3))
+    curve = _curve(project(permanent, runs=3, model=LEGACY_MODEL))
     assert curve["2026-01-12"]["median_paise"] == 1_000_000 - 11 * 5_000
 
 
 def test_the_cut_tradeoff_ends_at_the_next_payday():
     from dataclasses import replace
 
-    from arno.engine.affordability import Hypothetical, _cut_category_tradeoff
+    from arno.engine.affordability import Hypothetical, afford
     from arno.engine.projection import CashEvent
 
     category = SpendCategory(
@@ -177,14 +179,13 @@ def test_the_cut_tradeoff_ends_at_the_next_payday():
         ),
         runs=100,
     )
-    tradeoff = _cut_category_tradeoff(
-        inputs, purchase, runs=100, seed=20261103, threshold=0.90, with_purchase=with_purchase
-    )
-    assert tradeoff is not None
+    assert with_purchase["floor_probability"] < 0.9
+    result = afford(inputs, purchase, runs=100)
+    tradeoff = next(trade for trade in result["tradeoffs"] if trade["kind"] == "cut_category")
     assert tradeoff["until"] == "2026-01-31"
     assert tradeoff["ratio"] <= 0.5
     assert tradeoff["categories"][0]["until"] == "2026-01-31"
-    assert "then back to normal spending" in tradeoff["detail"]
+    assert "then spend as usual" in tradeoff["detail"]
 
 
 # --- backtest: rows created after the as-of date are excluded -------------------------------

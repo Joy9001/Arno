@@ -172,6 +172,20 @@ class AccountSetup(WriteModel):
     due_day: int | None = Field(
         default=None, description="Card only, required on add: due day, 1-31."
     )
+    emi_rate_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Card only, when the offer states it: the EMI's annual interest rate in percent. "
+            "Leave it out rather than guessing."
+        ),
+    )
+    emi_fee_paise: int | None = Field(
+        default=None,
+        ge=0,
+        description="Card only, when stated: the EMI's processing fee in paise.",
+    )
     rate_percent: Decimal | None = None
     tenure_months: int | None = None
     active: bool | None = None

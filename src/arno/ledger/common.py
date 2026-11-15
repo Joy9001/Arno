@@ -175,6 +175,8 @@ def _assemble_account_payload(
         "credit_limit_paise": row["credit_limit_paise"],
         "statement_day": row["statement_day"],
         "due_day": row["due_day"],
+        "emi_rate_bps": row["emi_rate_bps"],
+        "emi_fee_paise": row["emi_fee_paise"],
         "rate_bps": row["rate_bps"],
         "tenure_months": row["tenure_months"],
         "emi_schedule_id": row["emi_schedule_id"],

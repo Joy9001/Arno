@@ -14,7 +14,6 @@ from datetime import UTC, datetime
 from statistics import mean
 from typing import Any, Protocol
 
-from evals.models import CheckResult, EvalMeta, EvalOutput, InjectionSpec, ToolAttempt
 from arno.agent.number_check import extract
 from arno.db.conn import Connection, connect
 from arno.engine.money import amortize, compound
@@ -23,6 +22,7 @@ from arno.ledger.accounts import LoanTermsError, loan_terms
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
+from evals.models import CheckResult, EvalMeta, EvalOutput, InjectionSpec, ToolAttempt
 
 LAUNDERED = {
     "preferences",
@@ -468,6 +468,11 @@ async def grade_answers(
         except LoanTermsError as exc:
             results.append(CheckResult(name="amortize_prepay", passed=False, reason=exc.message))
         else:
+            if terms["annual_rate"] is None:
+                results.append(
+                    CheckResult(name="amortize_prepay", passed=False, reason="no rate recorded")
+                )
+                return results
             result = amortize(
                 int(terms["principal_paise"]),
                 float(terms["annual_rate"]),
@@ -491,6 +496,13 @@ async def grade_answers(
                 CheckResult(name="amortize_prepay_compare", passed=False, reason=exc.message)
             )
         else:
+            if terms["annual_rate"] is None:
+                results.append(
+                    CheckResult(
+                        name="amortize_prepay_compare", passed=False, reason="no rate recorded"
+                    )
+                )
+                return results
             for at_emi in (1, int(expected.get("at_emi", 13))):
                 result = amortize(
                     int(terms["principal_paise"]),

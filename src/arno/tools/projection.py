@@ -17,14 +17,13 @@ from arno.engine.inputs import (
     ConfiguredSchedule,
     LedgerSnapshot,
     Occurrence,
-    SpendRow,
     build_inputs,
 )
 from arno.engine.money import _add_months, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
-    HISTORY_DAYS,
+    RARE_WINDOW_DAYS,
     BalanceAge,
     CardAccount,
     CashEvent,
@@ -34,6 +33,7 @@ from arno.engine.projection import (
     Projection,
     ProjectionInput,
     SourceRef,
+    SpendRow,
     last_statement_close,
 )
 from arno.engine.projection import (
@@ -300,7 +300,7 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
 
 
 async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
-    """Positive spend in the history window, by day, category, and paying card."""
+    """Positive spend over the long window, by day, category, and paying card."""
     rows = await conn.fetch(
         """
         SELECT v.date, v.category_id,
@@ -318,7 +318,7 @@ async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
         GROUP BY 1, 2, 3
         ORDER BY 1, 2, 3
         """,
-        as_of - timedelta(days=HISTORY_DAYS),
+        as_of - timedelta(days=RARE_WINDOW_DAYS),
         as_of - timedelta(days=1),
     )
     return [
@@ -528,6 +528,8 @@ async def load_snapshot(
             known=row["known"],
             credit_paise=int(row["credit_paise"]),
             unbilled_paise=int(row["unbilled_paise"]),
+            emi_rate_bps=row["emi_rate_bps"],
+            emi_fee_paise=row["emi_fee_paise"],
         )
         for row in card_rows
     )
@@ -585,6 +587,9 @@ async def load_snapshot(
         owed=tuple(owed_events),
         categories=tuple(await _category_rows(conn)),
         spend=tuple(await _spend_rows(conn, as_of)),
+        history_start=await conn.fetchval(
+            "SELECT min(date) FROM movements WHERE date <= $1", as_of
+        ),
         ask_horizon_days=horizon_days,
         gaps=tuple(gaps),
         balance_ages=tuple(balance_ages),
@@ -610,12 +615,22 @@ async def load_inputs(
 def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical | None:
     if payload is None or isinstance(payload, Hypothetical):
         return payload
-    unknown = set(payload) - {"amount_paise", "date", "method", "emi_months", "account"}
+    accepted = (
+        "amount_paise, date, method, emi_months, account, emi_rate_percent, emi_fee_paise, "
+        "and no_cost"
+    )
+    unknown = set(payload) - {
+        "amount_paise",
+        "date",
+        "method",
+        "emi_months",
+        "account",
+        "emi_rate_percent",
+        "emi_fee_paise",
+        "no_cost",
+    }
     if unknown:
-        raise ValueError(
-            f"hypothetical takes amount_paise, date, method, emi_months, and account, not "
-            f"{', '.join(sorted(unknown))}"
-        )
+        raise ValueError(f"hypothetical takes {accepted}, not {', '.join(sorted(unknown))}")
     if "amount_paise" not in payload or "date" not in payload:
         raise ValueError("a hypothetical needs amount_paise and date")
     return Hypothetical(
@@ -630,6 +645,15 @@ def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical
         method=str(payload.get("method") or "account"),
         emi_months=int(payload["emi_months"]) if payload.get("emi_months") else None,
         account=payload.get("account"),
+        emi_rate_bps=(
+            round(float(payload["emi_rate_percent"]) * 100)
+            if payload.get("emi_rate_percent") is not None
+            else None
+        ),
+        emi_fee_paise=(
+            int(payload["emi_fee_paise"]) if payload.get("emi_fee_paise") is not None else None
+        ),
+        no_cost=bool(payload.get("no_cost")),
     )
 
 

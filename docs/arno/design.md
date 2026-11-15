@@ -82,7 +82,7 @@ pgledger doesn't. The following table lists its fields:
 | `name`, `institution`, `last4` | "SBI savings", "Slice". `name` is `NULL` for `person` and `goal` accounts because their single home is `payees.display_name` and `goals.name`; readers use `v_accounts` for the resolved `name`. `pgledger_accounts.name` stores `accounts.id`. Only the last four digits of an account or card number are kept |
 | `statement_balance`, `statement_balance_as_of` | The last balance a statement or the user stated, as a check on the ledger's own balance. Staleness is always reported |
 | `liquid` | Counts toward spendable cash in the projection. True for bank, cash, and wallet accounts |
-| card: `credit_limit`, `statement_day`, `due_day` | Card spend is a liability until the due date |
+| card: `credit_limit`, `statement_day`, `due_day`, `emi_rate_bps`, `emi_fee_paise` | Card spend is a liability until the due date. The EMI terms are the annual rate and processing fee an offer from this card charges by default: an EMI's cost comes from the offer's own terms, else these, else a labeled 16% a year |
 | loan: `rate`, `tenure_months`, `emi_schedule_id` | The ledger balance is the outstanding principal. The engine's amortization splits each EMI into principal and interest, and a loan statement corrects any drift |
 | asset | No extra fields—hand updates are adjustment movements (EPF, FD, PPF, NPS, gold, funds). Statement-driven holdings are parked ([`parked.md`](parked.md)) |
 | `active` | Soft-delete keeps history |
@@ -416,9 +416,9 @@ agent replies render as plain text ([`platform.md`](platform.md#security)).
 One function in code, seeded so the same inputs always give the same output. No LLM
 involvement—this is the tested arithmetic every affordability verdict comes from.
 
-The scenario kernel ([`engine-blueprint.md`](engine-blueprint.md) §4) has landed; the parts of
-this section and [Pattern detection](#pattern-detection) that a later step of that blueprint
-replaces change when it lands.
+Steps 1 to 5 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
+admitted model switches, affordability on the kernel, and the money conventions. Step 6, pattern
+detection and payment-level attribution, changes when it lands.
 
 ### Inputs
 
@@ -428,12 +428,16 @@ replaces change when it lands.
   income is shown as an optimistic case only, never counted toward a verdict.
 - Card cycles: each card's outstanding is split at its last statement close. The closed bill is
   due on its due date (today, if that has passed); spend since the close joins the next bill.
-- Variable spend, simulated: each scenario fills the horizon by resampling real past days of spend
-  for each category, excluding categories already covered by obligations. Until a category has
-  enough real days, its setup estimate is used as a flat rate and the `data_quality` field says
-  so. Single days are resampled with weekday and weekend pools kept apart, the L5 decision in
-  `plan.md` §6. How days are drawn is one switch per change in `projection.Model`; a switch ships
-  only when it beats the one before it on the backtest.
+- Variable spend, simulated: each scenario fills the horizon by drawing whole past days (cash and
+  each card together, split into reducible and fixed) from the last 90 days, with weekdays and
+  weekends kept apart. A day the household spent far above its usual (the median plus 3 median
+  absolute deviations over spending days in the last 365 days) leaves that pool and is drawn as
+  its own stream at its long-run rate. Below 14 real days a category is topped up with five
+  pseudo-days at 0, ½, 1, 1½, and 2 times the stated daily estimate, weighted so real days count
+  r : 14 − r; the prior fades as real days arrive. Attribution is still by category, not by
+  payment, and a category an obligation covers is still dropped with a gap note; step 6 replaces
+  both with matched series. How days are drawn is one switch per change in `projection.Model`, and
+  a switch ships only when it beats the one before it on the backtest.
 - Goal contributions move money into a goal's account; those fenced savings are not spendable.
 - Money owed counts only when its label has an `expected_date`.
 
@@ -467,23 +471,48 @@ limit and the rest leaves cash that day; used credit falls only when a bill is p
 
 | Verdict | Condition |
 |---|---|
-| yes | Paid as asked, the floor probability stays at or above the threshold, and no goal slips |
-| yes-but | A same-date change—card float, card EMI, a category cut, a delayed goal—gets it there |
-| no | No same-date change does, or the only one is a later date, or an obligation can't be met on its date |
+| yes | Paid as asked, the floor probability is at least 90% and every obligation is met |
+| yes-but | A same-date plan, alone or combined, gets it there: card float, card EMI, a skipped goal contribution, or a category cut |
+| no | No same-date plan does, or the only change is a later date, or an obligation is missed |
+
+The yes rule has no goal-slip clause. A goal slips only through a plan that skips its
+contributions, and that plan reports the slip days.
+
+With no known liquid balance there is no verdict and no lever runs; the verdict reason says what
+is missing.
 
 A later date is a caveat, not a way to afford it as asked: the wait date is listed as a tradeoff,
 but it alone leaves the verdict `no`, and a wait date equal to the asked date is not a tradeoff.
 
 The threshold is 90%, settled at L5 (`plan.md` §6), so it matches the published P10-P90 band.
 
-The engine computes each tradeoff by rerunning the projection:
+A plan is one combination of these levers. The payment, goal, and cut levers are transforms of one
+scenario matrix, so one run for each payment method covers every combination of goals and cuts:
 
-| Tradeoff | How |
+| Lever | What changes |
 |---|---|
-| Wait until date X | Earliest purchase date within the horizon that meets the threshold; context only, and skipped when it is the asked date |
-| Pay by card or EMI | Card float to the next due date, or `n` installments, within the card's available limit |
-| Delay a goal | Goal completion dates before versus after—"Goa slips three weeks" |
-| Cut a category | Shortfall spread over `reducible` categories' baselines until next payday, when the normal baseline resumes; feasible only below a sensible cut ratio |
+| Pay by card or EMI | The cash moves to the bill's due date, or to `n` installments, within the card's available credit |
+| Skip a goal's contributions | The contributions in the month after the purchase come back from their dates; the plan reports the slip |
+| Cut reducible spend | The cut is at most half of the baseline and runs until the next payday, when the normal baseline resumes. A cut on card spend frees cash only once that bill is paid |
+| Wait until date X | The earliest date that meets the threshold. Context only: it never makes a yes-but, and it is skipped when it is the asked date |
+
+An EMI costs interest, 18% GST on the interest and on the processing fee, and the fee itself
+(`money.card_emi`). The rate and fee come from the offer, then the card's recorded `emi_rate_bps`
+and `emi_fee_paise`, then a labeled 16% a year with no fee. A stated no-cost offer carries no
+interest, but its fee and the fee's GST remain.
+
+For a lever where more is always at least as safe, each scenario has a critical value: the least
+setting at which that scenario passes. The least setting that passes a share `p` of scenarios is
+the `ceil(p·N)`-th smallest critical value, compared as integers. A plan is minimal when no other
+passing plan reaches the floor while switching method no more, skipping a subset of its goals,
+cutting no more, and costing no more. Up to four are reported, fewest levers first, then cheapest,
+and each carries its cost in paise (the EMI's interest, GST, and fee, or the spending a cut gives
+up) and the floor probability its rerun reached. Every plan is rerun on the same scenarios: a cut
+that rounding leaves short goes up a basis point, and where a card limit binds, the cut is found
+by bisection. Every number shown comes from that rerun.
+
+The tradeoff kinds are `wait`, `pay_by_card`, `delay_goal`, `cut_category`, and `combined`, which
+lists its `levers`. A `wait` is context only and carries no cost.
 
 The agent phrases the verdict and picks which tradeoffs to mention. The numbers come from the
 function.

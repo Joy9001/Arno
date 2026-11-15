@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from arno.engine.affordability import Hypothetical, _delay_goal_tradeoff, afford
+from arno.engine.affordability import Hypothetical, afford
 from arno.engine.money import amortize
 from arno.engine.patterns import _load_charges, detect_missed
 from arno.engine.projection import (
@@ -163,12 +163,43 @@ def test_an_emi_installment_split_adds_up_to_the_amount():
     )
     result = afford(
         _inputs(cards=(card,)),
-        Hypothetical(amount_paise=120_001, date=date(2026, 1, 1), method="emi", emi_months=3),
+        Hypothetical(
+            amount_paise=120_001,
+            date=date(2026, 1, 1),
+            method="emi",
+            emi_months=3,
+            no_cost=True,
+            emi_fee_paise=0,
+        ),
         runs=10,
     )
     installments = result["hypothetical"]["installments"]
     assert sum(item["amount_paise"] for item in installments) == 120_001
     assert installments[-1]["amount_paise"] == 40_001
+
+
+def test_an_emi_with_no_known_rate_carries_the_labeled_default_cost():
+    card = CardAccount(
+        id="card",
+        name="Slice card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=0,
+        credit_limit_paise=1_000_000,
+    )
+    result = afford(
+        _inputs(cards=(card,)),
+        Hypothetical(amount_paise=120_000, date=date(2026, 1, 1), method="emi", emi_months=3),
+        runs=10,
+    )
+    meta = result["hypothetical"]
+    assert meta["emi_rate_bps"] == 1_600
+    assert meta["emi_cost_paise"] > 0
+    assert (
+        sum(item["amount_paise"] for item in meta["installments"])
+        == 120_000 + meta["emi_cost_paise"]
+    )
+    assert any("assumes 16% a year" in gap for gap in result["data_quality"]["gaps"])
 
 
 def test_a_delayed_goal_that_never_completes_does_not_print_none_days():
@@ -206,16 +237,12 @@ def test_a_delayed_goal_that_never_completes_does_not_print_none_days():
             ),
         ),
     )
-    baseline = project(inputs, runs=10)
-    tradeoff = _delay_goal_tradeoff(
-        inputs,
-        Hypothetical(amount_paise=20_000, date=date(2026, 1, 1)),
-        runs=10,
-        seed=DEFAULT_SEED,
-        threshold=0.90,
-        baseline_goals=baseline["goals"],
+    # Paid as asked the balance goes below zero; skipping January's contribution keeps it above,
+    # and the goal then never completes inside the horizon.
+    result = afford(
+        inputs, Hypothetical(amount_paise=50_000, date=date(2026, 1, 1)), runs=10, seed=DEFAULT_SEED
     )
-    assert tradeoff is not None
+    tradeoff = next(trade for trade in result["tradeoffs"] if trade["kind"] == "delay_goal")
     assert tradeoff["slips_days"] is None
     assert "None" not in tradeoff["detail"]
 

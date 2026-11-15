@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -251,3 +252,60 @@ async def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_cli
 async def test_get_api_projection_rejects_an_amount_without_a_date(authed_client):
     response = authed_client.get("/api/projection", params={"amount_paise": 1000})
     assert response.status_code == 422
+
+
+async def test_load_inputs_carries_a_cards_emi_terms(ledger):
+    from arno.ledger.accounts import create_account
+
+    card = await create_account(
+        ledger,
+        kind="card",
+        name="Slice card",
+        credit_limit_paise=10_000_000,
+        statement_day=5,
+        due_day=25,
+        emi_rate_bps=1_650,
+        emi_fee_paise=25_000,
+    )
+
+    inputs = await projection_tools.load_inputs(ledger)
+
+    loaded = next(item for item in inputs.cards if item.id == card["id"])
+    assert loaded.emi_rate_bps == 1_650
+    assert loaded.emi_fee_paise == 25_000
+
+
+def test_a_hypothetical_emi_takes_the_offers_rate_fee_and_no_cost():
+    purchase = projection_tools._hypothetical(
+        {
+            "amount_paise": 5_000_000,
+            "date": "2026-11-20",
+            "method": "emi",
+            "emi_rate_percent": 15.5,
+            "emi_fee_paise": 20_000,
+            "no_cost": True,
+        }
+    )
+
+    assert purchase is not None
+    assert purchase.emi_rate_bps == 1_550
+    assert purchase.emi_fee_paise == 20_000
+    assert purchase.no_cost is True
+
+
+def test_a_hypothetical_without_emi_terms_leaves_them_unset():
+    purchase = projection_tools._hypothetical(
+        {"amount_paise": 5_000_000, "date": "2026-11-20", "method": "emi"}
+    )
+
+    assert purchase is not None
+    assert purchase.emi_rate_bps is None
+    assert purchase.emi_fee_paise is None
+    assert purchase.no_cost is False
+
+
+def test_an_unknown_hypothetical_key_is_still_rejected():
+    with pytest.raises(ValueError, match="not emo_months"):
+        projection_tools._hypothetical(
+            {"amount_paise": 5_000_000, "date": "2026-11-20", "emo_months": 3}
+        )

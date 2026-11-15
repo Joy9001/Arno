@@ -121,6 +121,18 @@ class ProjectHypothetical(BaseModel):
     account: str | None = Field(
         default=None, description="A card name for card or emi; the best card if omitted."
     )
+    emi_rate_percent: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="The EMI's annual interest rate in percent, when the offer states it",
+    )
+    emi_fee_paise: int | None = Field(
+        default=None, ge=0, description="The EMI's processing fee in paise, when stated"
+    )
+    no_cost: bool = Field(
+        default=False, description="True for a no-cost EMI: the merchant pays the interest"
+    )
 
 
 def _card_data(card: dict[str, Any]) -> list[DataChunk]:
@@ -271,7 +283,7 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
       payee_id, payee_name, amount_paise
     - v_accounts: id, kind, name, institution, last4, liquid, active, balance_paise,
       statement_balance_paise, statement_balance_as_of, credit_limit_paise, statement_day,
-      due_day, rate_bps, tenure_months, emi_schedule_id
+      due_day, emi_rate_bps, emi_fee_paise, rate_bps, tenure_months, emi_schedule_id
     - v_balances: account_id, name, kind, liquid, as_of, balance_paise (one row per day)
     - v_owed: payee_id, display_name, account_id, balance_paise, direction (owes_you, you_owe,
       settled), next_expected_date
@@ -413,7 +425,8 @@ async def amortize(
         high = fit["high_bps_x100"]
         if not fit["exact"] or low is None or high is None:
             raise ModelRetry(fit["note"])
-        rate = (low + high) / 2 / 10_000
+        # An EMI a zero rate explains is a zero-rate loan (a no-cost EMI), not a small rate.
+        rate = 0.0 if low == 0 else (low + high) / 2 / 10_000
         assumptions = [f"{low / 10_000:.4f}% to {high / 10_000:.4f}% a year, inferred from the EMI"]
         # A stated EMI was evidence for the rate, so the rate now computes the EMI. A named loan
         # keeps its real EMI, which can take a month more or less than its tenure.
@@ -748,9 +761,10 @@ async def update_setup(
     A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in
     credit is -500 for that card, passed once and not retried with the other sign.
     For action "add" on a card, a positive credit limit, a statement day, and a due day are
-    required. If the user does not know one, leave the card pending instead of guessing. A bank
-    needs only a name, and its balance and last4 are optional. An update changes only the fields
-    you pass.
+    required. If the user does not know one, leave the card pending instead of guessing. Record a
+    card's EMI rate and fee in `emi_rate_percent` and `emi_fee_paise` only when the offer states
+    them. A bank needs only a name, and its balance and last4 are optional.
+    An update changes only the fields you pass.
     Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
     payload_data = data.model_dump(exclude_none=True, mode="python")
     summary = payload_data.get("name") or payload_data.get("account") or payload_data

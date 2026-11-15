@@ -50,7 +50,8 @@ old name so that archives written before today still restore.
 **Engine redesign on November 13, 2026.** The projection, affordability, pattern, and money engine
 is rebuilt on one integer scenario matrix, behind a backtest that scores every change against
 baselines before it ships. Design and build order:
-[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6.
+[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Steps 1 to 5 of that build
+order have landed; the pattern engine and the steps after it are still to come.
 
 **App role demoted on November 14, 2026.** The `app` role owns the Arno databases without
 `SUPERUSER` (`LOGIN CREATEDB CREATEROLE`, `pg_signal_backend`, and `ADMIN OPTION` on `agent_ro` and
@@ -502,7 +503,10 @@ month. A backtest was run against a copy of the live ledger. With no income sche
 every month is unusable as a measurement, so `arno backtest --publish` refused to write and
 milestone 29 stays open until the owner adds a salary schedule. Milestone 30 is done as of November
 12: `arno hackerrank` scores the engine at 88.8% on the 25 externally labeled samples, and the
-README carries the block. Detail: [release-hardening.md](release-hardening.md).
+README carries the block. On November 15, 2026 the owner allowed the backtest and pattern scoring
+to run on the development instance's real ledger, reporting aggregate numbers only; nothing is
+committed or published, and a confirmed salary schedule will make its months count. Detail:
+[release-hardening.md](release-hardening.md).
 
 ### L6: Watch
 
@@ -613,14 +617,20 @@ Answer each when its layer arrives, not before.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
     `data_quality` says so; there is no per-account setting to keep in sync.
-- **L5 redesign:** decided November 13, 2026, and not yet built. The engine is rebuilt to
-  [`engine-blueprint.md`](engine-blueprint.md), in that document's build order. The L5 answers
-  above and the L6 recurring-charge thresholds below describe the shipped engine until a step
+- **L5 redesign:** decided November 13, 2026, and built through step 5 of its build order. The
+  engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's build
+  order. The L6 recurring-charge thresholds below describe the shipped engine until step 6
   replaces them. A model change ships only if it beats the one before it on the new backtest.
   - **NumPy.** A runtime dependency for the scenario kernel (§3).
   - **Scenario count.** 16,384 at every horizon, replacing 1,000.
-  - **Block resampling.** Single days stay unless a fixed block of 2 or 3 days wins on the
-    backtest.
+  - **Model switches.** Each one was scored on the tuning seeds of the ten synthetic households,
+    978 weekly origins, against a bar fixed before the first result: a 1% lower mean CRPS over
+    the ten (target, horizon) cells, with no cell significantly worse. Whole-day vectors, the
+    short-history prior, and rare large days were admitted; blocks, recency weights, and
+    per-scenario pool resampling were not, and pool resampling is retested after step 6 because
+    it was better in every cell but under the bar.
+  - **Block resampling.** Blocks of 2 or 3 days gained nothing (+0.03% and +0.07%, with one 14-day
+    cell worse), so single days stay and the L5 answer above holds.
   - **Obligation rule.** An obligation is met when at least 99% of scenarios can pay it. This
     replaces "no run misses one", which tightened as the run count rose.
   - **First floor crossing.** The first date by which more than 10% of scenarios have crossed, so
@@ -632,16 +642,20 @@ Answer each when its layer arrives, not before.
     case; with no confirmed income the projection stays unusable.
   - **EMI cost.** A card EMI carries interest, fee, and GST. The rate comes from the what-if,
     then the card, then a labeled default of 16% a year; zero only for a stated no-cost offer.
-    The 18% GST on interest and fees is checked against an issuer's terms before it is coded.
+    The 18% GST on interest and the processing fee follows CSB Bank's One credit card EMI terms
+    (April 2024).
   - **Pattern thresholds.** Two posterior thresholds, a lower one to propose a series and a
     higher one to project it, both set from precision on labeled data.
   - **Quantiles.** Order statistics with no interpolation; published numbers shift by a few
     paise.
-  - **Short history.** Below 14 real days the pool is topped up with pseudo-days around the
-    stated baseline, with a spread set by the backtest.
-  - **One-off mark.** Whether a payment can be excluded from the rare-large-spend stream waits on
-    the backtest, which decides whether that stream ships at all.
-  - **Release gate.** Still open: whether "shipped" waits for the redesign.
+  - **Short history.** Below 14 real days the pool is topped up with pseudo-days at 0, ½, 1, 1½,
+    and 2 times the stated daily estimate, weighted so real days count r : 14 − r. It cut mean
+    CRPS by 3.4%.
+  - **One-off mark.** Decided November 15, 2026, and to be built, because the rare-day stream
+    ships. A payment marked one-off leaves the spend history: it is neither everyday nor rare
+    spend.
+  - **Release gate.** Decided November 15, 2026: "shipped" waits for the engine redesign. The four
+    weeks of daily use start once the new engine has landed.
 - **L6:** settled in code and recorded here.
   - **Notification and briefing times.** The notification time is 08:00 Asia/Kolkata and the
     weekly briefing is Sunday at that time. Both are settings; nightly risk, pattern, baseline,

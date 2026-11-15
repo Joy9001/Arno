@@ -9,8 +9,6 @@ import pytest
 
 from arno.engine.affordability import (
     Hypothetical,
-    _cut_category_tradeoff,
-    _delay_goal_tradeoff,
     afford,
 )
 from arno.engine.projection import (
@@ -18,8 +16,10 @@ from arno.engine.projection import (
     CashEvent,
     GoalPlan,
     LiquidAccount,
+    Projection,
     ProjectionInput,
     SpendCategory,
+    Tradeoff,
     project,
 )
 
@@ -43,6 +43,10 @@ def _inputs(
         categories=categories,
         ask_horizon_days=90,
     )
+
+
+def _trade(result: Projection, kind: str) -> Tradeoff:
+    return next(trade for trade in result["tradeoffs"] if trade["kind"] == kind)
 
 
 def test_plenty_of_cash_is_a_yes_with_no_tradeoffs():
@@ -166,12 +170,10 @@ def test_cutting_a_reducible_category_frees_a_known_shortfall():
             ),
         ),
     )
-    projected = project(modified, runs=100)
-    tradeoff = _cut_category_tradeoff(
-        inputs, purchase, runs=100, seed=20261103, threshold=0.90, with_purchase=projected
-    )
-    assert tradeoff is not None
-    assert tradeoff["kind"] == "cut_category"
+    assert project(modified, runs=200)["floor_probability"] < 0.9
+    result = afford(inputs, purchase, runs=200)
+    assert result["verdict"] == "yes-but"
+    tradeoff = _trade(result, "cut_category")
     assert 0 < tradeoff["ratio"] <= 0.5
     assert tradeoff["categories"][0]["category"] == "Food"
 
@@ -204,17 +206,8 @@ def test_delaying_a_goal_reports_how_late_it_completes():
             ),
         ),
     )
-    baseline = project(inputs, runs=50)
-    tradeoff = _delay_goal_tradeoff(
-        inputs,
-        Hypothetical(amount_paise=20_000, date=date(2026, 1, 1)),
-        runs=50,
-        seed=20261103,
-        threshold=0.90,
-        baseline_goals=baseline["goals"],
-    )
-    assert tradeoff is not None
-    assert tradeoff["kind"] == "delay_goal"
+    result = afford(inputs, Hypothetical(amount_paise=20_000, date=date(2026, 1, 1)), runs=50)
+    tradeoff = _trade(result, "delay_goal")
     assert tradeoff["slips_days"] is not None and tradeoff["slips_days"] > 0
 
 

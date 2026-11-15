@@ -1,13 +1,19 @@
 # Engine blueprint: the next projection, affordability, pattern, and money engine
 
 **Status: decided on November 13, 2026, and being built.** The decisions of section 11 are
-recorded in [`plan.md`](plan.md) §6, which owns them. Until a step of section 10 lands,
-`design.md` and `tools.md` describe the shipped engine. Written against `src/arno/engine` at
+recorded in [`plan.md`](plan.md) §6, which owns them. Written against `src/arno/engine` at
 commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic households the
 shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat balance
 forecasts the end balance better than it does (README, "Projection backtest"). Step 2
 landed the same day: `project()` runs on the scenario kernel, which matches a plain
 day-by-day walk to the paisa and the old walk within its sampling error on card-free inputs.
+Steps 3 to 5 landed on November 15, 2026: the admitted switches ship as
+`Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8))`, which lifts P10-P90
+coverage on the tuning seeds from 25% to 34% under the old engine to 51% to 62%; the 80% target
+waits on step 6, mostly payments not yet attributed to schedules. Affordability reports
+critical-value minimal plans verified by rerun, and the money kernel carries bank conventions,
+rate inversion, cumulative rounding, and allocation; XIRR was not built, because nothing uses it
+and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe steps 1 to 5.
 Revised the same day after two external reviews; each accepted finding was first checked against
 the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 
@@ -560,20 +566,20 @@ Decided on November 13, 2026, and recorded in plan.md §6.
    of the base case even when no income is confirmed; it becomes an inbox proposal, and the
    projection stays unusable until one is accepted, as today.
 8. **EMI cost inputs**: a rate and fee on the what-if, a default per card, and a labeled default
-   of 16% a year. The 18% GST on interest and fees is checked against an issuer's terms before
-   it is coded.
+   of 16% a year. The 18% GST on interest and fees was checked against CSB Bank's One credit
+   card EMI terms (April 2024) before it was coded.
 9. **Pattern thresholds**: posterior thresholds replace "three occurrences, ±3 days, ±10%". Two
    of them, a lower one to propose a series and a higher one to put it in the projection, both
    set from precision on labeled data.
 10. **Quantile definition**: order statistics without interpolation shift published numbers by a
     few paise.
 11. **Short-history prior**: the pseudo-day multiples of section 4.2 are set by the backtest.
-12. **A one-off mark on a movement**, which would let the user exclude a payment from the
-    rare-spend stream, waits on the backtest: it matters only if that stream ships. Nothing like
-    it exists in the ledger today. Without it, one large expense 14 months ago adds about a 19%
-    chance of a repeat inside any 90 days.
+12. **A one-off mark on a movement** excludes a payment from the spend history. The rare-spend
+    stream shipped on the backtest (step 3), so on November 15, 2026 the mark was decided and is
+    to be built. Without it, one large expense 14 months ago adds about a 19% chance of a repeat
+    inside any 90 days.
 
-Still open: whether "shipped" (plan.md) waits for this redesign.
+Decided on November 15, 2026: "shipped" (plan.md) waits for this redesign.
 
 ## 12. What is not yet known
 

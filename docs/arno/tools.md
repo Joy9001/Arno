@@ -280,7 +280,14 @@ class Hypothetical:
     method: Literal["account", "card", "emi"]
     emi_months: int | None = None
     account: str | None = None
+    emi_rate_percent: float | None = None   # the offer's annual rate, when it states one
+    emi_fee_paise: int | None = None        # the offer's processing fee, when stated
+    no_cost: bool = False                   # the merchant pays the interest
 ```
+
+An EMI costs the offer's rate and fee, else the card's recorded `emi_rate_bps` and
+`emi_fee_paise`, else a labeled 16% a year; `no_cost` leaves only the fee and its GST. The gap
+that names the assumption is in `data_quality`, and the answer must state it.
 
 **Output**
 
@@ -320,10 +327,17 @@ first_floor_crossing = first date by which more than 10% of scenarios have cross
 obligations_met = every obligation is paid in at least 99% of scenarios
 if hypothetical:
     rerun with it
-    if threshold met, no goal slips, no obligation missed: verdict = yes
+    verdict = yes when floor_probability >= 0.90 and obligations_met   # no goal-slip clause
     else:
-        tradeoffs = rerun for: wait until date X, card or EMI, delay a goal, cut a category
-        verdict   = yes-but if a same-date tradeoff works, otherwise no
+        levers  = pay by card or EMI, skip a goal's next contributions, cut reducible spend
+                  until payday
+        critical value = the least setting that passes one scenario; the ceil(p*N)-th
+                  smallest passes a share p
+        minimal plans = up to 4, fewest levers then cheapest; no other plan changes no more,
+                  skips a subset of the goals, cuts no more, and costs no more
+        rerun each plan on the same scenarios; a cut that rounding leaves short goes up a
+                  basis point, and every number reported comes from that rerun
+        verdict = yes-but when a plan keeps the date, no when only a later date works
 ```
 
 "Wait until date X" is already a tradeoff, so a script doesn't need to sweep dates. It is context,
@@ -331,9 +345,10 @@ not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal 
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
 
-The scenario kernel of [`engine-blueprint.md`](engine-blueprint.md) has landed. The verdict and
-its tradeoffs still use the shipped rules until the blueprint's affordability step lands: that
-step drops the goal-slip clause and finds each tradeoff from the same scenarios.
+Steps 1 to 5 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
+projection model, the verdict and plan rules above, and the money conventions. Step 6, pattern
+detection and payment-level attribution, still changes how variable spend is drawn; the tool's
+surface does not change.
 
 ### `run_query`
 
@@ -811,8 +826,10 @@ baseline is typical daily spend.
 A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in credit is
 -500 for that card, passed once and not retried with the other sign.
 For action "add" on a card, a positive credit limit, a statement day, and a due day are required.
-If the user does not know one, leave the card pending instead of guessing. A bank needs only a
-name, and its balance and last4 are optional. An update changes only the fields you pass.
+If the user does not know one, leave the card pending instead of guessing. Record a card's EMI
+rate and fee in `emi_rate_percent` and `emi_fee_paise` only when the offer states them. A bank
+needs only a name, and its balance and last4 are optional. An update changes only the fields you
+pass.
 Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."
 
 **Input**
@@ -823,6 +840,9 @@ update_setup(entity: Literal["account", "balance", "schedule", "goal", "category
              action: Literal["add", "update", "archive"],
              data: ...)  # a typed model for each entity, for example:
 
+# account:  {name, kind, institution, last4, opening_balance_rupees, liquid,
+#            credit_limit_rupees, statement_day, due_day, emi_rate_percent, emi_fee_paise,
+#            rate_percent, tenure_months, active}
 # balance:  {account, balance_rupees, as_of}
 # schedule: {name, kind, subtype, amount_rupees, account, category, rule, starts, ends, confirmed}
 # goal:     {name, target_rupees, deadline, priority}

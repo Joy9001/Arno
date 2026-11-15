@@ -35,20 +35,21 @@ from arno.engine.inputs import (
     ConfiguredSchedule,
     LedgerSnapshot,
     Occurrence,
-    SpendRow,
     build_inputs,
 )
 from arno.engine.money import money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
-    HISTORY_DAYS,
+    LEGACY_MODEL,
+    RARE_WINDOW_DAYS,
     UNUSABLE_SETUP_GAPS,
     CardAccount,
     GoalPlan,
     LiquidAccount,
     Model,
     ProjectionInput,
+    SpendRow,
     last_statement_close,
     simulate_paths,
 )
@@ -120,6 +121,51 @@ FORECASTERS: dict[str, Forecaster] = {
     "engine": engine,
 }
 BASELINES = ("flat", "schedule", "schedule_mean")
+DEFAULT_PRIOR = (0, 2, 4, 6, 8)
+
+
+def model_from_name(name: str) -> Model:
+    """A model configuration named by its switches, joined with "+".
+
+    ``legacy`` is the walk shipped before the kernel. ``day`` draws whole historical days,
+    ``resample`` gives each scenario its own resampled history, ``L2`` and ``L3`` draw blocks of
+    about that many days, ``hl60`` weights history with a 60-day half-life, ``rare4`` splits off
+    days above the median plus four median absolute deviations, and ``prior`` (or ``prior:0,4,8``,
+    quarters of the estimate) tops up a short history with pseudo-days.
+    """
+    model = LEGACY_MODEL
+    for token in name.split("+"):
+        if token == "legacy":
+            continue
+        if token == "day":
+            model = replace(model, pooling="day")
+        elif token == "resample":
+            model = replace(model, pool_resampling=True)
+        elif token.startswith("L") and token[1:].isdigit():
+            model = replace(model, block_length=int(token[1:]))
+        elif token.startswith("hl") and token[2:].isdigit():
+            model = replace(model, recency_half_life_days=int(token[2:]))
+        elif token.startswith("rare") and token[4:].isdigit():
+            model = replace(model, rare_mad_multiple=int(token[4:]))
+        elif token == "prior":
+            model = replace(model, prior_quarters=DEFAULT_PRIOR)
+        elif token.startswith("prior:"):
+            model = replace(model, prior_quarters=tuple(int(part) for part in token[6:].split(",")))
+        else:
+            raise ValueError(f"unknown model switch {token!r}")
+    return model
+
+
+def _forecaster(name: str) -> Forecaster:
+    known = FORECASTERS.get(name)
+    if known is not None:
+        return known
+    model = model_from_name(name)
+
+    def candidate(inputs: ProjectionInput, seed: int) -> Paths:
+        return _walk(inputs, runs=DEFAULT_RUNS, seed=seed, model=model)
+
+    return candidate
 
 
 # --- Cases ---------------------------------------------------------------------------------------
@@ -162,7 +208,7 @@ def score_case(case: Case, names: Sequence[str], seed: int = DEFAULT_SEED) -> li
     rows: list[Score] = []
     actual = np.asarray(case.actual, dtype=np.int64)
     for name in names:
-        paths = FORECASTERS[name](case.inputs, seed)
+        paths = _forecaster(name)(case.inputs, seed)
         for horizon in HORIZONS:
             running_min = paths[:, : horizon + 1].min(axis=1)
             for target in TARGETS:
@@ -326,7 +372,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
                     linked_goal=schedule.goal_id in goal_ids,
                 )
             )
-    window = as_of - timedelta(days=HISTORY_DAYS)
+    window = as_of - timedelta(days=RARE_WINDOW_DAYS)
     spend: dict[tuple[date, str | None, str | None], int] = {}
     for movement in persona.movements:
         if movement.kind != "spend" or not window <= movement.date < as_of:
@@ -394,6 +440,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
             )
         ),
         ask_horizon_days=LAST_HORIZON,
+        history_start=persona.history_start,
     )
 
 
@@ -434,14 +481,14 @@ def _household_scores(key: str, seed: int, names: tuple[str, ...]) -> tuple[list
     return scores, dropped
 
 
-def backtest_personas(
+def persona_scores(
     *,
-    seeds: Sequence[int] = personas_mod.HOLDOUT_SEEDS,
-    names: Sequence[str] = tuple(FORECASTERS),
+    seeds: Sequence[int],
+    names: Sequence[str],
     keys: Sequence[str] = personas_mod.PERSONA_KEYS,
     workers: int | None = None,
-) -> dict[str, Any]:
-    """Score every forecaster on every persona and seed, one process per household."""
+) -> tuple[list[Score], int]:
+    """Every case's scores for every forecaster, and how many origins were dropped."""
     jobs = [(key, seed, tuple(names)) for key in keys for seed in seeds]
     cores = (os.cpu_count() or 2) - 1
     count = workers if workers is not None else max(1, min(len(jobs), cores, MAX_WORKERS))
@@ -451,7 +498,18 @@ def backtest_personas(
         with ProcessPoolExecutor(max_workers=count) as pool:
             results = list(pool.map(_household_scores, *zip(*jobs, strict=True)))
     scores = [score for household, _dropped in results for score in household]
-    dropped = sum(dropped for _household, dropped in results)
+    return scores, sum(dropped for _household, dropped in results)
+
+
+def backtest_personas(
+    *,
+    seeds: Sequence[int] = personas_mod.HOLDOUT_SEEDS,
+    names: Sequence[str] = tuple(FORECASTERS),
+    keys: Sequence[str] = personas_mod.PERSONA_KEYS,
+    workers: int | None = None,
+) -> dict[str, Any]:
+    """Score every forecaster on every persona and seed, one process per household."""
+    scores, dropped = persona_scores(seeds=seeds, names=names, keys=keys, workers=workers)
     label = f"synthetic personas, seeds {', '.join(str(seed) for seed in seeds)}"
     return summarize(scores, source=label, dropped=dropped, names=names)
 
@@ -723,6 +781,8 @@ __all__ = [
     "backtest",
     "backtest_db",
     "backtest_personas",
+    "model_from_name",
+    "persona_scores",
     "format_report",
     "persona_cases",
     "persona_snapshot",

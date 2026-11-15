@@ -895,6 +895,12 @@ async def update_setup_item(
                 ),
                 statement_day=data.get("statement_day"),
                 due_day=data.get("due_day"),
+                emi_rate_bps=(
+                    _percent_to_bps(data["emi_rate_percent"])
+                    if data.get("emi_rate_percent") is not None
+                    else None
+                ),
+                emi_fee_paise=data.get("emi_fee_paise"),
                 rate_bps=(
                     _percent_to_bps(data["rate_percent"])
                     if data.get("rate_percent") is not None
@@ -934,6 +940,12 @@ async def update_setup_item(
                     ),
                     statement_day=data.get("statement_day"),
                     due_day=data.get("due_day"),
+                    emi_rate_bps=(
+                        _percent_to_bps(data["emi_rate_percent"])
+                        if data.get("emi_rate_percent") is not None
+                        else None
+                    ),
+                    emi_fee_paise=data.get("emi_fee_paise"),
                     rate_bps=(
                         _percent_to_bps(data["rate_percent"])
                         if data.get("rate_percent") is not None

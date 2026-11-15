@@ -25,6 +25,7 @@ from arno.engine.projection import (
     ProjectionInput,
     SourceRef,
     SpendCategory,
+    SpendRow,
 )
 
 
@@ -55,16 +56,6 @@ class ConfiguredSchedule:
 
 
 @dataclass(frozen=True, slots=True)
-class SpendRow:
-    """Spend on one day in one category from one account; ``card_id`` is None for cash."""
-
-    date: date
-    category_id: str | None
-    card_id: str | None
-    amount_paise: int
-
-
-@dataclass(frozen=True, slots=True)
 class CategoryRow:
     id: str
     name: str
@@ -86,8 +77,10 @@ class LedgerSnapshot:
     schedules: tuple[ConfiguredSchedule, ...] = ()
     owed: tuple[CashEvent, ...] = ()
     categories: tuple[CategoryRow, ...] = ()
-    # Positive spend in the HISTORY_DAYS days before as_of; as_of itself is not history yet.
+    # Positive spend in the RARE_WINDOW_DAYS days before as_of; as_of itself is not history
+    # yet. Categories read the last HISTORY_DAYS of it.
     spend: tuple[SpendRow, ...] = ()
+    history_start: date | None = None
     ask_horizon_days: int | None = None
     gaps: tuple[str, ...] = ()
     balance_ages: tuple[BalanceAge, ...] = ()
@@ -139,7 +132,7 @@ def _spend_categories(
     by_card: dict[str, dict[str, int]] = {}
     uncategorized = 0
     for row in snapshot.spend:
-        if row.amount_paise <= 0:
+        if row.amount_paise <= 0 or row.date < window_start:
             continue
         if row.category_id is None:
             uncategorized += row.amount_paise
@@ -199,7 +192,8 @@ def _spend_categories(
         if real_days < MIN_REAL_DAYS:
             gaps.append(
                 f"{category.name} has only {day_label}; its "
-                f"{money(baseline_per_day)['text']}/day {source} estimate is used flat"
+                f"{money(baseline_per_day)['text']}/day {source} estimate stands in, with a "
+                "spread around it, until it has 14"
             )
         elif share == 0:
             gaps.append(
@@ -343,6 +337,8 @@ def build_inputs(snapshot: LedgerSnapshot) -> ProjectionInput:
             "outside_text": snapshot.outside_text,
         },
         sources=tuple(_sources(snapshot, baseline_rows)),
+        spend=snapshot.spend,
+        history_start=snapshot.history_start,
     )
 
 

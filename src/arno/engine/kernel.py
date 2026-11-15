@@ -139,6 +139,9 @@ class Settings:
     block_length: int = 1
     keep_days: int = 0  # keep full paths for the first this many days (the backtest)
     checkpoints: tuple[int, ...] = ()
+    # With checkpoints: report the reducible spend through this day that has left cash by each
+    # checkpoint, the quantity a spending cut acts on. -1 reports nothing.
+    reducible_until: int = -1
 
 
 @dataclass(slots=True)
@@ -156,6 +159,11 @@ class Run:
     optimistic_crossings: I64 | None
     paths: I64 | None
     checkpoints: I64 | None  # (scenarios, len(settings.checkpoints))
+    # Reducible spend through `reducible_until` that has left cash by each checkpoint: cash
+    # spend on its day, card spend when its bill is paid. (scenarios, len(checkpoints))
+    reducible: I64 | None = None
+    # Scenarios in which some card charge went past the limit and left cash early.
+    capped: npt.NDArray[np.bool_] | None = None
 
 
 # --- Drawing days ------------------------------------------------------------------------------
@@ -367,13 +375,30 @@ def run(spec: Spec, settings: Settings) -> Run:
         for card in spec.cards
     ]
     credit_exceeded = False
+    capped = np.zeros(scenarios, dtype=bool)
+    reducible = (
+        np.zeros((scenarios, len(settings.checkpoints)), dtype=np.int64)
+        if settings.checkpoints and settings.reducible_until >= 0
+        else None
+    )
+    # Cash reducible spend before this chunk; card reducible spend by the bill it joins.
+    reducible_cash = np.zeros(scenarios, dtype=np.int64)
+    reducible_bills: list[dict[int, I64]] = [{} for _card in spec.cards]
 
     for begin in range(0, total_days, CHUNK_DAYS):
         end = min(begin + CHUNK_DAYS, total_days)
         width = end - begin
         keys = np.arange(spec.first_day + begin, spec.first_day + end, dtype=np.int64)
-        spend = _spend(spec, states, rare, keys, begin, width, scenarios, card_count)
-        if spec.cut_bps and begin <= spec.cut_until:
+        cutting = spec.cut_bps > 0 and begin <= spec.cut_until
+        measuring = reducible is not None and begin <= settings.reducible_until
+        spend = _spend(
+            spec, states, rare, keys, begin, width, scenarios, card_count, cutting or measuring
+        )
+        if measuring:
+            reducible_cash = _measure_reducible(
+                spec, settings, spend, reducible_cash, reducible_bills, begin, width
+            )
+        if cutting:
             _apply_cut(spec, spend, cut_carry, begin, width, card_count)
 
         cash_out = spend["cash"]
@@ -398,6 +423,8 @@ def run(spec: Spec, settings: Settings) -> Run:
                 begin,
             )
             credit_exceeded |= exceeded
+            if exceeded:
+                capped |= overflow.any(axis=1)
             cash_out = cash_out + overflow
 
         fixed = spec.inflow[begin:end] - spec.obligation[begin:end] - spec.later[begin:end]
@@ -420,6 +447,10 @@ def run(spec: Spec, settings: Settings) -> Run:
             spot = checkpoint_index.get(day)
             if spot is not None and checkpoints is not None:
                 checkpoints[:, spot] = balances[:, column]
+                if reducible is not None:
+                    reducible[:, spot] = _realized(
+                        settings, spend, reducible_cash, reducible_bills, begin, day
+                    )
 
         curve[begin:end] = np.partition(balances, ranks, axis=0)[ranks].T
         lows = np.minimum.accumulate(balances, axis=1)
@@ -450,7 +481,53 @@ def run(spec: Spec, settings: Settings) -> Run:
         optimistic_crossings=optimistic_crossings,
         paths=paths,
         checkpoints=checkpoints,
+        reducible=reducible,
+        capped=capped,
     )
+
+
+def _measure_reducible(
+    spec: Spec,
+    settings: Settings,
+    spend: dict[str, I64],
+    before: I64,
+    bills: list[dict[int, I64]],
+    begin: int,
+    width: int,
+) -> I64:
+    """Add this chunk's card reducible spend to the bills it joins; return the cash total so far.
+
+    Only days up to `reducible_until` count. Card spend leaves cash on its bill's due date, so a
+    cut on a card frees nothing until that bill is paid.
+    """
+    stop = min(width, settings.reducible_until - begin + 1)
+    for k, card in enumerate(spec.cards):
+        dues = card.due_of_day[begin : begin + stop]
+        _add_to_bills(bills[k], spend[f"card{k}_cut"][:, :stop], dues)
+    return before + spend["cash_cut"][:, :stop].sum(axis=1)
+
+
+def _realized(
+    settings: Settings,
+    spend: dict[str, I64],
+    cash_after_chunk: I64,
+    bills: list[dict[int, I64]],
+    begin: int,
+    day: int,
+) -> I64:
+    """Reducible spend through `reducible_until` that has left cash by the end of ``day``."""
+    stop = settings.reducible_until - begin + 1
+    if day < settings.reducible_until and day - begin + 1 < stop:
+        # The cut window runs past this checkpoint: only the chunk's days up to it have happened.
+        later = spend["cash_cut"][:, day - begin + 1 : stop].sum(axis=1)
+        total = cash_after_chunk - later
+    else:
+        total = cash_after_chunk.copy()
+    for card_bills in bills:
+        for due, amount in card_bills.items():
+            if due <= day:
+                total += amount
+    return total
 
 
 def _cut_columns(card_count: int) -> list[str]:
@@ -466,9 +543,10 @@ def _spend(
     width: int,
     scenarios: int,
     card_count: int,
+    with_cut: bool,
 ) -> dict[str, I64]:
     names = ["cash", *(f"card{k}" for k in range(card_count))]
-    if spec.cut_bps and begin <= spec.cut_until:
+    if with_cut:
         names += _cut_columns(card_count)
     spend = {name: np.zeros((scenarios, width), dtype=np.int64) for name in names}
     classes = spec.classes[begin : begin + width]
