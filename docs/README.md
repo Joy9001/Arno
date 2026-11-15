@@ -27,6 +27,7 @@ plan wins. The project has the following docs:
 | [`system-design.md`](arno/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
 | [`typing.md`](arno/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
 | [`observability.md`](arno/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
+| [`development-operations.md`](arno/development-operations.md) | Maintainer guide: deployment, verification, backups, troubleshooting, and releases |
 | [`cost-tracking.md`](arno/cost-tracking.md) | Inference accounting, native budgets, subscription adapters, Phoenix contract, and definition of done |
 | [`recaps.md`](arno/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
 | [`web-interface-design.md`](arno/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
