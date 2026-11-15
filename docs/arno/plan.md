@@ -499,10 +499,12 @@ local code rather than the review screen, and those two import gaps remain. Deta
     reducing one named stream, a merchant's fixed instalment dates) have no product equivalent, so
     the adapter searches them and checks each with `project()`. The earlier 88.8% came from a
     parallel implementation and is retired. The three status misses are all plans that stop or
-    reduce a stream: the adapter's estimate of variable-amount streams before the next salary
-    differs from the label's, by under 3% of the ask in two and 13% in one, which crosses the
-    threshold. Tuning that estimate on the 25 scored samples would fit the test set, so the
-    adapter keeps the pattern engine's estimate. The data stays local and is never committed.
+    reduce a stream. In two, the adapter's safe amount differs from the label's by under 3% of
+    the ask, which is enough to cross the threshold. In the third it is 13% lower, and the cause
+    was not isolated: other amount estimates for variable streams move it by under 2 points, and
+    no subset of the projected payments accounts for it. No adapter change was made, because a
+    change chosen to flip these samples would fit the test set. The data stays local and is never
+    committed.
 31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
 
 **L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
@@ -688,9 +690,10 @@ Answer each when its layer arrives, not before.
     all linked is dropped and counted. Refunds and repayments stay in the outcome.
   - **Spend keeps its card.** Decided November 15, 2026. A resampled day's card spend stays on its
     card past the limit; only new charges (a what-if purchase, a card EMI, a detected series) are
-    held to it. The history already shows spend moving to cash while a card was full, so holding
-    resampled spend to the limit again moved cash out early: the low-limit household's outcomes
-    fell above its P90 almost half the time. It lowered mean CRPS by 1.2% on the tuning seeds.
+    held to it, after that day's resampled spend has used its share of the headroom. The history
+    already shows spend moving to cash while a card was full, so holding resampled spend to the
+    limit again moved cash out early: the low-limit household's outcomes fell above its P90 almost
+    half the time. It lowered mean CRPS by 1.2% on the tuning seeds.
   - **Calibration.** Decided November 15, 2026: not shipped. After the two changes above, the
     tuning seeds' P10-P90 coverage was 74% to 77% against the 80% target, short of it at 7 to 30
     days. A per-horizon map of where outcomes fell in their forecasts, shrunk toward the identity

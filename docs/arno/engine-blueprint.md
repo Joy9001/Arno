@@ -241,7 +241,8 @@ engine without it, because dropping covered categories had been hiding the doubl
 with, even past the limit. The history already shows spend moving to cash while a card was full,
 so holding a resampled day to the limit again moved that cash out a cycle early. Only charges the
 history does not contain are held to the limit: a what-if purchase, a card EMI, and a detected
-series. Within a billing piece those claim the headroom first.
+series. Each day the resampled spend goes on the card first, so a charge later in a cycle sees the
+headroom that spend has already used.
 
 ### 4.3 Kernel
 

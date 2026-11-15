@@ -431,7 +431,8 @@ with payment-level attribution.
   due on its due date (today, if that has passed); spend since the close joins the next bill.
   A drawn past day's card spend stays on its card even past the limit, because the history
   already shows spend moving to cash while a card was full. A what-if purchase, a card EMI, and a
-  detected series are held to the limit, and what does not fit is cash spend that day.
+  detected series are held to the limit after that day's drawn spend, and what does not fit is
+  cash spend that day.
 - Variable spend, simulated: each scenario fills the horizon by drawing whole past days (cash and
   each card together, split into reducible and fixed) from the last 90 days, with weekdays and
   weekends kept apart. A day the household spent far above its usual (the median plus 3 median
