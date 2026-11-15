@@ -95,33 +95,34 @@ leave out later income that pays no confirmed schedule.
 <!-- backtest:start -->
 Source: synthetic personas, seeds 201, 202. 978 weekly origins scored, 0 dropped for missing setup.
 CRPS is the forecast's distance from the outcome in rupees (lower is better); skill is against `schedule_mean` with its Diebold-Mariano p-value; coverage is how often the outcome fell inside P10-P90, with a 95% interval.
+Outcomes leave out income the forecast was told not to count: a later credit counts only if it pays an income schedule confirmed by the origin.
 
 | Target | Days | Forecaster | CRPS | Skill (p) | P10-P90 coverage | Width | Breach Brier |
 |---|---|---|---|---|---|---|---|
-| end | 7 | flat | ₹53,393.29 | -763.6% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 7 | schedule | ₹8,075.49 | -30.6% (0.00) | 0% (0%-1%) | ₹0 | - |
-| end | 7 | schedule_mean | ₹6,182.94 | - | 0% (0%-0%) | ₹0 | - |
-| end | 7 | engine | ₹4,559.26 | +26.3% (0.00) | 70% (67%-73%) | ₹6,805.71 | - |
-| lowest | 7 | flat | ₹28,045.89 | -647.5% (0.00) | 4% (3%-6%) | ₹0 | 0.011 |
-| lowest | 7 | schedule | ₹5,223.26 | -39.2% (0.00) | 3% (2%-4%) | ₹0 | 0.013 |
-| lowest | 7 | schedule_mean | ₹3,752.08 | - | 2% (1%-3%) | ₹0 | 0.018 |
-| lowest | 7 | engine | ₹2,237.19 | +40.4% (0.00) | 72% (69%-75%) | ₹6,117.69 | 0.008 |
-| end | 30 | flat | ₹21,278.19 | +0.6% (0.95) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule | ₹32,994.63 | -54.2% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule_mean | ₹21,399.76 | - | 0% (0%-0%) | ₹0 | - |
-| end | 30 | engine | ₹15,521.22 | +27.5% (0.00) | 65% (60%-69%) | ₹20,036.55 | - |
-| lowest | 30 | flat | ₹51,121.18 | -287.0% (0.00) | 2% (1%-3%) | ₹0 | 0.044 |
-| lowest | 30 | schedule | ₹16,813.54 | -27.3% (0.00) | 2% (1%-2%) | ₹0 | 0.083 |
-| lowest | 30 | schedule_mean | ₹13,208.55 | - | 1% (0%-1%) | ₹0 | 0.130 |
-| lowest | 30 | engine | ₹8,797.24 | +33.4% (0.00) | 65% (60%-69%) | ₹14,414.43 | 0.082 |
-| end | 90 | flat | ₹35,192.98 | +37.4% (0.01) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule | ₹1,34,436.08 | -139.1% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule_mean | ₹56,226.14 | - | 0% (0%-0%) | ₹0 | - |
-| end | 90 | engine | ₹43,530.75 | +22.6% (0.00) | 60% (53%-67%) | ₹54,241.13 | - |
-| lowest | 90 | flat | ₹64,795.94 | -73.3% (0.00) | 1% (1%-2%) | ₹0 | 0.177 |
-| lowest | 90 | schedule | ₹39,119.43 | -4.6% (0.61) | 1% (0%-1%) | ₹0 | 0.246 |
-| lowest | 90 | schedule_mean | ₹37,396.24 | - | 1% (0%-1%) | ₹0 | 0.230 |
-| lowest | 90 | engine | ₹29,311.29 | +21.6% (0.00) | 65% (58%-72%) | ₹36,431.88 | 0.183 |
+| end | 7 | flat | ₹52,239.87 | -1251.4% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 7 | schedule | ₹6,043.10 | -56.3% (0.00) | 0% (0%-1%) | ₹0 | - |
+| end | 7 | schedule_mean | ₹3,865.55 | - | 0% (0%-0%) | ₹0 | - |
+| end | 7 | engine | ₹2,366.83 | +38.8% (0.00) | 73% (70%-76%) | ₹6,728.99 | - |
+| lowest | 7 | flat | ₹28,487.15 | -749.8% (0.00) | 3% (2%-4%) | ₹0 | 0.012 |
+| lowest | 7 | schedule | ₹5,013.96 | -49.6% (0.00) | 3% (2%-4%) | ₹0 | 0.012 |
+| lowest | 7 | schedule_mean | ₹3,352.14 | - | 2% (1%-3%) | ₹0 | 0.017 |
+| lowest | 7 | engine | ₹1,931.17 | +42.4% (0.00) | 74% (71%-76%) | ₹6,051.32 | 0.006 |
+| end | 30 | flat | ₹26,627.03 | -137.0% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule | ₹26,251.98 | -133.7% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 30 | schedule_mean | ₹11,233.22 | - | 0% (0%-0%) | ₹0 | - |
+| end | 30 | engine | ₹6,022.12 | +46.4% (0.00) | 72% (69%-76%) | ₹19,871.84 | - |
+| lowest | 30 | flat | ₹56,541.02 | -606.9% (0.00) | 2% (1%-2%) | ₹0 | 0.095 |
+| lowest | 30 | schedule | ₹14,762.10 | -84.6% (0.00) | 2% (1%-2%) | ₹0 | 0.054 |
+| lowest | 30 | schedule_mean | ₹7,998.77 | - | 1% (0%-1%) | ₹0 | 0.075 |
+| lowest | 30 | engine | ₹4,180.92 | +47.7% (0.00) | 72% (68%-76%) | ₹14,194.23 | 0.031 |
+| end | 90 | flat | ₹55,566.22 | -99.7% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule | ₹1,20,328.36 | -332.4% (0.00) | 0% (0%-0%) | ₹0 | - |
+| end | 90 | schedule_mean | ₹27,827.04 | - | 0% (0%-0%) | ₹0 | - |
+| end | 90 | engine | ₹15,578.20 | +44.0% (0.00) | 66% (60%-72%) | ₹53,966.03 | - |
+| lowest | 90 | flat | ₹86,252.14 | -399.7% (0.00) | 1% (0%-1%) | ₹0 | 0.262 |
+| lowest | 90 | schedule | ₹33,051.34 | -91.5% (0.00) | 1% (0%-1%) | ₹0 | 0.170 |
+| lowest | 90 | schedule_mean | ₹17,261.45 | - | 1% (0%-1%) | ₹0 | 0.142 |
+| lowest | 90 | engine | ₹9,622.07 | +44.3% (0.00) | 72% (66%-77%) | ₹36,183.97 | 0.100 |
 <!-- backtest:end -->
 
 ### HackerRank "Buy or Wait"
