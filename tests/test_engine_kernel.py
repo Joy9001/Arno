@@ -186,11 +186,21 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
                 used[k] -= paid
             balance -= int(spec.obligation[t])
             for k, card in enumerate(spec.cards):
-                charges = [
+                new = [
                     int(card.obligation[t]) if card.obligation is not None else 0,
                     int(card.other[t]) if card.other is not None else 0,
-                    spend[f"card{k}"],
                 ]
+                if card.limit_spend:
+                    charges = [*new, spend[f"card{k}"]]
+                else:
+                    # Resampled spend goes on the card first, past the limit; a series is new.
+                    series_part = day_series.get(f"card{k}", 0) if t > 0 else 0
+                    loose = spend[f"card{k}"] - series_part
+                    used[k] += loose
+                    due = int(card.due_of_day[t])
+                    if due >= 0:
+                        bills[k][due] = bills[k].get(due, 0) + loose
+                    charges = [*new, series_part]
                 for amount in charges:
                     charged = min(amount, max(card.limit - used[k], 0))
                     balance -= amount - charged
@@ -206,7 +216,13 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
 
 
 def _spec(
-    rng: random.Random, *, cards: int, days: int, cut: bool = False, series: bool = False
+    rng: random.Random,
+    *,
+    cards: int,
+    days: int,
+    cut: bool = False,
+    series: bool = False,
+    limit_spend: bool = True,
 ) -> Spec:
     total = days + 1
     first_day = 739_000
@@ -237,7 +253,11 @@ def _spec(
                     [rng.randint(500, 3_000) if rng.random() < 0.04 else 0 for _ in range(total)],
                     np.int64,
                 ),
-                other=np.zeros(total, np.int64),
+                other=np.array(
+                    [rng.randint(1_000, 5_000) if rng.random() < 0.03 else 0 for _ in range(total)],
+                    np.int64,
+                ),
+                limit_spend=limit_spend,
             )
         )
     pools = []
@@ -309,15 +329,20 @@ def test_the_numpy_draws_match_the_python_oracle_bit_for_bit():
             assert int(values[scenario, column]) == kernel.draw(20261103, 9, scenario, int(day))
 
 
+@pytest.mark.parametrize("limit_spend", [True, False])
 @pytest.mark.parametrize("with_series", [False, True])
 @pytest.mark.parametrize("block_length", [1, 3])
 @pytest.mark.parametrize("cards", [0, 2])
-def test_the_kernel_matches_a_plain_day_by_day_walk(block_length, cards, with_series, monkeypatch):
+def test_the_kernel_matches_a_plain_day_by_day_walk(
+    block_length, cards, with_series, limit_spend, monkeypatch
+):
     # Small chunks prove that state carries across chunk edges exactly.
     monkeypatch.setattr(kernel, "CHUNK_DAYS", 17)
     rng = random.Random(block_length * 10 + cards + (100 if with_series else 0))
     for trial in range(3):
-        spec = _spec(rng, cards=cards, days=75, cut=trial == 1, series=with_series)
+        spec = _spec(
+            rng, cards=cards, days=75, cut=trial == 1, series=with_series, limit_spend=limit_spend
+        )
         settings = Settings(scenarios=6, seed=trial, block_length=block_length, keep_days=76)
         run = kernel.run(spec, settings)
         expected = reference(spec, settings)
@@ -543,10 +568,10 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
     days = 6
     total = days + 1
     other = np.zeros(total, np.int64)
-    other[1] = 5_000
+    other[3] = 5_000
     card = CardSpec(
         limit=10_000,
-        used=9_000,
+        used=5_000,
         due_of_day=np.full(total, -1, np.int64),
         other=other,
         limit_spend=limit_spend,
@@ -576,8 +601,8 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
     drops = (run.paths[:, :-1] - run.paths[:, 1:])[0].tolist()
     assert run.credit_exceeded
     if limit_spend:
-        # The day's spend and the purchase share the last 1,000 of headroom; the rest is cash.
-        assert drops == [6_000, 2_000, 2_000, 2_000, 2_000, 2_000]
+        # Two days of spend fit; on day 3 the spend and the purchase share the last 1,000.
+        assert drops == [0, 0, 6_000, 2_000, 2_000, 2_000]
     else:
-        # The purchase takes the headroom first; spend the history paid by card stays on it.
-        assert drops == [4_000, 0, 0, 0, 0, 0]
+        # Spend stays on the card and fills it by day 3, so the late purchase is all cash.
+        assert drops == [0, 0, 5_000, 0, 0, 0]

@@ -754,8 +754,8 @@ def _charge(
 
     Days are split where a bill is due. Within a piece used credit only rises, so the amount
     charged so far is min(cumulative charges, headroom at the piece start), and the rest is cash.
-    ``loose`` charges are never held to the limit; they take what headroom is left after
-    ``charges`` in each piece. ``used`` and ``bills`` are updated in place.
+    ``loose`` charges are never held to the limit but use up headroom: each day they go on the card
+    first, and ``charges`` get what is left. ``used`` and ``bills`` are updated in place.
     """
     scenarios, width = charges.shape
     overflow = np.zeros_like(charges)
@@ -770,6 +770,15 @@ def _charge(
             bill_paid[:, start] += paid
             used -= paid
         piece = charges[:, start:stop]
+        if loose is not None:
+            spilled, increments = _charge_after_loose(
+                card, used, piece, loose[:, start:stop], obligation, obligation_overflow, start
+            )
+            if spilled.any():
+                overflow[:, start:stop] = spilled
+            exceeded |= bool(spilled.any() or (used > card.limit).any())
+            _add_to_bills(bills, increments, card.due_of_day[day : begin + stop])
+            continue
         headroom = np.maximum(card.limit - used, 0)
         running = np.cumsum(piece, axis=1)
         charged = np.minimum(running, headroom[:, None])
@@ -784,16 +793,41 @@ def _charge(
                 owed = obligation[None, start:stop]
                 obligation_overflow[:, start:stop] += np.clip(before + owed - card.limit, 0, owed)
         used += charged[:, -1]
-        if loose is not None:
-            # ponytail: new charges claim the piece's headroom first; exact for a purchase on day
-            # zero, slightly generous to an EMI that falls later in the same billing piece.
-            kept = loose[:, start:stop]
-            used += kept.sum(axis=1)
-            increments = increments + kept
-            exceeded |= bool((used > card.limit).any())
         dues = card.due_of_day[day : begin + stop]
         _add_to_bills(bills, increments, dues)
     return overflow, exceeded
+
+
+def _charge_after_loose(
+    card: CardSpec,
+    used: I64,
+    piece: I64,
+    kept: I64,
+    obligation: I64 | None,
+    obligation_overflow: I64,
+    start: int,
+) -> tuple[I64, I64]:
+    """One billing piece where ``kept`` spend goes on the card first each day, past the limit.
+
+    Return what of ``piece`` spills to cash and what each day adds to the card. Loose spend can
+    take headroom back mid-piece, so the new charges are walked a day at a time.
+    """
+    if not piece.any():
+        used += kept.sum(axis=1)
+        return np.zeros_like(piece), kept
+    spilled = np.zeros_like(piece)
+    taken = np.zeros_like(piece)
+    for column in range(piece.shape[1]):
+        used += kept[:, column]
+        room = np.maximum(card.limit - used, 0)
+        take = np.minimum(piece[:, column], room)
+        if obligation is not None and obligation[start + column]:
+            owed = obligation[start + column]
+            obligation_overflow[:, start + column] += np.clip(used + owed - card.limit, 0, owed)
+        used += take
+        taken[:, column] = take
+        spilled[:, column] = piece[:, column] - take
+    return spilled, taken + kept
 
 
 def _add_to_bills(bills: dict[int, I64], increments: I64, dues: I64) -> None:
