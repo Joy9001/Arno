@@ -74,6 +74,12 @@ chat turn `699.4 ms` → `382.6 ms` (`7` → `0`), and home load `2,083.9 ms` �
 (`6` → `0`). Cache, outage, and uncertain-commit rules:
 [`platform.md`](platform.md#database-connections).
 
+**Decision tools on November 16, 2026.** Four capabilities from the
+[capability catalog](capability-catalog.md) are promoted into §5 as layer L9: a safe-to-spend
+figure, what-ifs with several dated changes, price-change alerts, and what a debt costs with its
+fees. Each one fixes an answer Arno got wrong or could not give, and none reopens a parked
+decision, adds a dependency, or reaches the network. The decisions are in §6, L9.
+
 ---
 
 ## 1. The product
@@ -167,9 +173,18 @@ enough for answers and verdicts on day one. Statements and the 12-month backfill
   exact; day-to-day spending is simulated from my own history, so the verdict carries a
   probability ("94% chance you stay above the floor"). "Yes-but" may propose any of the
   following: wait until date X, pay by card or EMI, delay a goal, or cut a reducible category.
+- **Safe to spend:** the largest amount that can be spent today with the projection still passing
+  the same test a `yes` passes, from the same run.
+- **What-ifs beyond a purchase:** the same engine run on dated changes that have not happened: no
+  income for a while, a paused or changed schedule, a new recurring payment or income, a one-time
+  amount. It says whether the plan holds and how long the money lasts. Nothing is saved.
+- **What a debt costs:** a loan's schedule, prepayment, fee, and _annual percentage rate_ (_APR_,
+  the yearly cost including fees), and what carrying a card balance costs at the card's own
+  finance charge. Arno never assumes a card's rate.
 - **Citations:** every number in an answer links to the rows and schedules behind it.
 - **Proactive:** bill, EMI, and card-due reminders; risk warnings when the projection turns; a
-  weekly briefing; and detection of recurring charges and new or missed subscriptions.
+  weekly briefing; and detection of recurring charges: new ones, missed ones, and ones whose
+  amount moved to a new level.
   Delivered to an in-app inbox plus web push. These run as fixed code, so they work when the LLM
   is down.
 - **Your own scheduled questions:** "every Sunday, tell me what I spent on food". The agent runs
@@ -592,6 +607,29 @@ once so every committed statement's opening sits at its first day. The whole rec
 commit SHAs, decisions, and the checklist items that remain, is
 [release-hardening.md](release-hardening.md).
 
+### L9: Decision tools
+
+Promoted from the [capability catalog](capability-catalog.md) on November 16, 2026. Catalog IDs are
+in parentheses.
+
+42. Safe to spend (C28): `project` returns the largest cash payment today that keeps the floor
+    probability and every obligation at the verdict's own thresholds, from the run it already
+    makes. The home page and the projection card show it.
+43. What-ifs with several changes (C29): `project` takes up to twelve dated changes, with or
+    without a purchase, applied to the projection inputs by a pure module. The result names each
+    change, says whether the plan holds, gives the runway in days, and keeps the unchanged figures.
+44. Price-change alerts (C30): a recurring charge that moves to a new amount raises one proposal at
+    the first payment at the new level, for a detected series and for a confirmed schedule.
+45. What a debt costs (C11): `amortize` takes a processing fee and returns the APR; `card_payoff`
+    walks a card balance under the minimum due or a fixed payment, at the card's own stored or
+    stated finance charge.
+
+**L9 status, November 16, 2026.** Milestones 42 to 45 are built and on `main`, each with its tests,
+its instruction rules, and eval cases for those rules. A streamed reply now keeps the provider's
+reported cost for every read; before that fix the spend gate stopped the weekly briefing, and would
+have stopped any streamed paid run on a provider that reports its own cost. What remains open is
+in [`completion-checklist.md`](completion-checklist.md), section F.
+
 **Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
 unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
 something has crept in—check it against [`parked.md`](parked.md).
@@ -800,6 +838,34 @@ Answer each when its layer arrives, not before.
     without view-level sorting, `v_owed`, and 17 domain tables, excluding raw `accounts`,
     `movement_legs`, and `pgledger_*` views); indexes, settings (`random_page_cost = 1.1`), and
     constraints land only with measured evidence.
+- **L9:** decided November 15 and 16, 2026, and settled in code.
+  - **Safe to spend.** The kernel is linear in cash, so a cash payment today lowers every
+    scenario by the same amount. The figure is the smaller of the floor headroom and the tightest
+    obligation's headroom, at the exact scenario ranks the verdict uses, so the amount is a `yes`
+    and one paisa more is not. It is zero when the forecast already fails and absent when no liquid
+    balance is known. It covers the whole projection horizon, not only the days to payday.
+  - **Changes in a what-if.** Five kinds: stop income, pause a schedule, change a schedule's
+    amount, add a recurring flow, add a one-time flow. A change cannot start in the past, and two
+    changes on the same schedule cannot overlap, so the result does not depend on their order. An
+    added outflow, recurring or one-time, is an obligation and is tested for payability. An added
+    or raised inflow counts in the result, which says that it assumes income not yet confirmed;
+    income the ledger holds as unconfirmed still never funds a `yes`. With no purchase the result
+    says whether the plan holds by the same rule as a `yes`.
+  - **Runway.** The whole days from today to the first floor crossing of the changed projection,
+    and absent when there is none inside the horizon.
+  - **Price steps.** At least 3 payments at the old level, then every later payment at one new
+    level more than 2% away. One payment is enough to report, so a rise shows at the first charge;
+    a single odd payment followed by a return is not a step. A step older than 90 days is not
+    reported, so a backfill raises no stale alerts. For a confirmed schedule the old level is its
+    stated amount, and a partial payment in progress is not a price drop.
+  - **APR.** The monthly rate at which the schedule's payments equal the amount disbursed after
+    the fee and its GST, times 12: the convention a loan's own rate uses, so a loan with no fee has
+    an APR equal to its rate. The fee is treated as deducted at disbursal.
+  - **Card payoff.** A monthly walk: the finance charge on the opening balance, 18% GST on it,
+    then the payment. There is no default finance charge: with none stored or stated the tool
+    refuses and the agent asks. A minimum due of 5% of the statement balance with a ₹200 floor is
+    assumed, and labeled, when the card's own rule is not known. The walk assumes no new spending.
+    The projection still pays every card bill in full.
 
 ---
 

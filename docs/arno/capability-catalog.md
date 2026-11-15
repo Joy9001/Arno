@@ -8,7 +8,9 @@ disagree, the plan wins and this file is stale.
 Researched on November 12, 2026, against commit `9181891`, and refreshed on November 15, 2026,
 against commit `1567975`, Pydantic AI 2.64.0, and Pydantic AI Harness 0.64.0. The catalog moved
 here from `docs/research/personal-finance-agent-2026/` on November 15; the research it rests on
-stays there. Nothing here approves a scope change, selects a paid service, or claims that an
+stays there. Updated on November 16, 2026, after tier 1 was built as `plan.md` §5 milestones 42 to
+45; the four entries that describe it, the index, the priority order, and the registry now state
+what exists. Nothing here approves a scope change, selects a paid service, or claims that an
 unfinished feature works. A capability is adopted only when `plan.md` §5 gives it a milestone, and
 a parked one only after the `plan.md` §2 change that [`parked.md`](parked.md) requires.
 
@@ -49,7 +51,7 @@ exercised for this document.
 
 ## What changed since November 12
 
-The following table records what landed between the two baselines and which entries it changes.
+The following table records what landed since the November 12 baseline and which entries it changes.
 
 | Change | Entries | Commits |
 |---|---|---|
@@ -63,14 +65,20 @@ The following table records what landed between the two baselines and which entr
 | The `app` database role runs without superuser | C21 | `ad490ef` |
 | Local speech-to-text runs whisper.cpp's native server with Silero voice activity detection | C04 | `757251b` |
 | The ledger schema is rebuilt around movement legs, and `run_query` reads named views | C02, C03 | `8a7b28c`, `838418d` |
+| A safe-to-spend figure comes from the projection's own run and shows on the home page and the projection card | C28 | `456020a` |
+| `project` takes 1 to 12 dated what-ifs, with or without a purchase, and reports each change, the runway, whether the plan holds, and the unchanged baseline | C29 | `fe36bd9` |
+| A recurring charge that steps to a new amount raises one `price_change` proposal, for a detected series and for a confirmed schedule | C30 | `0719711` |
+| `amortize` returns a loan's processing fee, GST, net disbursed amount, total cost, and APR; `card_payoff` walks a card balance under the minimum due or a fixed payment, from the card's stored rate; a card stores its finance rate and minimum-due rule | C11 | `b91c33d`, `2bffa51` |
+| A streamed reply keeps the provider's reported cost, so the spend gate sees what a paid run cost | C21, C22 | `eb59a6a` |
 
 XIRR is specified in the [engine blueprint](engine-blueprint.md) but was not built, because nothing
 uses it yet. Seven capabilities were added on November 15 (C28–C34), and C10 now covers only saved
-scenarios; its unsaved multi-event part is C29.
+scenarios; its unsaved multi-event part is C29. C28, C29, and C30 were then built as milestones 42
+to 44, and C11's fee and card-payoff paths as milestone 45; the rows above record that work.
 
 ## Index
 
-The index maps each capability to its coverage on November 15, 2026, and its tier.
+The index maps each capability to its coverage on November 16, 2026, and its tier.
 
 | ID | Capability | Coverage | Tier |
 |---|---|---|---|
@@ -84,7 +92,7 @@ The index maps each capability to its coverage on November 15, 2026, and its tie
 | [C08](#c08-cash-flow-and-account-funding-readiness) | Cash flow and account funding readiness | Aggregate forecast exists; account forecasts are parked | 3 |
 | [C09](#c09-purchase-affordability-and-payment-comparisons) | Purchase affordability and payment comparisons | Existing: minimal verified plans and card EMI cost | 0 |
 | [C10](#c10-saved-scenarios) | Saved scenarios | Proposed; depends on C29 | 3 |
-| [C11](#c11-debt-and-credit-lifecycle-cost) | Debt and credit lifecycle cost | Partial: amortization, prepayment, rate inference, card EMI cost | 1 |
+| [C11](#c11-debt-and-credit-lifecycle-cost) | Debt and credit lifecycle cost | Built: amortization, prepayment, rate inference, card EMI cost, loan fee with APR, and the card minimum-due path; foreclosure charges and a contract-driven rate reset proposed | 0 |
 | [C12](#c12-holdings-and-dated-net-worth) | Holdings and dated net worth | Manual assets exist; statement-based wealth is parked | 4 |
 | [C13](#c13-investment-performance-and-benchmarks) | Investment performance and benchmarks | Proposed; XIRR specified, not built | 4 |
 | [C14](#c14-retirement-and-life-event-planning) | Retirement and life-event planning | Proposed beyond generic goals and compounding | 4 |
@@ -101,9 +109,9 @@ The index maps each capability to its coverage on November 15, 2026, and its tie
 | [C25](#c25-merchant-identity-enrichment) | Merchant identity enrichment | Internal rules exist; external enrichment is parked | 5 |
 | [C26](#c26-additional-notification-and-approval-channels) | Additional notification and approval channels | In-app channels exist; chat integrations are parked | 5 |
 | [C27](#c27-business-system-and-accountant-handoff) | Business-system and accountant handoff | Not pursued | 5 |
-| [C28](#c28-safe-to-spend) | Safe-to-spend | Engine function exists, unexposed | 1 |
-| [C29](#c29-multi-event-what-ifs) | Multi-event what-ifs | Proposed; the hypothetical takes one purchase | 1 |
-| [C30](#c30-price-changes-in-recurring-charges) | Price changes in recurring charges | Partial: stepped amounts are detected, not reported | 1 |
+| [C28](#c28-safe-to-spend) | Safe-to-spend | Built: the figure is on the home page and the projection card | 0 |
+| [C29](#c29-multi-event-what-ifs) | Multi-event what-ifs | Built: 1 to 12 dated changes, with or without a purchase | 0 |
+| [C30](#c30-price-changes-in-recurring-charges) | Price changes in recurring charges | Built: one proposal for each step, for a detected series or a confirmed schedule | 0 |
 | [C31](#c31-arno-as-an-mcp-server) | Arno as an MCP server | Proposed; reopens the parked chat-app bridge | 3 |
 | [C32](#c32-statement-collection-from-email) | Statement collection from email | Proposed; reopens parked email capture | 3 |
 | [C33](#c33-settle-up-reminders) | Settle-up reminders | Partial: balances owed exist | 4 |
@@ -119,8 +127,8 @@ The following table summarizes the tiers, in the order to build them.
 
 | Tier | Meaning | Capabilities, in order |
 |---|---|---|
-| 0 | Built: finish acceptance | The ship gates in the completion checklist, then C01–C04, C06, C07, C09, C18–C22 |
-| 1 | Build now: fixes a wrong or missing answer, reopens no parked decision, adds no dependency or network | C28, C29, C30, C11 |
+| 0 | Built: finish acceptance | The ship gates in the completion checklist, then C01–C04, C06, C07, C09, C11, C18–C22, C28–C30 |
+| 1 | Moved to tier 0: built on November 15 and 16 as milestones 42 to 45, each fixing a wrong or missing answer, reopening no parked decision, and adding no dependency or network | C28, C29, C30, C11 |
 | 2 | First external capability: needs a `plan.md` decision | C17, C05 |
 | 3 | Reopens a parked decision or waits on real use: promote on its trigger | C08, C10, C32, C31 |
 | 4 | Applies only when the user's circumstances call for it | C12, C13, C14, C15, C16, C33, C34, C20's workbook |
@@ -131,21 +139,26 @@ capability: confirming the off-site backup, milestone 24's backfill through the 
 milestone 29's real backtest, a phone with web push, and milestone 41's four weeks. The four weeks
 start once two conditions hold: the engine redesign has landed, which it did on November 15
 (`plan.md` §6, L5 redesign, release gate), and group B's durability and import work is done, which
-is still open.
+is still open. Tier 1's four capabilities joined this tier on November 16: C28, C29, C30, and C11's
+fee and card paths are built, and their acceptance targets in this catalog stay open.
 
-**Tier 1: build now.** Each one fixes an answer Arno gets wrong or can't give today:
+**Tier 1: built on November 15 and 16 as milestones 42 to 45.** Each one fixed an answer Arno got
+wrong or could not give:
 
-1. **C28, safe-to-spend:** the smallest change. The engine already computes the figure, and only
-   the HackerRank adapter calls it.
-2. **C29, multi-event what-ifs:** the largest correctness gap. A job loss, a rent change, or a new
-   salary has no engine path, so the model would have to compute it, which rule 1 in `plan.md` §4
-   forbids for a verdict. Emergency runway comes with it.
-3. **C30, price changes:** small, and it sits on the stepped-amount detection that already ships.
-4. **C11's remainder:** the card minimum-due path and loan fees. The engine assumes that every card
-   bill is paid in full; paying only the minimum keeps a balance that accrues the issuer's finance
-   charge, which today goes unmodeled.
+1. **C28, safe-to-spend (milestone 42):** the smallest change. The engine already computed the
+   figure, and only the HackerRank adapter called it; `project` now returns it, and the home page
+   and the projection card show it.
+2. **C29, multi-event what-ifs (milestone 43):** the largest correctness gap. A job loss, a rent
+   change, or a new salary had no engine path, so the model would have had to compute it, which
+   rule 1 in `plan.md` §4 forbids for a verdict. Emergency runway came with it.
+3. **C30, price changes (milestone 44):** small, and it sat on the stepped-amount detection that
+   already shipped.
+4. **C11's remainder (milestone 45):** the card minimum-due path and loan fees. The engine assumed
+   that every card bill is paid in full; paying only the minimum keeps a balance that accrues the
+   issuer's finance charge, which went unmodeled until the card's finance rate was stored and
+   `card_payoff` walked it.
 
-Tier 1 fits beside milestone 41's clock: it changes no plan decision, and each change ships under
+Tier 1 fit beside milestone 41's clock: it changed no plan decision, and each change shipped under
 the normal definition of done.
 
 **Tier 2: the first external capability.** C17 first, then C05. Research reaches the network, so
@@ -385,7 +398,7 @@ adjustments while respecting essential commitments and the user's priorities.
   rules; [baselines](../../src/arno/importers/baselines.py) estimate daily variable spending.
 - Pydantic: existing `run_code` combines returned data; a persistent planned-versus-actual model
   remains proposed. Category caps are a separate parked decision, not required by this entry. How
-  much is left to spend is C28.
+  much is left to spend comes from C28's safe-to-spend figure, built in milestone 42.
 - External/MCP: none required; optional merchant enrichment is C25.
 
 **Completion checklist:**
@@ -397,7 +410,7 @@ adjustments while respecting essential commitments and the user's priorities.
 
 ### C07: Goals and irregular expense reserves
 
-_Tier 0. New work is in C29._
+_Tier 0. Contribution planning is C29's, built in milestone 43._
 
 **Description:** connect future obligations and goals to explicit funding needs and available cash.
 Represent annual premiums, repairs, festivals, and other uneven expenses with appropriate timing;
@@ -417,8 +430,9 @@ clear.
   accounts](../../src/arno/ledger/goals.py) handle fenced funds. A yearly schedule plus a goal with
   a contribution schedule already acts as a reserve for an annual bill. Detected recurring series
   enter the projection since November 15.
-- Proposed: "can I put ₹X a month toward this?" is a what-if that adds a contribution, which C29
-  answers with the engine. No separate reserve object is needed.
+- Internal, existing: "can I put ₹X a month toward this?" is C29's `add_recurring` change with
+  `goal` set, which counts the contribution as a goal outflow. No separate reserve object is
+  needed.
 - External/MCP: none required; contract dates and premiums may come from reviewed C05 evidence.
 
 **Completion checklist:**
@@ -501,7 +515,7 @@ verdict, uncertainty, and tradeoffs without substituting a model-written financi
 
 ### C28: Safe-to-spend
 
-_Tier 1._
+_Tier 0. Milestone 42._
 
 **Description:** report the largest one-off amount the user can spend today while the projection
 still clears the floor at the engine's 90% threshold, with its horizon, the date the floor binds,
@@ -512,18 +526,25 @@ already accounts for bills, card dues, goals, and simulated everyday spending.
 
 **What the agent can do:**
 
-- State the safe amount, its as-of date, and the date the floor is closest.
+- State the safe amount, its as-of date, which test binds it (`floor` or `obligation`), and the
+  binding date.
 - Explain what lowers it, such as a bill due before salary or a goal contribution, and hand a named
   purchase to C09.
 
 **Enabling tools and status:**
 
-- Internal, existing but unexposed: `safe_amount_today` in the [projection
-  engine](../../src/arno/engine/projection.py) returns the largest payment today that keeps the
-  floor probability at the threshold. Only the HackerRank adapter calls it.
-- Proposed: return the figure from `project` and show it on the home page with its horizon and
-  binding date. The summary's `median_low` is the median path's low point, not the threshold
-  path's, so subtracting the floor from it overstates the safe amount.
+- Internal, existing: `project` returns `safe_to_spend` with an `amount`, a `binding` of `floor` or
+  `obligation`, and a `binding_date`. `_safe_to_spend` in the [projection
+  engine](../../src/arno/engine/projection.py) computes it from the run the projection already
+  makes, from the per-obligation-day margins that [kernel.py](../../src/arno/engine/kernel.py)
+  records; it is null when no liquid account has a known balance. The figure covers the whole
+  horizon, not only the days to payday.
+- Shown on the home page ([AskHome.tsx](../../web/src/chat/AskHome.tsx)) and the projection card
+  ([projection.tsx](../../web/src/projection.tsx)).
+- `safe_amount_today` in the same engine file still exists, and only the [HackerRank
+  adapter](../../src/arno/engine/hackerrank.py) calls it.
+- Why the figure is not a subtraction: the summary's `median_low` is the median path's low point,
+  not the threshold path's, so subtracting the floor from it would overstate the safe amount.
 - Pydantic and external: none needed.
 
 **Completion checklist:**
@@ -534,9 +555,14 @@ already accounts for bills, card dues, goals, and simulated everyday spending.
 - [ ] No headroom renders as ₹0 with the binding date, never as a negative amount.
 - [ ] Chat and the home page show the same figure, as-of date, and data-quality notes.
 
+Automated evidence: `tests/test_engine_projection.py`, `tests/test_projection_tool.py`,
+`tests/test_home_api.py`, and `web/scripts/answer-contract.test.mjs`. The real-model eval cases
+`ans_safe_to_spend` and `hn_safe_to_spend_unknown_balance` are in `evals/cases.py`; a live run and a
+UI journey remain.
+
 ### C29: Multi-event what-ifs
 
-_Tier 1._
+_Tier 0. Milestone 43._
 
 **Description:** run the projection and affordability engine on a set of dated changes, not only
 one purchase. A change can stop or change income, add or change an obligation such as rent or a
@@ -557,22 +583,37 @@ above the floor with income stopped, comes with it.
 
 **Enabling tools and status:**
 
-- Internal, proposed: `ProjectHypothetical` in the [toolset](../../src/arno/agent/toolset.py)
-  accepts one purchase: an amount, a date, a method, and EMI terms. Extend it with dated changes to
-  income and obligation schedules, applied as path transforms by the affordability engine before
-  the kernel runs, one engine run for each alternative.
-- Without it, a shock question has no engine path, and the model would have to compute the effect
-  in `run_code`, which rule 1 in `plan.md` §4 forbids for a verdict.
-- Pydantic: a discriminated union of event inputs; Code Mode compares alternatives.
-- External: none required. Saving and reopening a set of changes is C10.
+- Internal, existing: `project(horizon_days, hypothetical, changes)` takes 1 to 12 dated changes,
+  with or without a purchase. The five change kinds are `stop_income`, `pause_schedule`,
+  `change_amount`, `add_recurring`, and `one_time`. The pure module
+  [scenario.py](../../src/arno/engine/scenario.py) applies them to the projection input without
+  mutating or saving it; names (schedules, projected detected series, and goals) resolve in
+  [tools/projection.py](../../src/arno/tools/projection.py), and `project_scenario` in
+  [affordability.py](../../src/arno/engine/affordability.py) runs the unchanged baseline beside the
+  changed projection, or routes a purchase through `afford`.
+- The result's `scenario` block carries `changes` (kind, label, occurrences, amount),
+  `assumptions`, `runway_days`, and `baseline` (floor probability, median low, first crossing, and
+  safe to spend). With no purchase it also carries `holds` and `reason`; with no known liquid
+  balance it carries a `reason` alone.
+- Nothing is saved: no ledger row, schedule, or goal changes. Saving and reopening a set of changes
+  is C10.
+- Pydantic: `ProjectChange` is a discriminated union of the five change models in the
+  [toolset](../../src/arno/agent/toolset.py); Code Mode compares alternatives.
+- External: none required.
 
 **Completion checklist:**
 
 - [ ] Each event kind changes only the intended flows; no live balance, schedule, or goal changes.
 - [ ] Income stopped from a date reports the runway and first floor crossing from the engine.
 - [ ] The same events give the same result in any order, on the same inputs and seed.
-- [ ] Unconfirmed or changed income is labeled and never funds a `yes`.
+- [ ] An added or raised inflow is counted and the result says it assumes income not yet confirmed,
+      while income the ledger holds as unconfirmed still never funds a `yes`.
 - [ ] An eval case answers a job-loss question from engine output, not `run_code` arithmetic.
+
+Automated evidence: `tests/test_engine_scenario.py`, `tests/test_engine_affordability.py`,
+`tests/test_projection_tool.py`, and `web/scripts/answer-contract.test.mjs`. The real-model eval
+cases `ans_whatif_job_loss`, `ans_whatif_purchase_rent_rise`, and `hn_whatif_unknown_schedule` are
+in `evals/cases.py`; a live run and a UI journey remain.
 
 ### C10: Saved scenarios
 
@@ -606,7 +647,7 @@ current data.
 
 ### C11: Debt and credit lifecycle cost
 
-_Tier 1 for the minimum-due path and loan fees._
+_Tier 0. Milestone 45; foreclosure charges and a contract-driven rate reset remain proposed._
 
 **Description:** model what a debt costs over its repayment life using the applicable contract.
 Include supported interest, fees, taxes on fees, discounts, rate resets, and early-repayment terms;
@@ -622,18 +663,26 @@ distinguish card minimum payment, full statement payment, available credit, and 
 
 **Enabling tools and status:**
 
-- Internal, partial: `amortize` returns the EMI, interest, payoff, schedule, and prepayment under
-  reduced tenure or reduced EMI; it infers a loan's rate from its EMI and matches a bank's rounding
-  conventions. A card EMI purchase in affordability carries interest, the processing fee, and 18%
-  GST on both, with a labeled default rate when the offer states none. Code: [money
+- Internal, existing: `amortize` returns the EMI, interest, payoff, schedule, and prepayment under
+  reduced tenure or reduced EMI; it infers a loan's rate from its EMI, matches a bank's rounding
+  conventions, and accepts a rate reset at a given EMI (`rate_changes` with `reset`). With a
+  processing fee it also returns the fee, its GST, the net disbursed amount, the total cost, and an
+  _annual percentage rate_ (_APR_, the yearly cost including fees); the agent tool takes the fee as
+  `fee_paise` and returns `apr_percent`. Code: [money
   calculations](../../src/arno/engine/money.py).
-- Proposed, Tier 1: a minimum-due path for a card, and a processing fee with the resulting _annual
-  percentage rate_ (_APR_, the yearly cost including fees) for a loan in `amortize`. The engine pays
-  every card bill in full on its due date. Paying only the minimum keeps a balance that accrues the
-  issuer's finance charge, and new purchases lose their interest-free period, so the path needs the
-  card's finance rate and minimum-due rule from C05 or from the user.
-- Proposed, later: foreclosure charges and variable-rate resets. Pydantic validates terms; Code Mode
-  must call the tested calculation rather than recreate formulas.
+- Internal, existing: `card_payoff` in the same file walks a card balance month by month under the
+  minimum due or a fixed payment, with the finance charge and 18% GST on it, and returns the months
+  to clear, the totals, the cost of carrying, and the schedule. The agent tool `card_payoff` reads a
+  card's ledger balance and stored terms, or takes them as arguments, and refuses with a prompt to
+  ask when no rate is stored or stated; there is no default finance charge. Migration
+  [`0042`](../../src/arno/db/migrations/0042_card_finance_terms.sql) stores a card's
+  `finance_rate_bps`, `min_due_bps`, and `min_due_floor_paise`; a 5% minimum with a ₹200 floor is
+  assumed, and labeled, when the card's own rule is unknown.
+- A card EMI purchase in affordability carries interest, the processing fee, and 18% GST on both,
+  with a labeled default rate when the offer states none.
+- Proposed: foreclosure charges; a contract-driven rate reset, because the engine walk needs real
+  reset dates and margins from C05 and no tool exposes it; and a projection that pays less than the
+  full card bill, which still pays every bill in full on its due date.
 - External: actual KFS and card terms through C05, and official rules through C17;
   [T05](#t05-financial-calculations).
 
@@ -645,6 +694,11 @@ distinguish card minimum payment, full statement payment, available credit, and 
 - [ ] Minimum-only card results use issuer or stated terms and show the continuing balance and the
       lost interest-free period.
 - [ ] Missing rates, reset rules, or contingent charges prevent an unsupported complete-cost claim.
+
+Automated evidence: `tests/test_engine_money.py`, `tests/test_tools_money.py`,
+`tests/test_ledger_accounts.py`, `tests/test_migrations.py`, and `tests/test_agent_tools.py`. The
+real-model eval cases `ans_card_payoff_rate`, `ans_loan_fee_apr`, and `hn_card_payoff_no_rate` are
+in `evals/cases.py`; a live run and a UI journey remain.
 
 ### C33: Settle-up reminders
 
@@ -822,7 +876,7 @@ retaining the relevant year, regime, residence assumptions, exemptions, and sour
 
 ### C16: Emergency reserves and financial protection
 
-_Tier 4. Runway itself comes with C29 in tier 1._
+_Tier 4. Runway itself comes from C29, built in milestone 43._
 
 **Description:** assess access to essential-expense reserves and inventory relevant protection
 evidence. Track policy coverage, dates, exclusions, nominees, and documents; distinguish deposit
@@ -962,8 +1016,8 @@ run user-scheduled questions with read-only tools and defined resource ceilings.
 - Internal, existing/partial: [watch jobs](../../src/arno/jobs), `update_setup` for scheduled
   questions, and `schedule_payment` for payment evidence. Existing reminders don't need a model.
   Since November 15 recurring charges are detected by calendar rules scored by likelihood:
-  proposed at confidence 0.9, projected at 0.999, and reported missed 3 or more days late. Price
-  changes are C30.
+  proposed at confidence 0.9, projected at 0.999, and reported missed 3 or more days late. A
+  charge that steps to a new amount raises its own proposal (C30).
 - Pydantic: the existing read-only scheduled agent, Code Mode, and spend limits.
 - External: web push is a delivery service; extra channels are C26. More anomaly/refund detection
   needs explicit logic and validation; anomaly detection stays parked.
@@ -980,7 +1034,7 @@ Real phone push and a real scheduled question are tracked in group B of the comp
 
 ### C30: Price changes in recurring charges
 
-_Tier 1._
+_Tier 0. Milestone 44._
 
 **Description:** notify when a recurring charge's amount steps to a new level, such as a
 subscription price rise, a changed EMI, or a raised premium. Show the old and new amounts, the first
@@ -995,12 +1049,20 @@ new date, and the payments behind it, as a proposal.
 
 **Enabling tools and status:**
 
-- Internal, partial: `engine/series.py` classifies a series' amounts as fixed, stepped, or variable
-  and returns the new level of a stepped one, but not the old level or the step date. The [pattern
-  job](../../src/arno/jobs/patterns.py) emits only new subscriptions, new income, and missed
-  charges.
-- Proposed: carry the previous level and step date out of the amount model, add a proposal kind,
-  and compare a confirmed schedule's matched payments with its stated amount.
+- Internal, existing: `price_step` in [series.py](../../src/arno/engine/series.py) returns the old
+  level, the new level, and the index of the first payment at the new level. A step needs a fixed
+  run of at least 3 payments at the old level, and every payment from the step on at one new level
+  more than 2% away, so ordinary variation and one odd payment that returns to the old level are not
+  steps.
+- Internal, existing: [tools/patterns.py](../../src/arno/tools/patterns.py) raises a `price_change`
+  proposal in two cases: a detected spend series whose latest run stepped and no confirmed schedule
+  covers it, and a confirmed obligation or instalment schedule whose paid occurrences moved away
+  from its stated amount. A proposal carries both levels, the first new date, and the movement IDs
+  behind it, and a partial payment still in progress is not a price drop.
+- Internal, existing: the [pattern job](../../src/arno/jobs/patterns.py) creates one inbox item for
+  each series or schedule and step date, so a rerun does not repeat it and a later step alerts
+  again. A step whose first new-level payment is more than 90 days before the run's day is not
+  reported, so a statement backfill raises no stale alert.
 - Pydantic and external: none needed.
 
 **Completion checklist:**
@@ -1009,6 +1071,10 @@ new date, and the payments behind it, as a proposal.
 - [ ] A variable bill, such as electricity, never raises a step alert from ordinary variation.
 - [ ] The old amount, new amount, step date, and payment rows are shown and cited.
 - [ ] Dismissing the proposal writes nothing.
+
+Automated evidence: `tests/test_engine_series.py`, `tests/test_audit_engine3.py`, and
+`tests/test_watch_workflows.py`. No real-model eval case covers price changes yet; a live run and a
+UI journey remain.
 
 ### C19: Connection health and recoverable ingestion
 
@@ -1318,10 +1384,12 @@ selected, configured, and tested. Candidate services are alternatives, not a sho
 
 Arno registers reads in [toolset.py](../../src/arno/agent/toolset.py) and exposes them through
 `run_code`: `get_financial_context`, `query_movements`, `summarize_spending`, `recap`, `project`,
-`run_query`, `amortize`, `compound`, `rupees`, `show_chart`, `show_table`, and `present`. The direct
-writes are `record_movement`, `correct_movement`, `update_setup`, `schedule_payment`, `preference`,
-and `undo`. Parser/task tools are a separate surface. `project`'s hypothetical takes one purchase
-(C29 extends it), and the engine's `safe_amount_today` has no tool yet (C28).
+`run_query`, `amortize`, `card_payoff`, `compound`, `rupees`, `show_chart`, `show_table`, and
+`present`. The direct writes are `record_movement`, `correct_movement`, `update_setup`,
+`schedule_payment`, `preference`, and `undo`. Parser/task tools are a separate surface. `project`
+takes a `hypothetical` for one purchase and a `changes` list of 1 to 12 dated what-ifs (C29), and
+returns `safe_to_spend` with its binding date (C28). `card_payoff` and `amortize(fee_paise=...)`
+return the card's carrying cost and a loan's APR (C11).
 
 Pydantic AI validates inputs and adapts the interaction; the application's plain Python computes
 financial results. [Code Mode](https://pydantic.dev/docs/ai/harness/code-mode/) executes constrained
@@ -1404,18 +1472,19 @@ configuration. Password guessing from identity attributes is not part of this ca
 
 ### T05: Financial calculations
 
-Existing `amortize` and `compound` call tested application functions. Money remains whole paise;
-rate solvers may legitimately use floating-point arithmetic with stated numerical tolerances.
-Decimal-only execution is not a substitute for correct assumptions and tests. `amortize` has no
-processing-fee input yet (C11).
+Existing `amortize`, `card_payoff`, and `compound` call tested application functions. Money remains
+whole paise; rate solvers may legitimately use floating-point arithmetic with stated numerical
+tolerances. Decimal-only execution is not a substitute for correct assumptions and tests. `amortize`
+takes a processing fee and returns the fee, its GST, the net disbursed amount, the total cost, and
+an APR; `card_payoff` walks a card balance under the minimum due or a fixed payment at the card's
+own rate (C11).
 
 The engine blueprint specifies XIRR as a bracketed bisection, returned only when the cash flows have
 one sign change, which needs no dependency. [PyXIRR](https://github.com/Anexen/pyxirr) is an
 Unlicense alternative; its [function reference](https://anexen.github.io/pyxirr/functions.html)
 documents dated `xirr`/`xnpv`, day-count conventions, invalid-flow errors, and failed convergence.
 Nonconventional flows can have multiple roots; neither search strategy proves uniqueness. CAGR,
-fee-inclusive debt, retirement, and tax models still need explicit application contracts and
-reference cases.
+retirement, and tax models still need explicit application contracts and reference cases.
 
 ### T06: Holdings and valuations
 
