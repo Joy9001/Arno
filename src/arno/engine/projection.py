@@ -375,6 +375,28 @@ class SpendCategory:
 
 
 @dataclass(frozen=True, slots=True)
+class SeriesForecast:
+    """A recurring payment the pattern engine found and the user has not confirmed.
+
+    It enters the projection as an outflow only, never as income. Each scenario keeps the series
+    alive with probability ``alive``; each expected date is then skipped with probability
+    ``skip``, or paid on a day moved by ``jitter`` (offset days, probability), with an amount drawn
+    uniformly from ``amounts`` (one value for a fixed charge).
+    """
+
+    id: str
+    name: str
+    expected: tuple[date, ...]
+    jitter: tuple[tuple[int, float], ...]
+    skip: float
+    alive: float
+    amounts: tuple[int, ...]
+    card_id: str | None = None
+    category_id: str | None = None
+    reducible: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class SpendRow:
     """Spend on one day in one category from one account; ``card_id`` is None for cash."""
 
@@ -400,6 +422,11 @@ class ProjectionInput:
     spend: tuple[SpendRow, ...] = ()
     # The first day the ledger holds data; days before it are not zero-spend days.
     history_start: date | None = None
+    # Detected recurring payments simulated as their own outflows (step 6 of the blueprint).
+    series: tuple[SeriesForecast, ...] = ()
+    # True when the spend rows already leave out every payment a schedule or a projected
+    # series accounts for, so no category has to be dropped to avoid counting it twice.
+    attributed: bool = False
 
     @property
     def starting_balance_paise(self) -> int:
@@ -1344,6 +1371,7 @@ __all__ = [
     "LiquidAccount",
     "ProjectionInput",
     "SpendCategory",
+    "SeriesForecast",
     "SpendRow",
     "card_due_date",
     "checkpoints_for",

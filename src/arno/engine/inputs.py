@@ -23,6 +23,7 @@ from arno.engine.projection import (
     GoalPlan,
     LiquidAccount,
     ProjectionInput,
+    SeriesForecast,
     SourceRef,
     SpendCategory,
     SpendRow,
@@ -81,6 +82,8 @@ class LedgerSnapshot:
     # yet. Categories read the last HISTORY_DAYS of it.
     spend: tuple[SpendRow, ...] = ()
     history_start: date | None = None
+    series: tuple[SeriesForecast, ...] = ()
+    attributed: bool = False
     ask_horizon_days: int | None = None
     gaps: tuple[str, ...] = ()
     balance_ages: tuple[BalanceAge, ...] = ()
@@ -153,7 +156,7 @@ def _spend_categories(
     baseline_rows: list[BaselineSource] = []
     days = [window_start + timedelta(days=offset) for offset in range(HISTORY_DAYS)]
     for category in snapshot.categories:
-        if category.id in covered:
+        if category.id in covered and not snapshot.attributed:
             gaps.append(
                 f"{category.name} is covered by an obligation and is not simulated as variable "
                 "spend"
@@ -339,6 +342,8 @@ def build_inputs(snapshot: LedgerSnapshot) -> ProjectionInput:
         sources=tuple(_sources(snapshot, baseline_rows)),
         spend=snapshot.spend,
         history_start=snapshot.history_start,
+        series=snapshot.series,
+        attributed=snapshot.attributed,
     )
 
 
