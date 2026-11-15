@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from arno.engine import kernel
-from arno.engine.kernel import CardSpec, Pool, Settings, Spec
+from arno.engine.kernel import CardSpec, Pool, SeriesSpec, Settings, Spec
 
 
 def _ref_pick(cumulative: list[int], positions: list[int], value: int) -> int:
@@ -58,6 +58,46 @@ def _ref_walk(
                 current = fresh
         positions.append(current)
     return positions
+
+
+def _ref_series(spec: Spec, settings: Settings, scenario: int) -> dict[int, dict[str, int]]:
+    by_day: dict[int, dict[str, int]] = {}
+    for series in spec.series:
+        if len(series.ordinals) == 0 or len(series.amounts) == 0:
+            continue
+        alive_draw = kernel.draw(settings.seed, series.stream * 8, scenario, 0)
+        if (alive_draw >> 32) >= series.alive_threshold:
+            continue
+        cum = [int(value) for value in series.jitter_cumulative]
+        offsets = [int(value) for value in series.jitter_offsets]
+        col = (
+            f"card{series.card}"
+            if series.card is not None and 0 <= series.card < len(spec.cards)
+            else "cash"
+        )
+        for ordinal in series.ordinals:
+            key = int(ordinal)
+            skip_draw = kernel.draw(settings.seed, series.stream * 8 + 1, scenario, key)
+            if (skip_draw >> 32) < series.skip_threshold:
+                continue
+            offset_draw = kernel.draw(settings.seed, series.stream * 8 + 2, scenario, key)
+            if len(cum) > 0:
+                target = ((offset_draw >> 32) * cum[-1]) >> 32
+                offset = offsets[bisect.bisect_right(cum, target)]
+            else:
+                offset = 0
+            day = (key - spec.first_day) + offset
+            if not (1 <= day <= spec.days):
+                continue
+            amount_draw = kernel.draw(settings.seed, series.stream * 8 + 3, scenario, key)
+            amount_index = ((amount_draw >> 32) * len(series.amounts)) >> 32
+            amount = int(series.amounts[amount_index])
+            slot = by_day.setdefault(day, {})
+            slot[col] = slot.get(col, 0) + amount
+            if series.reducible:
+                cut_col = f"{col}_cut"
+                slot[cut_col] = slot.get(cut_col, 0) + amount
+    return by_day
 
 
 def reference(spec: Spec, settings: Settings) -> list[list[int]]:
@@ -110,6 +150,7 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
                         settings.block_length,
                     )
                 )
+        series_by_day = _ref_series(spec, settings, scenario)
         balance = spec.start_balance
         used = [card.used for card in spec.cards]
         bills = [dict(card.bills) for card in spec.cards]
@@ -119,6 +160,7 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
         for t in range(days):
             spend = {}
             names = ["cash", *(f"card{k}" for k in range(len(spec.cards))), *removed_total]
+            day_series = series_by_day.get(t, {})
             for name in names:
                 spend[name] = 0
                 if t == 0:
@@ -127,6 +169,7 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
                     column = pool.columns.get(name)
                     if column is not None:
                         spend[name] += int(column[rows[t]])
+                spend[name] += day_series.get(name, 0)
             if spec.cut_bps and t <= spec.cut_until:
                 for total_name, cut_name in [
                     ("cash", "cash_cut"),
@@ -162,7 +205,9 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
     return paths
 
 
-def _spec(rng: random.Random, *, cards: int, days: int, cut: bool = False) -> Spec:
+def _spec(
+    rng: random.Random, *, cards: int, days: int, cut: bool = False, series: bool = False
+) -> Spec:
     total = days + 1
     first_day = 739_000
     classes = np.array([1 if (first_day + t) % 7 in (5, 6) else 0 for t in range(total)], np.int8)
@@ -212,6 +257,31 @@ def _spec(rng: random.Random, *, cards: int, days: int, cut: bool = False) -> Sp
                 resample=index == 1,
             )
         )
+    series_specs: list[SeriesSpec] = []
+    if series:
+        jitter_offsets = np.array([-1, 0, 1, 2], dtype=np.int64)
+        jitter_cumulative = np.array(
+            [1 << 30, (1 << 30) + (1 << 31), (1 << 30) + (1 << 31) + (1 << 29), 1 << 32],
+            dtype=np.uint64,
+        )
+        for index in range(3):
+            occ_days = sorted({0, days, *(rng.randint(1, days) for _ in range(rng.randint(4, 8)))})
+            series_specs.append(
+                SeriesSpec(
+                    ordinals=np.array([first_day + d for d in occ_days], dtype=np.int64),
+                    alive_threshold=int(round(rng.uniform(0.55, 0.95) * (1 << 32))),
+                    skip_threshold=int(round(rng.uniform(0.10, 0.35) * (1 << 32))),
+                    jitter_offsets=jitter_offsets,
+                    jitter_cumulative=jitter_cumulative,
+                    amounts=np.array(
+                        [rng.randint(200, 900) for _ in range(rng.randint(1, 3))],
+                        dtype=np.int64,
+                    ),
+                    card=rng.randrange(cards) if cards > 0 and index == 1 else None,
+                    reducible=index != 2,
+                    stream=100 + index,
+                )
+            )
     return Spec(
         start_balance=rng.randint(5_000, 30_000),
         days=days,
@@ -225,6 +295,7 @@ def _spec(rng: random.Random, *, cards: int, days: int, cut: bool = False) -> Sp
         floor=2_000,
         cards=tuple(card_specs),
         pools=tuple(pools),
+        series=tuple(series_specs),
         cut_bps=1_500 if cut else 0,
         cut_until=days // 2 if cut else -1,
     )
@@ -238,14 +309,15 @@ def test_the_numpy_draws_match_the_python_oracle_bit_for_bit():
             assert int(values[scenario, column]) == kernel.draw(20261103, 9, scenario, int(day))
 
 
+@pytest.mark.parametrize("with_series", [False, True])
 @pytest.mark.parametrize("block_length", [1, 3])
 @pytest.mark.parametrize("cards", [0, 2])
-def test_the_kernel_matches_a_plain_day_by_day_walk(block_length, cards, monkeypatch):
+def test_the_kernel_matches_a_plain_day_by_day_walk(block_length, cards, with_series, monkeypatch):
     # Small chunks prove that state carries across chunk edges exactly.
     monkeypatch.setattr(kernel, "CHUNK_DAYS", 17)
-    rng = random.Random(block_length * 10 + cards)
+    rng = random.Random(block_length * 10 + cards + (100 if with_series else 0))
     for trial in range(3):
-        spec = _spec(rng, cards=cards, days=75, cut=trial == 1)
+        spec = _spec(rng, cards=cards, days=75, cut=trial == 1, series=with_series)
         settings = Settings(scenarios=6, seed=trial, block_length=block_length, keep_days=76)
         run = kernel.run(spec, settings)
         expected = reference(spec, settings)

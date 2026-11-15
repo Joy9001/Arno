@@ -652,7 +652,66 @@ RARE_WINDOW_DAYS = 365
 RECENCY_UNIT = 1_024
 RARE_MIN_DAYS = 10
 DAY_STREAM = 0
+SERIES_STREAM_BASE = 100
 RARE_STREAM = 999
+
+
+def _probability_threshold(probability: float) -> int:
+    if probability <= 0.0:
+        return 0
+    if probability >= 1.0:
+        return 1 << 32
+    return max(0, min(1 << 32, int(round(probability * float(1 << 32)))))
+
+
+def _jitter_spec(jitter: tuple[tuple[int, float], ...]) -> tuple[kernel.I64, kernel.U64]:
+    positive = [(int(offset), float(prob)) for offset, prob in jitter if prob > 0.0]
+    if len(positive) == 0:
+        return np.array([0], dtype=np.int64), np.array([1 << 32], dtype=np.uint64)
+    total = sum(prob for _offset, prob in positive)
+    offsets = np.array([offset for offset, _prob in positive], dtype=np.int64)
+    cumulative = np.empty(len(positive), dtype=np.uint64)
+    running = 0.0
+    prev = 0
+    scale = float(1 << 32)
+    for index, (_offset, prob) in enumerate(positive):
+        running += prob / total
+        if index == len(positive) - 1:
+            current = 1 << 32
+        else:
+            current = max(prev, min(1 << 32, int(round(running * scale))))
+        cumulative[index] = current
+        prev = current
+    return offsets, cumulative
+
+
+def _series_spec(
+    series: SeriesForecast,
+    as_of: date,
+    days: int,
+    card_index: dict[str, int],
+    stream: int,
+) -> kernel.SeriesSpec:
+    jitter_offsets, jitter_cumulative = _jitter_spec(series.jitter)
+    active_offsets = [int(offset) for offset in jitter_offsets]
+    ordinals = [
+        day.toordinal()
+        for day in series.expected
+        if any(1 <= (day - as_of).days + offset <= days for offset in active_offsets)
+    ]
+    amounts = np.maximum(np.array(series.amounts, dtype=np.int64), 0)
+    card = card_index.get(series.card_id) if series.card_id is not None else None
+    return kernel.SeriesSpec(
+        ordinals=np.array(ordinals, dtype=np.int64),
+        alive_threshold=_probability_threshold(series.alive),
+        skip_threshold=_probability_threshold(series.skip),
+        jitter_offsets=jitter_offsets,
+        jitter_cumulative=jitter_cumulative,
+        amounts=amounts,
+        card=card,
+        reducible=series.reducible,
+        stream=stream,
+    )
 
 
 def _weekend(day: date) -> int:
@@ -1007,6 +1066,11 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
             )
             break
 
+    series_specs = tuple(
+        _series_spec(series, as_of, days, card_index, SERIES_STREAM_BASE + index)
+        for index, series in enumerate(inputs.series)
+    )
+
     spec = kernel.Spec(
         start_balance=inputs.starting_balance_paise,
         days=days,
@@ -1021,6 +1085,7 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
         cards=tuple(cards),
         pools=tuple(pools),
         rare=rare,
+        series=series_specs,
         cut_bps=cut_bps,
         cut_until=cut_until,
     )
@@ -1091,8 +1156,35 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
             f"borderline: the floor probability's 95% interval ({low:.1%} to {high:.1%}) "
             f"contains the {FLOOR_THRESHOLD:.0%} threshold"
         )
+    if len(inputs.series) > 0:
+        names = ", ".join(series.name for series in inputs.series)
+        count = len(inputs.series)
+        if count == 1:
+            gaps.append(
+                f"1 detected recurring payment you have not confirmed is counted as an outflow: "
+                f"{names}"
+            )
+        else:
+            gaps.append(
+                f"{count} detected recurring payments you have not confirmed are counted as "
+                f"outflows: {names}"
+            )
     data_quality["gaps"] = gaps
     data_quality["simulation"] = simulation
+
+    sources = list(inputs.sources)
+    existing_sources = {(source["kind"], source["id"]) for source in sources}
+    for series in inputs.series:
+        if ("series", series.id) not in existing_sources:
+            sources.append(
+                {
+                    "kind": "series",
+                    "id": series.id,
+                    "name": series.name,
+                    "detail": "detected, not confirmed",
+                }
+            )
+            existing_sources.add(("series", series.id))
 
     source_ids: SourceIds = {
         "accounts": sorted({account.id for account in inputs.liquid}),
@@ -1131,7 +1223,7 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
         "goals": goal_rows(inputs),
         "obligations_met": misses == 0,
         "data_quality": data_quality,
-        "sources": list(inputs.sources),
+        "sources": sources,
         "source_ids": source_ids,
         "runs": scenarios,
         "seed": seed,
@@ -1263,6 +1355,8 @@ def checkpoints_for(spec: kernel.Spec, extra: tuple[int, ...] = ()) -> tuple[int
     Spend and bills only lower the balance, so it can rise only on a day with an inflow; the
     minimum over any span ending at a checkpoint is the minimum over its checkpoints.
     """
+    # Detected series (`spec.series`) are outflows only (non-negative cash or card spend), so
+    # they can never create a rising day and the checkpoint invariant still holds.
     rising = np.flatnonzero((spec.inflow > 0) | (spec.unconfirmed > 0))
     days = {int(day) - 1 for day in rising if int(day) > 0} | {spec.days, *extra}
     return tuple(sorted(day for day in days if 0 <= day <= spec.days))

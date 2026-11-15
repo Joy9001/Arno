@@ -114,6 +114,21 @@ class CardSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class SeriesSpec:
+    """One detected recurring payment stream, drawn per scenario and occurrence."""
+
+    ordinals: I64  # date ordinals k of expected dates that can land in [1, days]
+    alive_threshold: int  # in [0, 2**32]
+    skip_threshold: int  # in [0, 2**32]
+    jitter_offsets: I64
+    jitter_cumulative: U64  # cumulative integer thresholds summing to 2**32
+    amounts: I64
+    card: int | None = None
+    reducible: bool = False
+    stream: int = 100
+
+
+@dataclass(frozen=True, slots=True)
 class Spec:
     start_balance: int
     days: int
@@ -128,6 +143,7 @@ class Spec:
     cards: tuple[CardSpec, ...] = ()
     pools: tuple[Pool, ...] = ()
     rare: Rare | None = None
+    series: tuple[SeriesSpec, ...] = ()
     cut_bps: int = 0
     cut_until: int = -1  # last day index the cut applies to
 
@@ -323,6 +339,47 @@ class _RareState:
         return happened, below(which, self.size).astype(np.int64)
 
 
+class _SeriesState:
+    """Precomputed per-scenario payments for one detected recurring series."""
+
+    def __init__(self, series: SeriesSpec, spec: Spec, settings: Settings) -> None:
+        self.series = series
+        if len(series.ordinals) == 0 or len(series.amounts) == 0:
+            self.scenarios_idx = np.empty(0, dtype=np.int64)
+            self.days = np.empty(0, dtype=np.int64)
+            self.amounts = np.empty(0, dtype=np.int64)
+            return
+        scenarios = settings.scenarios
+        alive_draws = _draws(
+            settings.seed, series.stream * 8, scenarios, np.zeros(1, dtype=np.int64)
+        )
+        alive = (alive_draws[:, 0] >> np.uint64(32)) < np.uint64(series.alive_threshold)
+
+        skip_draws = _draws(settings.seed, series.stream * 8 + 1, scenarios, series.ordinals)
+        offset_draws = _draws(settings.seed, series.stream * 8 + 2, scenarios, series.ordinals)
+        amount_draws = _draws(settings.seed, series.stream * 8 + 3, scenarios, series.ordinals)
+
+        skipped = (skip_draws >> np.uint64(32)) < np.uint64(series.skip_threshold)
+        if len(series.jitter_cumulative) > 0:
+            total = np.uint64(series.jitter_cumulative[-1])
+            target = ((offset_draws >> np.uint64(32)) * total) >> np.uint64(32)
+            offset_index = np.searchsorted(series.jitter_cumulative, target, side="right")
+            offsets = series.jitter_offsets[offset_index]
+        else:
+            offsets = np.zeros_like(offset_draws, dtype=np.int64)
+
+        base_days = series.ordinals - spec.first_day
+        pay_days = base_days[None, :] + offsets
+        amount_index = below(amount_draws, len(series.amounts)).astype(np.int64)
+        pay_amounts = series.amounts[amount_index]
+
+        valid = alive[:, None] & (~skipped) & (pay_days >= 1) & (pay_days <= spec.days)
+        scen_idx, occ_idx = np.nonzero(valid)
+        self.scenarios_idx = scen_idx.astype(np.int64)
+        self.days = pay_days[scen_idx, occ_idx].astype(np.int64)
+        self.amounts = pay_amounts[scen_idx, occ_idx].astype(np.int64)
+
+
 # --- The walk ----------------------------------------------------------------------------------
 
 
@@ -339,6 +396,7 @@ def run(spec: Spec, settings: Settings) -> Run:
     history_days = np.arange(max((pool.size for pool in spec.pools), default=0), dtype=np.int64)
     states = [_PoolState(pool, settings, history_days[: pool.size]) for pool in spec.pools]
     rare = _RareState(spec.rare, settings) if spec.rare is not None and spec.rare.events else None
+    series_states = [_SeriesState(series, spec, settings) for series in spec.series]
 
     ranks = [max(1, math.ceil(tau * scenarios)) - 1 for tau in (0.1, 0.5, 0.9)]
     curve = np.empty((total_days, 3), dtype=np.int64)
@@ -392,7 +450,16 @@ def run(spec: Spec, settings: Settings) -> Run:
         cutting = spec.cut_bps > 0 and begin <= spec.cut_until
         measuring = reducible is not None and begin <= settings.reducible_until
         spend = _spend(
-            spec, states, rare, keys, begin, width, scenarios, card_count, cutting or measuring
+            spec,
+            states,
+            rare,
+            series_states,
+            keys,
+            begin,
+            width,
+            scenarios,
+            card_count,
+            cutting or measuring,
         )
         if measuring:
             reducible_cash = _measure_reducible(
@@ -538,6 +605,7 @@ def _spend(
     spec: Spec,
     states: list[_PoolState],
     rare: _RareState | None,
+    series_states: list[_SeriesState],
     keys: I64,
     begin: int,
     width: int,
@@ -562,6 +630,19 @@ def _spend(
             column = spec.rare.columns.get(name)
             if column is not None:
                 spend[name] += np.where(happened, column[which], 0)
+    for series_state in series_states:
+        if len(series_state.days) == 0:
+            continue
+        mask = (series_state.days >= begin) & (series_state.days < begin + width)
+        if not bool(mask.any()):
+            continue
+        card = series_state.series.card
+        col = f"card{card}" if card is not None and 0 <= card < card_count else "cash"
+        coords = (series_state.scenarios_idx[mask], series_state.days[mask] - begin)
+        vals = series_state.amounts[mask]
+        np.add.at(spend[col], coords, vals)
+        if with_cut and series_state.series.reducible:
+            np.add.at(spend[f"{col}_cut"], coords, vals)
     if begin == 0:
         # Day zero is today: its spend is already in the balance.
         for name in names:
@@ -663,8 +744,10 @@ __all__ = [
     "Pool",
     "Rare",
     "Run",
+    "SeriesSpec",
     "Settings",
     "Spec",
+    "U64",
     "below",
     "draw",
     "mix",
