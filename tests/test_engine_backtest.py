@@ -8,7 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from arno.engine import backtest, hackerrank, personas
-from arno.engine.inputs import build_inputs
+from arno.engine.inputs import Occurrence, build_inputs
 
 
 def test_a_persona_snapshot_sees_nothing_after_its_day():
@@ -92,6 +92,111 @@ def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():
     report = backtest.format_report(result)
     assert "weekly origins scored" in report
     assert "| end | 30 | flat |" in report
+
+
+def test_outcomes_leave_out_income_the_base_case_does_not_count():
+    seed = personas.TUNING_SEEDS[0]
+    persona = personas.generate("freelancer", seed)
+    case = backtest.persona_cases("freelancer", seed)[-1]
+    end = case.as_of + timedelta(days=backtest.LAST_HORIZON)
+    retainer = {item.id for item in persona.series if item.schedule_id == "sched_retainer"}
+    uncounted = sum(
+        movement.amount_paise
+        for movement in persona.movements
+        if movement.kind == "income"
+        and case.as_of < movement.date <= end
+        and movement.series_id not in retainer
+    )
+
+    assert uncounted > 0
+    assert case.actual[0] == personas.bank_balance(persona, case.as_of)
+    assert case.actual[-1] == personas.bank_balance(persona, end) - uncounted
+
+
+async def test_the_db_outcome_counts_only_income_linked_to_a_schedule_confirmed_by_then(ledger):
+    from arno.india.recurrence import expand_rule
+    from arno.ledger.accounts import create_account
+    from arno.ledger.audit import write_group
+    from arno.ledger.common import today
+    from arno.ledger.movements import record_income, reverse_movement
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+
+    start = today() - timedelta(days=120)
+    bank = await create_account(ledger, kind="bank", name="Salary bank")
+    rule = "FREQ=MONTHLY;BYMONTHDAY=10"
+    salary = await create_schedule(
+        ledger,
+        kind="income_fixed",
+        name="Salary",
+        amount_paise=500_000,
+        account_id=bank["id"],
+        rule=rule,
+        starts=start - timedelta(days=30),
+    )
+    guess = await create_schedule(
+        ledger,
+        kind="income_variable",
+        name="Client guess",
+        amount_paise=70_000,
+        account_id=bank["id"],
+        rule=rule,
+        starts=start - timedelta(days=30),
+        confirmed=False,
+    )
+    await ledger.execute(
+        "UPDATE schedules SET created_at = $1::date - 1 WHERE id = ANY($2::text[])",
+        start,
+        [salary["id"], guess["id"]],
+    )
+    first, second = expand_rule(
+        rule,
+        start - timedelta(days=30),
+        start=start + timedelta(days=1),
+        end=start + timedelta(days=60),
+    )[:2]
+
+    async def income(day, amount, schedule=None):
+        movement = await record_income(
+            ledger, account_id=bank["id"], amount_paise=amount, description="Credit", date=day
+        )
+        if schedule is not None:
+            await link_payment(
+                ledger, schedule_id=schedule["id"], due_date=day, movement_id=movement["id"]
+            )
+        return movement
+
+    await income(first, 500_000, salary)
+    await income(second, 70_000, guess)
+    stray = await income(start + timedelta(days=3), 200_000)
+    async with write_group(ledger, actor="user") as group:
+        await reverse_movement(group, stray["id"], date=start + timedelta(days=5))
+
+    path = await backtest._liquid_path(ledger, [bank["id"]], start)
+
+    assert path[(first - start).days] - path[(first - start).days - 1] == 500_000
+    assert path[-1] == 500_000
+
+    def occurrence(day):
+        return Occurrence(
+            schedule_id=salary["id"],
+            name="Salary",
+            kind="income_fixed",
+            date=day,
+            amount_paise=500_000,
+            remaining_paise=500_000,
+            category_id=None,
+            card_id=None,
+            goal_id=None,
+            confirmed=True,
+            linked_goal=False,
+        )
+
+    last = start + timedelta(days=backtest.LAST_HORIZON)
+    assert not await backtest._unlinked_income(ledger, [occurrence(first)], start, last)
+    assert await backtest._unlinked_income(
+        ledger, [occurrence(first), occurrence(second)], start, last
+    )
 
 
 async def test_the_db_backtest_drops_and_counts_origins_it_cannot_start_from(demo_ledger):

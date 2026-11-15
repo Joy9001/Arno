@@ -11,6 +11,11 @@ Two sources. `personas` replays the synthetic households in `arno.engine.persona
 no code with the engine. `db` replays the real ledger as it stood on each origin, reading only
 rows that existed then. Origins with nothing to project from are dropped and counted, never
 scored.
+
+The base case counts only confirmed income, so an outcome is the balance that followed without the
+income the forecast was told to leave out: a credit after the origin counts only if it pays an
+income schedule that was confirmed by then. On the real ledger that payment has to be linked to
+its occurrence, so an origin whose confirmed income in the window is not all linked is dropped.
 """
 
 from __future__ import annotations
@@ -188,18 +193,28 @@ def _forecaster(name: str) -> Forecaster:
 
 @dataclass(frozen=True, slots=True)
 class Case:
-    """One forecast problem: the inputs as of a day, and the liquid balance that followed."""
+    """One forecast problem: the inputs as of a day, and the liquid balance that followed.
+
+    ``actual`` leaves out every later credit that pays no income schedule confirmed by ``as_of``,
+    because the base case is told not to count it. ``unlinked_income`` marks a real-ledger origin
+    whose confirmed income in the window is not all linked, so that split is unknown.
+    """
 
     group: str
     as_of: date
     floor_paise: int
     inputs: ProjectionInput
     actual: tuple[int, ...]
+    unlinked_income: bool = False
 
     @property
     def blocking(self) -> list[str]:
         gaps = self.inputs.data_quality.get("setup_gaps") or []
         return [gap for gap in gaps if gap in UNUSABLE_SETUP_GAPS]
+
+    @property
+    def dropped(self) -> bool:
+        return bool(self.blocking) or self.unlinked_income
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,19 +642,37 @@ def persona_origins(persona: personas_mod.Persona) -> list[date]:
     return sorted(day for day in origins if day >= first)
 
 
+def _uncounted_income(persona: personas_mod.Persona, as_of: date) -> npt.NDArray[np.int64]:
+    """Running total, day by day after ``as_of``, of income that pays no schedule confirmed then."""
+    confirmed = {
+        schedule.id
+        for schedule in persona.schedules
+        if schedule.kind.startswith("income") and schedule.confirmed and schedule.created <= as_of
+    }
+    counted = {item.id for item in persona.series if item.schedule_id in confirmed}
+    daily = np.zeros(LAST_HORIZON + 1, dtype=np.int64)
+    for movement in persona.movements:
+        offset = (movement.date - as_of).days
+        if movement.kind == "income" and 0 < offset <= LAST_HORIZON:
+            if movement.series_id not in counted:
+                daily[offset] += movement.amount_paise
+    return np.cumsum(daily)
+
+
 def persona_cases(key: str, seed: int) -> list[Case]:
     persona = personas_mod.generate(key, seed)
     ledger = _ledger(persona)
     cases: list[Case] = []
     for as_of in persona_origins(persona):
         at = ledger.index(as_of)
+        actual = ledger.bank[at : at + LAST_HORIZON + 1] - _uncounted_income(persona, as_of)
         cases.append(
             Case(
                 group=f"{key}:{seed}",
                 as_of=as_of,
                 floor_paise=persona.floor_paise,
                 inputs=build_inputs(persona_snapshot(ledger, as_of)),
-                actual=tuple(int(value) for value in ledger.bank[at : at + LAST_HORIZON + 1]),
+                actual=tuple(int(value) for value in actual),
             )
         )
     return cases
@@ -649,7 +682,7 @@ def _household_scores(key: str, seed: int, names: tuple[str, ...]) -> tuple[list
     scores: list[Score] = []
     dropped = 0
     for case in persona_cases(key, seed):
-        if case.blocking:
+        if case.dropped:
             dropped += 1
             continue
         scores.extend(score_case(case, names))
@@ -692,29 +725,84 @@ def backtest_personas(
 # --- The real ledger ---------------------------------------------------------------------------
 
 
+_INCOME_KINDS = ("income_fixed", "income_variable", "income_oneoff")
+
+
 async def _liquid_path(conn: Connection, account_ids: list[str], start: date) -> tuple[int, ...]:
+    """The liquid balance from ``start`` on, without income that pays no confirmed schedule.
+
+    After ``start`` an income movement, and a reversal of one, counts only if the income is linked
+    to an occurrence of an income schedule confirmed and created by ``start``.
+    """
     if not account_ids:
         return (0,) * (LAST_HORIZON + 1)
     rows = await conn.fetch(
         """
+        WITH counted AS (
+            SELECT sp.movement_id
+            FROM schedule_payments sp
+            JOIN schedule_occurrences o ON o.id = sp.occurrence_id
+            JOIN schedules s ON s.id = o.schedule_id
+            WHERE s.kind = ANY($4::text[]) AND s.confirmed
+              AND (s.created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2
+        )
         SELECT m.date <= $2 AS opening, m.date, coalesce(sum(e.amount), 0)::bigint AS amount
         FROM accounts a
         JOIN pgledger_entries e ON e.account_id = a.ledger_account_id
         JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
         JOIN movements m ON m.id = ml.movement_id
+        LEFT JOIN movements income ON income.id = CASE
+            WHEN m.kind = 'income' THEN m.id
+            WHEN m.kind = 'reversal' THEN m.reverses_id
+        END AND income.kind = 'income'
         WHERE a.id = ANY(ARRAY(SELECT unnest($1::text[])))
           AND m.date <= $3
+          AND (
+              m.date <= $2
+              OR income.id IS NULL
+              OR income.date <= $2
+              OR income.id IN (SELECT movement_id FROM counted)
+          )
         GROUP BY 1, 2
         """,
         account_ids,
         start,
         start + timedelta(days=LAST_HORIZON),
+        list(_INCOME_KINDS),
     )
     daily = [0] * (LAST_HORIZON + 1)
     for row in rows:
         offset = 0 if row["opening"] else (row["date"] - start).days
         daily[offset] += int(row["amount"])
     return tuple(int(value) for value in np.cumsum(daily))
+
+
+async def _unlinked_income(
+    conn: Connection, occurrences: Iterable[Occurrence], start: date, last: date
+) -> bool:
+    """Whether a confirmed income occurrence in the scored window has no linked payment."""
+    end = min(start + timedelta(days=LAST_HORIZON), last)
+    expected = {
+        (item.schedule_id, item.date)
+        for item in occurrences
+        if item.kind in _INCOME_KINDS and item.confirmed and start < item.date <= end
+    }
+    if not expected:
+        return False
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT o.schedule_id, o.due_date
+        FROM schedule_occurrences o
+        JOIN schedule_payments sp ON sp.occurrence_id = o.id
+        WHERE o.schedule_id = ANY(ARRAY(SELECT unnest($1::text[])))
+          AND o.due_date > $2 AND o.due_date <= $3
+        """,
+        sorted({schedule_id for schedule_id, _day in expected}),
+        start,
+        end,
+    )
+    linked = {(str(row["schedule_id"]), row["due_date"]) for row in rows}
+    return not expected <= linked
 
 
 async def db_cases(conn: Connection) -> list[Case]:
@@ -740,6 +828,9 @@ async def db_cases(conn: Connection) -> list[Case]:
                 floor_paise=inputs.floor_paise,
                 inputs=inputs,
                 actual=await _liquid_path(conn, [row.id for row in inputs.liquid], as_of),
+                unlinked_income=await _unlinked_income(
+                    conn, snapshot.occurrences, as_of, bounds["last"]
+                ),
             )
         )
     return cases
@@ -756,7 +847,7 @@ async def backtest_db(
     scores: list[Score] = []
     dropped = 0
     for case in await db_cases(conn):
-        if case.blocking:
+        if case.dropped:
             dropped += 1
             continue
         scores.extend(score_case(case, names))
@@ -883,14 +974,18 @@ def format_report(result: dict[str, Any]) -> str:
             f"NOT A MEASUREMENT: no origin of the {result['source']} had anything to project "
             f"from ({result['dropped']} dropped). This run must not be published."
         )
+    real = result["source"] == REAL_LEDGER
+    reasons = "missing setup or unlinked income" if real else "missing setup"
     lines = [
         f"Source: {result['source']}. {result['cases']} weekly origins scored, "
-        f"{result['dropped']} dropped for missing setup.",
+        f"{result['dropped']} dropped for {reasons}.",
         "CRPS is the forecast's distance from the outcome in rupees (lower is better); skill is "
         f"against `{REFERENCE}` with its Diebold-Mariano p-value; coverage is how often the "
         "outcome fell inside P10-P90, with a 95% interval.",
+        "Outcomes leave out income the forecast was told not to count: a later credit counts only "
+        "if it pays an income schedule confirmed by the origin.",
     ]
-    if result["source"] == REAL_LEDGER:
+    if real:
         lines.append(
             "Known limit: accounts, schedules, and goals created after an origin are excluded, "
             "but a later edit to one that already existed is read in its current form."
