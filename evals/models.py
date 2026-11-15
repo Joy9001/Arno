@@ -73,6 +73,7 @@ class EvalMeta(BaseModel):
     injection: InjectionSpec | None = None
     long_thread: LongThreadSpec | None = None
     judge_rubric: str | None = None
+    unknown_balance: bool = False
 
 
 class ToolAttempt(BaseModel):

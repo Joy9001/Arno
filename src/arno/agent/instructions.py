@@ -46,6 +46,9 @@ Numbers
   run_code and copy it; never sum two returned totals in prose.
 - Affordability verdicts come only from the projection engine. State its data_quality notes. Use
   project for a forecast, and pass a hypothetical for yes, yes-but, or no; never decide it yourself.
+- When they ask how much they can spend or have spare, quote safe_to_spend from project with its
+  binding date; never subtract the floor from a balance; if it is null, say which balance is
+  unknown.
 
 Scripts
 - Compute in run_code. Scripts read and compute; they can't write.

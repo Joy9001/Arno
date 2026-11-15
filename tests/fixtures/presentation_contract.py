@@ -108,6 +108,11 @@ def fixtures() -> dict:
             ],
             "goals": [],
             "obligations_met": True,
+            "safe_to_spend": {
+                "amount_paise": 200_000,
+                "binding": "floor",
+                "binding_date": "2026-11-06",
+            },
             "data_quality": {"gaps": [], "setup_gaps": ["no floor set"]},
             "sources": [],
             # The card passes source ids straight through; this fixture deliberately has none.

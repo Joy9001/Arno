@@ -6,6 +6,9 @@ from datetime import date, timedelta
 
 import pytest
 
+from arno.engine import backtest, personas
+from arno.engine.affordability import Hypothetical, afford
+from arno.engine.inputs import build_inputs
 from arno.engine.projection import (
     LEGACY_MODEL,
     CardAccount,
@@ -15,6 +18,7 @@ from arno.engine.projection import (
     LiquidAccount,
     Projection,
     ProjectionInput,
+    SeriesForecast,
     SpendCategory,
     SpendRow,
     first_full_payment_date,
@@ -406,3 +410,199 @@ def test_mature_computed_sparse_categories_join_the_day_pool():
     short_result = project(short, runs=64, seed=3)
     assert "Family" in short_result["data_quality"]["simulation"]["categories_flat"]
     assert "Family" not in short_result["data_quality"]["simulation"]["categories_sampled"]
+
+
+def test_safe_to_spend_matches_the_affordability_boundary_across_personas():
+    runs = 100
+    positive_cases = 0
+    zero_cases = 0
+    for key, days_back in (
+        ("salaried_steady", 90),
+        ("tight_card", 120),
+        ("messy_recurring", 120),
+        ("heavy_tails", 120),
+    ):
+        persona = personas.generate(key, personas.TUNING_SEEDS[0])
+        ledger = backtest._ledger(persona)
+        as_of = persona.end - timedelta(days=days_back)
+        inputs = build_inputs(backtest.persona_snapshot(ledger, as_of))
+        for seed in (personas.TUNING_SEEDS[0], personas.HOLDOUT_SEEDS[0]):
+            result = project(inputs, runs=runs, seed=seed)
+            safe = result["safe_to_spend"]
+            assert safe is not None
+            amount = safe["amount_paise"]
+            assert amount >= 0
+            assert safe["binding"] in {"floor", "obligation"}
+            if amount > 0:
+                positive_cases += 1
+                at_limit = afford(
+                    inputs,
+                    Hypothetical(amount_paise=amount, date=inputs.as_of, method="account"),
+                    runs=runs,
+                    seed=seed,
+                )
+                assert at_limit["verdict"] == "yes"
+                over_limit = afford(
+                    inputs,
+                    Hypothetical(amount_paise=amount + 1, date=inputs.as_of, method="account"),
+                    runs=runs,
+                    seed=seed,
+                )
+                assert over_limit["verdict"] != "yes"
+            else:
+                zero_cases += 1
+                assert (
+                    result["floor_probability"] < result["floor_threshold"]
+                    or not result["obligations_met"]
+                )
+    assert positive_cases >= 4
+    assert zero_cases >= 1
+
+
+def _rare_charge_inputs(balance_paise: int) -> ProjectionInput:
+    """Rent on day 5, salary on day 7, and a 5%-likely 60,000 charge on day 3."""
+    return ProjectionInput(
+        as_of=date(2026, 1, 1),
+        floor_paise=10_000,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=balance_paise),),
+        events=(
+            CashEvent(
+                date=date(2026, 1, 6),
+                amount_paise=-50_000,
+                name="Rent",
+                kind="obligation",
+            ),
+            CashEvent(
+                date=date(2026, 1, 8),
+                amount_paise=200_000,
+                name="Salary",
+                kind="income_fixed",
+            ),
+        ),
+        series=(
+            SeriesForecast(
+                id="s1",
+                name="Unexpected charge",
+                expected=(date(2026, 1, 3),),
+                jitter=((0, 1.0),),
+                skip=0.95,
+                alive=1.0,
+                amounts=(60_000,),
+            ),
+        ),
+        ask_horizon_days=90,
+    )
+
+
+def test_safe_to_spend_obligation_can_be_the_binding_constraint():
+    # 95% of scenarios never trigger the rare series outflow, keeping floor headroom at 60,000
+    # above the 10,000 floor. The 5% that trigger it (>1% allowed obligation misses) tighten the
+    # day-5 obligation margin to 10,000 before salary arrives on day 7.
+    inputs = _rare_charge_inputs(120_000)
+    runs = 200
+    result = project(inputs, runs=runs, seed=1)
+    safe = result["safe_to_spend"]
+    assert safe == {
+        "amount_paise": 10_000,
+        "binding": "obligation",
+        "binding_date": "2026-01-06",
+    }
+    assert (
+        afford(
+            inputs,
+            Hypothetical(amount_paise=10_000, date=inputs.as_of, method="account"),
+            runs=runs,
+            seed=1,
+        )["verdict"]
+        == "yes"
+    )
+    assert (
+        afford(
+            inputs,
+            Hypothetical(amount_paise=10_001, date=inputs.as_of, method="account"),
+            runs=runs,
+            seed=1,
+        )["verdict"]
+        != "yes"
+    )
+
+
+def test_safe_to_spend_returns_zero_with_binding_constraint_when_baseline_fails():
+    floor_failing = _inputs(start=50_000, floor=100_000)
+    assert project(floor_failing, runs=50)["safe_to_spend"] == {
+        "amount_paise": 0,
+        "binding": "floor",
+        "binding_date": "2026-01-01",
+    }
+
+    obligation_failing = _rare_charge_inputs(105_000)
+    assert project(obligation_failing, runs=200, seed=1)["safe_to_spend"] == {
+        "amount_paise": 0,
+        "binding": "obligation",
+        "binding_date": "2026-01-06",
+    }
+
+
+def test_safe_to_spend_is_zero_when_a_passing_baseline_has_no_headroom():
+    # Four of 37 scenarios take the rare charge, so the floor holds at the baseline but one
+    # paisa would put them below it.
+    inputs = _rare_charge_inputs(120_000)
+    result = project(inputs, runs=37, seed=1)
+    assert result["floor_probability"] >= result["floor_threshold"]
+    assert result["safe_to_spend"] == {
+        "amount_paise": 0,
+        "binding": "floor",
+        "binding_date": "2026-01-06",
+    }
+    assert (
+        afford(
+            inputs,
+            Hypothetical(amount_paise=1, date=inputs.as_of, method="account"),
+            runs=37,
+            seed=1,
+        )["verdict"]
+        != "yes"
+    )
+
+
+def test_safe_to_spend_is_none_when_no_liquid_balance_is_known():
+    inputs = ProjectionInput(
+        as_of=date(2026, 1, 1),
+        floor_paise=10_000,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=100_000, known=False),),
+        ask_horizon_days=90,
+    )
+    assert project(inputs, runs=20)["safe_to_spend"] is None
+
+
+def test_existing_projection_outputs_are_unchanged_by_safe_to_spend():
+    inputs = _inputs(
+        start=100_000,
+        floor=50_000,
+        events=(
+            CashEvent(
+                date=date(2026, 1, 10),
+                amount_paise=-20_000,
+                name="Rent",
+                kind="obligation",
+            ),
+            CashEvent(
+                date=date(2026, 1, 20),
+                amount_paise=40_000,
+                name="Salary",
+                kind="income_fixed",
+            ),
+        ),
+    )
+    result = project(inputs, runs=50, seed=1)
+    assert result["floor_probability"] == 1.0
+    assert result["median_low"] == {"date": "2026-01-10", "paise": 80_000}
+    assert result["p10_low_paise"] == 80_000
+    assert result["first_floor_crossing"] is None
+    assert result["obligations_met"] is True
+    assert safe_amount_today(inputs, runs=50, seed=1) == 30_000
+    assert result["safe_to_spend"] == {
+        "amount_paise": 30_000,
+        "binding": "floor",
+        "binding_date": "2026-01-10",
+    }

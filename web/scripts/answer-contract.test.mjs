@@ -433,3 +433,61 @@ test("saved result titles, notes and cells strip the envelope without touching t
   assert.notDeepEqual(result, original);
   assert.equal(fallbackViews(result)[0], "Table");
 });
+
+test("safe_to_spend renders on home and projection cards and hides when null or invalid", () => {
+  const receipt = structuredClone(fixtures.answers.receipt.results[0].receipt);
+  const cardHtml = render(Card, { ...receipt, card: "projection" });
+  assert.match(cardHtml, /₹2,000 safe to spend today/);
+  assert.match(cardHtml, /06 Nov 2026/);
+
+  const summaryHtml = renderToStaticMarkup(React.createElement(ProjectionSummary, { payload: receipt }));
+  assert.match(summaryHtml, /₹2,000 safe to spend today/);
+
+  const home = {
+    as_of: "2026-11-06",
+    spendable_paise: 300_000,
+    cash_quality: {
+      status: "known",
+      known_paise: 300_000,
+      known_count: 1,
+      unknown_count: 0,
+      unknown_accounts: [],
+    },
+    projection: {
+      ...receipt,
+      floor_set: true,
+      floor: { paise: 100_000, text: "₹1,000" },
+      safe_to_spend: { amount_paise: 150_000, binding: "obligation", binding_date: "2026-11-10" },
+    },
+    unread_count: 0,
+    needs_you: [],
+    recent: [],
+  };
+  const homeHtml = renderToStaticMarkup(React.createElement(NoticedView, { data: home }));
+  assert.match(homeHtml, /₹1,500 safe to spend today/);
+  assert.match(homeHtml, /10 Nov 2026/);
+
+  const nullHome = { ...home, projection: { ...home.projection, safe_to_spend: null } };
+  const nullHomeHtml = renderToStaticMarkup(React.createElement(NoticedView, { data: nullHome }));
+  assert.doesNotMatch(nullHomeHtml, /safe to spend today/);
+
+  const badHome = {
+    ...home,
+    projection: { ...home.projection, safe_to_spend: { amount_paise: 150_000 } },
+  };
+  assert.doesNotMatch(
+    renderToStaticMarkup(React.createElement(NoticedView, { data: badHome })),
+    /safe to spend today/,
+  );
+
+  // A chat message stored before this field existed still parses and renders.
+  const oldAnswer = structuredClone(fixtures.answers.receipt);
+  delete oldAnswer.results[0].receipt.safe_to_spend;
+  assert.ok(parseAnswerCard(oldAnswer));
+  assert.doesNotMatch(render(Card, { ...oldAnswer.results[0].receipt, card: "projection" }), /safe to spend today/);
+
+  const badReceipt = structuredClone(fixtures.answers.receipt);
+  badReceipt.results[0].receipt.safe_to_spend = { binding: "floor", binding_date: "2026-11-06" };
+  assert.equal(parseAnswerCard(badReceipt), null);
+});
+

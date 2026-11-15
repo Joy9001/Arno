@@ -263,12 +263,14 @@ return groups, total, cov                          # complete = false when part 
 
 **Description:** "Forecast the user's cash against their floor (the minimum balance they want to
 keep). Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
-data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict and
-the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid account
-has a known balance), the curve starts from an unknown balance: say what is missing instead of
-quoting its probabilities or balances. State the data_quality notes in your answer. A rare large day
-caused by a one-off payment can be marked one-off so the projection stops expecting it again.
-horizon_days is a minimum; the engine always looks at least 90 days and as far as a goal deadline."
+data-quality notes. Also returns safe_to_spend, the largest amount that can be spent today with the
+forecast still passing, or null when no balance is known. With a hypothetical purchase, also
+returns the yes, yes-but, or no verdict and the tradeoffs. Never give your own verdict: the engine
+decides. With no verdict (no liquid account has a known balance), the curve starts from an unknown
+balance: say what is missing instead of quoting its probabilities or balances. State the
+data_quality notes in your answer. A rare large day caused by a one-off payment can be marked
+one-off so the projection stops expecting it again. horizon_days is a minimum; the engine always
+looks at least 90 days and as far as a goal deadline."
 
 **Input**
 
@@ -295,6 +297,8 @@ that names the assumption is in `data_quality`, and the answer must state it.
 ```python
 {"floor_probability": 0.93, "median_low": {"amount": Money, "date"},
  "first_floor_crossing": str | None,
+ "safe_to_spend": {"amount": Money, "binding": "floor" | "obligation",
+                   "binding_date": str} | None,
  "optimistic": {"floor_probability": 0.97, "income": [...]} | None,
  "goals": [{"name", "completes_on", "slips_days"}],
  "verdict": "yes" | "yes-but" | "no" | None,
@@ -304,7 +308,8 @@ that names the assumption is in `data_quality`, and the answer must state it.
 ```
 
 The daily curve, the full source list, and the verdict card travel as UI metadata; the model sees
-the compact payload above. `optimistic` is the unconfirmed-income case and never feeds a verdict.
+the compact payload above, and both the compact payload and the projection card carry
+`safe_to_spend`. `optimistic` is the unconfirmed-income case and never feeds a verdict.
 `data_quality.balance_ages[]` uses the account summary's one anchor rule (`ledger.common`'s
 `balance_anchor`): `as_of` is the later of the last movement and the stated balance, and `age_days`
 is the age `get_financial_context` reports for the same account. An unknown liquid account keeps
@@ -326,6 +331,9 @@ curve   = median and P10-P90 for each day, as order statistics
 floor_probability = share of scenarios that never cross the floor
 first_floor_crossing = first date by which more than 10% of scenarios have crossed
 obligations_met = every obligation is paid in at least 99% of scenarios
+safe_to_spend = null if no liquid balance is known; else max(0, min(floor headroom, min
+                obligation-day margin)) at the exact scenario ranks that pass the yes rule,
+                paired with the binding constraint and date
 if hypothetical:
     rerun with it
     verdict = yes when floor_probability >= 0.90 and obligations_met   # no goal-slip clause

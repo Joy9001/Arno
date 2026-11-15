@@ -9,6 +9,14 @@ export function lowAmount(payload: ProjectionPayload): number | null {
   return null;
 }
 
+export function safeToSpendAmount(payload: ProjectionPayload): number | null {
+  const safe = payload.safe_to_spend;
+  if (!safe?.binding_date) return null;
+  if (safe.amount?.paise !== undefined) return safe.amount.paise;
+  if (safe.amount_paise !== undefined) return safe.amount_paise;
+  return null;
+}
+
 export function paymentMethodLabel(method: string | undefined): string {
   if (!method) return "";
   if (method === "account") return "from an account";

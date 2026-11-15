@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from arno.notifications import create_notification, mark_read
+from arno.tools import projection as projection_tools
 
 
 async def test_home_composes_one_payload(authed_client):
@@ -173,3 +174,20 @@ async def test_home_rejects_an_out_of_range_horizon(authed_client):
     response = authed_client.get("/api/home?horizon_days=0")
 
     assert response.status_code == 422
+
+
+async def test_home_returns_the_same_safe_to_spend_as_the_projection_tool(authed_client, db):
+    empty_home = authed_client.get("/api/home?horizon_days=90").json()
+    assert empty_home["projection"]["safe_to_spend"] is None
+
+    created = authed_client.post(
+        "/api/accounts",
+        json={"kind": "bank", "name": "SBI Salary", "opening_balance_paise": 18_420_000},
+    )
+    assert created.status_code == 201, created.text
+
+    home_body = authed_client.get("/api/home?horizon_days=90").json()
+    expected = await projection_tools.project(db, horizon_days=90)
+    assert home_body["projection"]["safe_to_spend"] == expected["safe_to_spend"]
+    assert home_body["projection"]["safe_to_spend"] is not None
+    assert home_body["projection"]["safe_to_spend"]["amount_paise"] >= 0

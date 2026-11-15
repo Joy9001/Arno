@@ -102,10 +102,17 @@ def _ref_series(spec: Spec, settings: Settings, scenario: int) -> dict[int, dict
 
 def reference(spec: Spec, settings: Settings) -> list[list[int]]:
     """Each scenario's daily balances, walked one day at a time."""
+    paths, _payables = _reference_walk(spec, settings)
+    return paths
+
+
+def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], list[list[int]]]:
+    """Each scenario's daily balances and pre-discretionary payables, one day at a time."""
     days = spec.days + 1
     keys = [spec.first_day + t for t in range(days)]
     classes = [int(c) for c in spec.classes]
     paths = []
+    payables = []
     for scenario in range(settings.scenarios):
         rows_by_pool = []
         for pool in spec.pools:
@@ -157,6 +164,7 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
         removed_total = {"cash_cut": 0, **{f"card{k}_cut": 0 for k in range(len(spec.cards))}}
         reducible_total = dict.fromkeys(removed_total, 0)
         path = []
+        payable_path = []
         for t in range(days):
             spend = {}
             names = ["cash", *(f"card{k}" for k in range(len(spec.cards))), *removed_total]
@@ -185,6 +193,7 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
                 balance -= paid
                 used[k] -= paid
             balance -= int(spec.obligation[t])
+            payable = balance
             for k, card in enumerate(spec.cards):
                 new = [
                     int(card.obligation[t]) if card.obligation is not None else 0,
@@ -201,9 +210,12 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
                     if due >= 0:
                         bills[k][due] = bills[k].get(due, 0) + loose
                     charges = [*new, series_part]
-                for amount in charges:
+                for charge_index, amount in enumerate(charges):
                     charged = min(amount, max(card.limit - used[k], 0))
-                    balance -= amount - charged
+                    overflow = amount - charged
+                    balance -= overflow
+                    if charge_index == 0:
+                        payable -= overflow
                     used[k] += charged
                     due = int(card.due_of_day[t])
                     if due >= 0:
@@ -211,8 +223,10 @@ def reference(spec: Spec, settings: Settings) -> list[list[int]]:
             balance -= int(spec.later[t])
             balance -= spend["cash"]
             path.append(balance)
+            payable_path.append(payable)
         paths.append(path)
-    return paths
+        payables.append(payable_path)
+    return paths, payables
 
 
 def _spec(
@@ -345,7 +359,7 @@ def test_the_kernel_matches_a_plain_day_by_day_walk(
         )
         settings = Settings(scenarios=6, seed=trial, block_length=block_length, keep_days=76)
         run = kernel.run(spec, settings)
-        expected = reference(spec, settings)
+        expected, payables = _reference_walk(spec, settings)
         assert run.paths is not None
         assert run.paths.tolist() == expected
         assert run.minima.tolist() == [min(path) for path in expected]
@@ -353,6 +367,15 @@ def test_the_kernel_matches_a_plain_day_by_day_walk(
             [min(path[: t + 1]) < spec.floor for path in expected] for t in range(spec.days + 1)
         ]
         assert run.crossings.tolist() == [sum(day) for day in breached]
+        rank = settings.scenarios // 100
+        expected_failures = [
+            sum(1 for row in payables if row[int(day)] < 0) for day in spec.obligation_days
+        ]
+        expected_margins = [
+            sorted(row[int(day)] for row in payables)[rank] for day in spec.obligation_days
+        ]
+        assert run.obligation_failures.tolist() == expected_failures
+        assert run.obligation_margins.tolist() == expected_margins
 
 
 def test_a_scenario_does_not_depend_on_how_many_run():
@@ -365,11 +388,18 @@ def test_a_scenario_does_not_depend_on_how_many_run():
 
 def test_checkpoints_and_obligations_come_from_the_same_walk():
     spec = _spec(random.Random(9), cards=1, days=60)
-    settings = Settings(scenarios=32, seed=1, keep_days=61, checkpoints=(0, 10, 60))
+    settings = Settings(scenarios=250, seed=1, keep_days=61, checkpoints=(0, 10, 60))
     run = kernel.run(spec, settings)
     assert run.paths is not None and run.checkpoints is not None
     assert run.checkpoints.tolist() == run.paths[:, [0, 10, 60]].tolist()
     assert len(run.obligation_failures) == len(spec.obligation_days)
+    assert len(run.obligation_margins) == len(spec.obligation_days)
+    _paths, payables = _reference_walk(spec, settings)
+    rank = settings.scenarios // 100
+    assert rank == 2
+    assert run.obligation_margins.tolist() == [
+        sorted(row[int(day)] for row in payables)[rank] for day in spec.obligation_days
+    ]
 
 
 def _lattice_floor_probability(

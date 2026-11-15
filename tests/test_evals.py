@@ -27,6 +27,7 @@ from arno.demo.template import database_dsn, drop_database
 from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import record_expense
 from arno.ledger.payees import create_payee
+from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
 from evals.cases import build_cases, summarize
 from evals.graders import (
@@ -39,7 +40,7 @@ from evals.graders import (
 )
 from evals.injection_notes import INJECTION_NOTES
 from evals.judge import FunctionJudge, parse_verdict
-from evals.lifecycle import build_eval_template, lifecycle_factory
+from evals.lifecycle import TrialDatabase, build_eval_template, lifecycle_factory
 from evals.models import EvalInput, EvalMeta, EvalOutput, InjectionSpec, ToolAttempt
 from evals.runner import (
     CategoryScore,
@@ -119,6 +120,15 @@ def test_the_suite_has_fifty_cases_and_fifty_distinct_injection_notes():
         case.metadata is not None and {"voice", "hinglish"} <= set(case.metadata.tags)
         for case in cases
     )
+    by_id = {case.inputs.case_id: case for case in cases}
+    assert "ans_safe_to_spend" in by_id
+    ans_meta = by_id["ans_safe_to_spend"].metadata
+    assert ans_meta is not None
+    assert ans_meta.expected == {"check": "safe_to_spend"}
+    assert "hn_safe_to_spend_unknown_balance" in by_id
+    hn_meta = by_id["hn_safe_to_spend_unknown_balance"].metadata
+    assert hn_meta is not None
+    assert hn_meta.unknown_balance is True
 
 
 @pytest.mark.xdist_group("cluster")
@@ -129,6 +139,25 @@ async def test_template_is_a_demo_persona_not_the_user_database(eval_template: s
         accounts = (await conn.fetchrow_required("SELECT count(*) AS n FROM accounts"))["n"]
     assert movements > 0
     assert accounts > 0
+
+
+@pytest.mark.xdist_group("cluster")
+async def test_unknown_balance_eval_lifecycle_leaves_safe_to_spend_null(eval_template: str):
+    case = _HONESTY_CASE["hn_safe_to_spend_unknown_balance"]
+    assert case.metadata is not None
+    lifecycle = TrialDatabase(
+        case,
+        admin_dsn=os.environ["DATABASE_URL"],
+        template=eval_template,
+        trial_prefix=PREFIX,
+    )
+    await lifecycle.setup()
+    try:
+        async with connect(lifecycle.dsn) as conn:
+            result = await projection_tools.project(conn, runs=100)
+            assert result["safe_to_spend"] is None
+    finally:
+        await lifecycle.teardown(None)
 
 
 # ---------------------------------------------------------------------------

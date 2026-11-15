@@ -22,10 +22,18 @@ import {
   OBLIGATION_WARNING,
   paymentMethodLabel,
   projectionReadiness,
+  safeToSpendAmount,
 } from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
 
 export type Money = { paise: number; text: string };
+
+export type SafeToSpend = {
+  amount?: Money;
+  amount_paise?: number;
+  binding: "floor" | "obligation";
+  binding_date: string;
+};
 
 export type ProjectionPoint = {
   date: string;
@@ -105,6 +113,7 @@ export type ProjectionPayload = {
   first_floor_crossing: string | null;
   goals?: ProjectionGoal[];
   obligations_met?: boolean;
+  safe_to_spend?: SafeToSpend | null;
   data_quality: ProjectionDataQuality;
   runs?: number;
   sources?: ProjectionSource[];
@@ -344,6 +353,7 @@ function Citations({ payload }: { payload: ProjectionPayload }) {
 export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const medianLow = lowAmount(payload);
+  const safeAmount = safeToSpendAmount(payload);
   const floorText =
     payload.floor?.text ??
     (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
@@ -381,6 +391,12 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
           ? ` · with unconfirmed income: ${percent(payload.optimistic.floor_probability)} above floor (optimistic only)`
           : ""}
       </p>
+      {safeAmount !== null && payload.safe_to_spend && (
+        <p className="projection-facts">
+          {formatPaise(safeAmount)} safe to spend today · binds{" "}
+          {dateLabel(payload.safe_to_spend.binding_date)}
+        </p>
+      )}
       {payload.verdict_reason && <p className="fine">{payload.verdict_reason}</p>}
     </>
   );
@@ -421,6 +437,7 @@ export function ProjectionCard({
   const gated = !readiness.ready;
   const title = data.title ? String(data.title) : "Projection";
   const median = lowAmount(payload);
+  const safeAmount = safeToSpendAmount(payload);
   const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
   const floorText =
     payload.floor?.text ??
@@ -458,6 +475,12 @@ export function ProjectionCard({
         <p className="receipt-note">{readiness.message}</p>
       ) : (
         payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>
+      )}
+      {!gated && safeAmount !== null && payload.safe_to_spend && (
+        <p className="receipt-note">
+          {formatPaise(safeAmount)} safe to spend today · binds{" "}
+          {dateLabel(payload.safe_to_spend.binding_date)}
+        </p>
       )}
       {purchase?.amount_paise !== undefined && (
         <p className="receipt-note">

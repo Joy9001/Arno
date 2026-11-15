@@ -3,6 +3,16 @@ import { z } from "zod";
 const number = z.number().finite();
 const money = z.object({ paise: number.safe(), text: z.string() });
 const optionalText = z.string().nullish().transform((value) => value ?? undefined);
+const safeToSpend = z
+  .object({
+    amount: money.optional(),
+    amount_paise: number.optional(),
+    binding: z.enum(["floor", "obligation"]),
+    binding_date: z.string(),
+  })
+  .refine((value) => value.amount !== undefined || value.amount_paise !== undefined, {
+    message: "safe_to_spend requires amount or amount_paise",
+  });
 
 /** Validate every field consumed by the receipt, its expanded details, and evidence panel. */
 export const projectionSchema = z.object({
@@ -27,6 +37,7 @@ export const projectionSchema = z.object({
     slips_days: number.nullable(), reached: z.boolean(),
   })).optional(),
   obligations_met: z.boolean().optional(),
+  safe_to_spend: safeToSpend.nullable().optional(),
   data_quality: z.object({
     balance_ages: z.array(z.object({
       account: z.string(), as_of: z.string().nullable(), age_days: number.nullable(),

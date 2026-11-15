@@ -179,6 +179,7 @@ class Run:
     minima: I64  # each scenario's lowest balance over the horizon
     crossings: I64  # by day, how many scenarios have been below the floor
     obligation_failures: I64  # by obligation day, how many scenarios could not pay
+    obligation_margins: I64  # by obligation day, payable order statistic at scenarios // 100
     credit_exceeded: bool
     optimistic_minima: I64 | None
     optimistic_crossings: I64 | None
@@ -452,6 +453,8 @@ def run(spec: Spec, settings: Settings) -> Run:
     optimistic_crossings = np.empty(total_days, dtype=np.int64) if optimistic else None
     obligation_index = {int(day): index for index, day in enumerate(spec.obligation_days)}
     obligation_failures = np.zeros(len(spec.obligation_days), dtype=np.int64)
+    obl_rank = scenarios // 100
+    obligation_margins = np.full(len(spec.obligation_days), np.iinfo(np.int64).max, dtype=np.int64)
     checkpoint_index = {day: index for index, day in enumerate(settings.checkpoints)}
     checkpoints = (
         np.empty((scenarios, len(settings.checkpoints)), dtype=np.int64)
@@ -565,6 +568,7 @@ def run(spec: Spec, settings: Settings) -> Run:
                     - obligation_overflow[:, column]
                 )
                 obligation_failures[failures] += int(np.count_nonzero(payable < 0))
+                obligation_margins[failures] = int(np.partition(payable, obl_rank)[obl_rank])
             spot = checkpoint_index.get(day)
             if spot is not None and checkpoints is not None:
                 checkpoints[:, spot] = balances[:, column]
@@ -597,6 +601,7 @@ def run(spec: Spec, settings: Settings) -> Run:
         minima=running_min,
         crossings=crossings,
         obligation_failures=obligation_failures,
+        obligation_margins=obligation_margins,
         credit_exceeded=credit_exceeded,
         optimistic_minima=optimistic_min,
         optimistic_crossings=optimistic_crossings,

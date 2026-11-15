@@ -40,6 +40,7 @@ from arno.engine.projection import (
     MedianLow,
     Projection,
     ProjectionInput,
+    SafeToSpend,
     SeriesForecast,
     SourceRef,
     SpendRow,
@@ -847,6 +848,16 @@ def _money_low(row: MedianLow | None) -> dict[str, Any] | None:
     return {"date": row["date"], "amount": money(int(row["paise"]))}
 
 
+def _safe_to_spend(row: SafeToSpend | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    return {
+        "amount": money(int(row["amount_paise"])),
+        "binding": row["binding"],
+        "binding_date": row["binding_date"],
+    }
+
+
 def summary(result: Projection) -> dict[str, Any]:
     """The compact model-facing payload: numbers, citations, and data quality, no curve."""
     optimistic = result["optimistic"]
@@ -870,6 +881,7 @@ def summary(result: Projection) -> dict[str, Any]:
             for goal in result["goals"]
         ],
         "obligations_met": result["obligations_met"],
+        "safe_to_spend": _safe_to_spend(result["safe_to_spend"]),
         "data_quality": result["data_quality"],
         "source_ids": result["source_ids"],
         "outside_text": bool(result["data_quality"].get("outside_text")),
@@ -919,6 +931,7 @@ def card(result: Projection) -> dict[str, Any]:
             for goal in result["goals"]
         ],
         "obligations_met": result["obligations_met"],
+        "safe_to_spend": _safe_to_spend(result["safe_to_spend"]),
         "data_quality": result["data_quality"],
         "sources": result["sources"],
         "source_ids": result["source_ids"],

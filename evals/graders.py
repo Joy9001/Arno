@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from statistics import mean
 from typing import Any, Protocol
 
@@ -624,6 +624,36 @@ async def grade_answers(
                 reason=f"expected {result['floor_probability']:.0%}",
             )
         )
+    elif check == "safe_to_spend":
+        result = await projection_tools.project(conn)
+        sts = result["safe_to_spend"]
+        if sts is None:
+            results.append(
+                CheckResult(
+                    name="safe_to_spend",
+                    passed=False,
+                    reason="safe_to_spend is unknown on the trial ledger",
+                )
+            )
+        else:
+            results.append(_money_check("safe_to_spend", output.reply, int(sts["amount_paise"])))
+            binding = date.fromisoformat(sts["binding_date"])
+            date_terms = [
+                sts["binding_date"],
+                f"{binding.day:02d} {binding.strftime('%b %Y')}",
+                f"{binding.day} {binding.strftime('%b %Y')}",
+                f"{binding.strftime('%B')} {binding.day}",
+                f"{binding.day} {binding.strftime('%B')}",
+                f"{binding.day} {binding.strftime('%b')}",
+                f"{binding.strftime('%b')} {binding.day}",
+            ]
+            results.append(
+                CheckResult(
+                    name="safe_to_spend_binding_date",
+                    passed=_has_any(output.reply, date_terms),
+                    reason=f"expected binding date {sts['binding_date']} in the reply",
+                )
+            )
     elif check == "affordability_numbers":
         # A what-if without the L5 engine still has concrete numbers from amortize/compound.
         for label, paise in expected.get("values", {}).items():

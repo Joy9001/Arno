@@ -65,6 +65,25 @@ async def test_eval_grader_accepts_the_project_and_affordability_checks(demo_led
     assert next(check for check in checks if check.name == "verdict").passed
     assert next(check for check in checks if check.name == "affordability_floor_probability").passed
 
+    safe = base["safe_to_spend"]
+    assert safe is not None
+    safe_reply = (
+        f"You can spend ₹{safe['amount_paise'] / 100:,.2f} today "
+        f"(binding on {safe['binding_date']})."
+    )
+    safe_checks = await grade_answers(
+        demo_ledger,
+        EvalOutput(reply=safe_reply, started_at=datetime.now(UTC).isoformat()),
+        {"check": "safe_to_spend"},
+    )
+    assert all(check.passed for check in safe_checks), safe_checks
+    bad_safe = await grade_answers(
+        demo_ledger,
+        EvalOutput(reply="You can spend ₹1 today.", started_at=datetime.now(UTC).isoformat()),
+        {"check": "safe_to_spend"},
+    )
+    assert any(not check.passed for check in bad_safe)
+
 
 async def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_ledger):
     result = await projection_tools.project(demo_ledger, as_of=date(2026, 11, 1), runs=100)
@@ -76,17 +95,26 @@ async def test_project_from_the_ledger_has_a_curve_quality_and_source_ids(demo_l
     assert result["source_ids"]["goals"]
     assert result["data_quality"]["balance_ages"]
     assert result["optimistic"] is not None
+    assert result["safe_to_spend"] is not None
+    assert result["safe_to_spend"]["amount_paise"] >= 0
+    assert result["safe_to_spend"]["binding"] in {"floor", "obligation"}
+    assert result["safe_to_spend"]["binding_date"]
 
     compact = projection_tools.summary(result)
     assert "curve" not in compact
     assert compact["source_ids"] == result["source_ids"]
     assert compact["data_quality"]["gaps"]
+    assert compact["safe_to_spend"] is not None
+    assert compact["safe_to_spend"]["amount"]["paise"] == result["safe_to_spend"]["amount_paise"]
+    assert compact["safe_to_spend"]["binding"] == result["safe_to_spend"]["binding"]
+    assert compact["safe_to_spend"]["binding_date"] == result["safe_to_spend"]["binding_date"]
 
     card = projection_tools.card(result)
     assert card["card"] == "projection"
     assert len(card["curve"]) == len(result["curve"])
     assert card["sources"]
     assert card["source_ids"]["accounts"]
+    assert card["safe_to_spend"] == compact["safe_to_spend"]
 
 
 async def test_an_unknown_balance_with_activity_is_not_known_in_the_projection(ledger):
@@ -126,8 +154,12 @@ async def test_a_project_tool_call_on_an_unknown_balance_has_no_verdict(ledger):
     )
     assert "verdict" not in result
     assert result["tradeoffs"] == []
+    assert result["safe_to_spend"] is None
     assert "no liquid account has a known balance" in result["data_quality"]["setup_gaps"]
-    assert "verdict" not in projection_tools.summary(result)
+    compact = projection_tools.summary(result)
+    assert "verdict" not in compact
+    assert compact["safe_to_spend"] is None
+    assert projection_tools.card(result)["safe_to_spend"] is None
 
 
 async def test_project_with_a_hypothetical_returns_a_verdict_and_tradeoffs(demo_ledger):

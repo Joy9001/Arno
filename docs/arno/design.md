@@ -470,6 +470,10 @@ limit and the rest leaves cash that day; used credit falls only when a bill is p
 - **First floor crossing:** the first date by which more than 10% of scenarios have crossed the
   floor. It is absent exactly when the floor probability passes the 90% threshold.
 - An obligation is met when at least 99% of scenarios can pay it on its date.
+- **Safe to spend today:** the largest one-off cash payment today (`method: account`) under which
+  the projection still keeps the floor probability at or above 90% and every future obligation met
+  under the 99% rule. Computed in one pass from the same scenario run (`amount_paise`, `binding`,
+  and `binding_date`), and `null` when no liquid account has a known balance.
 - Goal completion dates.
 - Source IDs: the balances, schedules, and baselines that fed the run, for citations.
 - `data_quality`: balance ages, baseline sources, coverage gaps. The agent must state these.

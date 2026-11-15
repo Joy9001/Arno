@@ -6,7 +6,7 @@ import { Busy } from "../Loading";
 import { goTo, UserContext } from "../nav";
 import { Orb } from "../Orb";
 import { KIND_LABELS, markNotificationRead, openNotification } from "../notifications";
-import { lowAmount, projectionReadiness } from "../projectionData";
+import { lowAmount, projectionReadiness, safeToSpendAmount } from "../projectionData";
 import type { ProjectionPayload } from "../projection";
 import type { CashQuality, Movement, NotificationItem } from "../types";
 import { useApi } from "../useApi";
@@ -142,6 +142,14 @@ export function NoticedView({
   const floorSet = projection.floor_set ?? (floorPaise ?? 0) > 0;
   const holds = projection.floor_probability >= projection.floor_threshold;
   const low = lowAmount(projection);
+  const safeAmount = safeToSpendAmount(projection);
+  const safeLine =
+    safeAmount !== null && projection.safe_to_spend ? (
+      <p>
+        {formatPaise(safeAmount)} safe to spend today · binds{" "}
+        {formatDate(projection.safe_to_spend.binding_date)}.
+      </p>
+    ) : null;
   const unread = data.needs_you.filter((item) => !item.read_at).slice(0, 2);
   const forecast = readiness.ready && cashKnown;
   const unreadCards = unread.map((item) => (
@@ -231,6 +239,7 @@ export function NoticedView({
               Lowest median {low === null ? "—" : formatPaise(low)} on{" "}
               {formatDate(projection.median_low.date)}.
             </p>
+            {safeLine}
             <button type="button" className="pill-button light" onClick={() => goTo("money", "timeline")}>
               Open the timeline
             </button>
@@ -243,6 +252,7 @@ export function NoticedView({
               Your lowest median balance, on {formatDate(projection.median_low.date)}. Set a floor and
               I&apos;ll check every purchase against it.
             </p>
+            {safeLine}
             <button type="button" className="pill-button light" onClick={() => goTo("settings", "profile")}>
               Set a floor
             </button>

@@ -347,13 +347,14 @@ async def project(
 ) -> ToolReturn:
     """Forecast the user's cash against their floor (the minimum balance they want to keep).
     Returns the median path, the P10-P90 band, the floor probability, goal completion, and the
-    data-quality notes. With a hypothetical purchase, also returns the yes, yes-but, or no verdict
-    and the tradeoffs. Never give your own verdict: the engine decides. With no verdict (no liquid
-    account has a known balance), the curve starts from an unknown balance: say what is missing
-    instead of quoting its probabilities or balances. State the data_quality
-    notes in your answer. A rare large day caused by a one-off payment can be marked one-off so the
-    projection stops expecting it again. horizon_days is a minimum; the engine always looks at
-    least 90 days and as far as a goal deadline."""
+    data-quality notes. Also returns safe_to_spend, the largest amount that can be spent today
+    with the forecast still passing, or null when no balance is known. With a hypothetical
+    purchase, also returns the yes, yes-but, or no verdict and the tradeoffs. Never give your own
+    verdict: the engine decides. With no verdict (no liquid account has a known balance), the curve
+    starts from an unknown balance: say what is missing instead of quoting its probabilities or
+    balances. State the data_quality notes in your answer. A rare large day caused by a one-off
+    payment can be marked one-off so the projection stops expecting it again. horizon_days is a
+    minimum; the engine always looks at least 90 days and as far as a goal deadline."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
     try:

@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from functools import lru_cache
-from typing import NotRequired, Required, TypedDict
+from typing import Literal, NotRequired, Required, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -258,6 +258,14 @@ class PaymentDate(TypedDict):
     amount_paise: int
 
 
+class SafeToSpend(TypedDict):
+    """The largest one-off cash payment today that still passes the engine's yes test."""
+
+    amount_paise: int
+    binding: Literal["floor", "obligation"]
+    binding_date: str
+
+
 class Projection(TypedDict):
     """One projection run: the balance band, the floor odds, and every citation behind them."""
 
@@ -274,6 +282,7 @@ class Projection(TypedDict):
     curve: list[CurvePoint]
     goals: list[GoalRow]
     obligations_met: bool
+    safe_to_spend: SafeToSpend | None
     data_quality: DataQuality
     sources: list[SourceRef]
     source_ids: SourceIds
@@ -1150,9 +1159,47 @@ def _first_crossing(as_of: date, crossings: kernel.I64, scenarios: int) -> str |
     return (as_of + timedelta(days=int(over[0]))).isoformat() if len(over) > 0 else None
 
 
+def _floor_share(held: int, scenarios: int) -> float:
+    """The floor probability the verdict compares: ``held / scenarios`` rounded to four places."""
+    return round(held / scenarios, 4)
+
+
 def _median_low(as_of: date, medians: kernel.I64) -> MedianLow:
     index = int(np.argmin(medians))
     return {"date": (as_of + timedelta(days=index)).isoformat(), "paise": int(medians[index])}
+
+
+def _safe_to_spend(
+    inputs: ProjectionInput, prepared: Prepared, run: kernel.Run
+) -> SafeToSpend | None:
+    if not any(account.known for account in inputs.liquid):
+        return None
+    scenarios = run.scenarios
+    # Invert the rounded floor test the verdict compares, so the safe boundary agrees with
+    # `afford()` to the paisa for any run count.
+    min_held = max(0, math.floor((FLOOR_THRESHOLD - 1e-4) * scenarios))
+    while min_held < scenarios and _floor_share(min_held, scenarios) < FLOOR_THRESHOLD:
+        min_held += 1
+    max_fail = scenarios - min_held
+    floor_headroom = int(np.partition(run.minima, max_fail)[max_fail]) - inputs.floor_paise
+    floor_date = (inputs.as_of + timedelta(days=int(np.argmin(run.curve[:, 0])))).isoformat()
+
+    obl_days = prepared.spec.obligation_days
+    if len(obl_days) > 0:
+        obl_index = int(np.argmin(run.obligation_margins))
+        obl_headroom = int(run.obligation_margins[obl_index])
+        if obl_headroom < floor_headroom:
+            obl_date = (inputs.as_of + timedelta(days=int(obl_days[obl_index]))).isoformat()
+            return {
+                "amount_paise": max(0, obl_headroom),
+                "binding": "obligation",
+                "binding_date": obl_date,
+            }
+    return {
+        "amount_paise": max(0, floor_headroom),
+        "binding": "floor",
+        "binding_date": floor_date,
+    }
 
 
 def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed: int) -> Projection:
@@ -1171,7 +1218,7 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
     ]
     held = int(np.count_nonzero(run.minima >= floor))
     low_rank = order_rank(scenarios, 0.1)
-    floor_probability = held / scenarios
+    floor_probability = _floor_share(held, scenarios)
     low, high = _wilson(held, scenarios)
     breaching = run.minima[run.minima < floor]
     misses = int(np.count_nonzero(run.obligation_failures * 100 > scenarios))
@@ -1275,13 +1322,14 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
         "floor_paise": floor,
         "floor_set": floor > 0,
         "floor_threshold": FLOOR_THRESHOLD,
-        "floor_probability": round(floor_probability, 4),
+        "floor_probability": floor_probability,
         "median_low": _median_low(as_of, run.curve[:, 1]),
         "p10_low_paise": int(np.partition(run.minima, low_rank)[low_rank]),
         "first_floor_crossing": _first_crossing(as_of, run.crossings, scenarios),
         "curve": curve,
         "goals": goal_rows(inputs),
         "obligations_met": misses == 0,
+        "safe_to_spend": _safe_to_spend(inputs, prepared, run),
         "data_quality": data_quality,
         "sources": sources,
         "source_ids": source_ids,
