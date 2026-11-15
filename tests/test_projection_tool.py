@@ -381,6 +381,7 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.tools import patterns
+    from arno.tools.mark import mark
 
     bank = await create_account(
         ledger,
@@ -434,7 +435,8 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     assert forecast.category_id == cat_id
     assert forecast.reducible is bool(cat_row["reducible"])
     assert date(2026, 11, 1) in forecast.expected
-    assert "Netflix" not in forecast.name
+    # The payee came from statement text, so the series carries its name marked, not bare.
+    assert forecast.name == mark("Netflix")
     assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 18), 15_000)]
 
     early = await projection_tools.load_snapshot(ledger, as_of=date(2026, 9, 25), known_then=True)

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from arno.engine.inputs import build_inputs
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import undo_group
 from arno.ledger.common import today
@@ -20,7 +21,7 @@ from arno.ledger.movements import (
 )
 from arno.ledger.schedule_payments import link_payment, unlink_payment
 from arno.ledger.schedules import create_schedule, get_occurrence, upcoming, update_schedule
-from arno.tools.projection import load_inputs
+from arno.tools.projection import load_inputs, load_snapshot
 
 
 async def _plan(conn, *, amount=100_000, kind="obligation"):
@@ -403,7 +404,7 @@ async def test_concurrent_matches_cannot_spend_the_same_allocation_twice(ledger)
 
 
 @pytest.mark.parametrize("state", ["expired", "unknown", "prepaid", "scheduled"])
-async def test_only_applicable_known_schedules_replace_a_spending_baseline(ledger, state):
+async def test_a_covered_category_keeps_its_baseline_and_its_payments_leave_spend(ledger, state):
     bank, _, due = await _plan(ledger)
     category_id = await ledger.fetchval("SELECT id FROM categories ORDER BY id LIMIT 1")
     await ledger.execute(
@@ -422,10 +423,39 @@ async def test_only_applicable_known_schedules_replace_a_spending_baseline(ledge
         starts=today() - timedelta(days=30) if state == "expired" else due,
         ends=today() - timedelta(days=1) if state == "expired" else None,
     )
+    paid = None
     if state == "prepaid":
-        await _pay(ledger, bank, schedule, due, 100_000)
-    inputs = await load_inputs(ledger, horizon_days=30)
+        # Dated inside the spend window, so only attribution can keep it out of spend history.
+        paid = await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=100_000,
+            description="A recorded payment",
+            category_id=category_id,
+            date=today() - timedelta(days=1),
+        )
+        await link_payment(ledger, schedule_id=schedule["id"], due_date=due, movement_id=paid["id"])
+
+    snapshot = await load_snapshot(ledger, horizon_days=30)
+    inputs = build_inputs(snapshot)
+    # A covered category still carries its baseline: the schedule's own payments are attributed
+    # instead of the whole category being dropped.
     represented = [category for category in inputs.categories if category.id == category_id]
-    assert bool(represented) is (state in {"expired", "unknown"})
-    if represented:
-        assert represented[0].baseline_per_day_paise == 10_000
+    assert represented
+    assert represented[0].baseline_per_day_paise == 10_000
+    assert not any("covered by an obligation" in gap for gap in inputs.data_quality["gaps"])
+
+    if paid is not None:
+        assert not any(
+            row.date == paid["date"] and row.amount_paise == paid["amount_paise"]
+            for row in snapshot.spend
+        )
+
+    open_events = [event for event in inputs.events if event.source_id == schedule["id"]]
+    if state == "scheduled":
+        assert (open_events[0].date, open_events[0].amount_paise) == (due, -100_000)
+    elif state == "prepaid":
+        assert not any(event.date == due for event in open_events)
+    else:
+        # Expired or unknown-amount schedules reserve nothing, so the baseline stands alone.
+        assert open_events == []

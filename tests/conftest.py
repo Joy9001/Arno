@@ -374,6 +374,7 @@ SNAPSHOT_RESTORE_ORDER = (
     "captures",
     "statement_lines",
     "schedule_payments",
+    "series_detections",
 )
 
 

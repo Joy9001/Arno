@@ -382,6 +382,8 @@ class SeriesForecast:
     alive with probability ``alive``; each expected date is then skipped with probability
     ``skip``, or paid on a day moved by ``jitter`` (offset days, probability), with an amount drawn
     uniformly from ``amounts`` (one value for a fixed charge).
+
+    ``name`` must already be display-safe: the loader marks text from outside the conversation.
     """
 
     id: str
@@ -652,7 +654,7 @@ RARE_WINDOW_DAYS = 365
 RECENCY_UNIT = 1_024
 RARE_MIN_DAYS = 10
 DAY_STREAM = 0
-SERIES_STREAM_BASE = 100
+SERIES_STREAM_BASE = 100  # the least a series stream may be; it always starts past the categories
 RARE_STREAM = 999
 
 
@@ -662,6 +664,22 @@ def _probability_threshold(probability: float) -> int:
     if probability >= 1.0:
         return 1 << 32
     return max(0, min(1 << 32, int(round(probability * float(1 << 32)))))
+
+
+def _series_streams(categories: int, count: int) -> list[int]:
+    """Stream numbers for ``count`` series that no pool or rare stream uses.
+
+    Category pools take 1..``categories``, whole days 0, and rare days 999, so the series start
+    past the categories and step over the rare stream.
+    """
+    taken = {DAY_STREAM, RARE_STREAM, *range(1, categories + 1)}
+    streams: list[int] = []
+    candidate = max(SERIES_STREAM_BASE, categories + 1)
+    while len(streams) < count:
+        if candidate not in taken:
+            streams.append(candidate)
+        candidate += 1
+    return streams
 
 
 def _jitter_spec(jitter: tuple[tuple[int, float], ...]) -> tuple[kernel.I64, kernel.U64]:
@@ -679,6 +697,8 @@ def _jitter_spec(jitter: tuple[tuple[int, float], ...]) -> tuple[kernel.I64, ker
         if index == len(positive) - 1:
             current = 1 << 32
         else:
+            # A share under 2**-33 rounds onto the previous threshold, an empty interval, so that
+            # offset can never be drawn; the detector's jitter is far coarser than that.
             current = max(prev, min(1 << 32, int(round(running * scale))))
         cumulative[index] = current
         prev = current
@@ -712,6 +732,11 @@ def _series_spec(
         reducible=series.reducible,
         stream=stream,
     )
+
+
+def _pays_in_horizon(spec: kernel.SeriesSpec) -> bool:
+    """True when the series can pay at least once inside the horizon."""
+    return spec.alive_threshold > 0 and bool((spec.amounts > 0).any()) and len(spec.ordinals) > 0
 
 
 def _weekend(day: date) -> int:
@@ -1066,9 +1091,10 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
             )
             break
 
+    streams = _series_streams(len(inputs.categories), len(inputs.series))
     series_specs = tuple(
-        _series_spec(series, as_of, days, card_index, SERIES_STREAM_BASE + index)
-        for index, series in enumerate(inputs.series)
+        _series_spec(series, as_of, days, card_index, stream)
+        for series, stream in zip(inputs.series, streams, strict=True)
     )
 
     spec = kernel.Spec(
@@ -1156,9 +1182,15 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
             f"borderline: the floor probability's 95% interval ({low:.1%} to {high:.1%}) "
             f"contains the {FLOOR_THRESHOLD:.0%} threshold"
         )
-    if len(inputs.series) > 0:
-        names = ", ".join(series.name for series in inputs.series)
-        count = len(inputs.series)
+    # Only a series that can actually pay inside the horizon is a gap or a citation.
+    paying = [
+        series
+        for series, series_spec in zip(inputs.series, prepared.spec.series, strict=True)
+        if _pays_in_horizon(series_spec)
+    ]
+    if len(paying) > 0:
+        names = ", ".join(series.name for series in paying)
+        count = len(paying)
         if count == 1:
             gaps.append(
                 f"1 detected recurring payment you have not confirmed is counted as an outflow: "
@@ -1172,10 +1204,14 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
     data_quality["gaps"] = gaps
     data_quality["simulation"] = simulation
 
-    sources = list(inputs.sources)
-    existing_sources = {(source["kind"], source["id"]) for source in sources}
-    for series in inputs.series:
-        if ("series", series.id) not in existing_sources:
+    sources: list[SourceRef] = []
+    cited: set[str] = set()
+    for source in inputs.sources:
+        if source["id"] not in cited:
+            sources.append(source)
+            cited.add(source["id"])
+    for series in paying:
+        if series.id not in cited:
             sources.append(
                 {
                     "kind": "series",
@@ -1184,7 +1220,7 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
                     "detail": "detected, not confirmed",
                 }
             )
-            existing_sources.add(("series", series.id))
+            cited.add(series.id)
 
     source_ids: SourceIds = {
         "accounts": sorted({account.id for account in inputs.liquid}),

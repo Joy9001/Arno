@@ -123,7 +123,15 @@ async def test_a_recap_tells_every_story_from_the_rows(ledger):
     await _seed(ledger)
     result = await recaps.recap(ledger, "month-2026-10", today=TODAY)
     stories = {story["key"]: story for story in result["stories"]}
-    assert list(stories) == ["total", "in_out", "where", "change", "biggest", "frequent"]
+    assert list(stories) == [
+        "total",
+        "in_out",
+        "where",
+        "change",
+        "biggest",
+        "frequent",
+        "recurring",
+    ]
 
     # 20,000 rent + 1,200 coffee + 1,500 dinner - 500 refund, refunds netted.
     assert stories["total"]["figure"]["paise"] == 2_220_000
@@ -135,6 +143,13 @@ async def test_a_recap_tells_every_story_from_the_rows(ledger):
     assert stories["change"]["figure"]["paise"] == 220_000 - 30_000
     assert stories["biggest"]["figure"]["paise"] == 2_000_000
     assert stories["frequent"]["figure"]["count"] == 3
+    # Three weekly ₹400 coffees at the same cafe are a real uncovered series: reported, marked.
+    charge = stories["recurring"]["charges"][0]
+    assert stories["recurring"]["figure"]["count"] == 1
+    assert "Blue Tokai" in charge["merchant"]
+    assert charge["amount"]["paise"] == 40_000
+    assert charge["every"] == "week"
+    assert charge["last_date"] == "2026-10-17"
     # The cafe came from a statement: its name is marked, and the result says so.
     assert "<outside>" in stories["frequent"]["figure"]["name"]
     assert result["outside_text"] is True

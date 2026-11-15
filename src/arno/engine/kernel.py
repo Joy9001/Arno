@@ -340,24 +340,55 @@ class _RareState:
 
 
 class _SeriesState:
-    """Precomputed per-scenario payments for one detected recurring series."""
+    """One detected series: the scenarios that keep it, and its payments in one chunk.
+
+    Only the per-scenario alive flags last the whole run. The skip, offset, and amount draws are
+    keyed by scenario and expected date, so a chunk draws just the occurrences that can land in
+    it. An occurrence whose jitter range spans two chunks draws with the same keys in each and
+    scatters only where its day falls.
+    """
 
     def __init__(self, series: SeriesSpec, spec: Spec, settings: Settings) -> None:
         self.series = series
+        self.settings = settings
+        self.first_day = spec.first_day
+        self.alive = np.zeros(settings.scenarios, dtype=bool)
         if len(series.ordinals) == 0 or len(series.amounts) == 0:
-            self.scenarios_idx = np.empty(0, dtype=np.int64)
-            self.days = np.empty(0, dtype=np.int64)
-            self.amounts = np.empty(0, dtype=np.int64)
             return
-        scenarios = settings.scenarios
         alive_draws = _draws(
-            settings.seed, series.stream * 8, scenarios, np.zeros(1, dtype=np.int64)
+            settings.seed,
+            series.stream * 8,
+            settings.scenarios,
+            np.zeros(1, dtype=np.int64),
         )
-        alive = (alive_draws[:, 0] >> np.uint64(32)) < np.uint64(series.alive_threshold)
+        self.alive = (alive_draws[:, 0] >> np.uint64(32)) < np.uint64(series.alive_threshold)
 
-        skip_draws = _draws(settings.seed, series.stream * 8 + 1, scenarios, series.ordinals)
-        offset_draws = _draws(settings.seed, series.stream * 8 + 2, scenarios, series.ordinals)
-        amount_draws = _draws(settings.seed, series.stream * 8 + 3, scenarios, series.ordinals)
+    def rows(self, begin: int, width: int) -> tuple[I64, I64, I64]:
+        """(scenario, day, amount) for the payments that land in ``begin .. begin + width``."""
+        series = self.series
+        empty = np.empty(0, dtype=np.int64)
+        if not bool(self.alive.any()):
+            return empty, empty, empty
+        low, high = (
+            (int(series.jitter_offsets.min()), int(series.jitter_offsets.max()))
+            if len(series.jitter_offsets) > 0
+            else (0, 0)
+        )
+        base_days = series.ordinals - self.first_day
+        touch = (base_days + high >= begin) & (base_days + low < begin + width)
+        if not bool(touch.any()):
+            return empty, empty, empty
+        ordinals = series.ordinals[touch]
+
+        skip_draws = _draws(
+            self.settings.seed, series.stream * 8 + 1, self.settings.scenarios, ordinals
+        )
+        offset_draws = _draws(
+            self.settings.seed, series.stream * 8 + 2, self.settings.scenarios, ordinals
+        )
+        amount_draws = _draws(
+            self.settings.seed, series.stream * 8 + 3, self.settings.scenarios, ordinals
+        )
 
         skipped = (skip_draws >> np.uint64(32)) < np.uint64(series.skip_threshold)
         if len(series.jitter_cumulative) > 0:
@@ -368,16 +399,22 @@ class _SeriesState:
         else:
             offsets = np.zeros_like(offset_draws, dtype=np.int64)
 
-        base_days = series.ordinals - spec.first_day
-        pay_days = base_days[None, :] + offsets
+        pay_days = (ordinals - self.first_day)[None, :] + offsets
         amount_index = below(amount_draws, len(series.amounts)).astype(np.int64)
         pay_amounts = series.amounts[amount_index]
 
-        valid = alive[:, None] & (~skipped) & (pay_days >= 1) & (pay_days <= spec.days)
+        valid = (
+            self.alive[:, None]
+            & (~skipped)
+            & (pay_days >= max(begin, 1))
+            & (pay_days < begin + width)
+        )
         scen_idx, occ_idx = np.nonzero(valid)
-        self.scenarios_idx = scen_idx.astype(np.int64)
-        self.days = pay_days[scen_idx, occ_idx].astype(np.int64)
-        self.amounts = pay_amounts[scen_idx, occ_idx].astype(np.int64)
+        return (
+            scen_idx.astype(np.int64),
+            pay_days[scen_idx, occ_idx].astype(np.int64),
+            pay_amounts[scen_idx, occ_idx].astype(np.int64),
+        )
 
 
 # --- The walk ----------------------------------------------------------------------------------
@@ -461,8 +498,11 @@ def run(spec: Spec, settings: Settings) -> Run:
             card_count,
             cutting or measuring,
         )
+        # The chunk's reducible cash before the cut: a cut may only remove spend, and the
+        # quantity a cut could free is measured on what was there.
+        cash_cut = np.empty((scenarios, 0), dtype=np.int64)
         if measuring:
-            reducible_cash = _measure_reducible(
+            reducible_cash, cash_cut = _measure_reducible(
                 spec, settings, spend, reducible_cash, reducible_bills, begin, width
             )
         if cutting:
@@ -516,7 +556,7 @@ def run(spec: Spec, settings: Settings) -> Run:
                 checkpoints[:, spot] = balances[:, column]
                 if reducible is not None:
                     reducible[:, spot] = _realized(
-                        settings, spend, reducible_cash, reducible_bills, begin, day
+                        settings, cash_cut, reducible_cash, reducible_bills, begin, day
                     )
 
         curve[begin:end] = np.partition(balances, ranks, axis=0)[ranks].T
@@ -561,35 +601,36 @@ def _measure_reducible(
     bills: list[dict[int, I64]],
     begin: int,
     width: int,
-) -> I64:
-    """Add this chunk's card reducible spend to the bills it joins; return the cash total so far.
+) -> tuple[I64, I64]:
+    """Add this chunk's card reducible spend to the bills it joins.
+
+    Returns the cash total so far and the chunk's pre-cut cash slice, since a cut rewrites
+    ``spend`` in place and `_realized` measures the spend that was there to cut.
 
     Only days up to `reducible_until` count. Card spend leaves cash on its bill's due date, so a
     cut on a card frees nothing until that bill is paid.
     """
     stop = min(width, settings.reducible_until - begin + 1)
+    cash = spend["cash_cut"][:, :stop].copy()
     for k, card in enumerate(spec.cards):
         dues = card.due_of_day[begin : begin + stop]
         _add_to_bills(bills[k], spend[f"card{k}_cut"][:, :stop], dues)
-    return before + spend["cash_cut"][:, :stop].sum(axis=1)
+    return before + cash.sum(axis=1), cash
 
 
 def _realized(
     settings: Settings,
-    spend: dict[str, I64],
+    cash_cut: I64,
     cash_after_chunk: I64,
     bills: list[dict[int, I64]],
     begin: int,
     day: int,
 ) -> I64:
     """Reducible spend through `reducible_until` that has left cash by the end of ``day``."""
-    stop = settings.reducible_until - begin + 1
-    if day < settings.reducible_until and day - begin + 1 < stop:
+    total = cash_after_chunk.copy()
+    if day < settings.reducible_until:
         # The cut window runs past this checkpoint: only the chunk's days up to it have happened.
-        later = spend["cash_cut"][:, day - begin + 1 : stop].sum(axis=1)
-        total = cash_after_chunk - later
-    else:
-        total = cash_after_chunk.copy()
+        total -= cash_cut[:, day - begin + 1 :].sum(axis=1)
     for card_bills in bills:
         for due, amount in card_bills.items():
             if due <= day:
@@ -631,15 +672,12 @@ def _spend(
             if column is not None:
                 spend[name] += np.where(happened, column[which], 0)
     for series_state in series_states:
-        if len(series_state.days) == 0:
-            continue
-        mask = (series_state.days >= begin) & (series_state.days < begin + width)
-        if not bool(mask.any()):
+        scen_idx, days, vals = series_state.rows(begin, width)
+        if len(days) == 0:
             continue
         card = series_state.series.card
         col = f"card{card}" if card is not None and 0 <= card < card_count else "cash"
-        coords = (series_state.scenarios_idx[mask], series_state.days[mask] - begin)
-        vals = series_state.amounts[mask]
+        coords = (scen_idx, days - begin)
         np.add.at(spend[col], coords, vals)
         if with_cut and series_state.series.reducible:
             np.add.at(spend[f"{col}_cut"], coords, vals)

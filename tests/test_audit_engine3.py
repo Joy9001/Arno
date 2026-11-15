@@ -368,7 +368,7 @@ async def test_series_detection_proposes_subscription_and_income_and_skips_rando
     bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
     sub_payee = await create_payee(ledger, display_name="Cloud Storage", kind="merchant")
     rand_payee = await create_payee(ledger, display_name="Local Cafe", kind="merchant")
-    salary_payee = await create_payee(ledger, display_name="Acme Corp", kind="employer")
+    salary_payee = await create_payee(ledger, display_name="Acme Corp", kind="organization")
     rent_cat = await ledger.fetchval("SELECT id FROM categories WHERE name = 'Rent' AND active")
 
     for month in (6, 7, 8, 9):

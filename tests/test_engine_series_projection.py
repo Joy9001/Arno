@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import date, timedelta
 
 import numpy as np
 
 from arno.engine import kernel
 from arno.engine.projection import (
+    LEGACY_MODEL,
     MODEL,
     CardAccount,
     CashEvent,
@@ -16,6 +18,7 @@ from arno.engine.projection import (
     ProjectionInput,
     SeriesForecast,
     SpendCategory,
+    _series_streams,
     checkpoints_for,
     prepare,
     project,
@@ -418,3 +421,50 @@ def test_checkpoints_still_capture_series_minima():
     run_full = kernel.run(prepared.spec, kernel.Settings(scenarios=128, seed=3, checkpoints=marks))
     assert run_full.checkpoints is not None
     assert run_full.checkpoints.min(axis=1).tolist() == run_full.minima.tolist()
+
+
+def test_only_series_that_can_pay_inside_the_horizon_are_gaps_and_citations():
+    # Expected today, with no jitter to move it: `prepare` drops the only date, so nothing pays.
+    dead = SeriesForecast(
+        id="s_dead",
+        name="Gone",
+        expected=(AS_OF,),
+        jitter=((0, 1.0),),
+        skip=0.0,
+        alive=1.0,
+        amounts=(1_000,),
+    )
+    result = project(_inputs(dead, start=500_000), runs=32, seed=1)
+    assert not any("detected recurring payment" in gap for gap in result["data_quality"]["gaps"])
+    assert all(source["id"] != "s_dead" for source in result["sources"])
+    assert result["curve"][-1]["median_paise"] == 500_000
+
+    # A repeated id cites one source, not one per forecast.
+    live = replace(dead, id="s_live", name="Live", expected=(date(2026, 1, 15),))
+    repeated = project(
+        _inputs(live, replace(live, name="Live again"), start=500_000), runs=32, seed=1
+    )
+    assert [source["id"] for source in repeated["sources"]].count("s_live") == 1
+
+
+def test_series_streams_never_collide_with_category_pool_streams():
+    # Category pools take streams 1..n, so 105 categories pass the old fixed series base of 100.
+    categories = tuple(
+        SpendCategory(id=f"cat{index}", name=f"Cat {index}", baseline_per_day_paise=100)
+        for index in range(105)
+    )
+    series = SeriesForecast(
+        id="s1",
+        name="Gym",
+        expected=(date(2026, 1, 15),),
+        jitter=((0, 1.0),),
+        skip=0.0,
+        alive=1.0,
+        amounts=(1_000,),
+    )
+    prepared = prepare(_inputs(series, categories=categories), LEGACY_MODEL)
+    streams = [pool.stream for pool in prepared.spec.pools]
+    streams += [item.stream for item in prepared.spec.series]
+    assert len(streams) == len(set(streams))
+    # The rare-day stream is 999, so the series step over it.
+    assert _series_streams(998, 2) == [1000, 1001]
