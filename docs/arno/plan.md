@@ -50,9 +50,9 @@ old name so that archives written before today still restore.
 **Engine redesign on November 13, 2026.** The projection, affordability, pattern, and money engine
 is rebuilt on one integer scenario matrix, behind a backtest that scores every change against
 baselines before it ships. Design and build order:
-[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Steps 1 to 6 of that build
-order have landed, the pattern engine included, and so has the HackerRank adapter (step 8); the
-optional calibration step is still to come.
+[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Every step of that build
+order is done: steps 1 to 6 and the HackerRank adapter (step 8) shipped, and calibration (step 7)
+was built, measured, and not admitted.
 
 **App role demoted on November 14, 2026.** The `app` role owns the Arno databases without
 `SUPERUSER` (`LOGIN CREATEDB CREATEROLE`, `pg_signal_backend`, and `ADMIN OPTION` on `agent_ro` and
@@ -623,9 +623,9 @@ Answer each when its layer arrives, not before.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
     `data_quality` says so; there is no per-account setting to keep in sync.
-- **L5 redesign:** decided November 13, 2026, and built through step 6 of its build order. The
-  engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's build
-  order. A model change ships only if it beats the one before it on the new backtest.
+- **L5 redesign:** decided November 13, 2026, and built through the last step of its build
+  order. The engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's
+  build order. A model change ships only if it beats the one before it on the new backtest.
   - **NumPy.** A runtime dependency for the scenario kernel (§3).
   - **Scenario count.** 16,384 at every horizon, replacing 1,000.
   - **Model switches.** Each one was scored on the tuning seeds of the ten synthetic households,
@@ -671,6 +671,25 @@ Answer each when its layer arrives, not before.
     A payment marked `movements.one_off` leaves the spend history: it is neither everyday nor rare
     spend. The movement correction tool and the movement dialog both set it, and both are
     undoable.
+  - **Backtest outcome.** Decided November 15, 2026. The base case counts only confirmed income,
+    so it is scored against the balance that followed without the income it was told to leave
+    out: a credit after the origin counts only if it pays an income schedule confirmed by then.
+    Scoring it against the whole balance measured the policy, not the forecast: the freelancer
+    household's outcome fell above every scenario at every origin. On the real ledger the payment
+    has to be linked to its occurrence, and an origin whose confirmed income in the window is not
+    all linked is dropped and counted. Refunds and repayments stay in the outcome.
+  - **Spend keeps its card.** Decided November 15, 2026. A resampled day's card spend stays on its
+    card past the limit; only new charges (a what-if purchase, a card EMI, a detected series) are
+    held to it. The history already shows spend moving to cash while a card was full, so holding
+    resampled spend to the limit again moved cash out early: the low-limit household's outcomes
+    fell above its P90 almost half the time. It lowered mean CRPS by 1.2% on the tuning seeds.
+  - **Calibration.** Decided November 15, 2026: not shipped. After the two changes above, the
+    tuning seeds' P10-P90 coverage was 74% to 77% against the 80% target, short of it at 7 to 30
+    days. A per-horizon map of where outcomes fell in their forecasts, shrunk toward the identity
+    and cross-fitted seed against seed, lifted coverage to 77% to 79% but left mean CRPS where it
+    was (ratio 1.0008), so it failed the same bar as every model switch. The engine reports its
+    own quantiles. Most of the remaining shortfall is spend that drifts upward, which recency
+    weights did not fix, and a ledger too young to show its spread.
   - **Release gate.** Decided November 15, 2026: "shipped" waits for the engine redesign. The four
     weeks of daily use start once the new engine has landed.
 - **L6:** settled in code and recorded here.

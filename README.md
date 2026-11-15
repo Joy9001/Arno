@@ -89,7 +89,8 @@ assumptions (`src/arno/engine/personas.py`, which shares no code with the engine
 is scored as a distribution against what happened over the next 7 to 90 days, beside three
 baselines. These numbers come from the held-out seeds; settings are chosen on the tuning seeds. A
 real ledger is scored the same way with `arno backtest --source db` once it has a confirmed
-income schedule.
+income schedule with its payments linked. The base case counts only confirmed income, so outcomes
+leave out later income that pays no confirmed schedule.
 
 <!-- backtest:start -->
 Source: synthetic personas, seeds 201, 202. 978 weekly origins scored, 0 dropped for missing setup.

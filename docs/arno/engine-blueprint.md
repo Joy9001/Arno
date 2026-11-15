@@ -1,6 +1,6 @@
 # Engine blueprint: the next projection, affordability, pattern, and money engine
 
-**Status: decided on November 13, 2026, and built through step 6 of the build order.** The
+**Status: decided on November 13, 2026; every step of the build order is done.** The
 decisions of section 11 are recorded in [`plan.md`](plan.md) §6, which owns them. Written against
 `src/arno/engine` at commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic
 households the shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat
@@ -16,7 +16,10 @@ income series, payment-level attribution in the projection, and the one-off mark
 reports critical-value minimal plans verified by rerun, and the money kernel carries bank
 conventions, rate inversion, cumulative rounding, and allocation; XIRR was not built, because
 nothing uses it and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe
-steps 1 to 6.
+steps 1 to 6. Step 8 landed the same day: the HackerRank scorer is an adapter over the shipped
+engine. Step 7 was measured and not shipped (section 4.6): with the backtest scoring the base case
+on the income it was given and resampled card spend kept on its card, coverage on the tuning seeds
+is 74% to 77%, and a calibration map raised it without lowering CRPS.
 Revised the same day after two external reviews; each accepted finding was first checked against
 the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 
@@ -233,6 +236,12 @@ baseline joins the whole-day pool however sparse it is; the short-history prior 
 young ledger or a stated estimate. Before both fixes, attribution scored 0.5% worse than the
 engine without it, because dropping covered categories had been hiding the double count.
 
+**Card limits on resampled days** (step 7's diagnosis). A whole day keeps the card it was paid
+with, even past the limit. The history already shows spend moving to cash while a card was full,
+so holding a resampled day to the limit again moved that cash out a cycle early. Only charges the
+history does not contain are held to the limit: a what-if purchase, a card EMI, and a detected
+series. Within a billing piece those claim the headroom first.
+
 ### 4.3 Kernel
 
 - **Randomness.** A counter-based integer hash (the SplitMix64 finalizer over `seed`, stream,
@@ -298,6 +307,16 @@ So calibration targets the path minimum directly: the backtest records where eac
 minimum fell in its forecast distribution, and a monotone map with shrinkage toward the identity
 corrects the reported quantiles. It ships only if the backtest still shows miscalibration after
 section 4.2, and its parameters are data passed into `project()`.
+
+As built (step 7): not shipped. Measured first, the miscalibration was mostly the scoring target:
+the freelancer household's unconfirmed income sat in the outcome but not, by design, in the base
+case (section 8.1), and the low-limit household's resampled card spend was held to the limit a
+second time (section 4.2). With both fixed, P10-P90 coverage on the tuning seeds was 74% to 77%,
+and 10% to 12% of lowest balances fell below P10. A map per target and horizon (knots from 1% to
+99%, identity outside them, shrunk toward the identity by effective sample size over that plus
+100) was fitted on one tuning seed and scored on the other. It lifted coverage to 77% to 79% and
+left mean CRPS unchanged (ratio 1.0008, no cell significantly better), so it failed the bar of
+section 3. The 1% tail the obligation rule reads could not have been checked either way.
 
 ### 4.7 Considered and rejected
 
@@ -509,6 +528,11 @@ Tax, inflation indexing, and investment returns stay out, per plan.md.
   re-detected at each origin from past data only.
 - **Honesty.** Every published number carries an interval and its sample count. Dropped origins
   are counted.
+- **Outcome.** The base case counts only confirmed income, so the realized balance is scored
+  without later credits that pay no income schedule confirmed by the origin. Scored against the
+  whole balance, the freelancer household's outcome fell above every scenario at every origin,
+  which measured the income policy rather than the forecast. On the real ledger such a payment has
+  to be linked to its occurrence; an origin whose confirmed income is not all linked is dropped.
 
 The faster kernel makes this affordable: 50 origins across 10 personas is about 30 s
 (_estimate_), against 88 s measured for 12 origins today.
@@ -557,7 +581,8 @@ hundreds of times.
 4. **Affordability** on the kernel: critical values, minimal plans, verification, rule fixes.
 5. **Money** conventions, inversion, and rounding, which step 4's EMI costs need.
 6. **Pattern engine**, then payment-level attribution and detected series into the projection.
-7. **Calibration**, only if step 3 leaves measurable miscalibration.
+7. **Calibration**, only if step 3 leaves measurable miscalibration. Built and measured; it did
+   not beat the uncalibrated engine and did not ship (section 4.6).
 8. **HackerRank adapter** onto steps 4 and 6.
 
 ## 11. Decisions
