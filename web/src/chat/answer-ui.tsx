@@ -204,11 +204,11 @@ function SummaryBody({ result }: { result: AnswerResult }) {
   );
 }
 
-function TableBody({
-  result,
+export function TableBody({
+  title,
   table,
 }: {
-  result: AnswerResult;
+  title: string;
   table: NonNullable<AnswerResult["table"]>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -220,7 +220,7 @@ function TableBody({
       <div className="answer-table-wrap">
         <table id={tableId}>
           <caption className="aui-sr-only">
-            {displayText(table.caption ?? result.title)}
+            {displayText(table.caption ?? title)}
           </caption>
           <thead>
             <tr>
@@ -316,7 +316,7 @@ function ResultSection({
       ) : null}
       {empty ? <p className="answer-empty">No rows were returned for this result.</p> : null}
       {!empty && hasSummary ? <SummaryBody result={result} /> : null}
-      {!empty && hasTable && table ? <TableBody result={result} table={table} /> : null}
+      {!empty && hasTable && table ? <TableBody title={result.title} table={table} /> : null}
       {!empty && hasChart && result.chart ? (
         <ChartCard data={result.chart} showTitle={!showTitle} />
       ) : null}

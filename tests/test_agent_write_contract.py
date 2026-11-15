@@ -386,3 +386,17 @@ async def test_schedule_payment_tool_matches_existing_money_and_returns_undo(led
     assert await ledger.fetchval(
         "SELECT outside_text_at IS NOT NULL FROM conversations WHERE id=$1", deps.conversation_id
     )
+
+
+def test_account_setup_caps_monthly_finance_rate_at_8_33_percent():
+    from decimal import Decimal
+
+    import pytest
+    from pydantic import ValidationError
+
+    valid = AccountSetup(name="Slice card", finance_rate_percent=Decimal("8.33"))
+    assert valid.finance_rate_percent == Decimal("8.33")
+    with pytest.raises(ValidationError, match=r"8\.33"):
+        AccountSetup(name="Slice card", finance_rate_percent=Decimal("8.34"))
+    schema = AccountSetup.model_json_schema()
+    assert "8.33" in schema["properties"]["finance_rate_percent"]["description"]

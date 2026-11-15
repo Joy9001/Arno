@@ -18,6 +18,8 @@ from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
 from arno.agent.toolset import LoanConventions
 from arno.agent.toolset import amortize as amortize_tool
+from arno.agent.toolset import card_payoff as card_payoff_tool
+from arno.agent.toolset import present as present_tool
 from arno.engine.money import Prepay
 from arno.engine.money import amortize as amortize_fn
 from arno.tools import read as read_tools
@@ -657,6 +659,135 @@ async def test_amortize_refuses_an_emi_that_no_rate_fits():
 async def test_amortize_with_a_rate_is_unchanged():
     expected = amortize_fn(100_000_000, 8.5, 240)
     result = await _amortize(principal_paise=100_000_000, annual_rate=8.5, months=240)
+    assert set(result.keys()) - {"ui_results"} == set(expected.keys())
     assert result["emi"] == expected["emi"]
     assert result["months"] == expected["months"]
     assert result["total_interest"] == expected["total_interest"]
+
+
+async def test_amortize_with_fee_returns_apr_percent_and_works_on_named_loan(demo_ledger):
+    with_fee = await _amortize(
+        principal_paise=10_000_000, annual_rate=10, months=12, fee_paise=200_000
+    )
+    assert with_fee["processing_fee"] == {"paise": 200_000, "text": "₹2,000"}
+    assert with_fee["fee_gst"] == {"paise": 36_000, "text": "₹360"}
+    assert with_fee["net_disbursed"] == {"paise": 9_764_000, "text": "₹97,640"}
+    assert isinstance(with_fee["apr_percent"], float)
+    assert 14.0 < with_fee["apr_percent"] < 15.5
+
+    agent = build_agent()
+    code = (
+        "res = await amortize(loan='Home loan', fee_paise=500000)\n"
+        "(res['net_disbursed'], res['apr_percent'])"
+    )
+    model = _model(
+        ModelResponse(parts=[ToolCallPart("run_code", {"code": code})]),
+        ModelResponse(parts=[TextPart("Computed.")]),
+    )
+    with agent.override(model=model):
+        run_res = await run_agent(
+            agent, "What is the APR on my Home loan with a ₹5,000 fee?", AgentDeps("cnv_fee")
+        )
+    returns = [
+        part.content
+        for message in run_res.all_messages()
+        for part in getattr(message, "parts", [])
+        if getattr(part, "part_kind", "") == "tool-return"
+    ]
+    assert returns
+
+
+async def test_card_payoff_adapter_errors_present_and_code_mode(demo_ledger):
+    ctx = _amortize_ctx()
+    with pytest.raises(ModelRetry, match="Ask the user for the card's finance charge"):
+        await card_payoff_tool(ctx, card="Slice card", balance_paise=4_000_000)
+
+    with pytest.raises(ModelRetry, match="never clears the balance"):
+        await card_payoff_tool(
+            ctx,
+            balance_paise=4_000_000,
+            monthly_rate_percent=3.5,
+            payment_paise=10_000,
+        )
+
+    res = (
+        await card_payoff_tool(
+            ctx,
+            balance_paise=4_000_000,
+            monthly_rate_percent=3.5,
+        )
+    ).return_value
+    assert isinstance(res, dict)
+    assert res["cost_of_carrying"]["paise"] > 0
+    assert res["months"] > 0
+    result_id = res["ui_results"][0]["id"]
+    presented_val = (
+        await present_tool(
+            ctx,
+            {
+                "_type": "Stack",
+                "children": [
+                    {"_type": "Summary", "result_id": result_id},
+                    {"_type": "Table", "result_id": result_id},
+                ],
+            },
+        )
+    ).return_value
+    assert isinstance(presented_val, dict)
+    assert presented_val["shown"] is True
+
+    with pytest.raises(ModelRetry, match="Unknown or stale result id"):
+        await present_tool(ctx, {"_type": "Summary", "result_id": "res_does_not_exist"})
+    with pytest.raises(ModelRetry, match="Chart"):
+        await present_tool(ctx, {"_type": "Chart", "result_id": result_id})
+
+    pos_res = (await card_payoff_tool(ctx, None, 4_000_000, 3.5)).return_value
+    assert isinstance(pos_res, dict)
+    assert pos_res["months"] == res["months"]
+
+    # An error echoing an outside_text person account marks the name and flags the conversation.
+    from arno.ledger.payees import create_payee
+
+    thread_id, message_id = await _thread(demo_ledger, "cnv_card_outside", "msg_card_outside")
+    await create_payee(
+        demo_ledger,
+        display_name="Outside person payee",
+        kind="person",
+        outside_text=True,
+        actor="system",
+    )
+    flagged_ctx = cast(
+        RunContext[AgentDeps],
+        SimpleNamespace(deps=AgentDeps(conversation_id=thread_id, message_id=message_id)),
+    )
+    with pytest.raises(ModelRetry, match="<outside>Outside person payee</outside>"):
+        await card_payoff_tool(flagged_ctx, card="Outside person payee", monthly_rate_percent=3.5)
+    assert await demo_ledger.fetchval(
+        "SELECT outside_text_at IS NOT NULL FROM conversations WHERE id = $1", thread_id
+    )
+
+    agent = build_agent()
+    code = (
+        "kw = await card_payoff(balance_paise=4000000, monthly_rate_percent=3.5)\n"
+        "kw2 = await card_payoff(balance_paise=5000000, monthly_rate_percent=3.0)\n"
+        "loan_kw = await amortize(principal_paise=10000000, annual_rate=10, months=12, "
+        "fee_paise=200000)\n"
+        "(kw['cost_of_carrying'], kw['months'], kw2['months'], loan_kw['apr_percent'])"
+    )
+    model = _model(
+        ModelResponse(parts=[ToolCallPart("run_code", {"code": code})]),
+        ModelResponse(parts=[TextPart("Done.")]),
+    )
+    with agent.override(model=model):
+        run_res = await run_agent(agent, "Compute card and loan costs.", AgentDeps("cnv_cm"))
+    tool_returns = [
+        part.content
+        for message in run_res.all_messages()
+        for part in getattr(message, "parts", [])
+        if getattr(part, "part_kind", "") == "tool-return"
+    ]
+    assert len(tool_returns) == 1
+    assert res["cost_of_carrying"]["text"] in str(tool_returns[0])
+    assert str(res["months"]) in str(tool_returns[0])
+    # Calling card_payoff many times in a script must not emit native cards without `present`.
+    assert not cards_from_messages(run_res.all_messages())

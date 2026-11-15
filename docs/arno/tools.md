@@ -47,12 +47,13 @@ writes Python that calls the read tools inside Monty. See [Code Mode](design.md#
 
 **Description:** "The user's whole picture: today's date, settings, every account with its balance
 and the age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months,
-a card's next_statement_close and the next_bill_due for spend made today, each schedule's next four
-runs (next_dates, each with date and weekday), the next 30 days of events (each with date and
-weekday; a null amount carries a note saying why), goals, who owes what, remembered preferences,
-scheduled_questions, open imports (status, account, period, line counts; read them before saying
-anything about an import), what setup is missing, and data warnings. The sandbox has no clock, so
-get today's date here."
+a card's next_statement_close, the next_bill_due for spend made today, and any stored finance terms
+(finance_rate_bps, min_due_bps, min_due_floor), each schedule's next four runs (next_dates, each
+with date and weekday), the next 30 days of events (each with date and weekday; a null amount
+carries a note saying why), goals, who owes what, remembered preferences, scheduled_questions,
+open imports (status, account, period, line counts; read them before saying anything about an
+import), what setup is missing, and data warnings. The sandbox has no clock, so get today's date
+here."
 
 **Input:** none
 
@@ -435,11 +436,12 @@ An EMI is the fixed monthly loan payment. Amortization is how each EMI splits in
 principal.
 
 **Description:** "Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a
-loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Without a
-rate, an EMI plus the principal and the months gives the rate. Add prepay to compare a lump-sum
-prepayment, for example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a
-bank's rounding when its statement differs by paise. Use this instead of writing the formula. It
-returns the schedule, not a card: show it with present."
+loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Without a rate,
+an EMI plus the principal and the months gives the rate. Pass fee_paise for an upfront processing
+fee to get net_disbursed, total_cost, and apr_percent. Add prepay to compare a lump-sum prepayment,
+for example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a bank's
+rounding when its statement differs by paise. Use this instead of writing the formula. It returns
+the schedule, not a card: show it with present."
 
 **Input**
 
@@ -447,7 +449,7 @@ returns the schedule, not a card: show it with present."
 amortize(loan: str | None = None, principal_paise: int | None = None,
          annual_rate: float | None = None, months: int | None = None,
          emi_paise: int | None = None, prepay: Prepay | None = None,
-         conventions: LoanConventions | None = None)
+         conventions: LoanConventions | None = None, fee_paise: int = 0)
 
 class Prepay:
     amount_paise: int
@@ -470,6 +472,10 @@ class LoanConventions:
  "prepay": {"new_emi": Money, "new_months": int, "new_total_interest": Money,
             "interest_saved": Money, "months_saved": int} | None,
  "assumptions": ["8.5% as you entered it; a floating rate can change"]}
+# When fee_paise > 0, the return also carries:
+# "processing_fee": Money, "fee_gst": Money, "total_fee": Money, "net_disbursed": Money,
+# "total_cost": Money, "apr": {"low_bps_x100", "high_bps_x100", "exact", "note"},
+# "apr_percent": float   (omitted if either bound in apr is null)
 ```
 
 **Logic**
@@ -491,6 +497,11 @@ if emi <= first month's interest: ModelRetry("this EMI never repays the loan")
 schedule = each month: interest = round(balance·r)
                        principal = min(emi − interest, balance)
                        balance −= principal
+if fee_paise > 0:
+    fee_gst = round(fee_paise * 18%), net_disbursed = P − processing_fee − fee_gst
+    total_cost = total_interest + processing_fee + fee_gst
+    apr = effective annual rate solving net_disbursed against the scheduled EMIs (1e-4% units)
+    apr_percent = round(midpoint(apr.low, apr.high), 2) if both bounds exist, else omitted
 if prepay:
     subtract amount before EMI at_emi
     reduce = tenure: same EMI, walk to zero
@@ -503,6 +514,57 @@ Conventions change the interest and EMI rounding, never the formula. This runs o
 `Decimal`. `record_movement` splits a loan payment with `ledger.movements.loan_payment_parts`, not
 with this schedule: one month's interest per loan, booked by the first payment in a calendar month
 (a later payment that month is all principal), at the loan's own rate.
+
+### `card_payoff`
+
+What carrying a credit card balance costs: paying only the minimum due, or a fixed monthly amount.
+
+**Description:** "Credit card payoff maths: months to clear, total finance charge, GST, cost of
+carrying, payoff date, and the monthly schedule. Pass a card account's name to use its ledger
+balance and stored terms, or pass balance_paise and monthly_rate_percent in percent a month. Any
+term passed here overrides the card's stored term. Leave payment_paise unset to model paying only
+the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
+minimum_percent and minimum_floor_paise. Use this instead of writing the formula. It returns the
+schedule, not a card: show it with present."
+
+**Input**
+
+```python
+card_payoff(card: str | None = None, balance_paise: int | None = None,
+            monthly_rate_percent: float | None = None, payment_paise: int | None = None,
+            minimum_percent: float | None = None, minimum_floor_paise: int | None = None)
+```
+
+**Output**
+
+```python
+{"months": int, "total_finance_charge": Money, "total_gst": Money, "total_paid": Money,
+ "cost_of_carrying": Money, "payoff_date": str | None,
+ "schedule": [{"n", "date", "opening_paise", "finance_charge_paise", "gst_paise",
+               "payment_paise", "closing_paise"}],
+ "assumptions": [...],
+ "balance": Money, "balance_source": "stored on the card" | "as you stated",
+ "monthly_rate_percent": float, "annual_rate_bps": int,
+ "rate_source": "stored on the card" | "as you stated",
+ "payment_mode": "minimum" | "fixed", "fixed_payment": Money | None}
+```
+
+UI: a `card_payoff` result with `Summary` (totals and assumptions) and `Table` (monthly schedule),
+shown with `present`.
+
+**Logic**
+
+```
+if card: resolve active card account by exact case-insensitive name (unknown or ambiguous -> ModelRetry)
+         balance = negated ledger balance if known and positive; unknown balance -> ModelRetry
+         stored terms = finance_rate_bps, min_due_bps, min_due_floor_paise from the account
+rate     = monthly_rate_percent via shared monthly_percent_to_annual_bps, else stored finance_rate_bps
+if no rate: ModelRetry telling the model to ask the user for the monthly finance charge and that
+            update_setup can record it; never fall back to a default rate
+payment  = payment_paise if given (fixed), else "minimum" with passed or stored minimum_percent and
+           minimum_floor_paise
+delegate to engine.money.card_payoff(); ValueError -> ModelRetry
+```
 
 ### `compound`
 
@@ -664,9 +726,9 @@ resolve to a different result in another turn. A turn keeps at most 64 results. 
 period, filters, coverage gaps, source IDs that the tool actually returned, and `as_of` where it
 applies. Unknown money is `{"type": "unknown"}`; it is never filled with zero. Ordinary
 spending, movement, and query reads also emit a readable `card: "result"` fallback, so a turn that
-does not call `present` still shows its data. Native chart, projection, amortize, and compound
-cards keep their existing controls and gain a `result_id`; a composed answer hides a native card
-only when the same assistant message covers it with the matching view.
+does not call `present` still shows its data. Native chart, projection, amortize, card_payoff, and
+compound cards keep their existing controls and gain a `result_id`; a composed answer hides a native
+card only when the same assistant message covers it with the matching view.
 
 Read results in one assistant message collect into one closed **Supporting data** disclosure with a
 read count, rather than one top-level card per read. A valid composed answer removes the result
@@ -855,16 +917,17 @@ if amount changed on a movement a committed statement verified:
 
 **Description:** "Change setup: accounts, balances, schedules, goals, categories, payees, settings
 (the floor), scheduled questions, and baselines. Not for money that moved. Amounts are rupees in
-`*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits; the
-floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated balance; a
-baseline is typical daily spend.
+`*_rupees` fields, except `*_paise` fields (`emi_fee_paise`, `min_due_floor_paise`). A schedule
+uses an iCalendar RRULE; `last4` is only the last four digits; the floor is the minimum balance to
+keep; `rate_percent` is annual; `as_of` dates a stated balance; a baseline is typical daily spend.
 A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in credit is
 -500 for that card, passed once and not retried with the other sign.
 For action "add" on a card, a positive credit limit, a statement day, and a due day are required.
 If the user does not know one, leave the card pending instead of guessing. Record a card's EMI
-rate and fee in `emi_rate_percent` and `emi_fee_paise` only when the offer states them. A bank
-needs only a name, and its balance and last4 are optional. An update changes only the fields you
-pass.
+rate and fee in `emi_rate_percent` and `emi_fee_paise`, and its finance terms in
+`finance_rate_percent` (percent a month), `min_due_percent`, and `min_due_floor_paise`, only when
+the issuer states them. A bank needs only a name, and its balance and last4 are optional. An update
+changes only the fields you pass.
 Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."
 
 **Input**

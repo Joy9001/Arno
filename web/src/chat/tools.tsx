@@ -94,6 +94,7 @@ export const CHAT_TOOLKIT = defineToolkit({
   run_query: { type: "backend", render: knownTool("run_query") },
   project: { type: "backend", render: knownTool("project") },
   amortize: { type: "backend", render: knownTool("amortize") },
+  card_payoff: { type: "backend", render: knownTool("card_payoff") },
   compound: { type: "backend", render: knownTool("compound") },
   show_chart: { type: "backend", render: knownTool("show_chart") },
   show_table: { type: "backend", render: knownTool("show_table") },

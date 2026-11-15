@@ -35,6 +35,7 @@ from arno.engine.money import infer_rate as infer_rate_fn
 from arno.engine.money import money
 from arno.ledger.accounts import LoanTermsError, loan_terms
 from arno.ledger.common import today as ledger_today
+from arno.tools import money as money_tools
 from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
 from arno.tools import recaps as recaps_tools
@@ -271,9 +272,10 @@ async def _finish_read(
 async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
     """The user's whole picture: today's date, settings, every account with its balance and the
     age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months, a
-    card's next_statement_close and the next_bill_due for spend made today, each schedule's
-    next four runs (next_dates, each with date and weekday), the next 30 days of events (each with
-    date and weekday; a null amount carries a note saying why), goals, who owes what, remembered
+    card's next_statement_close, the next_bill_due for spend made today, and any stored finance
+    terms (finance_rate_bps, min_due_bps, min_due_floor), each schedule's next four runs
+    (next_dates, each with date and weekday), the next 30 days of events (each with date and
+    weekday; a null amount carries a note saying why), goals, who owes what, remembered
     preferences, scheduled_questions, open imports (status, account, period, line counts; read
     them before saying anything about an import), what setup is missing, and data warnings. The
     sandbox has no clock, so get today's date here."""
@@ -367,9 +369,10 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
       payee_name, note, expected_date, is_reversal, is_reversed
     - v_spending: movement_id, date, description, transfer_id, category_id, category_name,
       payee_id, payee_name, amount_paise
-    - v_accounts: id, kind, name, institution, last4, liquid, active, balance_paise,
-      statement_balance_paise, statement_balance_as_of, credit_limit_paise, statement_day,
-      due_day, emi_rate_bps, emi_fee_paise, rate_bps, tenure_months, emi_schedule_id
+    - v_accounts: id, kind, ledger_account_id, name, institution, last4, statement_balance_paise,
+      statement_balance_as_of, liquid, credit_limit_paise, statement_day, due_day, rate_bps,
+      tenure_months, emi_schedule_id, active, created_at, updated_at, balance_paise,
+      emi_rate_bps, emi_fee_paise, finance_rate_bps, min_due_bps, min_due_floor_paise
     - v_balances: account_id, name, kind, liquid, as_of, balance_paise (one row per day)
     - v_owed: payee_id, display_name, account_id, balance_paise, direction (owes_you, you_owe,
       settled), next_expected_date
@@ -486,10 +489,12 @@ async def amortize(
     emi_paise: int | None = None,
     prepay: Prepay | None = None,
     conventions: LoanConventions | None = None,
+    fee_paise: int = 0,
 ) -> ToolReturn:
     """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name to
     use its outstanding balance, rate, and real EMI, or pass the terms. Without a rate, an EMI plus
-    the principal and the months gives the rate. Add prepay to compare a lump-sum prepayment, for
+    the principal and the months gives the rate. Pass fee_paise for an upfront processing fee to
+    get net_disbursed, total_cost, and apr_percent. Add prepay to compare a lump-sum prepayment, for
     example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a bank's
     rounding when its statement differs by paise. Use this instead of writing the formula. It
     returns the schedule, not a card: show it with present."""
@@ -546,15 +551,73 @@ async def amortize(
             start_date=start,
             prepay=PrepayPayload(**prepay.model_dump()) if prepay is not None else None,
             assumptions=assumptions,
+            processing_fee_paise=int(fee_paise),
             **conventions_args,
         )
     except ValueError as exc:
         raise ModelRetry(str(exc)) from exc
-    card = {"card": "amortize", "title": "Loan schedule", **result}
-    registered = ctx.deps.presentation.register_calculation("amortize", result, card)
+    payload: dict[str, Any] = dict(result)
+    apr = money_tools.apr_percent(result.get("apr"))
+    if apr is not None:
+        payload["apr_percent"] = apr
+    card = {"card": "amortize", "title": "Loan schedule", **payload}
+    registered = ctx.deps.presentation.register_calculation("amortize", payload, card)
     card["result_id"] = registered.result_id
     # Thirty `amortize` calls in one script used to render thirty identical loan schedules. A
     # calculation is a value to compute with; `present` is how it reaches the answer.
+    return ToolReturn(return_value={**payload, "ui_results": [registered.descriptor()]})
+
+
+async def card_payoff(
+    ctx: RunContext[AgentDeps],
+    card: str | None = None,
+    balance_paise: int | None = None,
+    monthly_rate_percent: float | None = None,
+    payment_paise: int | None = None,
+    minimum_percent: float | None = None,
+    minimum_floor_paise: int | None = None,
+) -> ToolReturn:
+    """Credit card payoff maths: months to clear, total finance charge, GST, cost of carrying,
+    payoff date, and the monthly schedule. Pass a card account's name to use its ledger balance and
+    stored terms, or pass balance_paise and monthly_rate_percent in percent a month. Any term
+    passed here overrides the card's stored term. Leave payment_paise unset to model paying only
+    the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
+    minimum_percent and minimum_floor_paise. Use this instead of writing the formula. It returns
+    the schedule, not a card: show it with present."""
+    start: date | None = ledger_today()
+    if card is not None:
+        async with connect() as conn:
+            try:
+                result = await money_tools.card_payoff(
+                    conn,
+                    card=card,
+                    balance_paise=balance_paise,
+                    monthly_rate_percent=monthly_rate_percent,
+                    payment_paise=payment_paise,
+                    minimum_percent=minimum_percent,
+                    minimum_floor_paise=minimum_floor_paise,
+                    start_date=start,
+                )
+            except (money_tools.ToolInputError, ValueError) as exc:
+                if has_mark(str(exc)):
+                    await flag_outside_text(conn, ctx.deps.conversation_id)
+                raise ModelRetry(str(exc)) from exc
+    else:
+        try:
+            result = await money_tools.card_payoff(
+                None,
+                balance_paise=balance_paise,
+                monthly_rate_percent=monthly_rate_percent,
+                payment_paise=payment_paise,
+                minimum_percent=minimum_percent,
+                minimum_floor_paise=minimum_floor_paise,
+                start_date=start,
+            )
+        except (money_tools.ToolInputError, ValueError) as exc:
+            raise ModelRetry(str(exc)) from exc
+    card_payload = {"card": "card_payoff", "title": "Card payoff", **result}
+    registered = ctx.deps.presentation.register_calculation("card_payoff", result, card_payload)
+    card_payload["result_id"] = registered.result_id
     return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
 
 
@@ -692,6 +755,7 @@ def build_read_toolset() -> SetMetadataToolset[AgentDeps]:
             project,
             run_query,
             amortize,
+            card_payoff,
             compound,
             rupees,
             show_chart,
@@ -859,15 +923,17 @@ async def update_setup(
 ) -> ToolReturn:
     """Change setup: accounts, balances, schedules, goals, categories, payees, settings (the floor),
     scheduled questions, and baselines. Not for money that moved. Amounts are rupees in
-    `*_rupees` fields. A schedule uses an iCalendar RRULE; `last4` is only the last four digits;
-    the floor is the minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated
-    balance; a baseline is typical daily spend.
+    `*_rupees` fields, except `*_paise` fields (`emi_fee_paise`, `min_due_floor_paise`). A
+    schedule uses an iCalendar RRULE; `last4` is only the last four digits; the floor is the
+    minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated balance; a baseline
+    is typical daily spend.
     A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in
     credit is -500 for that card, passed once and not retried with the other sign.
     For action "add" on a card, a positive credit limit, a statement day, and a due day are
     required. If the user does not know one, leave the card pending instead of guessing. Record a
-    card's EMI rate and fee in `emi_rate_percent` and `emi_fee_paise` only when the offer states
-    them. A bank needs only a name, and its balance and last4 are optional.
+    card's EMI rate and fee in `emi_rate_percent` and `emi_fee_paise`, and its finance terms in
+    `finance_rate_percent` (percent a month), `min_due_percent`, and `min_due_floor_paise`, only
+    when the issuer states them. A bank needs only a name, and its balance and last4 are optional.
     An update changes only the fields you pass.
     Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
     payload_data = data.model_dump(exclude_none=True, mode="python")

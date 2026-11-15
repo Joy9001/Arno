@@ -16,10 +16,10 @@ import { api, errorMessage } from "../api";
 import { displayText } from "./display-text";
 import { formatRupees } from "./format";
 import { ProjectionCard, type ProjectionPayload } from "../projection";
-import { AnswerCard, ResultCard, Unavailable } from "./answer-ui";
+import { AnswerCard, ResultCard, TableBody, Unavailable } from "./answer-ui";
 import { ChartCard } from "./chart";
 import { AnswerBoundary } from "./answer-boundary";
-import { chartSchema } from "./answer-data";
+import { chartSchema, type AnswerCell, type AnswerResult } from "./answer-data";
 import { projectionSchema } from "./projection-schema";
 
 function UndoButton({ undoId }: { undoId?: string | null }) {
@@ -196,6 +196,104 @@ function ImportCard({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+const MAX_SCHEDULE_ROWS = 50;
+
+function moneyLabel(value: unknown): string {
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === "string" && record.text) return displayText(record.text);
+    if (typeof record.paise === "number" && Number.isFinite(record.paise)) {
+      return formatRupees(record.paise);
+    }
+  }
+  return "—";
+}
+
+function CardPayoffCard({ data }: { data: Record<string, unknown> }) {
+  const title = displayText(String(data.title ?? "Card payoff"));
+  const assumptions = Array.isArray(data.assumptions)
+    ? data.assumptions.map((item) => displayText(String(item)))
+    : [];
+  const rawSchedule = Array.isArray(data.schedule) ? data.schedule : [];
+  const shown = rawSchedule.slice(0, MAX_SCHEDULE_ROWS);
+  const rows: AnswerCell[][] = shown.map((entry) => {
+    const row = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+    const numberCell = (val: unknown): AnswerCell =>
+      typeof val === "number" && Number.isFinite(val)
+        ? { type: "number", value: val }
+        : { type: "unknown" };
+    const textCell = (val: unknown): AnswerCell =>
+      typeof val === "string" && val ? { type: "text", text: val } : { type: "unknown" };
+    const moneyCell = (val: unknown): AnswerCell =>
+      typeof val === "number" && Number.isFinite(val)
+        ? { type: "money", paise: val, text: formatRupees(val) }
+        : { type: "unknown" };
+    return [
+      numberCell(row.n),
+      textCell(row.date),
+      moneyCell(row.opening_paise),
+      moneyCell(row.finance_charge_paise),
+      moneyCell(row.gst_paise),
+      moneyCell(row.payment_paise),
+      moneyCell(row.closing_paise),
+    ];
+  });
+  const table: AnswerResult["table"] = {
+    caption: "Monthly schedule",
+    columns: [
+      { key: "n", label: "No.", type: "number" },
+      { key: "date", label: "Date", type: "date" },
+      { key: "opening", label: "Opening", type: "money" },
+      { key: "finance_charge", label: "Finance charge", type: "money" },
+      { key: "gst", label: "GST", type: "money" },
+      { key: "payment", label: "Payment", type: "money" },
+      { key: "closing", label: "Closing", type: "money" },
+    ],
+    rows,
+    note:
+      rawSchedule.length > MAX_SCHEDULE_ROWS
+        ? `Showing the first ${MAX_SCHEDULE_ROWS} of ${rawSchedule.length} months.`
+        : undefined,
+  };
+  return (
+    <div className="chat-card">
+      <strong>{title}</strong>
+      <dl className="answer-facts">
+        <div>
+          <dt>Cost of carrying</dt>
+          <dd>{moneyLabel(data.cost_of_carrying)}</dd>
+        </div>
+        <div>
+          <dt>Total finance charge</dt>
+          <dd>{moneyLabel(data.total_finance_charge)}</dd>
+        </div>
+        <div>
+          <dt>Total GST</dt>
+          <dd>{moneyLabel(data.total_gst)}</dd>
+        </div>
+        <div>
+          <dt>Total paid</dt>
+          <dd>{moneyLabel(data.total_paid)}</dd>
+        </div>
+        <div>
+          <dt>Months</dt>
+          <dd>{typeof data.months === "number" ? String(data.months) : "—"}</dd>
+        </div>
+        <div>
+          <dt>Payoff</dt>
+          <dd>
+            {typeof data.payoff_date === "string" && data.payoff_date
+              ? displayText(data.payoff_date)
+              : "—"}
+          </dd>
+        </div>
+      </dl>
+      {assumptions.length > 0 && <p className="fine">{assumptions.join(" · ")}</p>}
+      {rows.length > 0 && <TableBody title={title} table={table} />}
+    </div>
+  );
+}
+
 export function Card({
   data,
   onRetryCapture,
@@ -345,6 +443,15 @@ export function Card({
   if (card === "amortize") {
     const emi = data.emi as { text?: string } | undefined;
     const interest = data.total_interest as { text?: string } | undefined;
+    const hasFee = Boolean(data.processing_fee && typeof data.processing_fee === "object");
+    const aprNote =
+      data.apr && typeof data.apr === "object" && typeof (data.apr as { note?: unknown }).note === "string"
+        ? displayText(String((data.apr as { note: string }).note))
+        : "—";
+    const aprText =
+      typeof data.apr_percent === "number" && Number.isFinite(data.apr_percent)
+        ? `${data.apr_percent.toFixed(2)}%`
+        : aprNote;
     return (
       <div className="chat-card">
         <strong>Loan schedule</strong>
@@ -352,6 +459,30 @@ export function Card({
           EMI {emi?.text ?? "—"} · total interest {interest?.text ?? "—"} ·{" "}
           {String(data.months ?? "—")} months
         </p>
+        {hasFee && (
+          <dl className="answer-facts">
+            <div>
+              <dt>Processing fee</dt>
+              <dd>{moneyLabel(data.processing_fee)}</dd>
+            </div>
+            <div>
+              <dt>Fee GST</dt>
+              <dd>{moneyLabel(data.fee_gst)}</dd>
+            </div>
+            <div>
+              <dt>Net disbursed</dt>
+              <dd>{moneyLabel(data.net_disbursed)}</dd>
+            </div>
+            <div>
+              <dt>Total cost</dt>
+              <dd>{moneyLabel(data.total_cost)}</dd>
+            </div>
+            <div>
+              <dt>APR</dt>
+              <dd>{aprText}</dd>
+            </div>
+          </dl>
+        )}
         {Boolean(data.prepay && typeof data.prepay === "object") && (
           <p className="fine">
             Prepay saves {(data.prepay as Record<string, { text?: string }>).interest_saved?.text ??
@@ -361,6 +492,8 @@ export function Card({
       </div>
     );
   }
+
+  if (card === "card_payoff") return <CardPayoffCard data={data} />;
 
   if (card === "compound") {
     const final = data.final as { text?: string } | undefined;

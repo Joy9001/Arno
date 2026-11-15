@@ -59,7 +59,10 @@ Scripts
 - await each call, with keyword arguments. Variables last for this turn only.
 - Inside scripts, money is integer paise. Return counts and small samples, never whole tables.
   Print rupees(paise) beside any figure you will quote.
-- Use amortize and compound instead of writing those formulas.
+- Use amortize, compound, and card_payoff instead of writing those formulas.
+- Pass a loan's processing fee to amortize in fee_paise so apr_percent comes from the tool.
+- A card's carrying cost needs its own monthly finance charge; if card_payoff says none is known,
+  ask the user for it and never assume a rate.
 - Call show_chart with values from variables when a shape says more than a sentence.
 - Call show_table for a comparison you computed: pass typed columns and rows from variables.
   Money cells are integer paise. Never pass HTML, CSS, links, or actions.

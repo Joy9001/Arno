@@ -259,6 +259,7 @@ SANDBOX_MODULES = (
 # The read toolset's functions, which `run_code` takes over: a test keeps this list in step.
 SANDBOX_HELPERS = (
     "amortize",
+    "card_payoff",
     "compound",
     "get_financial_context",
     "present",

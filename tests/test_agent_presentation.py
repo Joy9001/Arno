@@ -486,3 +486,63 @@ async def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, comput
         if chunk.get("type") == "data-card" and chunk["data"].get("card") == "answer"
     )
     assert replayed["data"]["results"] == stored_answer["data"]["results"]
+
+
+def test_amortize_fee_and_card_payoff_presentation_snapshots():
+    from arno.engine.money import amortize as amortize_fn
+    from arno.engine.money import card_payoff as card_payoff_fn
+    from arno.engine.money import money
+    from arno.tools.money import apr_percent
+
+    registry = ResultRegistry()
+    raw_loan = amortize_fn(10_000_000, 10, 12, processing_fee_paise=200_000)
+    loan_payload = {**raw_loan, "apr_percent": apr_percent(raw_loan.get("apr"))}
+    loan_reg = registry.register_calculation("amortize", loan_payload, {})
+    loan_facts = {fact["label"]: fact["value"] for fact in loan_reg.snapshot["summary"]["facts"]}
+    assert loan_facts["Processing fee"] == {"type": "money", "paise": 200_000, "text": "₹2,000"}
+    assert loan_facts["Fee GST"] == {"type": "money", "paise": 36_000, "text": "₹360"}
+    assert loan_facts["Net disbursed"] == {"type": "money", "paise": 9_764_000, "text": "₹97,640"}
+    assert loan_facts["APR"] == {"type": "text", "text": f"{loan_payload['apr_percent']:.2f}%"}
+
+    raw_card = card_payoff_fn(4_000_000, annual_rate_bps=4_200, payment="minimum")
+    card_payload = {
+        **raw_card,
+        "balance": money(4_000_000),
+        "balance_source": "as you stated",
+        "monthly_rate_percent": 3.5,
+        "annual_rate_bps": 4_200,
+        "rate_source": "as you stated",
+        "payment_mode": "minimum",
+        "fixed_payment": None,
+    }
+    card_reg = registry.register_calculation("card_payoff", card_payload, {})
+    assert card_reg.views == ("Summary", "Table")
+    assert card_reg.snapshot["kind"] == "card_payoff"
+    assert len(card_reg.snapshot["table"]["columns"]) == 7
+    assert len(card_reg.snapshot["table"]["rows"]) == 50  # capped at MAX_TABLE_ROWS
+    answer_card, _ = build_answer(
+        registry,
+        {
+            "_type": "Stack",
+            "children": [
+                {"_type": "Summary", "result_id": card_reg.result_id},
+                {"_type": "Table", "result_id": card_reg.result_id},
+            ],
+        },
+    )
+    assert answer_card["results"][0]["kind"] == "card_payoff"
+
+    precise = registry.register_calculation(
+        "card_payoff",
+        {
+            "monthly_rate_percent": 1.255,
+            "schedule": [{"n": 1, "date": None}],
+        },
+        {},
+    )
+    precise_facts = {fact["label"]: fact["value"] for fact in precise.snapshot["summary"]["facts"]}
+    assert precise_facts["Monthly rate"] == {"type": "text", "text": "1.255%"}
+    assert precise_facts["Cost of carrying"] == {"type": "unknown"}
+    assert precise_facts["Months"] == {"type": "unknown"}
+    assert precise.snapshot["table"]["rows"][0][1] == {"type": "unknown"}
+    assert precise.snapshot["table"]["rows"][0][2] == {"type": "unknown"}

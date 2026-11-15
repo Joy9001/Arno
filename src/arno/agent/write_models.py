@@ -196,10 +196,11 @@ class AccountSetup(WriteModel):
     finance_rate_percent: Decimal | None = Field(
         default=None,
         ge=Decimal("0"),
-        le=Decimal("100"),
+        le=Decimal("8.33"),
         description=(
             "Card only, when the issuer states it: the card's finance charge in percent a month, "
-            "as the issuer states it (3.5 means 3.5% a month). Leave it out rather than guessing."
+            "as the issuer states it (3.5 means 3.5% a month, at most 8.33% a month). Leave it "
+            "out rather than guessing."
         ),
     )
     min_due_percent: Decimal | None = Field(

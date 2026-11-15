@@ -259,10 +259,10 @@ The following tables hold memory, conversations, and provenance:
 
 ---
 
-## Tool surface: 18 tools
+## Tool surface: 19 tools
 
 _"Answers any question" is a property of the tool surface._ Few wide tools over complete data.
-Twelve read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools:
+Thirteen read tools sit behind Code Mode's single `run_code` tool, so the model sees seven tools:
 `run_code` and the six write tools. See [Code Mode](#code-mode). Each tool's description, input,
 output, and logic are in [`tools.md`](tools.md).
 
@@ -273,7 +273,7 @@ its own card ([note](diagrams/sd-tool-surface.md)).*
 
 ### Read
 
-The agent has twelve read tools:
+The agent has thirteen read tools:
 
 | Tool | Returns |
 |---|---|
@@ -283,7 +283,8 @@ The agent has twelve read tools:
 | `recap(period)` | The stories of a day, week, or month, read from the same engine as the Recaps page ([`recaps.md`](recaps.md)) |
 | `project(horizon, hypothetical)` | Curve, floor probability, verdict, and tradeoffs. See [The projection engine](#the-projection-engine) |
 | `run_query(sql)` | Rows, queried as the read-only `agent_ro` role, including conversation search on `messages.search`. The agent shows the SQL it ran |
-| `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment compared. A logged EMI splits by the ledger's own rule, not this schedule: `loan_payment_parts` books one month's interest at the loan's rate |
+| `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment or processing fee and APR compared. A logged EMI splits by the ledger's own rule, not this schedule: `loan_payment_parts` books one month's interest at the loan's rate |
+| `card_payoff(card or balance, monthly_rate_percent, payment_paise)` | Months to clear, total finance charge, GST, cost of carrying, payoff date, and the monthly schedule under minimum due or a fixed monthly payment. Uses the card's ledger balance and stored terms or explicit terms; refuses with a prompt to ask when no rate is known |
 | `compound(monthly, annual_rate, months, start)` | Growth of a monthly investment at an assumed rate, which the reply must state |
 | `rupees(paise)` | The rupee form of a paise figure, from the one formatter; no card |
 | `show_chart(type, title, series)` | Nothing the model needs: a line, bar, stacked bar, or donut chart, from a typed spec that Arno emits as a card |
@@ -335,7 +336,7 @@ The following table sets how it is configured:
 
 | Concern | Decision |
 |---|---|
-| Which tools move behind `run_code` | The twelve read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
+| Which tools move behind `run_code` | The thirteen read tools only. They live in a toolset tagged `.with_metadata(code_mode=True)`, and the capability is `CodeMode(tools={'code_mode': True})`. The default `tools='all'` would also hide the write tools, so it is not used |
 | Writes | Always direct tool calls, one row at a time, each with its write-show-undo card. A script never writes |
 | Money in the sandbox | Integer paise, which stay exact. Code Mode turns a `Decimal` into a string at the boundary, and Monty's `round(x, 2)` differs from CPython's (2.68 against 2.67 for 2.675), so scripts don't use either for money. Rate arithmetic (interest, growth) is floating point, so results are rounded to the rupee for display |
 | Types crossing the boundary | Only JSON-native ones. Code Mode turns tuples, sets, dates, and `Decimal` values into lists and strings, and raw Monty doesn't, so anything else would make a script see different values on replay |
@@ -345,7 +346,7 @@ The following table sets how it is configured:
 | Calling convention | `await` and keyword arguments. Code Mode also type-checks a script, and it keeps variables between `run_code` calls in a turn, not into the next one |
 | Errors in a script | A nested `ModelRetry` arrives as a catchable `Exception` with its message. Uncaught, `run_code` ends with that message, and the model retries |
 | Provenance | The `run_code` return keeps every nested tool call and return in its metadata. The UI shows the script next to the answer, and the source IDs from the nested returns become the answer's citations |
-| Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge. Standard money maths—EMI and amortization, prepayment, compounding—comes from tested engine functions the script calls; free-form arithmetic covers what those don't, and the script is shown either way |
+| Verdicts | A script can call `project()` many times, for example to sweep purchase dates. The yes, yes-but, or no verdict still comes only from the engine, which is tested and backtested; model-written code explores but doesn't judge. Standard money maths—EMI and amortization, prepayment, card payoff, compounding—comes from tested engine functions the script calls; free-form arithmetic covers what those don't, and the script is shown either way |
 
 **Cards from scripts.** Metadata from a tool called inside a script reaches the `run_code` return,
 under `metadata['tool_returns'][call_id]`, but `VercelAIAdapter` doesn't stream it. So Arno emits

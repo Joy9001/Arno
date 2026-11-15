@@ -543,3 +543,57 @@ test("safe_to_spend renders on home and projection cards and hides when null or 
   assert.equal(parseAnswerCard(badReceipt), null);
 });
 
+test("amortize cards render fees and APR when present and stay unchanged when absent", () => {
+  const legacySnapshot = fixtures.results.find((result) => result.kind === "amortize" && !result.summary.facts.some((f) => f.label === "APR"));
+  assert.ok(legacySnapshot);
+  assert.ok(parseResultCard(legacySnapshot));
+  const legacyResultHtml = render(ResultCard, { card: "result", snapshot: legacySnapshot });
+  assert.doesNotMatch(legacyResultHtml, /Processing fee|Fee GST|Net disbursed|Total cost|APR/);
+
+  const legacyCardHtml = render(Card, fixtures.cards.amortize_legacy);
+  assert.match(legacyCardHtml, /Loan schedule/);
+  assert.doesNotMatch(legacyCardHtml, /Processing fee|Fee GST|Net disbursed|Total cost|APR/);
+
+  const feeAnswer = fixtures.answers.loan_with_fee;
+  assert.ok(parseAnswerCard(feeAnswer));
+  const feeAnswerHtml = render(AnswerCard, feeAnswer);
+  assert.match(feeAnswerHtml, /Processing fee/);
+  assert.match(feeAnswerHtml, /Fee GST/);
+  assert.match(feeAnswerHtml, /Net disbursed/);
+  assert.match(feeAnswerHtml, /Total cost/);
+  assert.match(feeAnswerHtml, /APR/);
+
+  const feeCardHtml = render(Card, fixtures.cards.amortize_with_fee);
+  assert.match(feeCardHtml, /Processing fee/);
+  assert.match(feeCardHtml, /Fee GST/);
+  assert.match(feeCardHtml, /Net disbursed/);
+  assert.match(feeCardHtml, /Total cost/);
+  assert.match(feeCardHtml, /APR/);
+  assert.match(feeCardHtml, new RegExp(`${fixtures.cards.amortize_with_fee.apr_percent.toFixed(2)}%`));
+});
+
+test("card_payoff cards validate and render totals, assumptions, and collapsible schedules", () => {
+  const answer = fixtures.answers.card_payoff;
+  assert.ok(parseAnswerCard(answer));
+  const answerHtml = render(AnswerCard, answer);
+  assert.match(answerHtml, /Card payoff/);
+  assert.match(answerHtml, /Cost of carrying/);
+  assert.match(answerHtml, /Total finance charge/);
+  assert.match(answerHtml, /Total GST/);
+  assert.match(answerHtml, /Total paid/);
+  assert.match(answerHtml, /Months/);
+  assert.match(answerHtml, /Payoff/);
+  assert.match(answerHtml, /Finance charge/);
+  assert.match(answerHtml, /Show all \d+ rows/);
+
+  const cardHtml = render(Card, fixtures.cards.card_payoff);
+  assert.match(cardHtml, /Card payoff/);
+  assert.match(cardHtml, /Cost of carrying/);
+  assert.match(cardHtml, /Total finance charge/);
+  assert.match(cardHtml, /Total GST/);
+  assert.match(cardHtml, /Total paid/);
+  assert.match(cardHtml, /Finance charge/);
+  assert.match(cardHtml, /Show all \d+ rows/);
+});
+
+

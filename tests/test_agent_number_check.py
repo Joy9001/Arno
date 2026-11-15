@@ -325,3 +325,27 @@ def test_a_whole_rupee_amount_may_be_rounded_from_paise():
     assert check("Interest saved: ₹15,37,548.", {"saved": {"paise": 153754754}}) == []
     # Counts keep the tighter tolerance, so an off-by-one month is still a flag.
     assert check("It ends 18 months early.", {"months": 8}) == ["18"]
+
+
+def test_card_payoff_and_amortize_apr_values_trace():
+    from arno.engine.money import amortize, card_payoff
+    from arno.tools.money import apr_percent
+
+    card_res = card_payoff(4_000_000, annual_rate_bps=4_200, payment="minimum")
+    loan_res = amortize(10_000_000, 10, 12, processing_fee_paise=200_000)
+    loan_apr = apr_percent(loan_res.get("apr"))
+    assert loan_apr is not None
+    returns = [{**loan_res, "apr_percent": loan_apr}, card_res]
+    good = (
+        f"Paying only the minimum takes {card_res['months']} months and adds "
+        f"{card_res['cost_of_carrying']['text']} in carrying cost. "
+        f"The loan's effective APR is {loan_apr:.2f}%."
+    )
+    assert check(good, returns) == []
+    fixed_res = card_payoff(4_000_000, annual_rate_bps=4_200, payment=1_000_000)
+    bad = (
+        "Paying ₹10,000 a month takes 55 months and adds "
+        "₹99,999 in carrying cost. The loan's effective APR is 19.50%."
+    )
+    flagged = check(bad, [{**loan_res, "apr_percent": loan_apr}, fixed_res])
+    assert flagged == ["₹99,999", "19.50%", "55"]

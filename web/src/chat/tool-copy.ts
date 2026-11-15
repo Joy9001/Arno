@@ -40,6 +40,11 @@ export const TOOL_COPY: Record<string, ToolCopy> = {
     running: "Working out the loan schedule…",
     done: "Worked out the loan schedule.",
   },
+  card_payoff: {
+    label: "Working out card payoff",
+    running: "Working out the card payoff…",
+    done: "Worked out the card payoff.",
+  },
   compound: {
     label: "Working out growth",
     running: "Working out growth at the assumed rate…",

@@ -15,8 +15,9 @@ from arno.agent.presentation import (
     TableInput,
     build_answer,
 )
-from arno.engine.money import amortize, compound, money
+from arno.engine.money import amortize, card_payoff, compound, money
 from arno.engine.projection import SourceIds
+from arno.tools.money import apr_percent
 from arno.tools.projection import card as projection_card
 
 
@@ -198,7 +199,26 @@ def fixtures() -> dict:
         }
     )
     scenario_reg = registry.register_read("project", {}, context={"card": scenario_native})
-    loan = registry.register_calculation("amortize", amortize(1_000_000, 8, 12), {})
+    loan_payload = amortize(1_000_000, 8, 12)
+    loan = registry.register_calculation("amortize", loan_payload, {})
+    loan_fee_raw = amortize(10_000_000, 10, 12, processing_fee_paise=200_000)
+    loan_fee_payload = {
+        **loan_fee_raw,
+        "apr_percent": apr_percent(loan_fee_raw.get("apr")),
+    }
+    loan_with_fee = registry.register_calculation("amortize", loan_fee_payload, {})
+    card_raw = card_payoff(4_000_000, annual_rate_bps=4_200, payment="minimum")
+    card_payload = {
+        **card_raw,
+        "balance": money(4_000_000),
+        "balance_source": "as you stated",
+        "monthly_rate_percent": 3.5,
+        "annual_rate_bps": 4_200,
+        "rate_source": "as you stated",
+        "payment_mode": "minimum",
+        "fixed_payment": None,
+    }
+    card_reg = registry.register_calculation("card_payoff", card_payload, {})
     growth = registry.register_calculation("compound", compound(10_000, 8, 12), {})
     resources = [
         *spending.results,
@@ -208,6 +228,8 @@ def fixtures() -> dict:
         *projection.results,
         *scenario_reg.results,
         loan,
+        loan_with_fee,
+        card_reg,
         growth,
     ]
     answers = {
@@ -240,11 +262,40 @@ def fixtures() -> dict:
         "scenario": build_answer(
             registry, {"_type": "Receipt", "result_id": scenario_reg.primary_id}
         )[0],
+        "loan_with_fee": build_answer(
+            registry,
+            {
+                "_type": "Stack",
+                "children": [
+                    {"_type": view, "result_id": loan_with_fee.result_id}
+                    for view in ("Summary", "Table")
+                ],
+            },
+        )[0],
+        "card_payoff": build_answer(
+            registry,
+            {
+                "_type": "Stack",
+                "children": [
+                    {"_type": view, "result_id": card_reg.result_id}
+                    for view in ("Summary", "Table")
+                ],
+            },
+        )[0],
     }
     return {
         "results": [resource.snapshot for resource in resources],
         "answers": answers,
         "comparison": comparison.snapshot,
+        "cards": {
+            "amortize_legacy": {"card": "amortize", "title": "Loan schedule", **loan_payload},
+            "amortize_with_fee": {
+                "card": "amortize",
+                "title": "Loan schedule",
+                **loan_fee_payload,
+            },
+            "card_payoff": {"card": "card_payoff", "title": "Card payoff", **card_payload},
+        },
     }
 
 

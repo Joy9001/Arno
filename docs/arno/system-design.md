@@ -221,8 +221,8 @@ the context small, a backup model covers errors, and circuit breakers stop a run
   the parser subagent: a statement is long, untrusted text, and it needs its own context, its own
   tools, and to run while you keep chatting ([step 5](#imports-the-agent-writes-the-parser)).
 - **Code Mode gives it computing power, and the engine gives verdicts.** Scripts orchestrate:
-  standard money maths (EMI and amortization, prepayment, compounding) comes from tested engine
-  functions, and free-form arithmetic covers the rest, with the script shown
+  standard money maths (EMI and amortization, prepayment, card payoff, compounding) comes from
+  tested engine functions, and free-form arithmetic covers the rest, with the script shown
   ([`design.md`](design.md#code-mode)). The yes, yes-but, or no verdict comes only from the engine.
 - **Answer quality over cost.** A frontier model, metered by Spend Limits, with no routing to
   cheaper models. Prompt caching is the main cost lever.
@@ -376,18 +376,20 @@ description, input, output, and logic are in [`tools.md`](tools.md).
 
 ![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
 
-*Figure: the model sees seven tools. A script reaches the twelve read tools through `run_code`, and
-every write is a direct call with its own card ([note](diagrams/sd-tool-surface.md)).*
+*Figure: the model sees seven tools. A script reaches the thirteen read tools through `run_code`,
+and every write is a direct call with its own card ([note](diagrams/sd-tool-surface.md)).*
 
 ### Decisions on the surface
 
 - **One word: movement.** `query_movements`, `record_movement`, and `correct_movement` replace the
   `transaction` names, matching the ledger.
-- **Every tool is a normal PydanticAI tool.** Code Mode changes how the model calls the twelve read
-  tools, not what they are. Writes stay direct calls, because an approval-gated tool can't pause
-  inside a script, and a script could otherwise write many rows with no card for each.
-- **Two tested money functions.** `amortize` and `compound` cover loans and compounding, so standard
-  maths isn't rewritten in each script. The rate in `compound` is an assumption the reply must state.
+- **Every tool is a normal PydanticAI tool.** Code Mode changes how the model calls the thirteen
+  read tools, not what they are. Writes stay direct calls, because an approval-gated tool can't
+  pause inside a script, and a script could otherwise write many rows with no card for each.
+- **Three tested money functions.** `amortize`, `card_payoff`, and `compound` cover loans, card
+  balances, and compounding, so standard maths isn't rewritten in each script. `card_payoff` asks
+  for the card's monthly finance charge rather than guessing one, and the rate in `compound` is an
+  assumption the reply must state.
 - **The unit is in the field name.** Read tools take `*_paise`, because scripts compute in paise.
   Write tools take `*_rupees`, as you said it, so the model never multiplies by 100.
 - **`category` or `category_guess`.** `category` means you named it, and it wins. `category_guess` is

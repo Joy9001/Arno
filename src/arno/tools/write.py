@@ -28,11 +28,15 @@ from arno.ledger.audit import undo_group, undo_latest, write_group
 from arno.ledger.common import today as ledger_today
 from arno.ledger.errors import InvalidLedgerError
 from arno.tools.mark import mark
-
-
-class ToolInputError(ValueError):
-    """A message the model can act on, delivered as ModelRetry by the wrapper."""
-
+from arno.tools.money import (
+    ToolInputError,
+)
+from arno.tools.money import (
+    monthly_percent_to_annual_bps as _monthly_percent_to_annual_bps,
+)
+from arno.tools.money import (
+    percent_to_bps as _percent_to_bps,
+)
 
 # `amount_paise` columns are BIGINT. Reject earlier, with words the model can retry on.
 MAX_PAISE = 9_223_372_036_854_775_807
@@ -84,16 +88,6 @@ def _stated_balance_paise(value: Any, kind: str, field: str = "balance_rupees") 
             "owed as a positive number, or 0 if it is paid off."
         )
     return -paise
-
-
-def _percent_to_bps(value: Any) -> int:
-    """An annual percent as integer basis points, rounded half up like every other amount."""
-    return int((Decimal(str(value)) * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
-
-
-def _monthly_percent_to_annual_bps(value: Any) -> int:
-    """An issuer's monthly percent as annual basis points: 3.5% a month is 4,200 a year."""
-    return _percent_to_bps(Decimal(str(value)) * 12)
 
 
 def _date(value: Any) -> date | None:

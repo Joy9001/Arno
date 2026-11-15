@@ -259,6 +259,7 @@ class ResultRegistry:
     ) -> PresentationResult:
         builder = {
             "amortize": self._register_amortize,
+            "card_payoff": self._register_card_payoff,
             "compound": self._register_compound,
             "chart": self._register_chart,
         }.get(kind)
@@ -851,6 +852,25 @@ class ResultRegistry:
             {"label": "Months", "value": _number_cell(payload.get("months"))},
             {"label": "Payoff", "value": _text_cell(payload.get("payoff_date"))},
         ]
+        if "processing_fee" in payload:
+            apr_percent = payload.get("apr_percent")
+            apr_cell = (
+                _text_cell(f"{float(apr_percent):.2f}%")
+                if apr_percent is not None
+                else _text_cell((payload.get("apr") or {}).get("note"))
+            )
+            facts.extend(
+                [
+                    {
+                        "label": "Processing fee",
+                        "value": _money_cell(payload.get("processing_fee")),
+                    },
+                    {"label": "Fee GST", "value": _money_cell(payload.get("fee_gst"))},
+                    {"label": "Net disbursed", "value": _money_cell(payload.get("net_disbursed"))},
+                    {"label": "Total cost", "value": _money_cell(payload.get("total_cost"))},
+                    {"label": "APR", "value": apr_cell},
+                ]
+            )
         prepay = payload.get("prepay")
         if isinstance(prepay, dict):
             facts.extend(
@@ -896,6 +916,81 @@ class ResultRegistry:
         )
         return self.add(
             kind="amortize", title="Loan schedule", views=["Summary", "Table"], snapshot=snapshot
+        )
+
+    def _register_card_payoff(
+        self, payload: dict[str, Any], card: dict[str, Any]
+    ) -> PresentationResult:
+        del card
+        schedule = payload.get("schedule") or []
+        shown = schedule[:MAX_TABLE_ROWS]
+        notes = []
+        if len(schedule) > MAX_TABLE_ROWS:
+            notes.append(f"Showing the first {MAX_TABLE_ROWS} of {len(schedule)} months.")
+        facts = [
+            {"label": "Cost of carrying", "value": _money_cell(payload.get("cost_of_carrying"))},
+            {
+                "label": "Total finance charge",
+                "value": _money_cell(payload.get("total_finance_charge")),
+            },
+            {"label": "Total GST", "value": _money_cell(payload.get("total_gst"))},
+            {"label": "Total paid", "value": _money_cell(payload.get("total_paid"))},
+            {"label": "Months", "value": _number_cell(payload.get("months"))},
+            {"label": "Payoff", "value": _text_cell(payload.get("payoff_date"))},
+        ]
+        if payload.get("balance") is not None:
+            facts.append({"label": "Balance", "value": _money_cell(payload.get("balance"))})
+        if payload.get("monthly_rate_percent") is not None:
+            rate = payload["monthly_rate_percent"]
+            facts.append(
+                {
+                    "label": "Monthly rate",
+                    "value": _text_cell(
+                        f"{float(rate):g}%"
+                        if isinstance(rate, (int, float))
+                        and not isinstance(rate, bool)
+                        and math.isfinite(float(rate))
+                        else None
+                    ),
+                }
+            )
+        snapshot = _snapshot(
+            kind="card_payoff",
+            title="Card payoff",
+            views=["Summary", "Table"],
+            summary=_summary(facts),
+            table=_table(
+                caption="Monthly schedule",
+                columns=[
+                    {"key": "n", "label": "No.", "type": "number"},
+                    {"key": "date", "label": "Date", "type": "date"},
+                    {"key": "opening", "label": "Opening", "type": "money"},
+                    {"key": "finance_charge", "label": "Finance charge", "type": "money"},
+                    {"key": "gst", "label": "GST", "type": "money"},
+                    {"key": "payment", "label": "Payment", "type": "money"},
+                    {"key": "closing", "label": "Closing", "type": "money"},
+                ],
+                rows=[
+                    [
+                        _number_cell(row.get("n")),
+                        _text_cell(row.get("date")),
+                        _money_cell(row.get("opening_paise")),
+                        _money_cell(row.get("finance_charge_paise")),
+                        _money_cell(row.get("gst_paise")),
+                        _money_cell(row.get("payment_paise")),
+                        _money_cell(row.get("closing_paise")),
+                    ]
+                    for row in shown
+                ],
+                total_rows=len(schedule),
+                note=notes[-1] if notes else None,
+            ),
+            notes=notes,
+            assumptions=[str(note) for note in payload.get("assumptions") or []],
+            empty=not schedule,
+        )
+        return self.add(
+            kind="card_payoff", title="Card payoff", views=["Summary", "Table"], snapshot=snapshot
         )
 
     def _register_compound(
