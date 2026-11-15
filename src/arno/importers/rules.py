@@ -175,6 +175,15 @@ async def record_categorize_group(conn: Connection, *, import_id: str, group_id:
     )
 
 
+async def lock_import(conn: Connection, import_id: str) -> None:
+    """Take the import's row lock before writing any row the import owns.
+
+    Undo starts with this same lock, so it and a categorization write wait for each other
+    instead of each holding a row the other needs.
+    """
+    await conn.fetchval("SELECT id FROM imports WHERE id = $1 FOR UPDATE", import_id)
+
+
 async def _label(
     conn: Connection,
     group: WriteGroup,
@@ -268,9 +277,10 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
     One write group per import, attributed to it: undoing the import reverts these labels.
     """
     rules = await load_rules(conn)
-    rows = await _import_rows(conn, import_id)
     labeled = 0
     async with write_group(conn, actor="agent") as group:
+        await lock_import(conn, import_id)
+        rows = await _import_rows(conn, import_id)
         for row in rows:
             if row["category_id"] is not None:
                 continue

@@ -28,11 +28,13 @@ The session, base URL, current thread, and the last turn's confirm cards live un
 (default `<tempdir>/arno-e2e-<database>`), as `state.json` plus `server.log`. So separate
 shell invocations continue the same conversation.
 
-**`--seed demo` re-seeds and truncates the ledger**, so it is for a first start only. To restart a
-server on the same database — a new port, or a different `CHAT_BASE_URL` read from the shell — run
-`up --keep`: it stops the server the state file records, leaves every row alone, and reuses the
-session. Without `--seed` or `--keep`, `up` only migrates and keeps the ledger too; `--keep` also
-stops the previous process so the port is free.
+**`--seed demo` re-seeds and truncates the ledger**, so it is for a first start only. Start the
+first turn after it with `chat --new`: the state file keeps the previous run's thread, and
+`conversations` survive the truncate, so a turn without `--new` continues a thread whose history
+describes rows that no longer exist. To restart a server on the same database — a new port, or a
+different `CHAT_BASE_URL` read from the shell — run `up --keep`: it stops the server the state file
+records, leaves every row alone, and reuses the session. Without `--seed` or `--keep`, `up` only
+migrates and keeps the ledger too; `--keep` also stops the previous process so the port is free.
 
 ```bash
 uv run python -m tests.e2e.driver up --port 8125 --keep

@@ -706,12 +706,15 @@ async def save_categories(
     if unknown:
         raise ModelRetry("No answer was held for these keys: " + ", ".join(unknown))
     async with connect() as conn:
-        pending = await rules_mod.pending_rows(conn, ctx.deps.import_id)
         _names, by_name = await _categories(conn)
         rules_written = 0
         labeled = 0
         uncategorized = 0
         async with write_group(conn, actor="agent") as group:
+            # The import's row lock comes first, as it does in undo, and the rows are read under
+            # it: a save that waited for an undo finds nothing left to label.
+            await rules_mod.lock_import(conn, ctx.deps.import_id)
+            pending = await rules_mod.pending_rows(conn, ctx.deps.import_id)
             for key, (category, reason) in held.items():
                 movement_ids = pending.get(key)
                 if not movement_ids:

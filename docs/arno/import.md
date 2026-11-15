@@ -116,11 +116,13 @@ The task runs in the API process, owned by one `DelegationTasks` opened at start
 folder, on a Docker volume, holds each task's record. The owner's `step_store` is a
 `PostgresStepStore`, so every step of the subagent's run is saved as it happens; without it, the
 folder saves a task's history only when the task settles or asks, and a crash mid-parse would lose
-the run. So a restart loses nothing the subagent learned. After a restart the task shows as cancelled in that conversation, and you ask the
-main agent to continue; it resumes the same task with its history. Resuming is safe because the
-subagent writes nothing to the ledger. There is no job retry loop and no server-started turn:
-reports and questions wait for the conversation's next turn, and the import card shows progress
-from the database meanwhile.
+the run. So a restart loses nothing the subagent learned. A task the restart interrupted is settled
+as stopped: the import card shows the file as failed with the reason ("The parser was stopped before
+it finished."), and the server starts a turn with no user message so the main agent tells you what
+happened ([harness.md](harness.md#the-wake-turn)). When you ask it to continue, it resumes the same
+task with its history. Resuming is safe because the subagent writes nothing to the ledger. There is
+no job retry loop: a report or a question that arrives while no one is chatting gets a wake turn,
+and the import card shows progress from the database meanwhile.
 
 The subagent has no write or ledger tools, so a crafted payee note can't reach a write. Its report
 does reach the main agent, which has write tools, so the report carries counts and statuses, and
@@ -437,6 +439,13 @@ A change you made afterwards is a genuine conflict and the undo is refused with 
 a row you recategorized and a rule the categorizer wrote that you edited. The message names what
 changed—how many movements, labels, or rules a later change touched—and says to undo that change
 first. Nothing is half-reverted: undo the later change, then undo the import again.
+
+The undo and the categorizer's save take the same locks in the same order, so neither waits for the
+other in a circle. Both take the import's row lock (`imports`, `FOR UPDATE`) before any row the
+import owns, and the save reads the rows it labels under that lock. So a save that arrives while the
+undo runs waits, then finds nothing left to label: it writes nothing and the job still finishes
+`done`. An undo that arrives while the save runs waits for it, then reverts the labels and rules the
+save recorded along with everything else the import caused.
 
 ## Photos and voice
 
