@@ -15,11 +15,11 @@ from datetime import date, timedelta
 from typing import Any
 
 from arno.db.conn import Connection
-from arno.engine import patterns
 from arno.engine.money import money
 from arno.india.formatting import format_paise
 from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import ledger_span
+from arno.tools import patterns
 from arno.tools.mark import CLOSE, OPEN, mark
 from arno.tools.read import summarize_spending
 
@@ -420,7 +420,7 @@ def _bars(groups: list[dict[str, Any]], total: int) -> list[dict[str, Any]]:
 
 
 async def _recurring(conn: Connection, period: Period) -> list[dict[str, Any]]:
-    found = await patterns.detect(conn, as_of=period.end)
+    found = await patterns.detect(conn, as_of=period.end, write=False)
     return [
         proposal
         for proposal in found

@@ -1,71 +1,32 @@
-"""Rule-based recurring-charge and subscription detection.
+"""Pure recurring-pattern coverage rules and cadence helpers.
 
-Weekly, monthly, and yearly charges are recognised from at least three occurrences whose gaps are
-within three days of the interval and whose amount stays within ten percent of the median. A
-recurring charge with no matching schedule becomes a proposal; a schedule covers a charge when the
-merchant names match, or when its category, cadence, and amount do (a "Rent" schedule covers
-"Ramesh (landlord)"). An expected schedule occurrence three or more days late with no matching
-payment becomes a missed-charge proposal. Nothing here writes a schedule: proposals go to the
-inbox and the agent only writes when the user accepts one.
-
-A merchant copied from a statement keeps its `outside_text` flag through the proposal, so opening
-the proposal in chat still asks for a confirming tap before a lasting write.
+Detection itself lives in ``arno.engine.series``; database loading, storage of
+``series_detections``, and missed-occurrence queries live in ``arno.tools.patterns``.
 """
 
 from __future__ import annotations
 
 import re
-import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import Any
 
-from arno.db.conn import Connection
-from arno.ledger import schedules as schedules_mod
-from arno.ledger.common import today as ledger_today
-
-INTERVALS = (7, 30, 365)
-INTERVAL_TOLERANCE_DAYS = 3
 AMOUNT_TOLERANCE = 0.10
-MIN_OCCURRENCES = 3
 MISSED_AFTER_DAYS = 3
 HISTORY_DAYS = 800
-_GENERIC = {
-    "ach",
-    "autopay",
-    "india",
-    "limited",
-    "ltd",
-    "mandate",
-    "nach",
-    "neft",
-    "payment",
-    "pvt",
-    "rtgs",
-    "upi",
+
+FAMILY_INTERVAL_DAYS: dict[str, int] = {
+    "weekly": 7,
+    "fortnightly": 14,
+    "four_weekly": 28,
+    "twice_monthly": 15,
+    "monthly": 30,
+    "last_day": 30,
+    "last_working_day": 30,
+    "nth_weekday": 30,
+    "quarterly": 90,
+    "half_yearly": 180,
+    "yearly": 365,
 }
-
-
-def normalize_merchant(name: str | None) -> str:
-    """A stable merchant key: case, punctuation, and bank prefixes removed."""
-    if not name:
-        return ""
-    text = unicodedata.normalize("NFKC", name).casefold()
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    tokens = [token for token in text.split() if token not in _GENERIC]
-    return " ".join(tokens)
-
-
-@dataclass(frozen=True, slots=True)
-class Charge:
-    movement_id: str
-    merchant: str
-    normalized: str
-    payee_id: str | None
-    outside_text: bool
-    date: date
-    amount_paise: int
-    category_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,35 +37,43 @@ class KnownSchedule:
     amount_paise: int | None
     category_id: str | None = None
     interval_days: int | None = None
+    confirmed: bool = True
 
 
-_FREQ_DAYS = {"WEEKLY": 7, "MONTHLY": 30, "YEARLY": 365}
+def family_interval_days(family: str) -> int | None:
+    """Map a ``series.Rule.family`` name to an approximate interval in days."""
+    return FAMILY_INTERVAL_DAYS.get(family)
 
 
-def _rule_interval(rule: str | None) -> int | None:
-    match = re.search(r"FREQ=(WEEKLY|MONTHLY|YEARLY)", (rule or "").upper())
-    return _FREQ_DAYS[match.group(1)] if match else None
-
-
-def _median(values: list[int]) -> int:
-    ordered = sorted(values)
-    middle = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[middle]
-    return (ordered[middle - 1] + ordered[middle]) // 2
-
-
-def _interval(dates: list[date]) -> int | None:
-    if len(dates) < MIN_OCCURRENCES:
+def rule_interval_days(rule: str | None) -> int | None:
+    """Derive an approximate cadence in days from an RRULE string."""
+    upper = (rule or "").upper()
+    freq_match = re.search(r"FREQ=(DAILY|WEEKLY|MONTHLY|YEARLY)", upper)
+    if not freq_match:
         return None
-    gaps = [(right - left).days for left, right in zip(dates, dates[1:], strict=False)]
-    for interval in INTERVALS:
-        if all(abs(gap - interval) <= INTERVAL_TOLERANCE_DAYS for gap in gaps):
-            return interval
-    return None
+    freq = freq_match.group(1)
+    interval_match = re.search(r"INTERVAL=(\d+)", upper)
+    step = int(interval_match.group(1)) if interval_match else 1
+    if freq == "DAILY":
+        return 28 if step == 28 else None
+    if freq == "WEEKLY":
+        return 7 * step
+    if freq == "MONTHLY":
+        if step == 3:
+            return 90
+        if step == 6:
+            return 180
+        if step == 1:
+            bymonthday = re.search(r"BYMONTHDAY=([0-9,-]+)", upper)
+            if bymonthday and "," in bymonthday.group(1):
+                return 15
+            return 30
+        return 30 * step
+    return 365 * step
 
 
-def _same_merchant(schedule: KnownSchedule, normalized: str) -> bool:
+def same_merchant(schedule: KnownSchedule, normalized: str) -> bool:
+    """Whether a schedule name and normalized merchant share identity."""
     if not schedule.normalized or not normalized:
         return False
     if schedule.normalized == normalized:
@@ -114,8 +83,11 @@ def _same_merchant(schedule: KnownSchedule, normalized: str) -> bool:
     return bool(left & right)
 
 
-def _same_charge(
-    schedule: KnownSchedule, categories: set[str], amount_paise: int, interval_days: int
+def same_charge(
+    schedule: KnownSchedule,
+    categories: set[str],
+    amount_paise: int,
+    interval_days: int,
 ) -> bool:
     """A schedule with the same category, cadence, and amount covers this charge.
 
@@ -131,164 +103,36 @@ def _same_charge(
     return abs(amount_paise - schedule.amount_paise) <= schedule.amount_paise * AMOUNT_TOLERANCE
 
 
-def detect_recurring(charges: list[Charge], schedules: list[KnownSchedule]) -> list[dict[str, Any]]:
-    """Return new-recurring-charge proposals for merchants with no matching schedule."""
-    grouped: dict[str, list[Charge]] = {}
-    for charge in charges:
-        if not charge.normalized:
+def is_covered(
+    *,
+    normalized: str,
+    categories: set[str],
+    amount_paise: int,
+    interval_days: int | None,
+    schedules: Sequence[KnownSchedule],
+) -> bool:
+    """Whether any confirmed schedule covers this series."""
+    for schedule in schedules:
+        if not schedule.confirmed:
             continue
-        grouped.setdefault(charge.normalized, []).append(charge)
-
-    proposals: list[dict[str, Any]] = []
-    for normalized, items in sorted(grouped.items()):
-        if len(items) < MIN_OCCURRENCES:
-            continue
-        items = sorted(items, key=lambda item: (item.date, item.movement_id))
-        dates = [item.date for item in items]
-        interval = _interval(dates)
-        if interval is None:
-            continue
-        amounts = [item.amount_paise for item in items]
-        median = _median(amounts)
-        if median <= 0 or any(
-            abs(amount - median) > median * AMOUNT_TOLERANCE for amount in amounts
+        if same_merchant(schedule, normalized):
+            return True
+        if interval_days is not None and same_charge(
+            schedule, categories, amount_paise, interval_days
         ):
-            continue
-        if any(
-            _same_merchant(schedule, normalized)
-            or _same_charge(
-                schedule,
-                {item.category_id for item in items if item.category_id},
-                median,
-                interval,
-            )
-            for schedule in schedules
-        ):
-            continue
-        outside = any(item.outside_text for item in items)
-        proposals.append(
-            {
-                "kind": "new_subscription",
-                "merchant": items[-1].merchant,
-                "normalized": normalized,
-                "payee_id": next(
-                    (item.payee_id for item in reversed(items) if item.payee_id), None
-                ),
-                "outside_text": outside,
-                "amount_paise": median,
-                "interval_days": interval,
-                "occurrences": len(items),
-                "first_date": dates[0].isoformat(),
-                "last_date": dates[-1].isoformat(),
-            }
-        )
-    return proposals
-
-
-async def _load_charges(conn: Connection, as_of: date) -> list[Charge]:
-    start = as_of - timedelta(days=HISTORY_DAYS)
-    rows = await conn.fetch(
-        """
-        SELECT v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text,
-               min(v.category_id) AS category_id,
-               sum(v.amount_paise)::bigint AS amount_paise
-        FROM v_spending v
-        JOIN payees p ON p.id = v.payee_id
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
-        WHERE v.amount_paise > 0
-          AND v.date BETWEEN $1 AND $2
-          AND p.active
-          AND ms.is_effective
-        GROUP BY v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text
-        """,
-        start,
-        as_of,
-    )
-    return [
-        Charge(
-            movement_id=str(row["movement_id"]),
-            merchant=str(row["display_name"]),
-            normalized=normalize_merchant(row["display_name"]),
-            payee_id=str(row["payee_id"]) if row["payee_id"] else None,
-            outside_text=bool(row["outside_text"]),
-            date=row["date"],
-            amount_paise=int(row["amount_paise"]),
-            category_id=str(row["category_id"]) if row["category_id"] else None,
-        )
-        for row in rows
-    ]
-
-
-async def _load_schedules(conn: Connection) -> list[KnownSchedule]:
-    return [
-        KnownSchedule(
-            id=str(row["id"]),
-            name=str(row["name"]),
-            normalized=normalize_merchant(row["name"]),
-            amount_paise=int(row["amount_paise"]) if row["amount_paise"] else None,
-            category_id=str(row["category_id"]) if row["category_id"] else None,
-            interval_days=_rule_interval(row["rule"]),
-        )
-        for row in await conn.fetch("SELECT * FROM schedules WHERE active ORDER BY name")
-    ]
-
-
-async def detect_missed(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
-    """Expected obligation occurrences three or more days old with no payment evidence."""
-    day = as_of or ledger_today()
-    start = day - timedelta(days=90)
-    end = day - timedelta(days=MISSED_AFTER_DAYS)
-    proposals: list[dict[str, Any]] = []
-    rows = await conn.fetch(
-        """
-        SELECT * FROM schedules
-        WHERE active AND kind IN ('obligation', 'instalment') AND amount_paise IS NOT NULL
-        ORDER BY name
-        """
-    )
-    starts_by_id = {str(row["id"]): max(start, row["starts"]) for row in rows}
-    expanded_by_id = await schedules_mod.expand_schedules(
-        conn, rows, start, end, as_of=day, starts_by_id=starts_by_id
-    )
-    for row in rows:
-        occurrences = expanded_by_id[str(row["id"])]
-        for occurrence in occurrences:
-            amount = occurrence["amount_paise"]
-            if not amount or amount <= 0 or occurrence["paid_paise"]:
-                continue
-            expected = date.fromisoformat(occurrence["date"])
-            proposals.append(
-                {
-                    "kind": "missed_recurring",
-                    "schedule_id": str(row["id"]),
-                    "merchant": str(occurrence["name"]),
-                    "outside_text": bool(occurrence["outside_text"]),
-                    "amount_paise": int(amount),
-                    "expected_date": expected.isoformat(),
-                    "days_late": (day - expected).days,
-                    "subtype": occurrence["subtype"],
-                }
-            )
-    return proposals
-
-
-async def detect(conn: Connection, *, as_of: date | None = None) -> list[dict[str, Any]]:
-    """Run both detectors over the ledger and return proposals; no schedule is written."""
-    day = as_of or ledger_today()
-    proposals = detect_recurring(await _load_charges(conn, day), await _load_schedules(conn))
-    proposals.extend(await detect_missed(conn, as_of=day))
-    proposals.sort(key=lambda item: (item["kind"], item["merchant"]))
-    return proposals
+            return True
+    return False
 
 
 __all__ = [
     "AMOUNT_TOLERANCE",
-    "INTERVALS",
-    "MIN_OCCURRENCES",
-    "Charge",
+    "FAMILY_INTERVAL_DAYS",
+    "HISTORY_DAYS",
+    "MISSED_AFTER_DAYS",
     "KnownSchedule",
-    "detect",
-    "detect_missed",
-    "detect_recurring",
-    "normalize_merchant",
+    "family_interval_days",
+    "is_covered",
+    "rule_interval_days",
+    "same_charge",
+    "same_merchant",
 ]

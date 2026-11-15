@@ -7,10 +7,12 @@ shares, and hands back source IDs for every underlying account, schedule, goal, 
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any, cast
 
 from arno.db.conn import Connection
+from arno.engine import series
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.inputs import (
     CategoryRow,
@@ -20,6 +22,12 @@ from arno.engine.inputs import (
     build_inputs,
 )
 from arno.engine.money import _add_months, money
+from arno.engine.patterns import (
+    KnownSchedule,
+    family_interval_days,
+    is_covered,
+    rule_interval_days,
+)
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -32,6 +40,7 @@ from arno.engine.projection import (
     MedianLow,
     Projection,
     ProjectionInput,
+    SeriesForecast,
     SourceRef,
     SpendRow,
     last_statement_close,
@@ -39,6 +48,7 @@ from arno.engine.projection import (
 from arno.engine.projection import (
     project as run_projection,
 )
+from arno.india.workdays import calendar_for
 from arno.ledger import schedules as schedules_mod
 from arno.ledger.common import balance_anchor, has_known_balance
 from arno.ledger.common import today as ledger_today
@@ -299,7 +309,12 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
     return goals
 
 
-async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
+async def _spend_rows(
+    conn: Connection,
+    as_of: date,
+    *,
+    excluded_movement_ids: Sequence[str] = (),
+) -> list[SpendRow]:
     """Positive spend over the long window, by day, category, and paying card."""
     rows = await conn.fetch(
         """
@@ -308,6 +323,7 @@ async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
                     WHEN ta.kind = 'card' THEN ta.id END AS card_id,
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
+        JOIN movements m ON m.id = v.movement_id
         JOIN pgledger_transfers t ON t.id = v.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
         JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
@@ -315,11 +331,18 @@ async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND ms.is_effective
+          AND NOT m.one_off
+          AND NOT EXISTS (
+              SELECT 1 FROM schedule_payments sp
+              WHERE sp.movement_id = v.movement_id
+          )
+          AND NOT (v.movement_id = ANY($3::text[]))
         GROUP BY 1, 2, 3
         ORDER BY 1, 2, 3
         """,
         as_of - timedelta(days=RARE_WINDOW_DAYS),
         as_of - timedelta(days=1),
+        sorted(excluded_movement_ids),
     )
     return [
         SpendRow(
@@ -330,6 +353,112 @@ async def _spend_rows(conn: Connection, as_of: date) -> list[SpendRow]:
         )
         for row in rows
     ]
+
+
+def _detection_from_row(row: dict[str, Any]) -> series.Detection:
+    jitter = tuple((int(pair[0]), float(pair[1])) for pair in row["jitter"])
+    samples = tuple(int(value) for value in row["samples"])
+    return series.Detection(
+        rule=series.Rule(
+            family=str(row["family"]),
+            rrule=str(row["rrule"]),
+            starts=cast(date, row["starts"]),
+            holiday_adjust=str(row["holiday_adjust"]),
+            description=str(row["description"]),
+        ),
+        confidence=float(row["confidence"]),
+        rule_posterior=float(row["confidence"]),
+        skip=float(row["skip"]),
+        jitter=jitter,
+        end=0.0,
+        alive=float(row["alive"]),
+        matched=tuple(str(movement_id) for movement_id in row["matched_movement_ids"]),
+        amounts=series.Amounts(
+            kind=str(row["amount_kind"]),
+            level_paise=int(row["level_paise"]),
+            low_paise=int(row["low_paise"]),
+            high_paise=int(row["high_paise"]),
+            coverage=0.0,
+            samples=samples,
+        ),
+        next_dates=(),
+    )
+
+
+async def _series_forecasts(
+    conn: Connection,
+    *,
+    as_of: date,
+    end: date,
+    known_then: bool,
+    schedules: Sequence[KnownSchedule],
+    category_reducible: dict[str, bool],
+) -> tuple[tuple[SeriesForecast, ...], set[str]]:
+    """Projected unconfirmed spend detections and their matched movement IDs."""
+    rows = await conn.fetch(
+        """
+        SELECT d.*, p.display_name AS payee_name, p.outside_text AS payee_outside_text
+        FROM series_detections d
+        JOIN payees p ON p.id = d.payee_id
+        WHERE d.kind = 'spend'
+          AND d.confidence >= $1
+          AND p.active
+          AND (NOT $2 OR d.as_of <= $3)
+        ORDER BY p.display_name, d.id
+        """,
+        series.PROJECT_CONFIDENCE,
+        known_then,
+        as_of,
+    )
+    if not rows:
+        return (), set()
+
+    cal = calendar_for(as_of - timedelta(days=7), end + timedelta(days=7))
+    forecasts: list[SeriesForecast] = []
+    matched_ids: set[str] = set()
+    for row in rows:
+        payee_name = str(row["payee_name"])
+        category_id = str(row["category_id"]) if row["category_id"] else None
+        categories = {category_id} if category_id is not None else set()
+        level_paise = int(row["level_paise"])
+        interval_days = family_interval_days(str(row["family"]))
+        if is_covered(
+            normalized=series.normalize(payee_name),
+            categories=categories,
+            amount_paise=level_paise,
+            interval_days=interval_days,
+            schedules=schedules,
+        ):
+            continue
+
+        detection = _detection_from_row(row)
+        expected = tuple(series.upcoming(detection, after=as_of, until=end, calendar=cal))
+        amounts = (
+            (level_paise,)
+            if row["amount_kind"] in ("fixed", "stepped")
+            else tuple(int(value) for value in row["samples"])
+        )
+        display_name = cast(
+            str,
+            mark(payee_name) if row["payee_outside_text"] else payee_name,
+        )
+        forecasts.append(
+            SeriesForecast(
+                id=str(row["id"]),
+                name=display_name,
+                expected=expected,
+                jitter=detection.jitter,
+                skip=detection.skip,
+                alive=detection.alive,
+                amounts=amounts,
+                card_id=str(row["card_id"]) if row["card_id"] else None,
+                category_id=category_id,
+                reducible=category_reducible.get(category_id, False) if category_id else False,
+            )
+        )
+        matched_ids.update(str(movement_id) for movement_id in row["matched_movement_ids"])
+
+    return tuple(forecasts), matched_ids
 
 
 async def _category_rows(conn: Connection) -> list[CategoryRow]:
@@ -572,6 +701,28 @@ async def load_snapshot(
         row["outside_text"]
         for row in await conn.fetch("SELECT outside_text FROM schedules WHERE active")
     ) or any(row["outside_text"] for row in await conn.fetch("SELECT outside_text FROM payees"))
+    category_rows = await _category_rows(conn)
+    known_schedules = [
+        KnownSchedule(
+            id=str(row["id"]),
+            name=str(row["name"]),
+            normalized=series.normalize(str(row["name"])),
+            amount_paise=int(row["amount_paise"]) if row["amount_paise"] else None,
+            category_id=str(row["category_id"]) if row["category_id"] else None,
+            interval_days=rule_interval_days(row["rule"]),
+            confirmed=bool(row["confirmed"]),
+        )
+        for row in schedule_rows
+        if row["confirmed"]
+    ]
+    series_forecasts, excluded_movement_ids = await _series_forecasts(
+        conn,
+        as_of=as_of,
+        end=end,
+        known_then=known_then,
+        schedules=known_schedules,
+        category_reducible={row.id: row.reducible for row in category_rows},
+    )
 
     return LedgerSnapshot(
         as_of=as_of,
@@ -585,11 +736,15 @@ async def load_snapshot(
             for row in schedule_rows
         ),
         owed=tuple(owed_events),
-        categories=tuple(await _category_rows(conn)),
-        spend=tuple(await _spend_rows(conn, as_of)),
+        categories=tuple(category_rows),
+        spend=tuple(
+            await _spend_rows(conn, as_of, excluded_movement_ids=sorted(excluded_movement_ids))
+        ),
         history_start=await conn.fetchval(
             "SELECT min(date) FROM movements WHERE date <= $1", as_of
         ),
+        series=series_forecasts,
+        attributed=True,
         ask_horizon_days=horizon_days,
         gaps=tuple(gaps),
         balance_ages=tuple(balance_ages),

@@ -7,9 +7,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from arno.engine import series
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.money import amortize
-from arno.engine.patterns import Charge, KnownSchedule, detect_recurring
+from arno.engine.patterns import KnownSchedule, family_interval_days, is_covered
 from arno.engine.projection import (
     CardAccount,
     CashEvent,
@@ -295,18 +296,9 @@ async def test_the_projection_names_its_goal_remaining_apart_from_a_goal_card(de
 # --- e6 F7: a schedule covers a charge by category, amount, and cadence ------------------------
 
 
-def _rent_charges(amount_paise: int = 2_800_000) -> list[Charge]:
+def _rent_payments() -> list[series.Payment]:
     return [
-        Charge(
-            movement_id=f"mov_{index}",
-            merchant="Ramesh (landlord)",
-            normalized="ramesh landlord",
-            payee_id="pay_landlord",
-            outside_text=False,
-            date=when,
-            amount_paise=amount_paise,
-            category_id="cat_rent",
-        )
+        series.Payment(movement_id=f"mov_{index}", date=when, amount_paise=2_800_000)
         for index, when in enumerate(
             (date(2026, 8, 5), date(2026, 9, 5), date(2026, 10, 5), date(2026, 11, 5))
         )
@@ -324,28 +316,123 @@ def _rent_schedule(*, amount_paise: int = 2_800_000, interval_days: int = 30) ->
     )
 
 
+def _is_rent_covered(schedule: KnownSchedule) -> bool:
+    as_of = date(2026, 11, 10)
+    detected = series.detect(
+        _rent_payments(),
+        as_of=as_of,
+        window_start=date(2026, 1, 1),
+    )
+    assert detected is not None
+    return is_covered(
+        normalized=series.normalize("Ramesh (landlord)"),
+        categories={"cat_rent"},
+        amount_paise=detected.amounts.level_paise,
+        interval_days=family_interval_days(detected.rule.family),
+        schedules=[schedule],
+    )
+
+
 def test_a_schedule_covers_a_payee_charge_by_category_amount_and_cadence():
     # "Rent" and "Ramesh (landlord)" share no word, so name matching alone proposed it again.
-    assert detect_recurring(_rent_charges(), [_rent_schedule()]) == []
+    assert _is_rent_covered(_rent_schedule()) is True
 
 
 def test_a_different_amount_is_still_a_new_recurring_charge():
-    proposals = detect_recurring(_rent_charges(), [_rent_schedule(amount_paise=2_000_000)])
-    assert [proposal["merchant"] for proposal in proposals] == ["Ramesh (landlord)"]
+    assert _is_rent_covered(_rent_schedule(amount_paise=2_000_000)) is False
 
 
 def test_a_different_cadence_is_still_a_new_recurring_charge():
-    proposals = detect_recurring(_rent_charges(), [_rent_schedule(interval_days=7)])
-    assert [proposal["merchant"] for proposal in proposals] == ["Ramesh (landlord)"]
+    assert _is_rent_covered(_rent_schedule(interval_days=7)) is False
 
 
 async def test_the_demo_personas_rent_is_not_proposed_as_a_new_charge(demo_ledger):
-    from arno.engine import patterns
+    from arno.tools import patterns
 
     proposals = await patterns.detect(demo_ledger, as_of=DEMO_DAY)
     assert not any(
         proposal["kind"] == "new_subscription" and "Ramesh" in proposal["merchant"]
         for proposal in proposals
+    )
+
+
+async def test_series_detection_proposes_subscription_and_income_and_skips_random_and_covered(
+    ledger,
+):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense, record_income
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedules import create_schedule
+    from arno.tools import patterns
+
+    bank = await create_account(ledger, kind="bank", name="HDFC", opening_balance_paise=10_000_000)
+    sub_payee = await create_payee(ledger, display_name="Cloud Storage", kind="merchant")
+    rand_payee = await create_payee(ledger, display_name="Local Cafe", kind="merchant")
+    salary_payee = await create_payee(ledger, display_name="Acme Corp", kind="employer")
+    rent_cat = await ledger.fetchval("SELECT id FROM categories WHERE name = 'Rent' AND active")
+
+    for month in (6, 7, 8, 9):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=99_900,
+            description="Cloud Storage",
+            payee_id=sub_payee["id"],
+            category_id=str(rent_cat) if rent_cat else None,
+            date=date(2026, month, 5),
+        )
+        await record_income(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=10_000_000,
+            description="Monthly salary",
+            payee_id=salary_payee["id"],
+            date=date(2026, month, 1),
+        )
+
+    for when, amt in (
+        (date(2026, 6, 2), 18_000),
+        (date(2026, 6, 21), 62_000),
+        (date(2026, 7, 30), 25_000),
+        (date(2026, 9, 4), 140_000),
+    ):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amt,
+            description="Coffee",
+            payee_id=rand_payee["id"],
+            date=when,
+        )
+
+    as_of = date(2026, 10, 15)
+    proposals = await patterns.detect(ledger, as_of=as_of)
+    sub = next(p for p in proposals if p["kind"] == "new_subscription")
+    assert sub["payee_id"] == sub_payee["id"]
+    assert sub["confidence"] >= 0.9
+    assert sub["rule"]["family"] == "monthly"
+    assert sub["rule"]["description"]
+    assert not any(p.get("payee_id") == rand_payee["id"] for p in proposals)
+
+    inc = next(p for p in proposals if p["kind"] == "new_income")
+    assert inc["payee_id"] == salary_payee["id"]
+    assert inc["confidence"] >= 0.9
+    assert inc["rule"]["family"] == "monthly"
+
+    await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="rent",
+        name="Housing",
+        amount_paise=99_900,
+        account_id=bank["id"],
+        category_id=str(rent_cat) if rent_cat else None,
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 6, 5),
+    )
+    after_cover = await patterns.detect(ledger, as_of=as_of)
+    assert not any(
+        p["kind"] == "new_subscription" and p["payee_id"] == sub_payee["id"] for p in after_cover
     )
 
 

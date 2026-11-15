@@ -8,13 +8,13 @@ from typing import Any
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from arno.engine.patterns import Charge, KnownSchedule, detect_missed, detect_recurring
 from arno.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
 from arno.jobs.questions import run_scheduled_question, spend_budget
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
 from arno.ledger.common import today as ledger_today
 from arno.scheduled_questions import create_question
+from arno.tools.patterns import detect, detect_missed
 from tests.agent_helpers import streaming_model
 
 
@@ -174,30 +174,69 @@ async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
     assert len(rows) == 2
 
 
-def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text():
-    charges = [
-        Charge(
-            movement_id=f"mov_{index}",
-            merchant="Netflix",
-            normalized="netflix",
-            payee_id="pay_1",
-            outside_text=True,
-            date=date(2026, 8, 1) + timedelta(days=30 * index),
-            amount_paise=64900 + (index * 100),
-        )
-        for index in range(3)
-    ]
-    proposals = detect_recurring(charges, [])
-    assert len(proposals) == 1
-    assert proposals[0]["kind"] == "new_subscription"
-    assert proposals[0]["interval_days"] == 30
-    assert proposals[0]["outside_text"] is True
+async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.ledger.schedules import create_schedule
 
-    matched = detect_recurring(
-        charges,
-        [KnownSchedule(id="sch_1", name="Netflix", normalized="netflix", amount_paise=64900)],
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    netflix = await create_payee(ledger, display_name="Netflix", kind="merchant", outside_text=True)
+    random_shop = await create_payee(ledger, display_name="Corner Store", kind="merchant")
+
+    for month in (6, 7, 8, 9):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=64_900,
+            description="Netflix subscription",
+            payee_id=netflix["id"],
+            date=date(2026, month, 1),
+        )
+
+    for when, amt in (
+        (date(2026, 6, 3), 12_000),
+        (date(2026, 6, 17), 85_000),
+        (date(2026, 7, 29), 34_000),
+        (date(2026, 9, 2), 199_000),
+    ):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=amt,
+            description="Corner store purchase",
+            payee_id=random_shop["id"],
+            date=when,
+        )
+
+    as_of = date(2026, 10, 15)
+    proposals = await detect(ledger, as_of=as_of)
+    sub_proposals = [p for p in proposals if p["kind"] == "new_subscription"]
+    assert len(sub_proposals) == 1
+    prop = sub_proposals[0]
+    assert prop["payee_id"] == netflix["id"]
+    assert prop["interval_days"] == 30
+    assert prop["outside_text"] is True
+    assert prop["confidence"] >= 0.9
+    assert prop["rule"]["family"] == "monthly"
+    assert prop["rule"]["description"]
+    assert prop["next_date"] == "2026-11-01"
+    assert not any(p.get("payee_id") == random_shop["id"] for p in proposals)
+
+    await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="subscription",
+        name="Netflix",
+        amount_paise=64_900,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=1",
+        starts=date(2026, 6, 1),
     )
-    assert matched == []
+    covered = await detect(ledger, as_of=as_of)
+    assert not any(
+        p["kind"] == "new_subscription" and p["payee_id"] == netflix["id"] for p in covered
+    )
 
 
 async def test_missed_detection_finds_a_late_schedule_and_preserves_the_flag(db):

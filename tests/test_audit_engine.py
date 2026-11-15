@@ -9,7 +9,6 @@ import pytest
 
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.money import amortize
-from arno.engine.patterns import _load_charges, detect_missed
 from arno.engine.projection import (
     DEFAULT_SEED,
     CardAccount,
@@ -40,6 +39,7 @@ from arno.ledger.movements import (
 from arno.ledger.payees import create_payee
 from arno.ledger.schedule_payments import link_payment
 from arno.ledger.schedules import create_schedule
+from arno.tools.patterns import _load_spend_payments, detect_missed
 from arno.tools.projection import card as projection_card
 from arno.tools.projection import load_inputs
 from arno.tools.projection import summary as projection_summary
@@ -731,7 +731,7 @@ async def test_a_reversed_refund_is_not_a_recurring_charge(ledger):
         date=ledger_today() - timedelta(days=10),
     )
     await correct_movement(ledger, refund["id"], changes={"delete": True})
-    assert await _load_charges(ledger, ledger_today()) == []
+    assert await _load_spend_payments(ledger, ledger_today()) == []
 
 
 # --- projection adapter --------------------------------------------------------------------

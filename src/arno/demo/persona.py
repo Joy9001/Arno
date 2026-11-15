@@ -45,7 +45,7 @@ TRUNCATE
     pgledger_idempotency_keys, pgledger_entries, pgledger_transfers, pgledger_accounts,
     accounts, payees, categories, movements, movement_legs, captures,
     imports, statement_lines, statement_layouts, parser_versions, attachments,
-    schedules, goals, scheduled_questions,
+    schedules, series_detections, goals, scheduled_questions,
     category_rules, baselines, audit_log, backup_runs
 RESTART IDENTITY CASCADE
 """

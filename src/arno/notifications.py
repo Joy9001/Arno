@@ -29,6 +29,7 @@ PUSH_BODIES = {
     "reminder": "A payment reminder is ready",
     "risk_warning": "A projection warning is ready",
     "new_subscription": "A recurring charge is ready to review",
+    "new_income": "A recurring income stream is ready to review",
     "missed_recurring": "A missed recurring charge is ready to review",
     "scheduled_question": "Your scheduled question has an answer",
     "backup_stale": "Arno needs a backup check",

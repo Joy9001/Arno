@@ -297,6 +297,7 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     - schedules: recurring income, obligation, installment, and goal-contribution rules
     - schedule_occurrences: materialized due dates with frozen expectations
     - schedule_payments: explicit allocations from movements to occurrences
+    - series_detections: recurring spend and income series detected from payment history
     - goals: savings targets linked to each goal account
     - scheduled_questions: user-scheduled recurring agent prompts
 

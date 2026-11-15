@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import math
 import os
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ import numpy.typing as npt
 from arno.db.conn import Connection
 from arno.engine import personas as personas_mod
 from arno.engine import scoring
+from arno.engine import series as series_mod
 from arno.engine.inputs import (
     CategoryRow,
     ConfiguredSchedule,
@@ -38,6 +40,15 @@ from arno.engine.inputs import (
     build_inputs,
 )
 from arno.engine.money import money
+from arno.engine.patterns import (
+    HISTORY_DAYS as PATTERN_HISTORY_DAYS,
+)
+from arno.engine.patterns import (
+    KnownSchedule,
+    family_interval_days,
+    is_covered,
+    rule_interval_days,
+)
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -49,12 +60,13 @@ from arno.engine.projection import (
     LiquidAccount,
     Model,
     ProjectionInput,
+    SeriesForecast,
     SpendRow,
     last_statement_close,
     simulate_paths,
 )
 from arno.india.recurrence import expand_rule
-from arno.india.workdays import HOLIDAY_ADJUSTMENTS, HolidayAdjust
+from arno.india.workdays import HOLIDAY_ADJUSTMENTS, HolidayAdjust, IndiaCalendar, calendar_for
 
 HORIZONS = (7, 14, 30, 60, 90)
 LAST_HORIZON = HORIZONS[-1]
@@ -252,6 +264,15 @@ def score_case(case: Case, names: Sequence[str], seed: int = DEFAULT_SEED) -> li
 
 
 @dataclass(frozen=True, slots=True)
+class _DetectedPersonaSeries:
+    payee_key: str
+    name: str
+    detection: series_mod.Detection
+    card_id: str | None
+    category_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class _Ledger:
     """A persona's daily balances, precomputed once so each origin is a lookup."""
 
@@ -260,6 +281,8 @@ class _Ledger:
     bank: npt.NDArray[np.int64]
     cards: dict[str, npt.NDArray[np.int64]]
     goals: dict[str, npt.NDArray[np.int64]]
+    calendar: IndiaCalendar
+    detections: dict[date, tuple[_DetectedPersonaSeries, ...]] = field(default_factory=dict)
 
     def index(self, day: date) -> int:
         return (day - self.start).days
@@ -296,13 +319,91 @@ def _ledger(persona: personas_mod.Persona) -> _Ledger:
             if movement.goal_id in goals:
                 goals[movement.goal_id][offset] += amount
     bank[0] += persona.opening_bank_paise
+    cal = calendar_for(
+        persona.history_start - timedelta(days=PATTERN_HISTORY_DAYS + 30),
+        persona.end + timedelta(days=LAST_HORIZON + 30),
+    )
     return _Ledger(
         persona=persona,
         start=start,
         bank=np.cumsum(bank),
         cards={key: np.cumsum(value) for key, value in cards.items()},
         goals={key: np.cumsum(value) for key, value in goals.items()},
+        calendar=cal,
     )
+
+
+def _detection_boundary(history_start: date, as_of: date) -> date:
+    days = (as_of - history_start).days
+    return history_start + timedelta(days=(days // 28) * 28)
+
+
+def _persona_detections(ledger: _Ledger, boundary: date) -> tuple[_DetectedPersonaSeries, ...]:
+    cached = ledger.detections.get(boundary)
+    if cached is not None:
+        return cached
+
+    window_start = boundary - timedelta(days=PATTERN_HISTORY_DAYS)
+    grouped: dict[str, list[personas_mod.Movement]] = {}
+    for movement in ledger.persona.movements:
+        if movement.kind != "spend" or not window_start <= movement.date <= boundary:
+            continue
+        if not movement.payee_key:
+            continue
+        grouped.setdefault(movement.payee_key, []).append(movement)
+
+    detected: list[_DetectedPersonaSeries] = []
+    for payee_key in sorted(grouped):
+        group = sorted(grouped[payee_key], key=lambda item: (item.date, item.id))
+        if len(group) < 3:
+            continue
+        detection = series_mod.detect(
+            [
+                series_mod.Payment(
+                    movement_id=item.id,
+                    date=item.date,
+                    amount_paise=item.amount_paise,
+                )
+                for item in group
+            ],
+            as_of=boundary,
+            window_start=window_start,
+            calendar=ledger.calendar,
+        )
+        if detection is None or detection.confidence < series_mod.PROJECT_CONFIDENCE:
+            continue
+
+        matched_set = set(detection.matched)
+        matched_movements = [item for item in group if item.id in matched_set]
+        if not matched_movements:
+            continue
+
+        card_counts = Counter(
+            None if item.account == "bank" else item.account for item in matched_movements
+        )
+        card_id, _ = max(
+            card_counts.items(),
+            key=lambda entry: (entry[1], 1 if entry[0] is None else 0, entry[0] or ""),
+        )
+        cat_list = [item.category_id for item in matched_movements if item.category_id is not None]
+        if cat_list:
+            cat_counts = Counter(cat_list)
+            category_id, _ = min(cat_counts.items(), key=lambda entry: (-entry[1], entry[0]))
+        else:
+            category_id = None
+        detected.append(
+            _DetectedPersonaSeries(
+                payee_key=payee_key,
+                name=matched_movements[-1].payee or payee_key,
+                detection=detection,
+                card_id=card_id,
+                category_id=category_id,
+            )
+        )
+
+    result = tuple(detected)
+    ledger.detections[boundary] = result
+    return result
 
 
 def _baseline(
@@ -372,18 +473,90 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
                     linked_goal=schedule.goal_id in goal_ids,
                 )
             )
+
+    confirmed_series_ids = {
+        series_item.id for series_item in persona.series if series_item.schedule_id is not None
+    }
+    confirmed_series_payees = {
+        series_item.payee_key
+        for series_item in persona.series
+        if series_item.schedule_id is not None and series_item.kind == "spend"
+    }
+    known_schedules = [
+        KnownSchedule(
+            id=schedule.id,
+            name=schedule.name,
+            normalized=series_mod.normalize(schedule.name),
+            amount_paise=schedule.amount_paise,
+            category_id=schedule.category_id,
+            interval_days=rule_interval_days(schedule.rule),
+            confirmed=schedule.confirmed,
+        )
+        for schedule in schedules
+        if schedule.confirmed
+    ]
+    category_reducible = {category.id: category.reducible for category in persona.categories}
+    boundary = _detection_boundary(persona.history_start, as_of)
+    series_forecasts: list[SeriesForecast] = []
+    matched_by_projected: set[str] = set()
+    for detected in _persona_detections(ledger, boundary):
+        if detected.payee_key in confirmed_series_payees:
+            continue
+        categories = {detected.category_id} if detected.category_id is not None else set()
+        if is_covered(
+            normalized=series_mod.normalize(detected.name),
+            categories=categories,
+            amount_paise=detected.detection.amounts.level_paise,
+            interval_days=family_interval_days(detected.detection.rule.family),
+            schedules=known_schedules,
+        ):
+            continue
+        expected = tuple(
+            series_mod.upcoming(
+                detected.detection, after=as_of, until=end, calendar=ledger.calendar
+            )
+        )
+        amounts = (
+            (detected.detection.amounts.level_paise,)
+            if detected.detection.amounts.kind in ("fixed", "stepped")
+            else detected.detection.amounts.samples
+        )
+        series_forecasts.append(
+            SeriesForecast(
+                id=f"det_{detected.payee_key}",
+                name=detected.name,
+                expected=expected,
+                jitter=detected.detection.jitter,
+                skip=detected.detection.skip,
+                alive=detected.detection.alive,
+                amounts=amounts,
+                card_id=detected.card_id,
+                category_id=detected.category_id,
+                reducible=(
+                    category_reducible.get(detected.category_id, False)
+                    if detected.category_id
+                    else False
+                ),
+            )
+        )
+        matched_by_projected.update(detected.detection.matched)
+
     window = as_of - timedelta(days=RARE_WINDOW_DAYS)
     spend: dict[tuple[date, str | None, str | None], int] = {}
     for movement in persona.movements:
         if movement.kind != "spend" or not window <= movement.date < as_of:
             continue
+        if movement.series_id in confirmed_series_ids:
+            continue
+        if movement.id in matched_by_projected:
+            continue
         card_id = None if movement.account == "bank" else movement.account
         key = (movement.date, movement.category_id, card_id)
         spend[key] = spend.get(key, 0) + movement.amount_paise
-    categories: list[CategoryRow] = []
+    categories_rows: list[CategoryRow] = []
     for category in persona.categories:
         baseline, source = _baseline(persona, category, as_of)
-        categories.append(
+        categories_rows.append(
             CategoryRow(
                 id=category.id,
                 name=category.name,
@@ -432,13 +605,15 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
             ConfiguredSchedule(kind=schedule.kind, confirmed=schedule.confirmed, ends=schedule.ends)
             for schedule in schedules
         ),
-        categories=tuple(categories),
+        categories=tuple(categories_rows),
         spend=tuple(
             SpendRow(date=day, category_id=category, card_id=card, amount_paise=amount)
             for (day, category, card), amount in sorted(
                 spend.items(), key=lambda item: (item[0][0], item[0][1] or "", item[0][2] or "")
             )
         ),
+        series=tuple(series_forecasts),
+        attributed=True,
         ask_horizon_days=LAST_HORIZON,
         history_start=persona.history_start,
     )

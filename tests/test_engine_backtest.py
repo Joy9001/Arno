@@ -28,6 +28,51 @@ def test_a_persona_snapshot_sees_nothing_after_its_day():
     assert "no confirmed income schedule" not in inputs.data_quality["setup_gaps"]
 
 
+def test_persona_snapshot_on_messy_recurring_projects_series_and_excludes_confirmed_payees():
+    persona = personas.generate("messy_recurring", personas.TUNING_SEEDS[0])
+    ledger = backtest._ledger(persona)
+    as_of = persona.end - timedelta(days=120)
+
+    snapshot = backtest.persona_snapshot(ledger, as_of)
+
+    assert snapshot.attributed is True
+    assert snapshot.series
+    confirmed_series_ids = {s.id for s in persona.series if s.schedule_id is not None}
+    confirmed_payees = {
+        s.payee_key for s in persona.series if s.schedule_id is not None and s.kind == "spend"
+    }
+    assert confirmed_payees
+    assert not any(
+        forecast.id == f"det_{payee}" for forecast in snapshot.series for payee in confirmed_payees
+    )
+    assert any(forecast.id == "det_netflix" for forecast in snapshot.series)
+
+    confirmed_movements = [
+        m
+        for m in persona.movements
+        if m.kind == "spend"
+        and m.series_id in confirmed_series_ids
+        and m.date < as_of
+        and m.date >= as_of - timedelta(days=backtest.RARE_WINDOW_DAYS)
+    ]
+    assert confirmed_movements
+    spend_by_key = {
+        (row.date, row.category_id, row.card_id): row.amount_paise for row in snapshot.spend
+    }
+    for mov in confirmed_movements:
+        card_id = None if mov.account == "bank" else mov.account
+        other_spend = sum(
+            other.amount_paise
+            for other in persona.movements
+            if other.kind == "spend"
+            and other.date == mov.date
+            and other.category_id == mov.category_id
+            and (None if other.account == "bank" else other.account) == card_id
+            and other.series_id not in confirmed_series_ids
+        )
+        assert spend_by_key.get((mov.date, mov.category_id, card_id), 0) <= other_spend
+
+
 def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():
     result = backtest.backtest_personas(
         seeds=(personas.HOLDOUT_SEEDS[0],),

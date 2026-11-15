@@ -7,17 +7,37 @@ from datetime import date
 from typing import Any
 
 from arno.db.conn import Connection, connect
-from arno.engine import patterns
 from arno.india.formatting import format_paise
 from arno.notifications import create_notification, send_push_for_kind
+from arno.tools import patterns
 
 logger = logging.getLogger("arno.jobs.patterns")
+
+_CADENCE_LABEL = {
+    7: "week",
+    14: "two weeks",
+    15: "half-month",
+    28: "four weeks",
+    30: "month",
+    90: "quarter",
+    180: "six months",
+    365: "year",
+}
 
 
 def _suggested_rule(interval: int, last_date: date) -> str:
     if interval == 7:
         days = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
         return f"FREQ=WEEKLY;BYDAY={days[last_date.weekday()]}"
+    if interval == 14:
+        days = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
+        return f"FREQ=WEEKLY;INTERVAL=2;BYDAY={days[last_date.weekday()]}"
+    if interval == 28:
+        return "FREQ=DAILY;INTERVAL=28"
+    if interval == 90:
+        return f"FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY={last_date.day}"
+    if interval == 180:
+        return f"FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY={last_date.day}"
     if interval == 365:
         return f"FREQ=YEARLY;BYMONTH={last_date.month};BYMONTHDAY={last_date.day}"
     # BYMONTHDAY=31 has no occurrence in a short month; the last day is the charge's real day.
@@ -27,7 +47,7 @@ def _suggested_rule(interval: int, last_date: date) -> str:
 
 def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     interval = int(proposal["interval_days"])
-    cadence = {7: "week", 30: "month", 365: "year"}.get(interval, f"{interval} days")
+    cadence = _CADENCE_LABEL.get(interval, f"{interval} days")
     last = date.fromisoformat(proposal["last_date"])
     amount = format_paise(int(proposal["amount_paise"]))
     title = f"New recurring charge: {proposal['merchant']}"
@@ -41,6 +61,26 @@ def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str
         **proposal,
         "suggested_rule": _suggested_rule(interval, last),
         "suggestion": "Add it as an obligation if it is yours.",
+    }
+    return title, body, key, data
+
+
+def _new_income(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
+    interval = int(proposal["interval_days"])
+    cadence = _CADENCE_LABEL.get(interval, f"{interval} days")
+    last = date.fromisoformat(proposal["last_date"])
+    amount = format_paise(int(proposal["amount_paise"]))
+    title = f"New recurring income: {proposal['merchant']}"
+    body = (
+        f"{proposal['merchant']} paid {amount} about every {cadence}, "
+        f"{proposal['occurrences']} times from {proposal['first_date']} to "
+        f"{proposal['last_date']}. Add it as recurring income?"
+    )
+    key = f"pattern:income:{proposal['normalized']}:{interval}:{proposal['last_date']}"
+    data = {
+        **proposal,
+        "suggested_rule": _suggested_rule(interval, last),
+        "suggestion": "Add it as recurring income if it is yours.",
     }
     return title, body, key, data
 
@@ -67,6 +107,9 @@ async def run_pattern_detection(
         if proposal["kind"] == "new_subscription":
             title, body, key, data = _new_subscription(proposal)
             kind = "new_subscription"
+        elif proposal["kind"] == "new_income":
+            title, body, key, data = _new_income(proposal)
+            kind = "new_income"
         else:
             title, body, key, data = _missed(proposal)
             kind = "missed_recurring"
@@ -84,9 +127,10 @@ async def run_pattern_detection(
 
 
 async def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
+    del payload
     async with connect() as conn:
         rows = await run_pattern_detection(conn)
-        for kind in ("new_subscription", "missed_recurring"):
+        for kind in ("new_subscription", "new_income", "missed_recurring"):
             if any(row["kind"] == kind for row in rows):
                 await send_push_for_kind(conn, kind)
         return {"created": len(rows), "ids": [row["id"] for row in rows]}

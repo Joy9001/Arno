@@ -33,6 +33,7 @@ EXPECTED_TABLES = {
     "parser_versions",
     "attachments",
     "schedules",
+    "series_detections",
     "goals",
     "scheduled_questions",
     "payees",
@@ -166,6 +167,7 @@ async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
             "v_owed",
             "schedule_occurrences",
             "schedule_payments",
+            "series_detections",
         ):
             assert await conn.fetchval(f"SELECT count(*) FROM {readable}") == 0
 

@@ -129,6 +129,7 @@ RESET_TABLES = (
     "parser_versions",
     "attachments",
     "schedules",
+    "series_detections",
     "goals",
     "scheduled_questions",
     "category_rules",

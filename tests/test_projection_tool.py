@@ -309,3 +309,133 @@ def test_an_unknown_hypothetical_key_is_still_rejected():
         projection_tools._hypothetical(
             {"amount_paise": 5_000_000, "date": "2026-11-20", "emo_months": 3}
         )
+
+
+async def test_load_snapshot_excludes_schedule_paid_and_one_off_movements_from_spend(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.schedule_payments import link_payment
+    from arno.ledger.schedules import create_schedule
+
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="SBI",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 9, 1),
+    )
+    food_cat = await ledger.fetchval(
+        "SELECT id FROM categories WHERE name = 'Food & Dining' AND active"
+    )
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        subtype="rent",
+        name="Rent",
+        amount_paise=2_500_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=5",
+        starts=date(2026, 8, 5),
+    )
+    paid_mov = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=2_500_000,
+        description="September rent",
+        category_id=str(food_cat) if food_cat else None,
+        date=date(2026, 9, 5),
+    )
+    await link_payment(
+        ledger,
+        schedule_id=schedule["id"],
+        due_date=date(2026, 9, 5),
+        movement_id=paid_mov["id"],
+    )
+
+    one_off_mov = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=1_200_000,
+        description="Laptop repair",
+        category_id=str(food_cat) if food_cat else None,
+        date=date(2026, 9, 12),
+    )
+    await ledger.execute("UPDATE movements SET one_off = true WHERE id = $1", one_off_mov["id"])
+
+    await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=45_000,
+        description="Lunch",
+        category_id=str(food_cat) if food_cat else None,
+        date=date(2026, 9, 20),
+    )
+
+    snapshot = await projection_tools.load_snapshot(ledger, as_of=date(2026, 10, 1))
+    assert snapshot.attributed is True
+    assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 20), 45_000)]
+
+
+async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spend(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+    from arno.tools import patterns
+
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="SBI",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 9, 1),
+    )
+    card = await create_account(
+        ledger,
+        kind="card",
+        name="HDFC Card",
+        credit_limit_paise=5_000_000,
+        statement_day=15,
+        due_day=5,
+    )
+    cat_row = await ledger.fetchrow_required(
+        "SELECT id, reducible FROM categories WHERE active ORDER BY name LIMIT 1"
+    )
+    cat_id = str(cat_row["id"])
+    netflix = await create_payee(ledger, display_name="Netflix", kind="merchant", outside_text=True)
+
+    for month in (6, 7, 8, 9):
+        await record_expense(
+            ledger,
+            account_id=card["id"],
+            amount_paise=64_900,
+            description="Netflix",
+            payee_id=netflix["id"],
+            category_id=cat_id,
+            date=date(2026, month, 1),
+        )
+    await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=15_000,
+        description="Coffee",
+        category_id=cat_id,
+        date=date(2026, 9, 18),
+    )
+
+    as_of = date(2026, 10, 1)
+    await patterns.detect(ledger, as_of=as_of)
+    snapshot = await projection_tools.load_snapshot(ledger, as_of=as_of)
+
+    assert snapshot.attributed is True
+    assert len(snapshot.series) == 1
+    forecast = snapshot.series[0]
+    assert forecast.amounts == (64_900,)
+    assert forecast.card_id == card["id"]
+    assert forecast.category_id == cat_id
+    assert forecast.reducible is bool(cat_row["reducible"])
+    assert date(2026, 11, 1) in forecast.expected
+    assert "Netflix" not in forecast.name
+    assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 18), 15_000)]
+
+    early = await projection_tools.load_snapshot(ledger, as_of=date(2026, 9, 25), known_then=True)
+    assert early.series == ()

@@ -8,7 +8,6 @@ from datetime import date, timedelta
 import pytest
 
 from arno.db.conn import connect
-from arno.engine.patterns import _load_charges
 from arno.importers.baselines import recompute_baselines
 from arno.importers.categorize import _counts as categorize_counts
 from arno.importers.commit import _book_adjustment, _superseded_anchors
@@ -32,6 +31,7 @@ from arno.ledger.movements import (
 )
 from arno.ledger.payees import create_payee
 from arno.ledger.uncategorized import uncategorized_rows
+from arno.tools.patterns import _load_spend_payments
 from arno.tools.projection import load_inputs
 from arno.tools.read import query_movements, summarize_spending
 from arno.tools.recaps import _spending_days, recap
@@ -451,7 +451,7 @@ async def test_baselines_projection_patterns_recaps_and_loan_interest_across_und
     assert all("uncategorized spending" not in g for g in gaps_rev)
     assert any("Groceries has only 2 real spending days" in g for g in gaps_rev)
     assert all(c.name != "Groceries" for c in spend_cats_rev)
-    charges_rev = await _load_charges(ledger, as_of=as_of_after)
+    charges_rev = await _load_spend_payments(ledger, as_of=as_of_after)
     assert len(charges_rev) == 2
 
     span_str = day.strftime("%Y-%m")
@@ -474,7 +474,7 @@ async def test_baselines_projection_patterns_recaps_and_loan_interest_across_und
         c.name == "Groceries" and sum(amt for _, amt in c.history) == 45_000 for c in spend_cats_res
     )
     assert any("uncategorized spending" in g for g in gaps_res)
-    charges_res = await _load_charges(ledger, as_of=as_of_after)
+    charges_res = await _load_spend_payments(ledger, as_of=as_of_after)
     assert len(charges_res) == 4
     recap_res = await recap(ledger, span_str)
     biggest_res = next(s for s in recap_res["stories"] if s["key"] == "biggest")
