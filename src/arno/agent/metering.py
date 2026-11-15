@@ -286,14 +286,6 @@ class MeteredModel(WrapperModel):
             return settings
         return {**(settings or {}), "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS}
 
-    def _stamp_stream(self, stream: StreamedResponse) -> None:
-        details = dict(stream.provider_details or {})
-        details["arno_cost"] = {
-            "provider": self.provider_name,
-            "billing_mode": self.billing_mode,
-        }
-        stream.provider_details = details
-
     def _start(self, *, mark_parent: bool) -> _Attempt:
         if self.wrapped.system not in {"function", "test"}:
             validate_pricing(
@@ -377,7 +369,6 @@ class MeteredModel(WrapperModel):
                 model_request_parameters,
                 run_context,
             ) as stream:
-                self._stamp_stream(stream)
                 try:
                     yield stream
                 except BaseException as exc:

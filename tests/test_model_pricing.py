@@ -9,12 +9,16 @@ from typing import override
 
 import httpx2
 import pytest
+from pydantic_ai import Agent
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models import ModelRequestParameters, override_allow_model_requests
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RequestUsage
+from pydantic_ai_harness.spend import InMemorySpendStore
 
+from arno.agent.capabilities import drain_events
+from arno.agent.metering import MeteredModel
 from arno.agent.pricing import (
     GENAI_PRICES_VERSION,
     LOCAL_PRICE_REVISION,
@@ -26,6 +30,7 @@ from arno.agent.pricing import (
     price_response,
 )
 from arno.agent.provider_usage import BillingMetadataModel, capture_response
+from arno.agent.spend import spend_limits
 
 WHEN = datetime(2026, 11, 12, tzinfo=UTC)
 
@@ -514,6 +519,123 @@ async def test_stream_billing_metadata_survives_a_child_task_drain():
         assert captured["cost"] == Decimal("0.001")
     finally:
         provider_usage._captured.reset(token)
+
+
+def _opencode_stream_body() -> str:
+    chunks = [
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion.chunk",
+            "created": 1763000000,
+            "model": "gpt-5",
+            "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion.chunk",
+            "created": 1763000000,
+            "model": "gpt-5",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "cost": 0.001,
+                "opencode": {
+                    "billing_source": "byok",
+                    "list_cost": 0.002,
+                    "estimated": True,
+                    "allowance": 0,
+                },
+            },
+        },
+    ]
+    return "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+def _opencode_stream_handler(body: str):
+    async def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+
+        class Body(httpx2.AsyncByteStream):
+            @override
+            async def __aiter__(self):
+                for line in body.splitlines(keepends=True):
+                    yield line.encode()
+
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=Body())
+
+    return handler
+
+
+class _Journal:
+    async def record_intent(self, attempt):
+        del attempt
+
+    async def record_final(self, attempt, observation, finished_at):
+        del attempt, observation, finished_at
+
+
+def _metered_opencode_model(handler) -> MeteredModel:
+    return MeteredModel(
+        _opencode_model(handler),
+        provider="opencode",
+        billing_mode="metered",
+        role="chat",
+        journal=_Journal(),
+    )
+
+
+async def test_opencode_stream_billing_metadata_outlives_the_stream_context():
+    model = _metered_opencode_model(_opencode_stream_handler(_opencode_stream_body()))
+
+    with override_allow_model_requests(True):
+        async with model.request_stream([], None, ModelRequestParameters()) as stream:
+            async for _event in stream:
+                pass
+            inside = stream.get()
+        after = stream.get()
+
+    for response in (inside, after):
+        details = response.provider_details or {}
+        assert details["opencode"]["list_cost"] == Decimal("0.002")
+        assert details["provider_usage"]["cost"] == Decimal("0.001")
+        assert details["arno_cost"] == {"provider": "opencode", "billing_mode": "metered"}
+        assert list(details).count("arno_cost") == 1
+    assert price_response(after) == Decimal("0.002")
+
+
+async def test_streamed_opencode_run_is_priced_by_the_spend_gate(monkeypatch):
+    priced: list[ModelResponse] = []
+    prices: list[Decimal | None] = []
+
+    def spy(response: ModelResponse) -> Decimal | None:
+        priced.append(response)
+        price = price_response(response)
+        prices.append(price)
+        return price
+
+    monkeypatch.setattr("arno.agent.spend.price_response", spy)
+    store = InMemorySpendStore()
+    limits = spend_limits(store)
+    assert limits is not None
+    agent = Agent(
+        _metered_opencode_model(_opencode_stream_handler(_opencode_stream_body())),
+        output_type=str,
+        capabilities=[limits],
+        name="pricing-test",
+    )
+
+    with override_allow_model_requests(True):
+        result = await agent.run("Synthetic prompt.", event_stream_handler=drain_events)
+
+    assert result.output == "hi"
+    assert prices == [Decimal("0.002")]
+    details = priced[0].provider_details or {}
+    assert details["opencode"]["list_cost"] == Decimal("0.002")
+    (status,) = await limits.status()
+    assert status.spent.usd == Decimal("0.002")
+    assert status.spent.unpriced_requests == 0
 
 
 @pytest.mark.parametrize(

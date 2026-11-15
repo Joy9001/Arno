@@ -188,11 +188,11 @@ class BillingMetadataModel(WrapperModel):
     def _marker(self) -> dict[str, str]:
         return {"provider": self.provider_name, "billing_mode": self.billing_mode}
 
-    def _finish(self, response: ModelResponse) -> ModelResponse:
+    def _finish(self, response: ModelResponse, metadata: dict[str, Any]) -> ModelResponse:
         details = dict(response.provider_details or {})
         details["arno_cost"] = self._marker()
         response.provider_details = details
-        _attach(response, _captured.get())
+        _attach(response, metadata)
         return response
 
     @override
@@ -202,10 +202,12 @@ class BillingMetadataModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        token = _captured.set({})
+        metadata: dict[str, Any] = {}
+        token = _captured.set(metadata)
         try:
             return self._finish(
-                await self.wrapped.request(messages, model_settings, model_request_parameters)
+                await self.wrapped.request(messages, model_settings, model_request_parameters),
+                metadata,
             )
         finally:
             _captured.reset(token)
@@ -219,24 +221,33 @@ class BillingMetadataModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncGenerator[StreamedResponse]:
-        token = _captured.set({})
+        metadata: dict[str, Any] = {}
+        token = _captured.set(metadata)
         try:
             async with self.wrapped.request_stream(
                 messages, model_settings, model_request_parameters, run_context
             ) as stream:
-                yield cast(StreamedResponse, _BillingStream(stream, self._finish))
+                yield cast(StreamedResponse, _BillingStream(stream, self._finish, metadata))
         finally:
             _captured.reset(token)
 
 
 class _BillingStream:
-    """A streamed response whose final `get()` carries the billing metadata."""
+    """A streamed response whose every `get()` carries this request's billing metadata.
+
+    Core reads the stream's response again after this wrapper's context has exited and the
+    capture context variable has been reset, so the metadata belongs to the stream itself.
+    """
 
     def __init__(
-        self, wrapped: StreamedResponse, finish: Callable[[ModelResponse], ModelResponse]
+        self,
+        wrapped: StreamedResponse,
+        finish: Callable[[ModelResponse, dict[str, Any]], ModelResponse],
+        metadata: dict[str, Any],
     ) -> None:
         self._wrapped = wrapped
         self._finish = finish
+        self._metadata = metadata
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
@@ -245,7 +256,7 @@ class _BillingStream:
         return self._wrapped.__aiter__()
 
     def get(self) -> ModelResponse:
-        return self._finish(self._wrapped.get())
+        return self._finish(self._wrapped.get(), self._metadata)
 
 
 __all__ = ["BillingMetadataModel", "CapturingSSEStream", "capture_response"]
