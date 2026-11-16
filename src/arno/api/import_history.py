@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from arno.db.conn import Connection
+from arno.importers.pipeline import import_list_item
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
@@ -22,7 +23,8 @@ _SELECT = """
 SELECT
     i.id, i.status, i.period_start, i.period_end, i.check_status, i.counts,
     i.reason, i.created_at, i.committed_at, i.undone_at,
-    a.filename, acc.name AS account_name
+    a.filename, acc.name AS account_name,
+    (a.data IS NOT NULL AND a.purged_at IS NULL) AS file_present
 FROM imports i
 LEFT JOIN attachments a ON a.id = i.attachment_id
 LEFT JOIN v_accounts acc ON acc.id = i.account_id
@@ -44,27 +46,6 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
         return value, import_id
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="Invalid import history cursor.") from exc
-
-
-def _item(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "import_id": row["id"],
-        "status": row["status"],
-        "filename": row["filename"],
-        "account": row["account_name"],
-        "period": {
-            "start": row["period_start"].isoformat() if row["period_start"] else None,
-            "end": row["period_end"].isoformat() if row["period_end"] else None,
-        }
-        if row["period_start"] or row["period_end"]
-        else None,
-        "check": row["check_status"],
-        "counts": row["counts"],
-        "reason": row["reason"],
-        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-        "committed_at": row["committed_at"].isoformat() if row["committed_at"] else None,
-        "undone_at": row["undone_at"].isoformat() if row["undone_at"] else None,
-    }
 
 
 async def list_import_history(
@@ -97,7 +78,7 @@ async def list_import_history(
     next_cursor = (
         _encode_cursor(rows[-1]["created_at"], rows[-1]["id"]) if has_more and rows else None
     )
-    return {"items": [_item(row) for row in rows], "next_cursor": next_cursor}
+    return {"items": [import_list_item(row) for row in rows], "next_cursor": next_cursor}
 
 
 __all__ = ["DEFAULT_LIMIT", "MAX_LIMIT", "list_import_history"]

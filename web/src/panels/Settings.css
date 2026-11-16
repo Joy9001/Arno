@@ -1101,3 +1101,74 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   color: var(--red);
   border-color: rgba(255, 99, 99, 0.35);
 }
+
+.stg-deletion {
+  display: grid;
+  gap: 18px;
+}
+
+.stg-deletion-block h4 {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+}
+
+.stg-deletion-block p {
+  margin: 0;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-deletion-list,
+.stg-deletion-why {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stg-deletion-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-deletion-list code {
+  font-size: 12px;
+}
+
+.stg-deletion-why li {
+  display: grid;
+  gap: 2px;
+  color: var(--sub);
+  font-size: 13px;
+}
+
+.stg-deletion-why strong {
+  color: var(--text);
+  font-weight: 560;
+}
+
+.stg-deletion-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.stg-deletion-confirm label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  color: var(--sub);
+  font-size: 13px;
+}
+

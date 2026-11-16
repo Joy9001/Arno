@@ -13,6 +13,7 @@ import type {
 } from "../types";
 import { useApi } from "../useApi";
 import { KIND_LABELS, markNotificationRead, openNotification } from "../notifications";
+import { PriceChange } from "../PriceChange";
 
 type NeedActions = {
   onOpen: (item: NotificationItem) => void;
@@ -21,7 +22,7 @@ type NeedActions = {
   dismissing: string | null;
 };
 
-function NeedRow({ item, busy, dismissing, onOpen, onDismiss }: { item: NotificationItem } & NeedActions) {
+export function NeedRow({ item, busy, dismissing, onOpen, onDismiss }: { item: NotificationItem } & NeedActions) {
   const working = busy === item.id || dismissing === item.id;
   return (
     <article
@@ -36,6 +37,7 @@ function NeedRow({ item, busy, dismissing, onOpen, onDismiss }: { item: Notifica
         <span className="inbox-kind">{KIND_LABELS[item.kind] ?? item.kind.replaceAll("_", " ")}</span>
         <strong className="inbox-subject">{item.title}</strong>
         {item.body && <p className="inbox-body">{item.body}</p>}
+        {item.kind === "price_change" && <PriceChange item={item} />}
         <div className="need-actions">
           <button
             type="button"

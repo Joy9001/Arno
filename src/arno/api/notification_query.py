@@ -36,16 +36,17 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
 
 async def count_unread(conn: Connection) -> int:
     row = await conn.fetchrow_required(
-        "SELECT count(*) AS n FROM notifications WHERE read_at IS NULL"
+        "SELECT count(*) AS n FROM notifications WHERE read_at IS NULL AND resolved_at IS NULL"
     )
     return int(row["n"])
 
 
 async def unread_first(conn: Connection, *, limit: int = 4) -> list[dict[str, Any]]:
-    """The newest `limit` items with unread first, however old the unread ones are."""
+    """The newest `limit` open items with unread first, however old the unread ones are."""
     rows = await conn.fetch(
         """
         SELECT * FROM notifications
+        WHERE resolved_at IS NULL
         ORDER BY (read_at IS NULL) DESC, created_at DESC, id DESC
         LIMIT $1
         """,
@@ -55,16 +56,23 @@ async def unread_first(conn: Connection, *, limit: int = 4) -> list[dict[str, An
 
 
 async def list_page(
-    conn: Connection, *, limit: int = 50, cursor: str | None = None
+    conn: Connection,
+    *,
+    limit: int = 50,
+    cursor: str | None = None,
+    include_resolved: bool = False,
 ) -> dict[str, Any]:
-    """One page of the full inbox, newest first, with a cursor for the next page."""
+    """One page of the inbox, newest first, with a cursor for the next page."""
     limit = _clamp(limit)
-    where = ""
+    clauses: list[str] = []
     params: list[Any] = []
+    if not include_resolved:
+        clauses.append("resolved_at IS NULL")
     if cursor:
         created_at, notification_id = _decode_cursor(cursor)
-        where = "WHERE (created_at, id) < ($1, $2)"
+        clauses.append("(created_at, id) < ($1, $2)")
         params.extend([created_at, notification_id])
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
 
     rows = await conn.fetch(
         f"""
@@ -72,7 +80,7 @@ async def list_page(
         {where}
         ORDER BY created_at DESC, id DESC
         LIMIT ${len(params) + 1}
-        """,  # noqa: S608 - `where` is a constant fragment, never user text
+        """,  # noqa: S608 - `where` is built from constant fragments only, never user text
         *params,
         limit + 1,
     )

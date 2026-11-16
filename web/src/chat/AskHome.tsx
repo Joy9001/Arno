@@ -6,8 +6,10 @@ import { Busy } from "../Loading";
 import { goTo, UserContext } from "../nav";
 import { Orb } from "../Orb";
 import { KIND_LABELS, markNotificationRead, openNotification } from "../notifications";
-import { lowAmount, projectionReadiness, safeToSpendAmount } from "../projectionData";
-import type { ProjectionPayload } from "../projection";
+import { lowAmount, projectionReadiness } from "../projectionData";
+import { SafeToSpend } from "../SafeToSpend";
+import { PriceChange } from "../PriceChange";
+import { WorkbookLink, type ProjectionPayload } from "../projection";
 import type { CashQuality, Movement, NotificationItem } from "../types";
 import { useApi } from "../useApi";
 import { FirstRun, FirstRunStarters } from "./FirstRun";
@@ -142,20 +144,14 @@ export function NoticedView({
   const floorSet = projection.floor_set ?? (floorPaise ?? 0) > 0;
   const holds = projection.floor_probability >= projection.floor_threshold;
   const low = lowAmount(projection);
-  const safeAmount = safeToSpendAmount(projection);
-  const safeLine =
-    safeAmount !== null && projection.safe_to_spend ? (
-      <p>
-        {formatPaise(safeAmount)} safe to spend today · binds{" "}
-        {formatDate(projection.safe_to_spend.binding_date)}.
-      </p>
-    ) : null;
+  const safeLine = <SafeToSpend payload={projection} />;
   const unread = data.needs_you.filter((item) => !item.read_at).slice(0, 2);
   const forecast = readiness.ready && cashKnown;
   const unreadCards = unread.map((item) => (
           <article key={item.id} className={item.kind === "reminder" ? "ask-card due" : "ask-card"}>
             <span className="ask-card-k">{KIND_LABELS[item.kind] ?? item.kind.replaceAll("_", " ")}</span>
             <strong className="ask-card-title">{item.title}</strong>
+            {item.kind === "price_change" && <PriceChange item={item} />}
             <div className="ask-card-actions">
               <button
                 type="button"
@@ -240,6 +236,9 @@ export function NoticedView({
               {formatDate(projection.median_low.date)}.
             </p>
             {safeLine}
+            <p>
+              <WorkbookLink />
+            </p>
             <button type="button" className="pill-button light" onClick={() => goTo("money", "timeline")}>
               Open the timeline
             </button>
@@ -253,6 +252,9 @@ export function NoticedView({
               I&apos;ll check every purchase against it.
             </p>
             {safeLine}
+            <p>
+              <WorkbookLink />
+            </p>
             <button type="button" className="pill-button light" onClick={() => goTo("settings", "profile")}>
               Set a floor
             </button>

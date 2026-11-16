@@ -15,6 +15,7 @@ from typing import override
 import pytest
 from pydantic import ValidationError
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 
 from arno.capture.photo import PaymentPhoto
 from arno.ledger import movements as movements_mod
@@ -406,6 +407,91 @@ async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
         )
         == 1
     )
+
+
+async def test_a_card_number_the_vision_model_reads_never_reaches_the_chat_model(
+    authed_client, demo_ledger, monkeypatch
+):
+    def script(messages, info):
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "merchant": "Card 4111 1111 1111 1111 CVV 123",
+                        "amount_paise": 45_000,
+                        "date": "2026-10-31",
+                        "method": "card",
+                        "upi_ref": "4111 1111 1111 1111",
+                    },
+                )
+            ]
+        )
+
+    monkeypatch.setattr("arno.capture.photo.vision_model", lambda: FunctionModel(script))
+    response = authed_client.post(
+        "/api/chat/cnv_photo_secret/photo",
+        files={"file": ("card.png", PNG, "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    card = response.json()["card"]
+    assert "[redacted:credit_card]" in card["merchant"]
+    assert "[redacted:cvv]" in card["merchant"]
+    # A UTR field that carried a card number was not a UTR.
+    assert card["upi_ref"] is None
+    assert "4111 1111 1111 1111" not in json.dumps(card)
+    assert "CVV 123" not in json.dumps(card)
+
+    thread = await demo_ledger.fetchrow(
+        "SELECT model_history FROM conversations WHERE id = 'cnv_photo_secret'"
+    )
+    assert thread is not None
+    history = json.dumps(thread["model_history"])
+    assert "[redacted:credit_card]" in history
+    assert "4111 1111 1111 1111" not in history
+    assert "CVV 123" not in history
+    assert (
+        await demo_ledger.fetchval("SELECT count(*) FROM payees WHERE display_name LIKE '%4111%'")
+        == 0
+    )
+
+
+async def test_a_receipt_vision_run_never_puts_its_text_or_image_in_a_trace(monkeypatch):
+    import pydantic_ai.models.instrumented as instrumented
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    from pydantic_ai import Agent
+
+    from arno.capture.photo import extract_payment_photo
+
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(instrumented, "get_tracer_provider", lambda: provider)
+    # Instrument everything, as production does; the vision agent must still opt out.
+    monkeypatch.setattr(Agent, "_instrument_default", True)
+
+    def script(messages, info):
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    info.output_tools[0].name,
+                    {
+                        "merchant": "Card 4111 1111 1111 1111 CVV 123",
+                        "amount_paise": 45_000,
+                        "method": "card",
+                    },
+                )
+            ]
+        )
+
+    photo = await extract_payment_photo(PNG, media_type="image/png", model=FunctionModel(script))
+
+    # An image cannot be text-redacted, so the vision run is not instrumented at all.
+    assert exporter.get_finished_spans() == ()
+    assert "4111 1111 1111 1111" not in json.dumps(photo.model_dump(), default=str)
 
 
 def test_photo_extraction_is_five_capped_fields_and_has_no_line_items():

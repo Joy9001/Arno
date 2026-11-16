@@ -171,6 +171,15 @@ async def test_pg_dump_restore_round_trip(ledger):
 @pytest.mark.skipif(shutil.which("restic") is None, reason="restic is not installed")
 async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
     settings = get_settings(refresh=True)
+    await ledger.execute(
+        "INSERT INTO scheduled_questions (prompt, rule) VALUES ('Restore question', 'daily')"
+    )
+    await ledger.execute(
+        "INSERT INTO jobs (key, kind) VALUES ('restore-test:1', 'scheduled_question')"
+    )
+    await ledger.execute(
+        "INSERT INTO preferences (body, created_by) VALUES ('Restore preference', 'user')"
+    )
     dump = export_pg_dump(settings.database_url)
     source_counts = await _counts(settings.database_url)
     repo = tmp_path / "restic-repo"
@@ -204,6 +213,23 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
         info = conninfo_to_dict(settings.database_url)
         info["dbname"] = restore_name
         assert await _counts(make_conninfo(**info)) == source_counts
+        async with connect(make_conninfo(**info)) as restored:
+            assert (
+                await restored.fetchval(
+                    "SELECT count(*) FROM scheduled_questions WHERE prompt = 'Restore question'"
+                )
+                == 1
+            )
+            assert (
+                await restored.fetchval("SELECT count(*) FROM jobs WHERE key = 'restore-test:1'")
+                == 1
+            )
+            assert (
+                await restored.fetchval(
+                    "SELECT count(*) FROM preferences WHERE body = 'Restore preference'"
+                )
+                == 1
+            )
     finally:
         async with _admin_conn() as admin:
             await admin.execute(f'DROP DATABASE IF EXISTS "{restore_name}" WITH (FORCE)')

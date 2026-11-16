@@ -76,6 +76,34 @@ class TaskOwner(DelegationTasks):
                     await temporary.unlink(missing_ok=True)
                 raise
 
+    def saved_count(self) -> int:
+        """How many task records are on disk; the deletion preview counts these."""
+        if self.directory is None:
+            return 0
+        return sum(1 for path in self.directory.glob("*.json") if _TASK_ID.fullmatch(path.stem))
+
+    def running(self) -> list[str]:
+        """Tasks still in progress, whose statement text an erase would delete mid-run."""
+        return [task_id for task_id, record in self.records.items() if record.status == "running"]
+
+    async def clear_all(self) -> int:
+        """Remove every saved record after an erase; returns how many records were removed."""
+        if self.directory is None:
+            return 0
+        removed = 0
+        lock = _SAVE_LOCKS.setdefault(str(self.directory), anyio.Lock())
+        async with lock:
+            folder = anyio.Path(self.directory)
+            # A crash can leave a `.tmp` holding the same statement text; both go.
+            for pattern in ("*.json", "*.tmp"):
+                async for path in folder.glob(pattern):
+                    with suppress(OSError):
+                        await path.unlink(missing_ok=True)
+                        if pattern == "*.json" and _TASK_ID.fullmatch(path.stem):
+                            removed += 1
+            self.records.clear()
+        return removed
+
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")

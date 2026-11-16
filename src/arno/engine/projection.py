@@ -27,6 +27,8 @@ import numpy.typing as npt
 
 from arno.engine import kernel
 
+# Increment when the projection or affordability calculation changes materially.
+CALCULATION_VERSION = "1"
 DEFAULT_RUNS = 16_384
 DEFAULT_SEED = 20261103
 FLOOR_THRESHOLD = 0.90

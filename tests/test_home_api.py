@@ -1,7 +1,40 @@
 from __future__ import annotations
 
+from arno.ledger.accounts import create_account
+from arno.ledger.common import today
+from arno.ledger.schedules import create_schedule
 from arno.notifications import create_notification, mark_read
 from arno.tools import projection as projection_tools
+from arno.tools import read as read_tools
+
+
+async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(authed_client, ledger):
+    bank = await create_account(
+        ledger, kind="bank", name="Salary bank", opening_balance_paise=1_000_000
+    )
+    await create_schedule(
+        ledger,
+        kind="income_fixed",
+        name="Salary",
+        amount_paise=500_000,
+        account_id=bank["id"],
+        rule="FREQ=MONTHLY;BYMONTHDAY=1",
+        starts=today(),
+    )
+    context = await read_tools.get_financial_context(ledger)
+    projection = await projection_tools.project(ledger, runs=50)
+    response = authed_client.get("/api/home?horizon_days=90")
+    assert response.status_code == 200
+    home = response.json()
+    assert context["liquid_total"]["paise"] == home["spendable_paise"] == 1_000_000
+    assert len(context["accounts"]) == len(context["schedules"]) == 1
+    assert context["schedules"][0]["name"] == "Salary"
+    assert "no income schedule" not in context["setup_gaps"]
+    assert "no estimated baselines" in context["setup_gaps"]
+    assert context["warnings"]
+    assert projection["safe_to_spend"] is not None
+    assert home["projection"]["safe_to_spend"] is not None
+    assert home["cash_quality"]["status"] == "known"
 
 
 async def test_home_composes_one_payload(authed_client):
@@ -168,6 +201,21 @@ async def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db
     body = authed_client.get("/api/home?horizon_days=90").json()
 
     assert body["needs_you"][0]["id"] == unread["id"]
+
+
+async def test_notifications_preserve_the_payment_ids_behind_a_price_change(authed_client, db):
+    data = {
+        "old_paise": 49900,
+        "new_paise": 59900,
+        "step_date": "2026-06-05",
+        "movement_ids": ["mov_one", "mov_two"],
+    }
+    item = await create_notification(db, kind="price_change", title="Price change", data=data)
+    assert item is not None
+    response = authed_client.get("/api/notifications")
+    assert response.status_code == 200
+    result = next(row for row in response.json()["notifications"] if row["id"] == item["id"])
+    assert result["data"] == data
 
 
 async def test_home_rejects_an_out_of_range_horizon(authed_client):

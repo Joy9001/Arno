@@ -234,12 +234,57 @@ async def _payee_is_outside(conn: Connection, payee_id: str | None) -> bool:
     return (await _payees_outside(conn, [payee_id]))[payee_id]
 
 
+# A memory's last replaced value, straight from the audit row that replaced it: what it said, when
+# it was saved, and when it was replaced. Undone edits are not history.
+_PREFERENCE_PREVIOUS = """
+    LEFT JOIN LATERAL (
+        SELECT jsonb_build_object(
+                   'text', a.before -> 'body',
+                   'changed_at', a.before ->> 'updated_at',
+                   'superseded_at', a.created_at) AS previous,
+               a.created_at AS changed_at
+        FROM audit_log a
+        WHERE a.table_name = 'preferences' AND a.row_id = p.id
+          AND a.undone_at IS NULL AND a.before ? 'body' AND a.after ? 'body'
+          AND a.before ->> 'body' IS DISTINCT FROM a.after ->> 'body'
+        ORDER BY a.created_at DESC, a.id DESC
+        LIMIT 1
+    ) change ON true
+"""
+
+
 async def get_financial_context(conn: Connection) -> dict[str, Any]:
     """One comprehensive snapshot: settings, balances and their ages, the next 30 days, schedules
     with their next dates, goals, owed, preferences, scheduled questions, open imports, and setup
-    gaps."""
+    gaps. A memory, the floor, an income amount, or a goal priority that changed also carries
+    `previous` and `changed_at`, so a new value can be set against the old one and its date."""
     day = ledger_today()
     settings = await settings_mod.read_settings(conn)
+    changes = await conn.fetch(
+        """
+        SELECT target.table_name, target.row_id, target.field,
+               change.previous, change.changed_at
+        FROM (
+            SELECT 'settings'::text AS table_name, '1'::text AS row_id,
+                   'floor_paise'::text AS field
+            UNION ALL
+            SELECT 'goals', g.id, 'priority' FROM goals g WHERE g.status <> 'abandoned'
+            UNION ALL
+            SELECT 'schedules', s.id, 'amount_paise' FROM schedules s WHERE s.active
+        ) target
+        JOIN LATERAL (
+            SELECT a.before -> target.field AS previous, a.created_at AS changed_at
+            FROM audit_log a
+            WHERE a.table_name = target.table_name AND a.row_id = target.row_id
+              AND a.undone_at IS NULL
+              AND a.before IS NOT NULL AND a.after IS NOT NULL
+              AND a.before -> target.field IS DISTINCT FROM a.after -> target.field
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT 1
+        ) change ON true
+        """
+    )
+    changes_by_key = {(r["table_name"], r["row_id"], r["field"]): r for r in changes}
     account_rows = await accounts_mod.list_accounts(conn)
     coverage_by_account = await _accounts_coverage(
         conn,
@@ -370,6 +415,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
             "remaining": money(row["remaining_paise"]),
             "deadline": row["deadline"],
             "priority": row["priority"],
+            "priority_history": changes_by_key.get(("goals", row["id"], "priority")),
             "status": row["status"],
         }
         for row in goal_rows
@@ -409,6 +455,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
                 "kind": payload["kind"],
                 "subtype": payload["subtype"],
                 "amount": money(payload["amount_paise"]),
+                "amount_history": changes_by_key.get(("schedules", row["id"], "amount_paise")),
                 "rule": payload["rule"],
                 "next_date": payload["next_date"],
                 # A run that is already fully paid is not still coming.
@@ -448,13 +495,22 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         )
 
     preferences = [
-        {"id": row["id"], "text": row["body"], "kind": row["kind"]}
+        {
+            "id": row["id"],
+            "text": row["body"],
+            "kind": row["kind"],
+            "subject": row["subject"],
+            "changed_at": row["changed_at"],
+            "previous": row["previous"],
+        }
         for row in await conn.fetch(
-            """
-            SELECT id, body, kind FROM preferences
-            WHERE active
-            ORDER BY created_at
-            """
+            f"""
+            SELECT p.id, p.body, p.kind, p.subject,
+                   coalesce(change.changed_at, p.created_at) AS changed_at, change.previous
+            FROM preferences p{_PREFERENCE_PREVIOUS}
+            WHERE p.active
+            ORDER BY p.created_at
+            """  # noqa: S608 - the fragment is a constant, not user input
         )
     ]
 
@@ -541,6 +597,7 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
         "settings": {
             "currency": settings["base_currency"],
             "floor": money(settings["floor_paise"]),
+            "floor_history": changes_by_key.get(("settings", "1", "floor_paise")),
             "default_horizon_days": settings["default_horizon_days"],
             "time_zone": settings["time_zone"],
         },
@@ -1003,10 +1060,12 @@ async def run_query(sql: str, *, deadline_seconds: float = 2.0) -> dict[str, Any
 
 async def active_preferences(conn: Connection) -> list[dict[str, Any]]:
     return await conn.fetch(
-        """
-        SELECT id, body, kind, created_by, active, created_at, updated_at
-        FROM preferences ORDER BY created_at
-        """
+        f"""
+        SELECT p.id, p.body, p.kind, p.subject, p.created_by, p.active, p.created_at, p.updated_at,
+               change.previous
+        FROM preferences p{_PREFERENCE_PREVIOUS}
+        ORDER BY p.created_at
+        """  # noqa: S608 - the fragment is a constant, not user input
     )
 
 

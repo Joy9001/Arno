@@ -104,5 +104,16 @@ export const projectionSchema = z.object({
     emi_months: number.nullable().optional(),
   }).loose().optional(),
   baseline: z.object({ floor_probability: number.min(0).max(1) }).optional(),
+  // The arguments the projection was asked with, for its workbook download.
+  request: z.object({
+    horizon_days: number.int().nullable().optional(),
+    hypothetical: z.object({
+      amount_paise: number.optional(), date: optionalText, method: optionalText,
+      emi_months: number.nullable().optional(), account: optionalText,
+      emi_rate_percent: number.nullable().optional(), emi_fee_paise: number.nullable().optional(),
+      no_cost: z.boolean().optional(),
+    }).loose().optional(),
+    changes: z.array(z.record(z.string(), z.unknown())).optional(),
+  }).optional(),
   scenario: scenario.optional(),
 }).loose();

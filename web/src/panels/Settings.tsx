@@ -43,6 +43,7 @@ import { NAVIGATE_EVENT } from "../nav";
 import { RuntimeInfo } from "./RuntimeInfo";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment, formatMomentShort, formatRelative } from "../format";
+import { MemoryPrevious } from "./MemoryPrevious";
 import {
   jobKindTitle,
   jobOutcome,
@@ -55,9 +56,14 @@ import {
 import { Busy } from "../Loading";
 import { Orb } from "../Orb";
 import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
+import { PushStatus } from "./PushStatus";
+import { ExportScope } from "./ExportScope";
+import { DeletionPreviewNote, DeletionScope } from "./DeletionScope";
+import { HistoryPanel } from "./History";
 import type {
   BackupStatus,
   CategoryTree,
+  DeletionPreview,
   JobStatus,
   JobView,
   ScheduledQuestion,
@@ -82,6 +88,7 @@ const SECTION_GROUPS: Array<{
       { id: "passkeys", label: "Passkeys", Icon: KeyRound },
       { id: "questions", label: "Scheduled questions", Icon: CalendarClock },
       { id: "memory", label: "Agent memory", Icon: Brain },
+      { id: "history", label: "History", Icon: RotateCcw },
     ],
   },
   {
@@ -90,6 +97,7 @@ const SECTION_GROUPS: Array<{
       { id: "jobs", label: "Background work", Icon: Activity },
       { id: "backups", label: "Backups", Icon: DatabaseBackup },
       { id: "export", label: "Export", Icon: Download },
+      { id: "deletion", label: "Delete everything", Icon: Trash2 },
     ],
   },
 ];
@@ -320,6 +328,7 @@ function ConfirmButton({
   title,
   description,
   confirmLabel,
+  preview,
   onConfirm,
 }: {
   label: string;
@@ -327,6 +336,8 @@ function ConfirmButton({
   title: string;
   description: string;
   confirmLabel: string;
+  /** The one row this action touches, shown with its retained data before the confirm. */
+  preview?: { scope: "memory" | "statement"; id: string };
   onConfirm: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -336,9 +347,10 @@ function ConfirmButton({
         {icon}
         {label}
       </button>
-      <AlertDialog.Content maxWidth="420px">
+      <AlertDialog.Content maxWidth="440px">
         <AlertDialog.Title>{title}</AlertDialog.Title>
         <AlertDialog.Description size="2">{description}</AlertDialog.Description>
+        {open && preview && <DeletionPreviewNote scope={preview.scope} id={preview.id} />}
         <div className="stg-confirm-actions">
           <AlertDialog.Cancel>
             <Button variant="soft" color="gray"><X size={14} aria-hidden="true" />Cancel</Button>
@@ -1231,15 +1243,6 @@ function PushCard() {
     }
   }
 
-  const permissionLabel =
-    permission === "granted"
-      ? "Allowed"
-      : permission === "denied"
-        ? "Blocked in this browser"
-        : permission === "unsupported"
-          ? "Not supported"
-          : "Not asked yet";
-
   return (
     <div className="stg-card">
       <h3>Web push</h3>
@@ -1254,25 +1257,7 @@ function PushCard() {
         </div>
       ) : (
         <>
-          <p className="stg-status-line">
-            <span className={`stg-status ${permission === "denied" ? "bad" : ""}`}>
-              <Bell size={14} strokeWidth={1.8} aria-hidden="true" />
-              {permissionLabel}
-            </span>
-            <span className="stg-status">
-              {subscribed ? (
-                <BellRing size={14} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <BellOff size={14} strokeWidth={1.8} aria-hidden="true" />
-              )}
-              {subscribed ? "Subscribed" : "Not subscribed"}
-            </span>
-          </p>
-          {permission === "denied" && (
-            <p className="stg-hint">
-              Allow notifications for this site in your browser settings, then try again.
-            </p>
-          )}
+          <PushStatus permission={permission} subscribed={subscribed} />
           <div className="stg-actions">
             <button type="button" className="ghost" disabled={busy} onClick={() => void toggle()}>
               {busy ? (
@@ -2057,7 +2042,7 @@ const EXPORT_FORMATS = [
   {
     id: "json",
     title: "JSON",
-    description: "Every table and record in one readable file. Best for inspecting or moving your data.",
+    description: "Data tables and records in one readable file, excluding secret tables.",
     path: "/api/export/json",
     filename: "arno-export.json",
     action: "Download JSON",
@@ -2066,7 +2051,7 @@ const EXPORT_FORMATS = [
   {
     id: "csv",
     title: "CSV ZIP",
-    description: "One spreadsheet per table, packed in a ZIP. Best for analysis in a spreadsheet app.",
+    description: "One CSV per data table, excluding secret tables, packed in a ZIP.",
     path: "/api/export/csv",
     filename: "arno-export.zip",
     action: "Download CSV ZIP",
@@ -2086,6 +2071,7 @@ const EXPORT_FORMATS = [
 function ExportSection() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const scope = useApi<{ excluded_tables: string[] }>("/api/export/scope");
 
   async function download(format: (typeof EXPORT_FORMATS)[number]) {
     setBusy(format.id);
@@ -2152,13 +2138,93 @@ function ExportSection() {
           ))}
         </div>
 
-        <p className="stg-export-note">
-          <ShieldCheck size={16} strokeWidth={1.8} aria-hidden="true" />
-          The file is built on this machine and only leaves when your browser saves it. The restic
-          backup sidecar is separate; its latest status is in Backups.
-        </p>
+        {scope.data && <ExportScope excludedTables={scope.data.excluded_tables} />}
+        {scope.loading && <p>Loading export scope…</p>}
+        {scope.error && <p role="alert">Could not load export scope: {scope.error}</p>}
 
         <Feedback error={error} message={null} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function DeletionSection() {
+  const preview = useApi<DeletionPreview>("/api/deletion/preview?scope=everything");
+  const [phrase, setPhrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const ready = phrase.trim().toLowerCase() === "delete everything";
+
+  async function erase() {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await ensureFreshPasskey();
+      const result = await api<{ total: number }>("/api/deletion/everything", {
+        method: "POST",
+        body: JSON.stringify({ confirm: phrase.trim() }),
+      });
+      setPhrase("");
+      setMessage(
+        `Deleted ${result.total} records. Your passkey, sign-in, and instance settings still work.`,
+      );
+      preview.reload();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <SettingsSection
+      id="deletion"
+      title="Delete everything"
+      description="Remove every financial and user row on this machine. The preview shows what goes, what stays, and where the data still lives. This cannot be undone."
+    >
+      <div className="stg-card">
+        <Loadable
+          state={preview}
+          label="the deletion scope"
+          skeleton={<SettingsSkeleton label="Counting what a delete would remove…" rows={5} />}
+        >
+          {(data) => <DeletionScope preview={data} />}
+        </Loadable>
+
+        <div className="stg-deletion-confirm">
+          <label>
+            Type <code>delete everything</code> to confirm
+            <input
+              value={phrase}
+              autoComplete="off"
+              disabled={busy}
+              onChange={(event) => setPhrase(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="ghost stg-danger"
+            disabled={!ready || busy}
+            onClick={() => void erase()}
+          >
+            {busy ? (
+              <>
+                <Busy />
+                Deleting…
+              </>
+            ) : (
+              <>
+                <Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />
+                Delete everything
+              </>
+            )}
+          </button>
+        </div>
+
+        <Feedback error={error} message={message} />
       </div>
     </SettingsSection>
   );
@@ -2435,6 +2501,7 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
                     {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
                     {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
                   </p>
+                  <MemoryPrevious previous={item.previous} />
                 </div>
                 <div className="stg-list-actions">
                   <button
@@ -2468,6 +2535,7 @@ function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () =
                     title="Delete this memory for good?"
                     description="Its text is blanked in the audit log and this cannot be undone."
                     confirmLabel="Delete for good"
+                    preview={{ scope: "memory", id: item.id }}
                     onConfirm={() => void remove(item)}
                   />
                 </div>
@@ -2513,8 +2581,12 @@ export function SettingsPanel({ onSignOut }: { onSignOut: () => void }) {
         return <BackupsSection backup={backup} />;
       case "export":
         return <ExportSection />;
+      case "deletion":
+        return <DeletionSection />;
       case "memory":
         return <MemorySection preferences={preferences} />;
+      case "history":
+        return <HistoryPanel />;
       case "profile":
       default:
         return <ProfileSection settings={settings} />;

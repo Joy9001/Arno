@@ -20,7 +20,13 @@ from pydantic_ai.capabilities import (
     ModelFallback,
     WrapRunHandler,
 )
-from pydantic_ai.messages import AgentStreamEvent, ModelRequest, UserPromptPart
+from pydantic_ai.messages import (
+    AgentStreamEvent,
+    ModelRequest,
+    ToolReturn,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models import Model, ModelRequestContext
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai_harness.code_mode import CodeMode
@@ -58,7 +64,7 @@ from arno.agent.spend import (
 )
 from arno.db.conn import connect
 from arno.ledger.common import today as ledger_today
-from arno.tools.mark import flag_outside_text
+from arno.tools.mark import flag_outside_text, has_mark
 
 logger = logging.getLogger("arno.agent")
 
@@ -238,6 +244,36 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
         }
 
 
+def _contains_outside(value: Any) -> bool:
+    if has_mark(value):
+        return True
+    if isinstance(value, ToolReturn):
+        return any(
+            _contains_outside(item) for item in (value.return_value, value.content, value.metadata)
+        )
+    if isinstance(value, ToolReturnPart):
+        return _contains_outside(value.content)
+    if isinstance(value, dict):
+        return any(_contains_outside(key) or _contains_outside(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_outside(item) for item in value)
+    return False
+
+
+class OutsideToolReturns(AbstractCapability[AgentDeps]):
+    """Persist taint from marked tool results, including Code Mode's nested returns."""
+
+    @override
+    async def after_tool_execute(
+        self, ctx: RunContext[AgentDeps], *, call: Any, tool_def: Any, args: Any, result: Any
+    ) -> Any:
+        if ctx.deps and ctx.deps.conversation_id and _contains_outside(result):
+            async with connect() as conn:
+                await flag_outside_text(conn, ctx.deps.conversation_id)
+            ctx.deps.flagged = True
+        return result
+
+
 # What a script can reach. Monty resolves only part of the standard library, so a name it
 # cannot import is answered with this list instead of the type checker's search paths.
 SANDBOX_MODULES = (
@@ -260,6 +296,7 @@ SANDBOX_MODULES = (
 SANDBOX_HELPERS = (
     "amortize",
     "card_payoff",
+    "compare_offers",
     "compound",
     "get_financial_context",
     "present",
@@ -480,6 +517,7 @@ def build_capabilities(
             target_tokens=target,
         ),
         ToolErrorsToModel(),
+        OutsideToolReturns(),
         CodeModeHints(),
         TaskTextIsOutside(),
     ]

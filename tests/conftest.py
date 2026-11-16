@@ -170,6 +170,10 @@ async def _reset(conn: Connection) -> None:
             reminder_lead_days = 3,
             last_model_error_type = NULL,
             last_model_error_at = NULL,
+            push_last_error = NULL,
+            push_last_error_at = NULL,
+            push_last_sent_at = NULL,
+            push_opted_out_at = NULL,
             updated_at = now()
         WHERE id = 1
         """

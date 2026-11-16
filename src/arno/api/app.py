@@ -27,7 +27,9 @@ from arno.api import (
     auth,
     capture,
     chat,
+    deletion,
     health,
+    history,
     home,
     imports,
     ledger,
@@ -217,6 +219,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(ledger.router)
+    app.include_router(history.router)
     app.include_router(home.router)
     app.include_router(imports.router)
     app.include_router(tasks.router)
@@ -224,6 +227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(capture.router)
     app.include_router(chat.router)
     app.include_router(watch.router)
+    app.include_router(deletion.router)
     app.include_router(static.router)
 
     @app.exception_handler(StarletteHTTPException)

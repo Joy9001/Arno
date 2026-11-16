@@ -19,11 +19,39 @@ from arno.agent.deps import AgentDeps
 from arno.agent.toolset import LoanConventions
 from arno.agent.toolset import amortize as amortize_tool
 from arno.agent.toolset import card_payoff as card_payoff_tool
+from arno.agent.toolset import compare_offers as compare_offers_tool
 from arno.agent.toolset import present as present_tool
 from arno.engine.money import Prepay
 from arno.engine.money import amortize as amortize_fn
 from arno.tools import read as read_tools
 from arno.tools import write as write_tools
+
+
+async def test_missing_card_dates_are_refused_through_the_agent_setup_tool(ledger):
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.usage import RunUsage
+
+    from arno.agent.toolset import update_setup
+    from arno.agent.write_models import AccountSetup
+
+    thread_id, message_id = await _thread(ledger)
+    ctx = RunContext(
+        deps=AgentDeps(conversation_id=thread_id, message_id=message_id),
+        model=TestModel(),
+        usage=RunUsage(),
+    )
+    with pytest.raises(ModelRetry) as caught:
+        await update_setup(
+            ctx,
+            entity="account",
+            action="add",
+            data=AccountSetup(name="Incomplete card", kind="card", credit_limit_rupees=1000),
+        )
+    assert "statement day" in str(caught.value)
+    assert "due day" in str(caught.value)
+    assert (
+        await ledger.fetchval("SELECT count(*) FROM accounts WHERE name = 'Incomplete card'") == 0
+    )
 
 
 async def _thread(conn, thread_id="cnv_test", message_id="msg_test"):
@@ -695,6 +723,47 @@ async def test_amortize_with_fee_returns_apr_percent_and_works_on_named_loan(dem
         if getattr(part, "part_kind", "") == "tool-return"
     ]
     assert returns
+
+
+async def test_compare_offers_adapter_separates_components_and_refuses_a_missing_rate():
+    ctx = _amortize_ctx()
+    result = (
+        await compare_offers_tool(
+            ctx,
+            offers=[
+                {"label": "Cash", "cash_price_paise": 10_000, "discount_paise": 1_000},
+                {
+                    "label": "EMI",
+                    "cash_price_paise": 10_000,
+                    "financing": {
+                        "kind": "card_emi",
+                        "annual_rate_bps": 0,
+                        "months": 2,
+                        "processing_fee_paise": 500,
+                    },
+                },
+            ],
+        )
+    ).return_value
+    assert isinstance(result, dict)
+    cash, emi = result["offers"]
+    assert cash["difference_vs_cash_paise"] == -1_000
+    assert cash["complete_cost"] is True
+    assert emi["gst_on_fee_paise"] == 90
+    assert emi["apr_percent"] > 0
+    assert emi["complete_cost"] is False
+    with pytest.raises(ModelRetry, match="requires an annual rate"):
+        await compare_offers_tool(
+            ctx,
+            offers=[
+                {"label": "Cash", "cash_price_paise": 10_000},
+                {
+                    "label": "Unknown rate",
+                    "cash_price_paise": 10_000,
+                    "financing": {"kind": "loan", "months": 2},
+                },
+            ],
+        )
 
 
 async def test_card_payoff_adapter_errors_present_and_code_mode(demo_ledger):

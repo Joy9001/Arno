@@ -445,6 +445,7 @@ class ResultRegistry:
                 columns=[
                     {"key": "date", "label": "Date", "type": "date"},
                     {"key": "description", "label": "Description", "type": "text"},
+                    {"key": "account", "label": "Account", "type": "text"},
                     {"key": "payee", "label": "Payee", "type": "text"},
                     {"key": "category", "label": "Category", "type": "text"},
                     {"key": "amount", "label": "Amount", "type": "money"},
@@ -453,6 +454,19 @@ class ResultRegistry:
                     [
                         _text_cell(row.get("date")),
                         _text_cell(row.get("description")),
+                        _text_cell(
+                            ", ".join(
+                                dict.fromkeys(
+                                    str(transfer[f"{side}_name"])
+                                    for transfer in row.get("transfers", [])
+                                    for side in ("from", "to")
+                                    if transfer.get(f"{side}_name")
+                                    and transfer.get(f"{side}_kind")
+                                    not in {"spending", "income", "equity"}
+                                )
+                            )
+                            or None
+                        ),
                         _text_cell(row.get("payee")),
                         _text_cell(row.get("category")),
                         _money_cell(row.get("amount_paise")),

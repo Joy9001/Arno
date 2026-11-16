@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { FileSearch, SlidersHorizontal } from "lucide-react";
+import { Download, FileSearch, SlidersHorizontal } from "lucide-react";
 import { openPlanner } from "./evidence";
 import {
   Area,
@@ -26,8 +26,10 @@ import {
   paymentMethodLabel,
   projectionReadiness,
   safeToSpendAmount,
+  workbookUrl,
 } from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
+import { SafeToSpend } from "./SafeToSpend";
 
 export type Money = { paise: number; text: string };
 
@@ -126,10 +128,27 @@ export type ProjectionDataQuality = {
   };
 };
 
+/** The arguments one projection was asked with, echoed by the tool for the workbook link. */
+export type ProjectionRequest = {
+  horizon_days?: number | null;
+  hypothetical?: {
+    amount_paise?: number;
+    date?: string;
+    method?: string;
+    emi_months?: number | null;
+    account?: string | null;
+    emi_rate_percent?: number | null;
+    emi_fee_paise?: number | null;
+    no_cost?: boolean;
+  };
+  changes?: Record<string, unknown>[];
+};
+
 export type ProjectionPayload = {
   card?: string;
   as_of: string;
   horizon_days: number;
+  request?: ProjectionRequest;
   curve: ProjectionPoint[];
   floor?: Money | null;
   floor_paise?: number;
@@ -170,6 +189,16 @@ function dateLabel(value: string | null | undefined): string {
     month: "short",
     year: "numeric",
   });
+}
+
+/** The workbook endpoint takes the same query parameters as `GET /api/projection`. */
+export function WorkbookLink({ request }: { request?: ProjectionRequest }) {
+  return (
+    <a className="ghost small" href={workbookUrl(request)} download>
+      <Download size={14} strokeWidth={2} aria-hidden="true" />
+      Download workbook (.xlsx)
+    </a>
+  );
 }
 
 export function ProjectionChart({
@@ -434,7 +463,6 @@ function scenarioBaselineText(payload: ProjectionPayload, scenario: ProjectionSc
 export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const medianLow = lowAmount(payload);
-  const safeAmount = safeToSpendAmount(payload);
   const scenario = payload.scenario;
   const floorText =
     payload.floor?.text ??
@@ -474,12 +502,7 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
           ? ` · with unconfirmed income: ${percent(payload.optimistic.floor_probability)} above floor (optimistic only)`
           : ""}
       </p>
-      {safeAmount !== null && payload.safe_to_spend && (
-        <p className="projection-facts">
-          {formatPaise(safeAmount)} safe to spend today · binds{" "}
-          {dateLabel(payload.safe_to_spend.binding_date)}
-        </p>
-      )}
+      <SafeToSpend payload={payload} className="projection-facts" showNotes={false} />
       {scenario && (scenario.holds !== undefined || scenario.reason) && (
         <p className="projection-facts">
           {scenario.holds !== undefined ? (scenario.holds ? "Plan holds" : "Plan falls short") : ""}
@@ -583,12 +606,7 @@ export function ProjectionCard({
       {!gated && scenario && (
         <p className="receipt-note">{scenarioRunwayText(payload, scenario)}</p>
       )}
-      {!gated && safeAmount !== null && payload.safe_to_spend && (
-        <p className="receipt-note">
-          {formatPaise(safeAmount)} safe to spend today · binds{" "}
-          {dateLabel(payload.safe_to_spend.binding_date)}
-        </p>
-      )}
+      {!gated && <SafeToSpend payload={payload} className="receipt-note" />}
       {purchase?.amount_paise !== undefined && (
         <p className="receipt-note">
           Purchase of {formatPaise(purchase.amount_paise)}
@@ -658,24 +676,27 @@ export function ProjectionCard({
           {payload.horizon_days}-day projection
           {!gated && floorSet && floorText ? ` · floor ${floorText}` : ""}
         </span>
-        {onEvidence && (
-          <span className="receipt-actions">
-            {!gated && (
-              <button type="button" className="ghost small" onClick={() => openPlanner(payload)}>
-                <SlidersHorizontal size={14} strokeWidth={2} aria-hidden="true" />
-                Planner
+        <span className="receipt-actions">
+          <WorkbookLink request={payload.request} />
+          {onEvidence && (
+            <>
+              {!gated && (
+                <button type="button" className="ghost small" onClick={() => openPlanner(payload)}>
+                  <SlidersHorizontal size={14} strokeWidth={2} aria-hidden="true" />
+                  Planner
+                </button>
+              )}
+              <button
+                type="button"
+                className="ghost small"
+                onClick={() => onEvidence(payload)}
+              >
+                <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
+                Sources and assumptions
               </button>
-            )}
-            <button
-              type="button"
-              className="ghost small"
-              onClick={() => onEvidence(payload)}
-            >
-              <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
-              Sources and assumptions
-            </button>
-          </span>
-        )}
+            </>
+          )}
+        </span>
       </div>
 
       {!onEvidence && (
@@ -692,7 +713,7 @@ export function ProjectionCard({
                 <Tradeoffs tradeoffs={payload.tradeoffs} />
               ) : null}
               {!gated && payload.goals?.length ? <Goals goals={payload.goals} /> : null}
-              <DataQuality payload={payload} />
+              {(gated || safeAmount === null) && <DataQuality payload={payload} />}
               <Citations payload={payload} />
             </>
           )}

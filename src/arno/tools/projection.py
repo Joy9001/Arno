@@ -1237,6 +1237,31 @@ async def project(
     seed: int = DEFAULT_SEED,
     known_then: bool = False,
 ) -> Projection:
+    """Return the projection computed from the loaded ledger inputs."""
+    _, result = await project_with_inputs(
+        conn,
+        horizon_days=horizon_days,
+        hypothetical=hypothetical,
+        changes=changes,
+        as_of=as_of,
+        runs=runs,
+        seed=seed,
+        known_then=known_then,
+    )
+    return result
+
+
+async def project_with_inputs(
+    conn: Connection,
+    *,
+    horizon_days: int | None = None,
+    hypothetical: dict[str, Any] | Hypothetical | None = None,
+    changes: Sequence[dict[str, Any]] | None = None,
+    as_of: date | None = None,
+    runs: int = DEFAULT_RUNS,
+    seed: int = DEFAULT_SEED,
+    known_then: bool = False,
+) -> tuple[ProjectionInput, Projection]:
     """The full projection or affordability result, including the daily curve and sources."""
     base = as_of or ledger_today()
     purchase = _hypothetical(hypothetical)
@@ -1261,7 +1286,7 @@ async def project(
         specs, income_source_ids = await _resolve_changes(
             conn, inputs, parsed_changes, as_of=base, known_then=known_then
         )
-        return project_scenario(
+        result = project_scenario(
             inputs,
             specs,
             hypothetical=purchase,
@@ -1269,9 +1294,11 @@ async def project(
             runs=runs,
             seed=seed,
         )
-    if purchase is not None:
-        return afford(inputs, purchase, runs=runs, seed=seed)
-    return run_projection(inputs, runs=runs, seed=seed)
+    elif purchase is not None:
+        result = afford(inputs, purchase, runs=runs, seed=seed)
+    else:
+        result = run_projection(inputs, runs=runs, seed=seed)
+    return inputs, result
 
 
 def _money_low(row: MedianLow | None) -> dict[str, Any] | None:
@@ -1368,8 +1395,12 @@ def summary(result: Projection) -> dict[str, Any]:
     return payload
 
 
-def card(result: Projection) -> dict[str, Any]:
-    """The UI metadata card: the full curve, sources, verdict, and every citation."""
+def card(result: Projection, request: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The UI metadata card: the full curve, sources, verdict, and every citation.
+
+    ``request`` echoes the arguments the projection was asked with, so the card can
+    download a workbook that recomputes exactly this request.
+    """
     payload: dict[str, Any] = {
         "card": "projection",
         "title": "Projection",
@@ -1416,6 +1447,8 @@ def card(result: Projection) -> dict[str, Any]:
     scenario = result.get("scenario")
     if scenario is not None:
         payload["scenario"] = _scenario(scenario)
+    if request is not None:
+        payload["request"] = request
     return payload
 
 

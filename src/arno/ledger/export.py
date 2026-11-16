@@ -91,6 +91,8 @@ def _csv_value(value: Any) -> Any:
         import json
 
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
     return value
 
 

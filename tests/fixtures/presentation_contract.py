@@ -47,6 +47,14 @@ def fixtures() -> dict:
                     "id": "mov_fixture",
                     "date": "2026-10-01",
                     "description": "Lunch",
+                    "transfers": [
+                        {
+                            "from_name": "Salary bank",
+                            "from_kind": "bank",
+                            "to_name": "Spending",
+                            "to_kind": "spending",
+                        }
+                    ],
                     "category": "Food",
                     "payee": None,
                     "amount_paise": 45_000,
@@ -112,7 +120,7 @@ def fixtures() -> dict:
             "safe_to_spend": {
                 "amount_paise": 200_000,
                 "binding": "floor",
-                "binding_date": "2026-11-06",
+                "binding_date": "2026-11-10",
             },
             "data_quality": {"gaps": [], "setup_gaps": ["no floor set"]},
             "sources": [],
@@ -121,7 +129,8 @@ def fixtures() -> dict:
             "runs": 100,
             "seed": 42,
             "optimistic": None,
-        }
+        },
+        request={"horizon_days": 90},
     )
     projection = registry.register_read("project", {}, context={"card": native})
     rounded = registry.register_read(
@@ -196,7 +205,11 @@ def fixtures() -> dict:
                     },
                 },
             },
-        }
+        },
+        request={
+            "horizon_days": 90,
+            "changes": [{"kind": "stop_income", "start": "2026-11-10"}],
+        },
     )
     scenario_reg = registry.register_read("project", {}, context={"card": scenario_native})
     loan_payload = amortize(1_000_000, 8, 12)

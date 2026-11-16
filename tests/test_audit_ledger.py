@@ -918,6 +918,20 @@ async def test_update_setup_card_days_are_validated(ledger):
         )
 
 
+async def test_missing_card_fields_refuse_setup_without_inventing_values(ledger):
+    with pytest.raises(InvalidLedgerError) as caught:
+        await write_tools.update_setup_item(
+            ledger,
+            entity="account",
+            action="add",
+            data={"name": "Pending card", "kind": "card", "credit_limit_rupees": 1000},
+            message_id=None,
+        )
+    assert "statement day" in str(caught.value)
+    assert "due day" in str(caught.value)
+    assert await ledger.fetchval("SELECT count(*) FROM accounts WHERE name = 'Pending card'") == 0
+
+
 async def test_update_setup_cannot_silently_ignore_an_opening_balance_change(ledger):
     account = await _bank(ledger)
 

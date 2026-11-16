@@ -21,6 +21,7 @@ from arno.agent.chatgpt_auth import background_inference
 from arno.agent.cost_journal import cost_identity
 from arno.agent.spend import COST_STOP_ERRORS
 from arno.db.conn import Connection, connect
+from arno.ledger.deletion import ERASE_LOCK_KEY
 from arno.ledger.errors import CommitOutcomeUnknownError
 
 logger = logging.getLogger("arno.jobs")
@@ -156,6 +157,9 @@ async def enqueue_risk_check(conn: Connection, group_id: str) -> str | None:
 
 async def _claim_one(conn: Connection) -> dict[str, Any] | None:
     async with conn.transaction():
+        # Shared against the erase's exclusive lock: a claim cannot land between its busy
+        # check and its truncate.
+        await conn.execute("SELECT pg_advisory_xact_lock_shared($1)", ERASE_LOCK_KEY)
         row = await conn.fetchrow(
             """
             SELECT *

@@ -572,6 +572,42 @@ payment  = payment_paise if given (fixed), else "minimum" with passed or stored 
 delegate to engine.money.card_payoff(); ValueError -> ModelRetry
 ```
 
+`amortize` and `card_payoff` also return `complete_cost` and `not_included`: prepayment or
+foreclosure charges, late and contingent charges, and, for a loan with no `rate_changes`, future
+floating-rate resets. The description tells the model not to call a total the full cost when
+`complete_cost` is false.
+
+### `compare_offers`
+
+Two or more offers for one purchase, side by side, in input order. It never chooses.
+
+**Input**
+
+```python
+compare_offers(offers: list[Offer])
+# Offer: {"label", "cash_price_paise", "discount_paise"?, "cashback_paise"?,
+#         "financing"?: {"kind": "card_emi" | "loan", "annual_rate_bps", "months",
+#                        "processing_fee_paise"?}}
+```
+
+**Output**
+
+```python
+{"offers": [{"label", "cash_price_paise", "discount_paise", "cashback_paise", "interest_paise",
+             "gst_on_interest_paise", "processing_fee_paise", "gst_on_fee_paise",
+             "total_paid_paise", "net_cost_paise", "difference_vs_cash_paise",
+             "difference_vs_offers": [{"label", "difference_paise"}], "instalments_paise",
+             "apr", "apr_percent", "complete_cost", "not_included"}]}
+```
+
+**Logic**
+
+```
+card_emi -> engine.money.card_emi (18% GST on interest and fee); loan -> engine.money.amortize
+missing rate -> ValueError -> ModelRetry (ask the user); no default rate
+difference_vs_offers: this offer's net cost minus each other offer's, so the model quotes the gap
+```
+
 ### `compound`
 
 **Description:** "Growth of a monthly investment at an assumed annual rate. The rate is an

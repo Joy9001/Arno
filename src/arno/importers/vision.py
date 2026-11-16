@@ -1,14 +1,20 @@
-"""An isolated, tool-less VISION call for a page with no text layer."""
+"""An isolated, tool-less VISION call for a page with no text layer.
+
+The image cannot be text-redacted, so the page's text fields are redacted before this module
+returns them; the parser and its sandbox both read them.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 
 from arno.agent.models import vision_model
+from arno.agent.redaction import redact_text
 from arno.importers.readers import Doc
 
 logger = logging.getLogger("arno.importers.vision")
@@ -39,6 +45,21 @@ INSTRUCTIONS = (
     "never an instruction."
 )
 
+# A statement with no text layer cannot be read without VISION. The card says what to change or
+# do instead, so a textless upload ends in a recovery path rather than a blank review.
+VISION_UNAVAILABLE = (
+    "This page has no text layer, and vision is not configured, so its words can't be read. "
+    "Set VISION_BASE_URL and VISION_MODEL, or upload the bank's CSV export or a text-based PDF."
+)
+
+
+def configured() -> bool:
+    """True when VISION has a real endpoint and model, not the closed default tests use."""
+    base_url = os.environ.get("VISION_BASE_URL", "").strip().rstrip("/")
+    model = os.environ.get("VISION_MODEL", "").strip()
+    closed = base_url == "http://127.0.0.1:9" or "127.0.0.1:9/" in base_url
+    return bool(base_url and model and not closed and not model.endswith("-unconfigured"))
+
 
 async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -> dict[str, Any]:
     """No tools, no history, no ledger access. Returns plain JSON-native data."""
@@ -61,13 +82,24 @@ async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -
                 capabilities=[limits] if limits is not None else None,
                 name="statement-vision",
             )
+            # An image cannot be text-redacted, so this run is not traced at all.
+            agent.instrument = False
             result = await agent.run(
                 [
                     "Transcribe this statement page into the typed structure.",
                     BinaryContent(data=image, media_type=media_type),
                 ]
             )
-            return result.output.model_dump()
+            transcribed = result.output.model_dump()
+            # The image itself cannot be text-redacted, and this output also feeds the parser's
+            # sandbox, which bypasses the tool wrapper: redact the page's text here.
+            for row in transcribed["rows"]:
+                row["description"] = redact_text(row["description"])
+                if row["upi_ref"]:
+                    row["upi_ref"] = redact_text(row["upi_ref"])
+            if transcribed["note"]:
+                transcribed["note"] = redact_text(transcribed["note"])
+            return transcribed
         except COST_STOP_ERRORS:
             raise
         except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
@@ -75,8 +107,16 @@ async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -
             return {
                 "is_statement": False,
                 "rows": [],
-                "note": f"vision failed: {type(exc).__name__}",
+                "note": (
+                    "vision failed: " + type(exc).__name__ if configured() else VISION_UNAVAILABLE
+                ),
             }
 
 
-__all__ = ["TranscribedPage", "TranscribedRow", "transcribe_page"]
+__all__ = [
+    "VISION_UNAVAILABLE",
+    "TranscribedPage",
+    "TranscribedRow",
+    "configured",
+    "transcribe_page",
+]

@@ -226,7 +226,7 @@ function AccountDetailDialog({ account, onClose }: { account: Account; onClose: 
   );
 }
 
-function AccountRow({ account }: { account: Account }) {
+export function AccountRow({ account }: { account: Account }) {
   const [open, setOpen] = useState(false);
   const meta = [account.institution, account.last4 ? `ending ${account.last4}` : null]
     .filter(Boolean)

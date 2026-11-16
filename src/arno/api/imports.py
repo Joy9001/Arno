@@ -1,15 +1,19 @@
-"""The imports REST surface: upload, password, review, commit, reject, undo."""
+"""The imports REST surface: upload, password, review, commit, reject, undo, retry."""
 
 from __future__ import annotations
 
 import hashlib
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from arno.api.deps import Database, current_session
+from arno.agent import history as history_mod
+from arno.agent.deps import AgentDeps
+from arno.agent.turns import PreparationBusy, TurnBusy
+from arno.api.deps import Database, Session, current_session
+from arno.api.wake import paused_parser_tasks, start_server_turn
 from arno.importers.commit import commit_import, reject_import, undo_import
 from arno.importers.pipeline import (
     import_payload,
@@ -250,6 +254,69 @@ def password_never_returned(import_id: str) -> dict[str, Any]:
         detail="A statement password is write-only and lives in memory for one import.",
         headers={"Allow": "POST"},
     )
+
+
+async def _start_parser_retry(
+    app: Any,
+    conn: Any,
+    *,
+    row: dict[str, Any],
+    session: dict[str, Any],
+) -> str:
+    """Start the chat turn that hands this import's stored file to the parser again.
+
+    The parser only runs from a chat turn, so a retry reuses that path: the same subagent, the
+    same instruction block about the attachment, and `create_import` returning the failed row.
+    """
+    tasks = app.state.tasks
+    record = tasks.records.get(str(row["task_id"])) if row["task_id"] else None
+    thread = (
+        await history_mod.get_thread(conn, record.conversation_id) if record is not None else None
+    )
+    if thread is None:
+        thread = await history_mod.create_thread(
+            conn, title=history_mod.title_for(f"Retry the import of {row['filename']}")
+        )
+    thread_id = str(thread["id"])
+    deps = AgentDeps(
+        conversation_id=thread_id,
+        user_id=str(session["user_id"]),
+        statement_attachments=(str(row["attachment_id"]),),
+        paused_parser_tasks=paused_parser_tasks(tasks, thread_id),
+    )
+    return await start_server_turn(app, conn, thread=thread, deps=deps)
+
+
+@router.post("/imports/{import_id}/retry")
+async def import_retry(
+    import_id: str, request: Request, session: Session, conn: Database
+) -> dict[str, Any]:
+    """Run the parser again on a failed import's stored file, as a new chat turn."""
+    row = await conn.fetchrow(
+        """
+        SELECT i.*, a.id AS attachment_id, a.filename,
+               (a.data IS NOT NULL AND a.purged_at IS NULL) AS file_present
+        FROM imports i
+        JOIN attachments a ON a.id = i.attachment_id
+        WHERE i.id = $1
+        """,
+        import_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such import")
+    if row["status"] != "failed":
+        raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
+    if not row["file_present"]:
+        raise HTTPException(status_code=409, detail="The statement file is gone. Upload it again.")
+    if getattr(request.app.state, "turns", None) is None:
+        raise HTTPException(status_code=503, detail="The parser is not running.")
+    try:
+        thread_id = await _start_parser_retry(request.app, conn, row=dict(row), session=session)
+    except (TurnBusy, PreparationBusy) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    payload = await import_payload(conn, import_id)
+    payload["thread_id"] = thread_id
+    return payload
 
 
 __all__ = ["MAX_UPLOAD_BYTES", "router"]

@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from arno.api import import_history, provenance, runtime_info
 from arno.api.deps import Database, FreshSession, current_session
-from arno.engine.projection import Projection
+from arno.engine.projection import Projection, ProjectionInput
 from arno.ledger import (
     accounts,
     categories,
@@ -26,6 +26,7 @@ from arno.ledger import (
     schedules,
     settings,
     uncategorized,
+    workbook,
 )
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
@@ -594,8 +595,7 @@ async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
 
 
 # The payload is typed for the checker, not re-validated: the engine owns its shape.
-@router.get("/projection", response_model=None)
-async def get_projection(
+async def _projection_request(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
     amount_paise: int | None = Query(default=None, gt=0),
@@ -603,9 +603,12 @@ async def get_projection(
     method: Literal["account", "card", "emi"] | None = None,
     emi_months: int | None = Query(default=None, ge=2, le=48),
     account: str | None = None,
+    emi_rate_percent: float | None = Query(default=None, ge=0, le=100),
+    emi_fee_paise: int | None = Query(default=None, ge=0),
+    no_cost: bool = False,
     changes: str | None = Query(default=None),
-) -> Projection:
-    """The read-only projection panel and the inline projection card share this payload."""
+) -> tuple[ProjectionInput, Projection, dict[str, Any]]:
+    """Load and calculate the projection shared by both response formats."""
     hypothetical = None
     if amount_paise is not None:
         if date is None:
@@ -616,6 +619,9 @@ async def get_projection(
             "method": method or "account",
             "emi_months": emi_months,
             "account": account,
+            "emi_rate_percent": emi_rate_percent,
+            "emi_fee_paise": emi_fee_paise,
+            "no_cost": no_cost,
         }
     parsed_changes: list[dict[str, Any]] | None = None
     if changes is not None:
@@ -627,14 +633,41 @@ async def get_projection(
             raise HTTPException(status_code=422, detail="changes must be a JSON array")
         parsed_changes = loaded
     try:
-        return await projection_tools.project(
+        inputs, result = await projection_tools.project_with_inputs(
             conn,
             horizon_days=horizon_days,
             hypothetical=hypothetical,
             changes=parsed_changes,
         )
+        return inputs, result, {"hypothetical": hypothetical, "changes": parsed_changes}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/projection", response_model=None)
+async def get_projection(
+    computed: Annotated[
+        tuple[ProjectionInput, Projection, dict[str, Any]], Depends(_projection_request)
+    ],
+) -> Projection:
+    """The read-only projection panel and the inline projection card share this payload."""
+    return computed[1]
+
+
+@router.get("/projection/workbook")
+async def get_projection_workbook(
+    computed: Annotated[
+        tuple[ProjectionInput, Projection, dict[str, Any]], Depends(_projection_request)
+    ],
+) -> Response:
+    inputs, result, request = computed
+    return Response(
+        workbook.projection_workbook(inputs, result, request),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="arno-projection-{result["as_of"]}.xlsx"'
+        },
+    )
 
 
 @router.get("/people")
@@ -683,6 +716,11 @@ async def get_backup_status(conn: Database) -> dict[str, Any]:
 def get_runtime_info() -> dict[str, Any]:
     """Configured model hosts and an explicitly configured Phoenix browser URL, nothing more."""
     return runtime_info.payload()
+
+
+@router.get("/export/scope")
+def get_export_scope() -> dict[str, list[str]]:
+    return {"excluded_tables": sorted(export.SECRET_TABLES)}
 
 
 @router.get("/export/json")

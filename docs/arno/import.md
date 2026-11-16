@@ -440,12 +440,16 @@ a row you recategorized and a rule the categorizer wrote that you edited. The me
 changed—how many movements, labels, or rules a later change touched—and says to undo that change
 first. Nothing is half-reverted: undo the later change, then undo the import again.
 
-The undo and the categorizer's save take the same locks in the same order, so neither waits for the
-other in a circle. Both take the import's row lock (`imports`, `FOR UPDATE`) before any row the
-import owns, and the save reads the rows it labels under that lock. So a save that arrives while the
-undo runs waits, then finds nothing left to label: it writes nothing and the job still finishes
-`done`. An undo that arrives while the save runs waits for it, then reverts the labels and rules the
-save recorded along with everything else the import caused.
+The commit, the undo, and the categorizer's save take the same locks in the same order, so none of
+them waits for another in a circle. A commit and an undo take the account's row lock first
+(`accounts`, `FOR UPDATE`): one gate for every import on that account. Under it they take the
+import's row (`imports`, `FOR UPDATE`), then the payees the import names, in id order. A save takes
+the import's row lock before any row the import owns and reads the rows it labels under it. So a
+save that arrives while the undo runs waits, then finds nothing left to label: it writes nothing
+and the job still finishes `done`. A commit of one import and an undo of another on the same
+account wait at the account instead of each holding a row the other needs. An undo that arrives
+while the save runs waits for it, then reverts the labels and rules the save recorded along with
+everything else the import caused.
 
 ## Photos and voice
 

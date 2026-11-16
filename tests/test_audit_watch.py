@@ -561,6 +561,7 @@ def test_watch_endpoints_require_a_session(client):
         "/api/notifications",
         "/api/notifications/read-all",
         "/api/push/key",
+        "/api/push/status",
         "/api/scheduled-questions",
         "/api/jobs",
         "/api/jobs/activity",

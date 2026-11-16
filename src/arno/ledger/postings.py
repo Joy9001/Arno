@@ -227,4 +227,35 @@ async def create_movement_in_group(
         )
         group.record_created("captures", capture_row)
 
+    await _sync_card_bill_alerts(conn, group, movement, resolved)
     return MovementRecord(movement=movement, transfer_ids=tuple(ordered_ids))
+
+
+async def _sync_card_bill_alerts(
+    conn: Connection,
+    group: WriteGroup,
+    movement: dict[str, Any],
+    resolved: list[tuple[TransferSpec, dict[str, Any], dict[str, Any]]],
+) -> None:
+    """Settle a card's bill reminder when money reaches it; a reversal reopens it.
+
+    Every recorded, imported, and reversed transfer is written here, so this one hook reaches the
+    reminder rows the job keyed by the card account.
+    """
+    if movement["kind"] == "reversal":
+        # The reversal takes the money back out, so the card is the source leg of that batch.
+        card_ids = {
+            str(source["id"]) for _transfer, source, _target in resolved if source["kind"] == "card"
+        }
+    else:
+        card_ids = {
+            str(target["id"]) for _transfer, _source, target in resolved if target["kind"] == "card"
+        }
+    if not card_ids:
+        return
+    from arno.notifications import sync_card_due_alerts_in_group
+
+    for account_id in sorted(card_ids):
+        await sync_card_due_alerts_in_group(
+            conn, group, account_id=account_id, movement_id=str(movement["id"])
+        )

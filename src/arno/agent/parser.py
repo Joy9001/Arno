@@ -30,6 +30,7 @@ from arno.agent.capabilities import (
 )
 from arno.agent.deps import AgentDeps
 from arno.agent.models import parse_model
+from arno.agent.redaction import redact_text
 from arno.db.conn import Connection, connect
 from arno.importers.checks import INPUT_REASONS, OPENING_MISSING, account_check
 from arno.importers.checks import check_statement as run_checks
@@ -54,6 +55,8 @@ from arno.importers.pipeline import (
     set_progress,
 )
 from arno.importers.readers import Doc, DocError, open_documents, sniff
+from arno.importers.vision import VISION_UNAVAILABLE
+from arno.importers.vision import configured as vision_configured
 from arno.importers.vision import transcribe_page as vision_transcribe
 from arno.ledger.common import today as ledger_today
 
@@ -341,6 +344,17 @@ def _archive_refusal(docs: list[Doc]) -> dict[str, Any] | None:
     return {"archive_files": len(docs), "reason": reason}
 
 
+async def _vision_refusal(conn: Connection, import_id: str, doc: Doc) -> dict[str, Any] | None:
+    """A page with no text layer needs VISION; without it the card says so, not nothing."""
+    if vision_configured():
+        return None
+    pages = doc.info().get("text_layer_pages")
+    if doc.kind != "image" and not (doc.kind == "pdf" and pages == 0):
+        return None
+    await _set_status(conn, import_id, "needs_input", reason=VISION_UNAVAILABLE)
+    return {"vision_required": True, "reason": VISION_UNAVAILABLE}
+
+
 async def _load_doc(ctx: RunContext[AgentDeps], import_id: str) -> Doc:
     doc = ctx.deps.parse_docs.get(import_id)
     if doc is not None:
@@ -532,6 +546,19 @@ async def open_imports(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
                     }
                 )
                 continue
+            unreadable = await _vision_refusal(conn, row["id"], doc)
+            if unreadable:
+                opened.append(
+                    {
+                        "import_id": row["id"],
+                        "kind": doc.kind,
+                        "locked": False,
+                        "institution": None,
+                        "variant": None,
+                        **unreadable,
+                    }
+                )
+                continue
             info = await _context(conn, row, doc)
             await _set_status(conn, row["id"], "parsing")
             await set_progress(conn, row["id"], "reading the statement")
@@ -561,6 +588,10 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
             too_large = await _too_large(conn, import_id, docs[0])
         if too_large:
             return {"status": "failed", **too_large}
+        async with connect() as conn:
+            unreadable = await _vision_refusal(conn, import_id, docs[0])
+        if unreadable:
+            return {"status": "failed", **unreadable}
         archive = _archive_refusal(docs)
         if archive:
             async with connect() as conn:
@@ -594,6 +625,12 @@ async def wait_for_password(ctx: RunContext[AgentDeps], import_id: str) -> dict[
         too_large = await _too_large(conn, import_id, docs[0])
     if too_large:
         return {"status": "failed", **too_large}
+    async with connect() as conn:
+        unreadable = await _vision_refusal(conn, import_id, docs[0])
+    if unreadable:
+        # Keep the unlocked copy: a retry after VISION is set up must not need the password.
+        await _store_unlocked(attachment_id, data, docs)
+        return {"status": "failed", **unreadable}
     archive = _archive_refusal(docs)
     if archive:
         async with connect() as conn:
@@ -639,6 +676,46 @@ async def doc_info(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, Any]
     return (await _load_doc(ctx, import_id)).info()
 
 
+def _redact_words(words: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Redact secrets split across positioned words before returning them to the model."""
+    result = [dict(word) for word in words]
+    index = 0
+    while index < len(result):
+        end = min(index + 8, len(result))
+        text = " ".join(str(word.get("text", "")) for word in result[index:end])
+        safe = redact_text(text)
+        if safe != text:
+            result[index]["text"] = safe
+            for word in result[index + 1 : end]:
+                word["text"] = ""
+            index = end
+        else:
+            index += 1
+    return result
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    return value
+
+
+def _redact_cells(rows: list[list[Any]]) -> list[list[Any]]:
+    safe_rows = []
+    for row in rows:
+        text = " ".join(str(cell) for cell in row)
+        safe = redact_text(text)
+        if safe != text and row:
+            safe_rows.append([safe, *([""] * (len(row) - 1))])
+        else:
+            safe_rows.append(_redact_value(row))
+    return safe_rows
+
+
 async def doc_words(
     ctx: RunContext[AgentDeps], import_id: str, page: int = 0
 ) -> list[dict[str, Any]]:
@@ -647,7 +724,7 @@ async def doc_words(
     total = doc.page_count()
     line = f"reading page {page + 1} of {total}" if total > 0 else "reading the statement"
     await _progress(import_id, line)
-    return doc.words(page)
+    return _redact_words(doc.words(page))
 
 
 async def doc_words_range(
@@ -662,14 +739,14 @@ async def doc_words_range(
         else "reading the statement"
     )
     await _progress(import_id, line)
-    return doc.words_range(first, last)
+    return [_redact_words(words) for words in doc.words_range(first, last)]
 
 
 async def doc_cells(
     ctx: RunContext[AgentDeps], import_id: str, sheet: int | str = 0
 ) -> list[list[Any]]:
     """A sheet's rows by index or name. Text formats arrive as one-line cells."""
-    return (await _load_doc(ctx, import_id)).cells(sheet)
+    return _redact_cells((await _load_doc(ctx, import_id)).cells(sheet))
 
 
 async def import_state(ctx: RunContext[AgentDeps], import_id: str) -> dict[str, Any]:
@@ -791,7 +868,8 @@ async def transcribe_page(
     ctx: RunContext[AgentDeps], import_id: str, page: int = 0
 ) -> dict[str, Any]:
     """An isolated VISION call for a page with no text layer. Returns typed rows."""
-    return await vision_transcribe(await _load_doc(ctx, import_id), page)
+    result = await vision_transcribe(await _load_doc(ctx, import_id), page)
+    return {key: _redact_value(value) for key, value in result.items()}
 
 
 async def submit_parser(

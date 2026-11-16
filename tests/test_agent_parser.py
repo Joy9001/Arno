@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from datetime import date
 from pathlib import Path
@@ -452,10 +453,11 @@ async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(ledger, 
 
 
 async def test_the_password_never_touches_history_the_task_record_or_the_plan(
-    ledger, monkeypatch, tmp_path
+    ledger, monkeypatch, tmp_path, caplog
 ):
     import arno.agent.parser as parser_module
 
+    caplog.set_level(logging.DEBUG)
     secret = "ARJU0101-unique-secret"
     real_open = parser_module.open_documents
     unlocked = {"done": False}
@@ -547,6 +549,7 @@ async def test_the_password_never_touches_history_the_task_record_or_the_plan(
         PASSWORDS.clear()
 
     assert secret not in str(result.all_messages())
+    assert secret not in caplog.text
     assert secret not in child_history
     assert secret not in json.dumps([dict(item) for item in plan])
     for path in Path(tmp_path).glob("*.json"):

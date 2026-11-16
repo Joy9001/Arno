@@ -548,6 +548,51 @@ async def commit_import(
         )
 
 
+async def _lock_import_scope(conn: Connection, import_id: str) -> dict[str, Any] | None:
+    """Take the account, the import, and the payees it names, in an order both paths share.
+
+    Commit writes the statement's movements and resolves the payees they name; undo reverses
+    them, archives the payees it created, and restores the account last. Taking those rows in
+    each path's own order made a commit and an undo of two imports on one account hold a row the
+    other needed, so Postgres broke a deadlock and picked a side. The account's row lock is the
+    gate: the import's own row and its payees come under it, payees in id order, so two
+    operations on one account wait for each other rather than for a row each of them holds.
+    """
+    account_id = await conn.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id)
+    if account_id is not None:
+        await conn.fetchval("SELECT id FROM accounts WHERE id = $1 FOR UPDATE", account_id)
+    # The row lock makes a double POST, a retry, and two concurrent commits book once.
+    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
+    if row is None:
+        return None
+    if row["account_id"] is not None:
+        if row["account_id"] != account_id:
+            # A parser re-bound the import while this waited for its row: take that gate too.
+            await conn.fetchval(
+                "SELECT id FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"]
+            )
+        await conn.fetch(
+            """
+            SELECT id FROM payees
+            WHERE id IN (
+                SELECT ml.payee_id
+                FROM statement_lines sl
+                JOIN movement_legs ml ON ml.movement_id = sl.movement_id
+                WHERE sl.import_id = $1 AND ml.payee_id IS NOT NULL
+            ) OR lower(display_name) IN (
+                SELECT lower(sl.match_detail ->> 'counterparty')
+                FROM statement_lines sl
+                WHERE sl.import_id = $1 AND sl.movement_id IS NULL
+                  AND sl.match_state <> 'ignored'
+            )
+            ORDER BY id
+            FOR UPDATE
+            """,
+            import_id,
+        )
+    return row
+
+
 async def _commit(
     conn: Connection,
     import_id: str,
@@ -555,8 +600,7 @@ async def _commit(
     adjustment_confirmed: bool = False,
     rematched: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    # The row lock makes a double POST, a retry, and two concurrent commits book once.
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
+    row = await _lock_import_scope(conn, import_id)
     if row is None:
         raise InvalidLedgerError("No such import")
     if row["status"] == "committed":
@@ -962,7 +1006,7 @@ async def undo_import(conn: Connection, import_id: str) -> dict[str, Any]:
 
 
 async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
+    row = await _lock_import_scope(conn, import_id)
     if row is None:
         raise InvalidLedgerError("No such import")
     if row["undone_at"] is not None:

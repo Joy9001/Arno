@@ -476,14 +476,19 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     )
     attachment = await conn.fetchrow(
         """
-        SELECT id, filename, content_type, size_bytes, sha256, purged_at, unlocked_at
+        SELECT id, filename, content_type, size_bytes, sha256, purged_at, unlocked_at,
+               (data IS NOT NULL) AS has_data
         FROM attachments WHERE id = $1
         """,
         row["attachment_id"],
     )
     attachment_payload = None
+    file_present = False
     if attachment is not None:
         attachment_payload = dict(attachment)
+        file_present = (
+            bool(attachment_payload.pop("has_data")) and attachment_payload["purged_at"] is None
+        )
         for key in ("purged_at", "unlocked_at"):
             value = attachment_payload[key]
             attachment_payload[key] = value.isoformat() if value else None
@@ -581,6 +586,9 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         "counts": row["counts"],
         "review": row["review"],
         "reason": row["reason"],
+        "recovery_action": "reupload" if row["status"] == "failed" else None,
+        # The stored file is still here, so the parse can run again on the same import.
+        "can_retry_parse": row["status"] == "failed" and file_present,
         "parser_saved": row["layout_id"] is not None,
         "categorize": categorize,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
@@ -705,7 +713,8 @@ async def set_manual_opening(
 async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]]:
     rows = await conn.fetch(
         """
-        SELECT i.*, a.filename, acc.name AS account_name
+        SELECT i.*, a.filename, acc.name AS account_name,
+               (a.data IS NOT NULL AND a.purged_at IS NULL) AS file_present
         FROM imports i
         LEFT JOIN attachments a ON a.id = i.attachment_id
         LEFT JOIN v_accounts acc ON acc.id = i.account_id
@@ -714,31 +723,39 @@ async def list_imports(conn: Connection, limit: int = 50) -> list[dict[str, Any]
         """,
         limit,
     )
-    return [
-        {
-            "import_id": row["id"],
-            "status": row["status"],
-            "filename": row["filename"],
-            "account": row["account_name"],
-            "period": {
-                "start": row["period_start"].isoformat() if row["period_start"] else None,
-                "end": row["period_end"].isoformat() if row["period_end"] else None,
-            }
-            if row["period_start"] or row["period_end"]
-            else None,
-            "check": row["check_status"],
-            "counts": row["counts"],
-            "reason": row["reason"],
-            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-            "committed_at": row["committed_at"].isoformat() if row["committed_at"] else None,
-            "undone_at": row["undone_at"].isoformat() if row["undone_at"] else None,
+    return [import_list_item(row) for row in rows]
+
+
+def import_list_item(row: Any) -> dict[str, Any]:
+    """One import in a list: the shape `GET /api/imports` and `GET /api/import-history` share.
+
+    `row` carries the import's columns plus `filename`, `account_name`, and `file_present`.
+    """
+    return {
+        "import_id": row["id"],
+        "status": row["status"],
+        "filename": row["filename"],
+        "account": row["account_name"],
+        "period": {
+            "start": row["period_start"].isoformat() if row["period_start"] else None,
+            "end": row["period_end"].isoformat() if row["period_end"] else None,
         }
-        for row in rows
-    ]
+        if row["period_start"] or row["period_end"]
+        else None,
+        "check": row["check_status"],
+        "counts": row["counts"],
+        "reason": row["reason"],
+        "recovery_action": "reupload" if row["status"] == "failed" else None,
+        "can_retry_parse": row["status"] == "failed" and bool(row["file_present"]),
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        "committed_at": row["committed_at"].isoformat() if row["committed_at"] else None,
+        "undone_at": row["undone_at"].isoformat() if row["undone_at"] else None,
+    }
 
 
 __all__ = [
     "create_import",
+    "import_list_item",
     "import_payload",
     "list_imports",
     "retry_with_password",

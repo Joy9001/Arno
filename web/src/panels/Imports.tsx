@@ -23,6 +23,7 @@ import {
   useNow,
 } from "../jobs";
 import { Busy } from "../Loading";
+import { DeletionPreviewNote } from "./DeletionScope";
 import type {
   AccountSummary,
   CategorizeState,
@@ -868,8 +869,61 @@ function ParserLayouts() {
   );
 }
 
+/** A failed parse's recovery: run the stored file again, or say to upload it again. */
+export function ParseRecovery({
+  detail,
+  busy = null,
+  error = null,
+  threadId = null,
+  onRetry,
+  onOpenThread,
+}: {
+  detail: ImportRecord;
+  busy?: string | null;
+  error?: string | null;
+  threadId?: string | null;
+  onRetry?: () => void;
+  onOpenThread?: () => void;
+}) {
+  if (detail.status !== "failed") return null;
+  if (!detail.can_retry_parse) {
+    return (
+      <p className="fine act-decision-note">
+        The stored statement file is gone, so this import can’t be retried. Upload it again.
+      </p>
+    );
+  }
+  return (
+    <>
+      <div className="row-actions">
+        <button type="button" disabled={busy !== null} onClick={onRetry}>
+          {busy === "retry" ? (
+            <>
+              <Busy />
+              Retrying…
+            </>
+          ) : (
+            "Retry parse"
+          )}
+        </button>
+        {threadId && (
+          <button type="button" className="ghost small" onClick={onOpenThread}>
+            <MessageCircle size={13} aria-hidden="true" />
+            Open the retry in chat
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="fine act-decision-note" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
 /** What the categorization job behind a committed import is doing, in place. */
-function CategorizeStatus({
+export function CategorizeStatus({
   state,
   onRefresh,
 }: {
@@ -1056,9 +1110,15 @@ export function ImportsPanel({
   const [password, setPassword] = useState("");
   // A non-zero closing difference is booked only after the user confirms this dialog.
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
+  // Purging the stored statement file is confirmed in its own dialog, with the scope shown.
+  const [purgeOpen, setPurgeOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A retry runs as a chat turn; the import stays failed until the parser picks it up.
+  const [retryThread, setRetryThread] = useState<string | null>(null);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryWait, setRetryWait] = useState(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [deepLinkRetry, setDeepLinkRetry] = useState(0);
@@ -1090,7 +1150,7 @@ export function ImportsPanel({
   const parsePolling = Boolean(
     selected && ["parsing", "needs_password", "needs_input"].includes(selected.status),
   );
-  const needsPoll = parsePolling || categorizePolling;
+  const needsPoll = parsePolling || categorizePolling || retryWait;
 
   const refreshSelected = useCallback(async () => {
     const id = selected?.import_id;
@@ -1101,6 +1161,8 @@ export function ImportsPanel({
       if (writeSeq.current !== seq) return;
       setSelected(next);
       setPollError(null);
+      // The retry turn has moved the import off failed; stop waiting for the parser.
+      if (next.status !== "failed") setRetryWait(false);
       if (next.status !== "parsing") reloadList();
     } catch (caught) {
       if (writeSeq.current !== seq) return;
@@ -1113,6 +1175,13 @@ export function ImportsPanel({
     const timer = window.setInterval(() => void refreshSelected(), 2500);
     return () => window.clearInterval(timer);
   }, [needsPoll, busy, refreshSelected]);
+
+  // A retry that never starts the parser must not poll forever.
+  useEffect(() => {
+    if (!retryWait) return;
+    const timer = window.setTimeout(() => setRetryWait(false), 60_000);
+    return () => window.clearTimeout(timer);
+  }, [retryWait]);
 
   // A finished background job may be the one this import was waiting on.
   const jobsVersion = useJobs((state) => state.version);
@@ -1130,6 +1199,10 @@ export function ImportsPanel({
     setPollError(null);
     setPassword("");
     setAdjustmentOpen(false);
+    setPurgeOpen(false);
+    setRetryThread(null);
+    setRetryError(null);
+    setRetryWait(false);
     try {
       const next = await api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`);
       if (seq !== writeSeq.current) return;
@@ -1158,6 +1231,10 @@ export function ImportsPanel({
     setDeepLinkError(null);
     setPassword("");
     setAdjustmentOpen(false);
+    setPurgeOpen(false);
+    setRetryThread(null);
+    setRetryError(null);
+    setRetryWait(false);
     loadedImport.current = null;
     setSelected(null);
     api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`)
@@ -1210,6 +1287,47 @@ export function ImportsPanel({
     writeSeq.current += 1;
     setSelected(next);
     reloadList();
+  }
+
+  async function retryParse() {
+    if (!selected || busy !== null) return;
+    writeSeq.current += 1;
+    setBusy("retry");
+    setError(null);
+    setRetryError(null);
+    try {
+      const next = await api<ImportRecord & { thread_id: string }>(
+        `/api/imports/${selected.import_id}/retry`,
+        { method: "POST" },
+      );
+      const { thread_id: threadId, ...detail } = next;
+      setSelected(detail);
+      setRetryThread(threadId);
+      setRetryWait(true);
+      reloadList();
+    } catch (caught) {
+      // A 409 or 503 states why the parser cannot run again right now.
+      setRetryError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function purgeStatementFile() {
+    const attachmentId = selected?.attachment?.id;
+    if (!attachmentId) return;
+    writeSeq.current += 1;
+    setBusy("purge");
+    setError(null);
+    try {
+      await api(`/api/attachments/${encodeURIComponent(attachmentId)}`, { method: "DELETE" });
+      setPurgeOpen(false);
+      await refreshSelected();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
   }
 
   const blockers: string[] = [];
@@ -1509,8 +1627,55 @@ export function ImportsPanel({
                       )}
                     </button>
                   )}
+                  {selected.attachment?.id && !selected.attachment.purged_at && (
+                    <button
+                      type="button"
+                      className="ghost"
+                      disabled={busy !== null}
+                      onClick={() => setPurgeOpen(true)}
+                    >
+                      Delete statement file
+                    </button>
+                  )}
                 </div>
               </div>
+
+              <Dialog.Root open={purgeOpen} onOpenChange={setPurgeOpen}>
+                <Dialog.Portal>
+                  <Dialog.Overlay className="dialog-overlay" />
+                  <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
+                    <Dialog.Title>Delete this statement file?</Dialog.Title>
+                    <p className="fine">
+                      Only the stored file is cleared. The import, its rows, and its trail stay.
+                    </p>
+                    {purgeOpen && (
+                      <DeletionPreviewNote scope="statement" id={selected.import_id} />
+                    )}
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={busy === "purge"}
+                        onClick={() => void purgeStatementFile()}
+                      >
+                        {busy === "purge" ? (
+                          <>
+                            <Busy />
+                            Deleting…
+                          </>
+                        ) : (
+                          "Delete file"
+                        )}
+                      </button>
+                      <Dialog.Close asChild>
+                        <button type="button" className="ghost" disabled={busy === "purge"}>
+                          Cancel
+                        </button>
+                      </Dialog.Close>
+                    </div>
+                  </Dialog.Content>
+                </Dialog.Portal>
+              </Dialog.Root>
 
               {selected.reason && <p className="notice">{selected.reason}</p>}
 
@@ -1669,6 +1834,22 @@ export function ImportsPanel({
 
               {(selected.status === "review" || selected.status === "failed") && (
                 <>
+                  {selected.status === "failed" && (
+                    <ParseRecovery
+                      detail={selected}
+                      busy={busy}
+                      error={retryError}
+                      threadId={retryThread}
+                      onRetry={() => void retryParse()}
+                      onOpenThread={() => {
+                        if (retryThread) {
+                          window.dispatchEvent(
+                            new CustomEvent("arno:open-thread", { detail: retryThread }),
+                          );
+                        }
+                      }}
+                    />
+                  )}
                   <div className="row-actions">
                     {selected.status === "review" && (
                       <button

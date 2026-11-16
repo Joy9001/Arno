@@ -25,6 +25,7 @@ from arno.notifications import (
     mark_all_read,
     mark_read,
     public_push_key,
+    push_status,
     seed_chat_text,
     subscribe,
     unsubscribe,
@@ -75,9 +76,12 @@ async def get_notifications(
     conn: Database,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
+    include_resolved: bool = Query(default=False),
 ) -> dict[str, Any]:
     try:
-        return await list_notification_page(conn, limit=limit, cursor=cursor)
+        return await list_notification_page(
+            conn, limit=limit, cursor=cursor, include_resolved=include_resolved
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -134,6 +138,11 @@ async def post_notification_chat(notification_id: str, conn: Database) -> dict[s
 @router.get("/push/vapid", include_in_schema=False)
 async def get_push_key(conn: Database) -> dict[str, Any]:
     return await public_push_key(conn)
+
+
+@router.get("/push/status")
+async def get_push_status(conn: Database) -> dict[str, Any]:
+    return await push_status(conn)
 
 
 @router.post("/push/subscribe", status_code=201)
@@ -267,7 +276,10 @@ async def post_job_retry(job_id: str, conn: Database) -> dict[str, Any]:
     await conn.execute(
         """
         UPDATE notifications
-        SET read_at = coalesce(read_at, now()), dedupe_key = NULL
+        SET read_at = coalesce(read_at, now()),
+            resolved_at = coalesce(resolved_at, now()),
+            resolved_by = coalesce(resolved_by, 'job_retry'),
+            dedupe_key = NULL
         WHERE dedupe_key = $1
         """,
         f"job_failed:{job_id}",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 
@@ -12,6 +13,33 @@ from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import record_expense
 from arno.tools import money as money_tools
 from arno.tools import write as write_tools
+
+
+def test_compare_offers_returns_actual_components_and_requires_rate():
+    offers: Any = [
+        {"label": "Cash", "cash_price_paise": 10_000, "cashback_paise": 500},
+        {
+            "label": "EMI",
+            "cash_price_paise": 10_000,
+            "financing": {
+                "kind": "card_emi",
+                "annual_rate_bps": 0,
+                "months": 2,
+                "processing_fee_paise": 500,
+            },
+        },
+    ]
+    result = money_tools.compare_offers(offers)
+    assert result[0]["total_paid_paise"] == 10_000
+    assert result[0]["net_cost_paise"] == 9_500
+    assert result[0]["complete_cost"] is False
+    assert result[1]["total_paid_paise"] == 10_590
+    assert result[1]["gst_on_fee_paise"] == 90
+    assert result[1]["apr_percent"] > 0
+    assert result[1]["complete_cost"] is False
+    del offers[1]["financing"]["annual_rate_bps"]
+    with pytest.raises(ValueError, match="requires an annual rate"):
+        money_tools.compare_offers(offers)
 
 
 async def test_card_payoff_by_name_uses_ledger_balance_and_stored_terms(ledger):

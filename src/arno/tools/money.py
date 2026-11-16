@@ -8,14 +8,22 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Literal
 
 from arno.db.conn import Connection
+from arno.engine.money import Offer, money
 from arno.engine.money import card_payoff as card_payoff_fn
-from arno.engine.money import money
+from arno.engine.money import compare_offers as compare_offers_fn
 from arno.ledger.common import has_known_balance, ledger_balance
 from arno.tools.mark import mark
 
 
 class ToolInputError(ValueError):
     """A message the model can act on, delivered as ModelRetry by the wrapper."""
+
+
+def compare_offers(offers: list[Offer]) -> list[dict[str, Any]]:
+    """Compare stated cash and financing offers without choosing between them."""
+    return [
+        {**offer, "apr_percent": apr_percent(offer["apr"])} for offer in compare_offers_fn(offers)
+    ]
 
 
 def _finite_decimal(value: Any, field: str) -> Decimal:
@@ -185,6 +193,7 @@ __all__ = [
     "ToolInputError",
     "apr_percent",
     "card_payoff",
+    "compare_offers",
     "monthly_percent_to_annual_bps",
     "percent_to_bps",
 ]

@@ -11,6 +11,79 @@ from arno.engine import backtest, hackerrank, personas
 from arno.engine.inputs import Occurrence, build_inputs
 
 
+async def test_backtest_results_are_labeled_synthetic_or_real(ledger):
+    real = await backtest.backtest_db(ledger)
+    assert real["source"] == backtest.REAL_LEDGER == "real ledger"
+    assert "the real ledger" in backtest.format_report(real)
+
+    synthetic = backtest.summarize(
+        [],
+        source=f"synthetic personas, seeds {personas.TUNING_SEEDS[0]}",
+        dropped=0,
+        names=("flat",),
+    )
+    assert synthetic["source"].startswith("synthetic personas, seeds ")
+    assert "synthetic personas, seeds " in backtest.format_report(synthetic)
+    assert real["source"] != synthetic["source"]
+
+
+async def test_the_db_backtest_reads_no_spend_after_its_origin(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.common import today
+    from arno.ledger.movements import record_expense
+
+    first = today() - timedelta(days=130)
+    late = today() - timedelta(days=30)
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="History bank",
+        opening_balance_paise=1_000_000,
+        opening_balance_as_of=first - timedelta(days=1),
+    )
+    day = first
+    while day <= today():
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=999_900 if day == late else 10_000,
+            date=day,
+        )
+        day += timedelta(days=7)
+    # `db_cases` scores weekly origins back from the last movement. Put one charge just before
+    # the earliest origin (history) and one on it (not history): the spend cutoff is strict.
+    last_movement = day - timedelta(days=7)
+    origin = last_movement - timedelta(days=backtest.LAST_HORIZON)
+    while origin - timedelta(days=backtest.STEP_DAYS) >= first + timedelta(days=14):
+        origin -= timedelta(days=backtest.STEP_DAYS)
+    adjacent = origin - timedelta(days=2)
+    for day, amount in ((adjacent, 888_800), (origin, 777_700)):
+        await record_expense(ledger, account_id=bank["id"], amount_paise=amount, date=day)
+
+    cases = await backtest.db_cases(ledger)
+    assert cases
+    earliest = cases[0]
+    assert earliest.as_of == origin
+    assert any(
+        row.date == adjacent and row.amount_paise == 888_800 for row in earliest.inputs.spend
+    )
+    assert not any(row.amount_paise == 777_700 for row in earliest.inputs.spend)
+    for case in cases:
+        assert case.as_of < late
+        assert all(row.date < case.as_of for row in case.inputs.spend)
+        assert all(
+            spend_date < case.as_of
+            for category in case.inputs.categories
+            for spend_date, _amount in category.history
+        )
+        # The one charge dated after every origin is nowhere in the scored inputs.
+        assert not any(
+            amount == 999_900
+            for category in case.inputs.categories
+            for _spend_date, amount in category.history
+        )
+
+
 def test_a_persona_snapshot_sees_nothing_after_its_day():
     persona = personas.generate("salaried_steady", personas.TUNING_SEEDS[0])
     ledger = backtest._ledger(persona)
@@ -82,6 +155,7 @@ def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():
     )
 
     assert result["cases"] > 40
+    assert result["source"].startswith("synthetic personas, seeds ")
     assert {row["forecaster"] for row in result["metrics"]} == {"flat", "schedule_mean"}
     flat = next(
         row
@@ -90,6 +164,7 @@ def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():
     )
     assert "schedule_mean" in flat["skill"]
     report = backtest.format_report(result)
+    assert "Source: synthetic personas, seeds " in report
     assert "weekly origins scored" in report
     assert "| end | 30 | flat |" in report
 

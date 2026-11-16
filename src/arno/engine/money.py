@@ -94,6 +94,8 @@ class Amortization(TypedDict):
     schedule: list[ScheduleRow]
     prepay: PrepayResult | None
     assumptions: list[str]
+    complete_cost: bool
+    not_included: list[str]
     processing_fee: NotRequired[Money]
     fee_gst: NotRequired[Money]
     total_fee: NotRequired[Money]
@@ -168,6 +170,50 @@ class CardPayoff(TypedDict):
     payoff_date: str | None
     schedule: list[CardPayoffRow]
     assumptions: list[str]
+    complete_cost: bool
+    not_included: list[str]
+
+
+class Offer(TypedDict):
+    label: str
+    cash_price_paise: int
+    discount_paise: NotRequired[int]
+    cashback_paise: NotRequired[int]
+    financing: NotRequired[OfferFinancing | None]
+
+
+class OfferFinancing(TypedDict):
+    kind: Literal["card_emi", "loan"]
+    # Missing is refused by compare_offers with a message the model can act on, not at the schema.
+    annual_rate_bps: NotRequired[int]
+    months: int
+    processing_fee_paise: NotRequired[int]
+
+
+class OfferComparison(TypedDict):
+    label: str
+    cash_price_paise: int
+    discount_paise: int
+    cashback_paise: int
+    interest_paise: int
+    gst_on_interest_paise: int
+    processing_fee_paise: int
+    gst_on_fee_paise: int
+    total_paid_paise: int
+    net_cost_paise: int
+    difference_vs_cash_paise: int
+    # Each other offer's net cost subtracted from this one, in input order: positive costs more.
+    difference_vs_offers: list[OfferDifference]
+    # What each month's instalment actually charges, for a financed offer; empty for cash.
+    instalments_paise: list[int]
+    apr: RateFit | None
+    complete_cost: bool
+    not_included: list[str]
+
+
+class OfferDifference(TypedDict):
+    label: str
+    difference_paise: int
 
 
 @overload
@@ -564,6 +610,12 @@ def amortize(
 
     total_interest = sum(walk.interest, Decimal(0))
     schedule_rows = schedule(walk)
+    not_included = [
+        "foreclosure and prepayment charges",
+        "late and contingent charges",
+    ]
+    if len(rate_changes) == 0:
+        not_included.append("future floating-rate resets not supplied")
     result: Amortization = {
         "emi": money(int(emi)),
         "months": len(walk.principal),
@@ -575,6 +627,8 @@ def amortize(
         "schedule": schedule_rows,
         "prepay": None,
         "assumptions": notes,
+        "complete_cost": False,
+        "not_included": not_included,
     }
 
     if processing_fee_paise > 0:
@@ -1052,7 +1106,98 @@ def card_payoff(
         else None,
         "schedule": schedule,
         "assumptions": notes,
+        "complete_cost": False,
+        "not_included": ["late and contingent charges", "future rate changes"],
     }
+
+
+def compare_offers(offers: Sequence[Offer]) -> list[OfferComparison]:
+    """Compare stated purchase costs in input order, without choosing an offer."""
+    if len(offers) < 2:
+        raise ValueError("at least two offers are required")
+    comparisons: list[OfferComparison] = []
+    for offer in offers:
+        price = offer["cash_price_paise"]
+        discount = offer.get("discount_paise", 0)
+        cashback = offer.get("cashback_paise", 0)
+        if offer["label"].strip() == "" or price <= 0 or min(discount, cashback) < 0:
+            raise ValueError("offer needs a label, positive price and non-negative discounts")
+        principal = price - discount
+        if principal <= 0 or cashback > principal:
+            raise ValueError("discounts cannot exceed the cash price")
+        financing = offer.get("financing")
+        interest = interest_gst = fee = fee_gst = 0
+        instalments: list[int] = []
+        apr: RateFit | None = None
+        omitted: list[str] = []
+        if cashback > 0:
+            omitted.append("cashback eligibility and payment conditions")
+        if financing is not None:
+            rate = financing.get("annual_rate_bps")
+            if rate is None:
+                raise ValueError("financing requires an annual rate")
+            months = financing["months"]
+            fee = financing.get("processing_fee_paise", 0)
+            if financing["kind"] == "card_emi":
+                emi = card_emi(
+                    principal, annual_rate_bps=rate, months=months, processing_fee_paise=fee
+                )
+                interest = emi["total_interest_paise"]
+                interest_gst = sum(row["gst_paise"] for row in emi["schedule"])
+                fee_gst = sum(row["fee_gst_paise"] for row in emi["schedule"])
+                instalments = [row["total_paise"] for row in emi["schedule"]]
+                apr = _compute_apr(principal, instalments)
+            elif financing["kind"] == "loan":
+                loan = amortize(principal, rate / 100, months, processing_fee_paise=fee)
+                interest = loan["total_interest"]["paise"]
+                fee_gst = loan.get("fee_gst", money(0))["paise"]
+                instalments = [
+                    row["principal_paise"] + row["interest_paise"] for row in loan["schedule"]
+                ]
+                apr = loan.get("apr")
+                if apr is None:
+                    apr = _compute_apr(principal, instalments)
+            else:
+                raise ValueError("financing kind must be card_emi or loan")
+            omitted.extend(
+                [
+                    "foreclosure and prepayment charges",
+                    "late and contingent charges",
+                    "future floating-rate resets not supplied",
+                ]
+            )
+        total = principal + interest + interest_gst + fee + fee_gst
+        net_cost = total - cashback
+        comparisons.append(
+            {
+                "label": offer["label"],
+                "cash_price_paise": price,
+                "discount_paise": discount,
+                "cashback_paise": cashback,
+                "interest_paise": interest,
+                "gst_on_interest_paise": interest_gst,
+                "processing_fee_paise": fee,
+                "gst_on_fee_paise": fee_gst,
+                "total_paid_paise": total,
+                "net_cost_paise": net_cost,
+                "difference_vs_cash_paise": net_cost - price,
+                "difference_vs_offers": [],
+                "instalments_paise": instalments,
+                "apr": apr,
+                "complete_cost": len(omitted) == 0,
+                "not_included": omitted,
+            }
+        )
+    for index, row in enumerate(comparisons):
+        row["difference_vs_offers"] = [
+            {
+                "label": other["label"],
+                "difference_paise": row["net_cost_paise"] - other["net_cost_paise"],
+            }
+            for other_index, other in enumerate(comparisons)
+            if other_index != index
+        ]
+    return comparisons
 
 
 def compound(
@@ -1104,6 +1249,9 @@ __all__ = [
     "CardPayoffRow",
     "CompoundResult",
     "Money",
+    "Offer",
+    "OfferComparison",
+    "OfferFinancing",
     "Prepay",
     "PrepayResult",
     "RateFit",
@@ -1115,6 +1263,7 @@ __all__ = [
     "card_emi",
     "card_payoff",
     "compound",
+    "compare_offers",
     "infer_rate",
     "money",
     "scale_cumulative",

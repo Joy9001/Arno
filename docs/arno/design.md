@@ -285,6 +285,7 @@ The agent has thirteen read tools:
 | `run_query(sql)` | Rows, queried as the read-only `agent_ro` role, including conversation search on `messages.search`. The agent shows the SQL it ran |
 | `amortize(loan or terms, prepay)` | EMI, total interest, payoff date, and the monthly schedule, with a prepayment or processing fee and APR compared. A logged EMI splits by the ledger's own rule, not this schedule: `loan_payment_parts` books one month's interest at the loan's rate |
 | `card_payoff(card or balance, monthly_rate_percent, payment_paise)` | Months to clear, total finance charge, GST, cost of carrying, payoff date, and the monthly schedule under minimum due or a fixed monthly payment. Uses the card's ledger balance and stored terms or explicit terms; refuses with a prompt to ask when no rate is known |
+| `compare_offers(offers)` | Two or more offers for one purchase in input order: price, discount, cashback, interest, GST, fee, total, the difference from cash and from each other offer, and APR. It never chooses, and marks what the cost leaves out |
 | `compound(monthly, annual_rate, months, start)` | Growth of a monthly investment at an assumed rate, which the reply must state |
 | `rupees(paise)` | The rupee form of a paise figure, from the one formatter; no card |
 | `show_chart(type, title, series)` | Nothing the model needs: a line, bar, stacked bar, or donut chart, from a typed spec that Arno emits as a card |

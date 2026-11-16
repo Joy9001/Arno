@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
@@ -19,6 +20,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     TextPart,
+    ToolCallPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionDef, FunctionModel, StreamFunctionDef
@@ -27,6 +29,8 @@ from pydantic_ai_harness.compaction import pin
 
 from arno.agent.capabilities import RootSpanIO, redaction_guardrail
 from arno.agent.deps import AgentDeps
+from arno.agent.parser import ParseReport, build_parser_agent
+from arno.importers.readers import open_documents
 
 
 @pytest.fixture(autouse=True)
@@ -160,6 +164,53 @@ async def test_root_span_preview_redacts_input_before_the_guardrail():
     assert _text(root, "input.mime_type") == "text/plain"
     assert _text(root, "output.value") == "Anytime."
     assert _text(root, "user.id") == "local-user"
+
+
+async def test_a_parser_document_return_keeps_a_card_number_out_of_every_span(monkeypatch):
+    doc = open_documents(b"Date,Description\n2026-01-01,Card 4111 1111 1111 1111\n")[0]
+
+    async def progress(*args: object) -> None:
+        return None
+
+    monkeypatch.setattr("arno.agent.parser._progress", progress)
+
+    def script(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if getattr(part, "part_kind", "") == "tool-return"
+        ]
+        if not returns:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_code", {"code": "print(await doc_cells(import_id='synthetic'))"}
+                    )
+                ]
+            )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(info.output_tools[0].name, ParseReport(status="gave_up").model_dump())
+            ]
+        )
+
+    agent = build_parser_agent(model=FunctionModel(script))
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    agent.instrument = InstrumentationSettings(tracer_provider=provider, include_content=True)
+
+    await agent.run(
+        "inspect", deps=AgentDeps(conversation_id="unused", parse_docs={"synthetic": doc})
+    )
+
+    recorded = "\n".join(
+        json.dumps(span.attributes, default=str) for span in exporter.get_finished_spans()
+    )
+    assert "[redacted:credit_card]" in recorded
+    assert "4111 1111 1111 1111" not in recorded
 
 
 async def test_root_span_preview_respects_include_content_off():

@@ -25,11 +25,95 @@ const { buildSupportingPlan, coveredByNativeCard, fallbackViews, messageCoverage
   await server.ssrLoadModule("/src/chat/supporting-data.ts");
 const { ProjectionBody, ProjectionChart, ProjectionSummary } = await server.ssrLoadModule("/src/projection.tsx");
 const { NoticedView } = await server.ssrLoadModule("/src/chat/AskHome.tsx");
+const { PriceChangeRows, PriceChange } = await server.ssrLoadModule("/src/PriceChange.tsx");
+const { NeedRow } = await server.ssrLoadModule("/src/panels/Inbox.tsx");
+const { CategorizeStatus, ParseRecovery } = await server.ssrLoadModule("/src/panels/Imports.tsx");
+const { AccountRow } = await server.ssrLoadModule("/src/panels/Accounts.tsx");
+const { copyFor } = await server.ssrLoadModule("/src/components/job-toasts.tsx");
+const { PushStatus } = await server.ssrLoadModule("/src/panels/PushStatus.tsx");
+const { ExportScope } = await server.ssrLoadModule("/src/panels/ExportScope.tsx");
+const { DeletionScope } = await server.ssrLoadModule("/src/panels/DeletionScope.tsx");
 const { EvidencePanel } = await server.ssrLoadModule("/src/EvidencePanel.tsx");
+const { dataQualityNotes } = await server.ssrLoadModule("/src/projectionData.ts");
+const { HistoryEntries } = await server.ssrLoadModule("/src/panels/History.tsx");
+const { MemoryPrevious } = await server.ssrLoadModule("/src/panels/MemoryPrevious.tsx");
 const render = (Component, data) => renderToStaticMarkup(React.createElement(Component, { data }));
 const cardPart = (data) => ({ type: "data", name: "card", data });
 const resultPart = (result) => cardPart({ card: "result", result_id: result.result_id, snapshot: result });
 const planFor = (parts) => buildSupportingPlan(parts, messageCoverage(parts));
+
+test("history leads with the readable change, keeps ids secondary, and offers undo only when allowed", () => {
+  const base = { created_at: "2026-11-16T10:00:00Z", actor: "user", summary: "Logged expense ₹450.00 · Swiggy", records: [{ table: "movements", id: "mov_1" }] };
+  const html = renderToStaticMarkup(React.createElement(HistoryEntries, {
+    items: [
+      { ...base, undo_id: "und_1", undoable: true, reason: null },
+      { ...base, undo_id: "und_2", undoable: false, reason: "A later write changed this record." },
+    ], onUndo: () => {}, busy: false,
+  }));
+  assert.equal((html.match(/>Undo<\/button>/g) ?? []).length, 1);
+  assert.equal((html.match(/Logged expense ₹450\.00 · Swiggy/g) ?? []).length, 2);
+  assert.match(html, /A later write changed this record/);
+  assert.match(html, /movements: mov_1/);
+  assert.doesNotMatch(html, /change recorded/);
+});
+
+test("export scope renders the server exclusion list and destination", () => {
+  const scope = JSON.parse(execFileSync("uv", ["run", "python", "-c",
+    "import json; from arno.api.ledger import get_export_scope; print(json.dumps(get_export_scope()))"],
+  { cwd: root, encoding: "utf8" }));
+  const html = renderToStaticMarkup(React.createElement(ExportScope, {
+    excludedTables: scope.excluded_tables,
+  }));
+  for (const table of scope.excluded_tables) assert.ok(html.includes(table));
+  assert.ok(scope.excluded_tables.includes("sessions"));
+  assert.ok(scope.excluded_tables.includes("model_credentials"));
+  assert.match(html, /dump includes credentials and secrets/);
+  assert.match(html, /projection inputs and result/);
+  assert.match(html, /no export is sent to a cloud destination/);
+});
+
+test("a deletion request shows its counts, retained data, backups, and provider limits", () => {
+  const facts = JSON.parse(execFileSync("uv", ["run", "python", "-c",
+    "import json; from arno.ledger.deletion import retention_facts; print(json.dumps(retention_facts()))"],
+  {
+    cwd: root, encoding: "utf8",
+    env: {
+      ...process.env,
+      CHAT_BASE_URL: "https://api.example.com/v1",
+      CHAT_MODEL: "example-chat",
+      CHAT_PROVIDER: "example",
+      CHAT_API_KEY: "sk-live-must-never-be-echoed",
+      VISION_BASE_URL: "http://127.0.0.1:9/v1",
+      VISION_MODEL: "local-vision",
+      STT_BASE_URL: "",
+      STT_MODEL: "",
+    },
+  }));
+  const html = renderToStaticMarkup(React.createElement(DeletionScope, {
+    preview: {
+      scope: "everything",
+      removes: [
+        { table: "movements", count: 41 },
+        { table: "preferences", count: 1 },
+        { table: "parser_task_records", count: 2 },
+      ],
+      retains: facts.retains,
+      backups: facts.backups,
+      providers: facts.providers,
+    },
+  }));
+  assert.match(html, /movements/);
+  assert.match(html, /41 rows/);
+  assert.match(html, /2 files/);
+  assert.match(html, /44 records in total/);
+  assert.match(html, /Your sign-in/);
+  assert.match(html, /keep-daily 7/);
+  assert.match(html, /about 4 weeks/);
+  assert.match(html, /api\.example\.com/);
+  assert.match(html, /cannot be recalled by Arno/);
+  assert.match(html, /stays on this machine/);
+  assert.doesNotMatch(html, /sk-live-must-never-be-echoed/);
+});
 
 test("real Python result snapshots satisfy the frontend contract", () => {
   for (const result of fixtures.results) {
@@ -488,12 +572,15 @@ test("saved result titles, notes and cells strip the envelope without touching t
 
 test("safe_to_spend renders on home and projection cards and hides when null or invalid", () => {
   const receipt = structuredClone(fixtures.answers.receipt.results[0].receipt);
+  const notes = dataQualityNotes(receipt);
+  assert.ok(notes.length, "the fixture carries a data-quality note");
   const cardHtml = render(Card, { ...receipt, card: "projection" });
-  assert.match(cardHtml, /₹2,000 safe to spend today/);
-  assert.match(cardHtml, /06 Nov 2026/);
+  assert.match(cardHtml, /<p class="receipt-note">₹2,000 safe to spend today/);
+  assert.match(cardHtml, /10 Nov 2026/);
 
   const summaryHtml = renderToStaticMarkup(React.createElement(ProjectionSummary, { payload: receipt }));
-  assert.match(summaryHtml, /₹2,000 safe to spend today/);
+  assert.match(summaryHtml, /<p class="projection-facts">₹2,000 safe to spend today/);
+  const panelHtml = renderToStaticMarkup(React.createElement(ProjectionBody, { payload: receipt }));
 
   const home = {
     as_of: "2026-11-06",
@@ -505,19 +592,25 @@ test("safe_to_spend renders on home and projection cards and hides when null or 
       unknown_count: 0,
       unknown_accounts: [],
     },
-    projection: {
-      ...receipt,
-      floor_set: true,
-      floor: { paise: 100_000, text: "₹1,000" },
-      safe_to_spend: { amount_paise: 150_000, binding: "obligation", binding_date: "2026-11-10" },
-    },
+    projection: receipt,
     unread_count: 0,
     needs_you: [],
     recent: [],
   };
   const homeHtml = renderToStaticMarkup(React.createElement(NoticedView, { data: home }));
-  assert.match(homeHtml, /₹1,500 safe to spend today/);
-  assert.match(homeHtml, /10 Nov 2026/);
+  for (const html of [homeHtml, cardHtml]) {
+    assert.match(html, /₹2,000 safe to spend today/);
+    assert.match(html, /as of 06 Nov 2026/);
+    assert.match(html, /Floor binds on 10 Nov 2026/);
+  }
+  // One inline note list on each of home and the card; the panel shows the same list through
+  // DataQuality, so every note appears exactly once per surface, never twice.
+  for (const html of [homeHtml, cardHtml, panelHtml]) {
+    for (const note of notes) {
+      const shown = displayText(note);
+      assert.equal(html.split(shown).length - 1, 1, `${shown} appears once`);
+    }
+  }
 
   const nullHome = { ...home, projection: { ...home.projection, safe_to_spend: null } };
   const nullHomeHtml = renderToStaticMarkup(React.createElement(NoticedView, { data: nullHome }));
@@ -541,6 +634,107 @@ test("safe_to_spend renders on home and projection cards and hides when null or 
   const badReceipt = structuredClone(fixtures.answers.receipt);
   badReceipt.results[0].receipt.safe_to_spend = { binding: "floor", binding_date: "2026-11-06" };
   assert.equal(parseAnswerCard(badReceipt), null);
+});
+
+test("price changes show the amounts and cited payment rows", () => {
+  const item = { id: "notice", kind: "price_change", data: { old_paise: 49900, new_paise: 59900, step_date: "2026-06-05", movement_ids: ["mov_1"] } };
+  const html = renderToStaticMarkup(React.createElement(PriceChange, { item }));
+  for (const text of [/₹499/, /₹599/, /05 Jun 2026/, /Loading payments/]) assert.match(html, text);
+  const rows = [{ id: "mov_1", date: "2026-06-05", description: "Storage", payee_name: "Cloud", amount_paise: 59900, transfers: [{ from_name: "Bank" }] }];
+  const rendered = renderToStaticMarkup(React.createElement(PriceChangeRows, { rows }));
+  for (const text of [/05 Jun 2026/, /Cloud/, /Bank/, /₹599/, /mov_1/]) assert.match(rendered, text);
+});
+
+test("failed jobs and import categorization offer retry and missed schedules open in chat", () => {
+  const copy = copyFor({ kind: "scheduled_question", status: "failed", last_error: "Model unavailable" });
+  assert.match(copy.title, /failed/i);
+  assert.ok(copy.actions.some((action) => action.label === "Retry" && action.retry));
+  const failed = renderToStaticMarkup(React.createElement(CategorizeStatus, { state: { state: "failed", job_id: "job_1", error: "Model unavailable" }, onRefresh: () => {} }));
+  assert.match(failed, /Categorizing stopped/);
+  assert.match(failed, /Retry/);
+  const item = { id: "n", kind: "missed_recurring", title: "Missed payment", body: "No payment found", data: {}, read_at: null, created_at: "2026-11-06T00:00:00Z" };
+  const html = renderToStaticMarkup(React.createElement(NeedRow, { item, busy: null, dismissing: null, onOpen: () => {}, onDismiss: () => {} }));
+  assert.match(html, /Missed payment/);
+  assert.match(html, /Open in chat/);
+});
+
+test("a failed parse offers retry only while its stored file is still here", () => {
+  const failed = { import_id: "imp_1", status: "failed", reason: "The parser stopped.", recovery_action: "reupload", can_retry_parse: true };
+  const idle = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, threadId: "cnv_retry", onRetry: () => {}, onOpenThread: () => {} }));
+  assert.match(idle, /Retry parse/);
+  assert.match(idle, /Open the retry in chat/);
+  assert.doesNotMatch(idle, /Upload it again/);
+
+  const running = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, busy: "retry" }));
+  assert.match(running, /Retrying…/);
+  assert.match(running, /disabled=""/);
+
+  const refused = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, error: "The parser is not running." }));
+  assert.match(refused, /The parser is not running\./);
+
+  const gone = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: { ...failed, can_retry_parse: false } }));
+  assert.doesNotMatch(gone, /Retry parse/);
+  assert.match(gone, /Upload it again/);
+});
+
+test("projection cards download a workbook of the request they were asked", () => {
+  const receipt = structuredClone(fixtures.answers.receipt.results[0].receipt);
+  assert.equal(receipt.request.horizon_days, 90);
+  const base = render(Card, { ...receipt, card: "projection" });
+  assert.match(base, /Download workbook \(\.xlsx\)/);
+  assert.match(base, /href="\/api\/projection\/workbook\?horizon_days=90"/);
+
+  const requested = {
+    ...receipt,
+    request: {
+      horizon_days: 180,
+      hypothetical: {
+        amount_paise: 12_345_600, date: "2026-11-20", method: "emi", emi_months: 9,
+        account: "Slice card", emi_rate_percent: 14, emi_fee_paise: 19_900,
+      },
+      changes: [{ kind: "stop_income", start: "2026-12-01" }],
+    },
+  };
+  const html = render(Card, { ...requested, card: "projection" });
+  const href = /href="([^"]*\/api\/projection\/workbook[^"]*)"/.exec(html)?.[1];
+  assert.ok(href, "the card renders a workbook link");
+  const query = new URL(href.replaceAll("&amp;", "&"), "https://arno.test").searchParams;
+  assert.equal(query.get("horizon_days"), "180");
+  assert.equal(query.get("amount_paise"), "12345600");
+  assert.equal(query.get("date"), "2026-11-20");
+  assert.equal(query.get("method"), "emi");
+  assert.equal(query.get("emi_months"), "9");
+  assert.equal(query.get("account"), "Slice card");
+  assert.equal(query.get("emi_rate_percent"), "14");
+  assert.equal(query.get("emi_fee_paise"), "19900");
+  assert.deepEqual(JSON.parse(query.get("changes")), [{ kind: "stop_income", start: "2026-12-01" }]);
+
+  const home = {
+    as_of: "2026-11-06",
+    spendable_paise: 300_000,
+    cash_quality: { status: "known", known_paise: 300_000, known_count: 1, unknown_count: 0, unknown_accounts: [] },
+    projection: receipt,
+    unread_count: 0,
+    needs_you: [],
+    recent: [],
+  };
+  const homeHtml = renderToStaticMarkup(React.createElement(NoticedView, { data: home }));
+  assert.match(homeHtml, /href="\/api\/projection\/workbook"/);
+});
+
+test("the last statement date and age remain visible without a reconciliation claim", () => {
+  const account = { kind: "bank", name: "Bank", balance_paise: 100000, balance_as_of: "2026-09-01", statement_balance_paise: 100000, statement_balance_as_of: "2026-09-01", statement_age_days: 66 };
+  const html = renderToStaticMarkup(React.createElement(AccountRow, { account }));
+  assert.match(html, /01 Sept? 2026/);
+  assert.match(html, /66 days old/);
+  assert.doesNotMatch(html, /reconciled/i);
+});
+
+test("blocked push and an opted-out subscription explain recovery", () => {
+  const html = renderToStaticMarkup(React.createElement(PushStatus, { permission: "denied", subscribed: false }));
+  assert.match(html, /Blocked in this browser/);
+  assert.match(html, /Not subscribed/);
+  assert.match(html, /browser settings, then try again/);
 });
 
 test("amortize cards render fees and APR when present and stay unchanged when absent", () => {
@@ -594,6 +788,21 @@ test("card_payoff cards validate and render totals, assumptions, and collapsible
   assert.match(cardHtml, /Total paid/);
   assert.match(cardHtml, /Finance charge/);
   assert.match(cardHtml, /Show all \d+ rows/);
+});
+
+test("a memory that replaced an earlier value shows what it said and when", () => {
+  const previous = {
+    text: "Prefers tea",
+    changed_at: "2026-01-05T09:00:00Z",
+    superseded_at: "2026-02-01T09:00:00Z",
+  };
+  const html = renderToStaticMarkup(React.createElement(MemoryPrevious, { previous }));
+  assert.match(html, /Previously: Prefers tea/);
+  assert.match(html, /Feb/);
+  assert.doesNotMatch(
+    renderToStaticMarkup(React.createElement(MemoryPrevious, { previous: null })),
+    /Previously/,
+  );
 });
 
 

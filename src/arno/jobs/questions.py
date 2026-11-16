@@ -52,8 +52,6 @@ async def _answer(
     agent: Any,
 ) -> tuple[str, bool]:
     """The agent's answer, or the plain ceiling note; and whether a ceiling stopped it."""
-    # TODO(L6): a real scheduled-question run against the configured CHAT endpoint is still
-    # pending; tests use a scripted model and prove the read-only/ceiling wiring.
     prompt = str(question["prompt"])
     history, outside = await build_snapshot_history(conn)
     deps = AgentDeps(

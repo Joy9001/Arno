@@ -523,6 +523,15 @@ async def get_occurrence(conn: Connection, schedule_id: str, due_date: date) -> 
     return events[0]
 
 
+def card_amount_due(card: dict[str, Any]) -> int:
+    """What a card bill is for: the outstanding balance, or zero when the card is in credit.
+
+    `upcoming` and the reminder job state this figure, so payment evidence is judged against
+    the same number the bill was announced with.
+    """
+    return max(-int(card["balance_paise"]), 0)
+
+
 async def upcoming(
     conn: Connection, *, days: int = 30, start: date | None = None, past_days: int = 0
 ) -> dict[str, Any]:
@@ -549,7 +558,7 @@ async def upcoming(
     for card in await conn.fetch(
         "SELECT * FROM v_accounts WHERE kind = 'card' AND active ORDER BY name"
     ):
-        outstanding = max(-int(card["balance_paise"]), 0)
+        outstanding = card_amount_due(card)
         if outstanding <= 0:
             continue
         # A ledger balance is not a statement: without one, the outstanding is unknown and the
@@ -595,6 +604,7 @@ __all__ = [
     "OBLIGATION_SUBTYPES",
     "SCHEDULE_KINDS",
     "archive_schedule",
+    "card_amount_due",
     "create_schedule",
     "expand_schedule",
     "get_schedule",

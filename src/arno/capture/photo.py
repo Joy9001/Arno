@@ -2,7 +2,7 @@
 
 The output is exactly the five fields the ledger needs. No line items, no free-form notes, and no
 tools: the image's text can only become a capped merchant, amount, date, method, and UPI reference.
-The caller marks the text fields before they reach the chat model.
+The caller marks the text fields as outside text before they reach the chat model.
 """
 
 # TODO(L7): no live VISION endpoint was configured. Tests swap in a typed extraction, so the
@@ -18,6 +18,7 @@ from pydantic_ai import Agent, BinaryContent
 from pydantic_ai.models import Model
 
 from arno.agent.models import vision_model
+from arno.agent.redaction import redact_text
 
 MAX_AMOUNT_PAISE = 1_000_000_000_000
 
@@ -48,6 +49,11 @@ class PaymentPhoto(BaseModel):
     )
 
 
+def _redacted(value: str | None) -> str | None:
+    """The same detectors the chat text uses; value shapes, not names alone, drive them."""
+    return redact_text(value) if value else None
+
+
 async def extract_payment_photo(
     data: bytes,
     *,
@@ -55,7 +61,12 @@ async def extract_payment_photo(
     model: Model | None = None,
     spend_store: Any = None,
 ) -> PaymentPhoto:
-    """No tools, no history, no ledger access. A test may pass a scripted model."""
+    """No tools, no history, no ledger access. A test may pass a scripted model.
+
+    An image cannot be text-redacted, so this run is not traced at all: no prompt, image, or
+    output reaches a span. The typed text it returns is redacted here, before any caller can
+    store it or forward it to the chat model.
+    """
     from arno.agent.capabilities import spend_limits
     from arno.agent.spend import spend_store_scope
 
@@ -68,13 +79,22 @@ async def extract_payment_photo(
             capabilities=[limits] if limits is not None else None,
             name="receipt-vision",
         )
+        agent.instrument = False
         result = await agent.run(
             [
                 "Read this receipt or payment screenshot into the typed fields.",
                 BinaryContent(data=data, media_type=media_type or "image/png"),
             ]
         )
-        return result.output
+        photo = result.output
+        upi_ref = _redacted(photo.upi_ref)
+        return photo.model_copy(
+            update={
+                "merchant": _redacted(photo.merchant),
+                # A UTR field that carried a secret was not a UTR; drop it, not a marker.
+                "upi_ref": None if upi_ref != photo.upi_ref else upi_ref,
+            }
+        )
 
 
 __all__ = [

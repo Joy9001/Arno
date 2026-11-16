@@ -235,6 +235,58 @@ number-check note.
 uv run pytest tests/test_e2e_driver.py -q -n 0
 ```
 
+## Browser journeys
+
+`tests/e2e/browser_journey.py` reuses the driver's scratch-database guard, migrations, server
+start, setup token, health wait, state directory, and stop path, then drives the running app with
+Playwright. The browser enrolls its own passkey through the real WebAuthn ceremony, using
+Chromium's CDP virtual authenticator, so no software authenticator stands in for the screen.
+
+Playwright `1.64.0` is the release whose bundled Chromium revision, `1248`, is already in the
+local browser cache. It is not a project dependency; `--with` installs it only for the journey
+process.
+
+```bash
+export DATABASE_URL=postgresql://app:<pw>@127.0.0.1:5433/arno_journey_test
+export AGENT_RO_PASSWORD=...  BACKUP_PASSWORD=...
+
+uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey enroll --port 8131 --dry-run
+uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey home-vs-chat --port 8131 --dry-run
+uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey walkthrough --port 8131 --dry-run
+```
+
+`--dry-run` points `CHAT_BASE_URL` at a closed port, so no model can be called: `enroll` stops
+after enrollment, `home-vs-chat` stops after reading the home block, and `walkthrough` runs in
+full. Drop the flag for the real journeys, where `enroll` completes onboarding and asks its first
+question. `--headed` shows the window.
+
+Every run resets its database (`--empty` for `enroll`, the demo persona otherwise), starts
+`uv run arno serve` on `127.0.0.1:<port>` with the passkey origin at `http://localhost:<port>`,
+and stops it at the end. Screenshots after each step, a full-page HTML dump, and
+`summary-<journey>.json` land under `$E2E_STATE/browser/<journey>/`. The same summary is printed
+as JSON: journey, passed steps, figures seen, screenshot paths, and the thread id. A failure names
+the step it stopped at and exits non-zero.
+
+- `enroll` (C01 box 4): empty database, the enrollment link (`/setup#t=…`), the passkey buttons,
+  the first-run message with the account and salary, any confirm card clicked in the UI, then
+  "How much can I safely spend before my next salary?" It asserts no error banner, a rupee
+  figure in the answer, and the home figure equal to the chat card's when both are rendered.
+- `home-vs-chat` (C28 box 4): the home safe-to-spend block and the chat projection card must show
+  the same amount, as-of date, and data-quality notes, string for string.
+- `walkthrough` (completion checklist B): Home's "What I noticed" cards, one inbox item opened in
+  chat, and every Settings section. It never confirms the erase.
+
+Selectors are roles, labels, and text. The projection card is a semantic `figure` found by its
+text. Two places have no accessible handle and use a class: the answer's markdown (`.aui-md`)
+and the inbox row (`article.inbox-item`, whose subject is its first `strong`).
+
+The app no longer has `pages/Home.tsx` or a notifications dialog: the home is the Ask welcome,
+its notifications are the "What I noticed" cards, and the inbox is Activity → Inbox. The
+walkthrough walks those. The demo seed leaves the Slice card without a statement balance, which
+hides the whole forecast on the web, and creates no notification; the journey states each card's
+own ledger balance and one unread inbox item as fixture setup, then does every step through the
+UI.
+
 ## Limits
 
 - `tests/test_e2e_driver.py` empties every table in `DATABASE_URL`, like every test in this suite.
@@ -243,5 +295,5 @@ uv run pytest tests/test_e2e_driver.py -q -n 0
   that a previous run used keeps that run's task records. Only an id you ask for reaches them.
 - `state` lists an active schedule with its rule, not its due dates: expanding an RRULE is the
   app's job, not SQL's.
-- There is no browser, so nothing here checks rendering, keyboard, or the WebAuthn UI. It checks
-  the wire, which is where the money paths are.
+- The driver itself has no browser, so it checks the wire, which is where the money paths are.
+  `tests/e2e/browser_journey.py` is the browser pass over the same server.

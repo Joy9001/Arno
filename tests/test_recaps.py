@@ -127,7 +127,6 @@ async def test_a_recap_tells_every_story_from_the_rows(ledger):
         "total",
         "in_out",
         "where",
-        "change",
         "biggest",
         "frequent",
         "recurring",
@@ -135,12 +134,10 @@ async def test_a_recap_tells_every_story_from_the_rows(ledger):
 
     # 20,000 rent + 1,200 coffee + 1,500 dinner - 500 refund, refunds netted.
     assert stories["total"]["figure"]["paise"] == 2_220_000
-    assert stories["total"]["line"] == "9% more than September."
+    assert "coverage is incomplete" in stories["total"]["line"]
     assert stories["in_out"]["figure"]["paise"] == 6_000_000 - 2_220_000
     assert stories["where"]["figure"]["name"] == "Rent"
     assert [bar["name"] for bar in stories["where"]["bars"]] == ["Rent", "Food & Dining"]
-    assert stories["change"]["figure"]["name"] == "Food & Dining"
-    assert stories["change"]["figure"]["paise"] == 220_000 - 30_000
     assert stories["biggest"]["figure"]["paise"] == 2_000_000
     assert stories["frequent"]["figure"]["count"] == 3
     # Three weekly ₹400 coffees at the same cafe are a real uncovered series: reported, marked.
@@ -169,6 +166,41 @@ async def test_every_figure_opens_rows_that_sum_to_it(ledger):
         if story["key"] == "change":
             expected = 220_000  # the category's spend this period; the figure is the difference
         assert rows["sum"]["paise"] == expected, story["key"]
+
+
+async def test_a_known_total_with_a_gap_cannot_imply_a_complete_trend(ledger):
+    from arno.tools.read import summarize_spending
+
+    seeded = await _seed(ledger)
+    spend = await summarize_spending(ledger, group_by="category", period="2026-10")
+    assert spend["total"]["paise"] == 2_220_000
+    assert spend["coverage"]["complete"] is False
+    assert "2026-10" in spend["coverage"]["gaps"]
+    result = await recaps.recap(ledger, "month-2026-10", today=TODAY)
+    stories = {story["key"]: story for story in result["stories"]}
+    assert "coverage is incomplete" in stories["total"]["line"]
+    assert "change" not in stories
+
+    await ledger.execute(
+        "INSERT INTO imports (file_hash, status, account_id, period_start, period_end) "
+        "VALUES ('october', 'committed', $1, '2026-10-01', '2026-10-31')",
+        seeded["account"],
+    )
+    result = await recaps.recap(ledger, "month-2026-10", today=TODAY)
+    assert result["coverage"]["complete"] is True
+    stories = {story["key"]: story for story in result["stories"]}
+    assert "coverage is incomplete" in stories["total"]["line"]
+    assert "change" not in stories
+
+    await ledger.execute(
+        "INSERT INTO imports (file_hash, status, account_id, period_start, period_end) "
+        "VALUES ('september', 'committed', $1, '2026-09-01', '2026-09-30')",
+        seeded["account"],
+    )
+    result = await recaps.recap(ledger, "month-2026-10", today=TODAY)
+    stories = {story["key"]: story for story in result["stories"]}
+    assert "than September" in stories["total"]["line"]
+    assert "change" in stories
 
 
 async def test_an_empty_period_says_so_and_the_list_starts_at_the_first_row(ledger):

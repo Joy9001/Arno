@@ -443,6 +443,7 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
     # Statement merchants are outside text: marked here, and the flag reaches the conversation.
     outside = bool(now.get("outside_text"))
     before_total = int(before["total"]["paise"]) if before["total"] else 0
+    comparable = now["coverage"]["complete"] and before["coverage"]["complete"]
     stories: list[dict[str, Any]] = []
 
     if total < 0:
@@ -476,7 +477,11 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
             "key": "total",
             "label": "You spent",
             "figure": money(total),
-            "line": _change_line(total, before_total, period.previous_label),
+            "line": (
+                _change_line(total, before_total, period.previous_label)
+                if comparable
+                else "Statement coverage is incomplete; a comparison is unavailable."
+            ),
             "rows": {"story": "total", "key": None},
         }
     )
@@ -518,7 +523,7 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
             }
         )
 
-    if before_total > 0:
+    if comparable and before_total > 0:
         earlier = {group["key"]: int(group["amount"]["paise"]) for group in before["groups"]}
         current = {group["key"]: int(group["amount"]["paise"]) for group in now["groups"]}
         moves = sorted(

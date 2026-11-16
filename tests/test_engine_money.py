@@ -17,10 +17,114 @@ from arno.engine.money import (
     amortize,
     card_emi,
     card_payoff,
+    compare_offers,
     compound,
     infer_rate,
     scale_cumulative,
 )
+
+
+def test_offer_comparison_separates_each_charge_and_preserves_order():
+    offers = compare_offers(
+        [
+            {"label": "Cash", "cash_price_paise": 10_000, "discount_paise": 1_000},
+            {
+                "label": "Card",
+                "cash_price_paise": 10_000,
+                "financing": {
+                    "kind": "card_emi",
+                    "annual_rate_bps": 1200,
+                    "months": 2,
+                    "processing_fee_paise": 500,
+                },
+            },
+        ]
+    )
+    cash, card = offers
+    assert cash["total_paid_paise"] == 9_000
+    assert cash["difference_vs_cash_paise"] == -1_000
+    assert cash["complete_cost"] is True
+    assert card["label"] == "Card"
+    assert card["interest_paise"] == 150
+    assert card["gst_on_interest_paise"] == 27
+    assert card["processing_fee_paise"] == 500
+    assert card["gst_on_fee_paise"] == 90
+    assert card["total_paid_paise"] == 10_767
+    assert card["difference_vs_cash_paise"] == 767
+    assert card["apr"] is not None
+    assert card["complete_cost"] is False
+    assert "foreclosure and prepayment charges" in card["not_included"]
+    assert "best" not in card
+    # The gap between offers comes from code, both ways, and the instalments sum to the total.
+    assert cash["difference_vs_offers"] == [{"label": "Card", "difference_paise": -1_767}]
+    assert card["difference_vs_offers"] == [{"label": "Cash", "difference_paise": 1_767}]
+    assert cash["instalments_paise"] == []
+    assert sum(card["instalments_paise"]) == card["total_paid_paise"]
+
+
+def test_debt_costs_identify_omitted_charges_and_rate_resets():
+    loan = amortize(10_000, 12, 2)
+    card = card_payoff(10_000, annual_rate_bps=1200, payment=6_000)
+    assert loan["complete_cost"] is False
+    assert "future floating-rate resets not supplied" in loan["not_included"]
+    assert card["complete_cost"] is False
+    assert "late and contingent charges" in card["not_included"]
+
+
+def test_a_stated_reset_schedule_still_leaves_other_charges_incomplete():
+    with_resets = amortize(10_000, 10, 12, rate_changes=[(6, 11)])
+    assert "future floating-rate resets not supplied" not in with_resets["not_included"]
+    assert "foreclosure and prepayment charges" in with_resets["not_included"]
+    assert "late and contingent charges" in with_resets["not_included"]
+    assert with_resets["complete_cost"] is False
+
+
+def test_offer_loan_fee_gst_and_cashback_are_not_counted_as_interest():
+    cash, loan = compare_offers(
+        [
+            {"label": "Cash", "cash_price_paise": 10_000},
+            {
+                "label": "Loan",
+                "cash_price_paise": 10_000,
+                "cashback_paise": 100,
+                "financing": {
+                    "kind": "loan",
+                    "annual_rate_bps": 0,
+                    "months": 2,
+                    "processing_fee_paise": 500,
+                },
+            },
+        ]
+    )
+    assert cash["total_paid_paise"] == 10_000
+    assert loan["interest_paise"] == 0
+    assert loan["gst_on_interest_paise"] == 0
+    assert loan["processing_fee_paise"] == 500
+    assert loan["gst_on_fee_paise"] == 90
+    assert loan["total_paid_paise"] == 10_590
+    assert loan["net_cost_paise"] == 10_490
+    assert loan["difference_vs_cash_paise"] == 490
+    assert loan["apr"] is not None
+    assert "cashback eligibility and payment conditions" in loan["not_included"]
+
+
+def test_a_loan_offer_keeps_gst_off_interest_per_the_loan_path():
+    _cash, loan = compare_offers(
+        [
+            {"label": "Cash", "cash_price_paise": 10_000},
+            {
+                "label": "Loan",
+                "cash_price_paise": 10_000,
+                "financing": {"kind": "loan", "annual_rate_bps": 1200, "months": 2},
+            },
+        ]
+    )
+    assert loan["interest_paise"] == 150
+    assert loan["gst_on_interest_paise"] == 0
+    assert loan["processing_fee_paise"] == 0
+    assert loan["gst_on_fee_paise"] == 0
+    assert loan["total_paid_paise"] == 10_150
+    assert loan["difference_vs_cash_paise"] == 150
 
 
 def _fraction_round_half_up(value: Fraction) -> int:
@@ -573,6 +677,8 @@ def test_amortize_zero_fee_leaves_return_unchanged_and_zero_fee_apr_matches_rate
         "schedule",
         "prepay",
         "assumptions",
+        "complete_cost",
+        "not_included",
     }
 
     # Internal APR helper on a zero-fee schedule matches the loan rate within schedule rounding.

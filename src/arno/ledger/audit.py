@@ -21,6 +21,7 @@ from uuid import UUID
 import asyncpg
 
 from arno.db.conn import Connection, quote_ident
+from arno.india.formatting import format_paise
 from arno.ledger.errors import (
     CommitOutcomeUnknownError,
     ConflictLedgerError,
@@ -306,6 +307,427 @@ def _describe_conflicts(conflicts: list[dict[str, Any]]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class UndoCheck:
+    """What `undo_group` would do with a group right now, without doing it."""
+
+    entries: list[dict[str, Any]]
+    conflicts: list[dict[str, Any]]
+
+    @property
+    def undone(self) -> bool:
+        return bool(self.entries) and all(entry["undone_at"] is not None for entry in self.entries)
+
+    @property
+    def reason(self) -> str | None:
+        """Why undo would refuse, in undo's own words; None when it would go ahead."""
+        if self.undone:
+            return "That write was already undone."
+        return _describe_conflicts(self.conflicts) if self.conflicts else None
+
+
+async def check_undo(
+    conn: Connection, group_id: str, *, ignore: frozenset[str] = frozenset()
+) -> UndoCheck:
+    """Read-only. Undo and the history list share it, so the reason shown is the reason tapped."""
+    entries = await _load_group(conn, group_id)
+    if entries and all(entry["undone_at"] is not None for entry in entries):
+        return UndoCheck(entries, [])
+    return UndoCheck(entries, await _conflicts(conn, group_id, ignore=ignore))
+
+
+DEFAULT_LIMIT = 25
+MAX_LIMIT = 100
+
+
+def _encode_cursor(created_at: datetime, group_id: str) -> str:
+    return f"{created_at.isoformat()}|{group_id}"
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+    try:
+        created_at, group_id = cursor.rsplit("|", 1)
+        value = datetime.fromisoformat(created_at)
+        if not group_id or value.tzinfo is None:
+            raise ValueError
+        return value, group_id
+    except (TypeError, ValueError) as exc:
+        raise InvalidLedgerError("Invalid history cursor") from exc
+
+
+# A write group's one-line history summary, read from its audit rows. Most tables have a specific
+# phrase; anything else falls back to that group's row counts per table.
+
+_MOVEMENT_WORDS = {
+    "expense": "Logged expense",
+    "income": "Logged income",
+    "transfer": "Transferred",
+    "split": "Split",
+    "loan": "Lent",
+    "refund": "Refunded",
+    "settlement": "Settled",
+    "adjustment": "Recorded adjustment",
+}
+_GENERIC_DESCRIPTIONS = {
+    "expense",
+    "income",
+    "transfer",
+    "split",
+    "loan",
+    "refund",
+    "settlement",
+    "adjustment",
+    "reversal",
+}
+
+
+def _rows(count: int) -> str:
+    return f"{count} row{'s' if count != 1 else ''}"
+
+
+async def _movement_detail(conn: Connection, movement_id: str) -> dict[str, Any]:
+    row = await conn.fetchrow(
+        """
+        SELECT m.kind, m.description,
+               (SELECT sum(t.amount)::bigint
+                  FROM movement_legs ml
+                  JOIN pgledger_transfers t ON t.id = ml.transfer_id
+                 WHERE ml.movement_id = m.id) AS amount_paise,
+               (SELECT p.display_name
+                  FROM movement_legs ml
+                  JOIN payees p ON p.id = ml.payee_id
+                 WHERE ml.movement_id = m.id
+                 ORDER BY ml.transfer_id
+                 LIMIT 1) AS payee_name
+        FROM movements m
+        WHERE m.id = $1
+        """,
+        movement_id,
+    )
+    return dict(row) if row is not None else {}
+
+
+def _movement_sentence(
+    *,
+    kind: str | None,
+    description: str | None,
+    amount_paise: Any,
+    payee_name: str | None,
+) -> str:
+    words = _MOVEMENT_WORDS.get(str(kind), f"Recorded {str(kind).replace('_', ' ')}")
+    if amount_paise is not None:
+        words = f"{words} {format_paise(int(amount_paise))}"
+    label = (payee_name or description or "").strip()
+    if label and label.casefold() in _GENERIC_DESCRIPTIONS:
+        label = ""
+    return f"{words} · {label}" if label else words
+
+
+async def _movement_phrase(
+    conn: Connection,
+    movement_id: str,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> str:
+    row = after or before or {}
+    if row.get("kind") == "reversal" and row.get("reverses_id"):
+        original = await _movement_detail(conn, str(row["reverses_id"]))
+        reversed_line = _movement_sentence(
+            kind=original.get("kind"),
+            description=original.get("description"),
+            amount_paise=original.get("amount_paise"),
+            payee_name=original.get("payee_name"),
+        )
+        return f"Reversed: {reversed_line}"
+    detail = await _movement_detail(conn, movement_id)
+    sentence = _movement_sentence(
+        kind=row.get("kind") or detail.get("kind"),
+        description=row.get("description") or detail.get("description"),
+        amount_paise=detail.get("amount_paise"),
+        payee_name=detail.get("payee_name"),
+    )
+    return (
+        f"Changed {sentence[0].lower()}{sentence[1:]}"
+        if before is not None and after is not None
+        else sentence
+    )
+
+
+async def _leg_phrase(conn: Connection, row: dict[str, Any]) -> str | None:
+    movement_id = row.get("movement_id")
+    if not movement_id:
+        return None
+    detail = await _movement_detail(conn, str(movement_id))
+    if not detail:
+        return None
+    sentence = _movement_sentence(
+        kind=detail.get("kind"),
+        description=detail.get("description"),
+        amount_paise=detail.get("amount_paise"),
+        payee_name=detail.get("payee_name"),
+    )
+    return f"Relabeled: {sentence}"
+
+
+def _account_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str | None:
+    row = after or before or {}
+    name = row.get("name")
+    if not name:
+        # Person and goal accounts carry no name of their own; their payee or goal entry speaks.
+        return None
+    if before is None:
+        return f"Added account {name}"
+    if after is None or (before.get("active") and not after.get("active")):
+        return f"Removed account {name}"
+    if before.get("name") != after.get("name"):
+        return f"Renamed account {before.get('name') or name} to {after.get('name') or name}"
+    return f"Changed account {name}"
+
+
+def _memory_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    # A delete-for-good blanks every copy of the body, so an empty body never names the text.
+    body = str((after or before or {}).get("body") or "").strip()
+    old = str((before or {}).get("body") or "").strip()
+    if before is None:
+        return f"Remembered: {body}" if body else "Remembered a memory"
+    if after is None:
+        return "Deleted a memory"
+    if before.get("active") and not after.get("active"):
+        return f"Forgot: {old}" if old else "Forgot a memory"
+    if not before.get("active") and after.get("active"):
+        return f"Restored: {body}" if body else "Restored a memory"
+    if before.get("body") != after.get("body"):
+        if old and body:
+            return f"Changed memory: {old} → {body}"
+        return "Changed a memory"
+    if before.get("kind") != after.get("kind"):
+        return f"Reclassified memory: {body}" if body else "Reclassified a memory"
+    return "Changed a memory"
+
+
+def _settings_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    before = before or {}
+    after = after or {}
+    old = before.get("floor_paise")
+    new = after.get("floor_paise")
+    if old != new:
+        if new is None:
+            return "Removed the floor"
+        if old is None:
+            return f"Set floor {format_paise(int(new))}"
+        return f"Changed floor {format_paise(int(old))} → {format_paise(int(new))}"
+    return "Changed settings"
+
+
+def _schedule_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    row = after or before or {}
+    name = row.get("name") or "a schedule"
+    if before is None:
+        return f"Added schedule {name}"
+    if after is None or (before.get("active") and not after.get("active")):
+        return f"Removed schedule {name}"
+    old = before.get("amount_paise")
+    new = after.get("amount_paise")
+    if old != new and old is not None and new is not None:
+        return f"Changed schedule {name} {format_paise(int(old))} → {format_paise(int(new))}"
+    return f"Changed schedule {name}"
+
+
+def _named_phrase(
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    *,
+    noun: str,
+    key: str,
+) -> str:
+    row = after or before or {}
+    name = row.get(key) or f"a {noun}"
+    if before is None:
+        return f"Added {noun} {name}"
+    if after is None or (before.get("active") and not after.get("active")):
+        return f"Removed {noun} {name}"
+    if before.get(key) != after.get(key):
+        return f"Renamed {noun} {before.get(key) or name} to {after.get(key) or name}"
+    return f"Changed {noun} {name}"
+
+
+def _goal_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    row = after or before or {}
+    name = row.get("name") or "a goal"
+    if before is None:
+        return f"Added goal {name}"
+    if after is None:
+        return f"Removed goal {name}"
+    if before.get("status") != after.get("status"):
+        return f"Changed goal {name} to {after.get('status')}"
+    return f"Changed goal {name}"
+
+
+async def _payment_phrase(
+    conn: Connection,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> str:
+    row = after or before or {}
+    name = None
+    if row.get("occurrence_id"):
+        name = await conn.fetchval(
+            "SELECT name FROM schedule_occurrences WHERE id = $1", str(row["occurrence_id"])
+        )
+    label = name or "a scheduled payment"
+    amount = row.get("amount_paise")
+    money = f" {format_paise(int(amount))}" if amount is not None else ""
+    return f"{'Unmarked' if after is None else 'Marked'} {label} paid{money}"
+
+
+async def _entry_phrase(conn: Connection, entry: dict[str, Any]) -> str | None:
+    table = str(entry["table_name"])
+    before = entry["before"]
+    after = entry["after"]
+    row_id = entry["row_id"]
+    if table == "accounts":
+        return _account_phrase(before, after)
+    if table == "movements" and row_id is not None:
+        return await _movement_phrase(conn, str(row_id), before, after)
+    if table == "movement_legs":
+        return await _leg_phrase(conn, after or before or {})
+    if table == "preferences":
+        return _memory_phrase(before, after)
+    if table == "settings":
+        return _settings_phrase(before, after)
+    if table == "schedules":
+        return _schedule_phrase(before, after)
+    if table == "schedule_occurrences" and after is not None:
+        name = after.get("name") or "a scheduled payment"
+        amount = after.get("amount_paise")
+        money = f" {format_paise(int(amount))}" if amount is not None else ""
+        return f"Marked {name} paid{money}"
+    if table == "schedule_payments":
+        return await _payment_phrase(conn, before, after)
+    if table == "payees":
+        return _named_phrase(before, after, noun="payee", key="display_name")
+    if table in {"categories", "category_rules"}:
+        key = "name" if table == "categories" else "pattern"
+        return _named_phrase(
+            before, after, noun="category rule" if key != "name" else "category", key=key
+        )
+    if table == "goals":
+        return _goal_phrase(before, after)
+    if table == "users":
+        name = (after or before or {}).get("display_name") or "you"
+        return f"Changed your name to {name}" if after is not None else "Removed your profile"
+    return None
+
+
+async def _import_phrase(conn: Connection, group_id: str) -> str | None:
+    row = await conn.fetchrow(
+        """
+        SELECT (SELECT a.filename FROM attachments a WHERE a.id = i.attachment_id) AS filename,
+               (SELECT count(*) FROM statement_lines s
+                 WHERE s.import_id = i.id AND s.match_state <> 'ignored') AS rows
+        FROM imports i
+        WHERE jsonb_exists(i.commit_groups, $1)
+          AND i.commit_groups ->> 0 = $1
+        LIMIT 1
+        """,
+        group_id,
+    )
+    if row is None:
+        return None
+    name = row["filename"] or "a statement"
+    return f"Committed import of {name} ({_rows(int(row['rows']))})"
+
+
+async def _group_phrase(conn: Connection, group_id: str, entries: list[dict[str, Any]]) -> str:
+    imported = await _import_phrase(conn, group_id)
+    if imported:
+        return imported
+    for entry in entries:
+        phrase = await _entry_phrase(conn, entry)
+        if phrase:
+            return phrase
+    counts: dict[str, int] = {}
+    for entry in entries:
+        table = str(entry["table_name"])
+        counts[table] = counts.get(table, 0) + 1
+    return "Changed " + ", ".join(f"{_rows(count)} in {table}" for table, count in counts.items())
+
+
+async def _group_summary(
+    conn: Connection, group_id: str, entries: list[dict[str, Any]], created_at: datetime
+) -> str:
+    # `undo_group` stamps the undone rows' `undone_at` with the same transaction `now()` its own
+    # audit rows carry, so an exact match names the group this one undid.
+    undone = await conn.fetch(
+        "SELECT DISTINCT group_id FROM audit_log WHERE undone_at = $1 AND group_id <> $2",
+        created_at,
+        group_id,
+    )
+    if undone:
+        target_id = str(undone[0]["group_id"])
+        return f"Undid: {await _group_phrase(conn, target_id, await _load_group(conn, target_id))}"
+    return await _group_phrase(conn, group_id, entries)
+
+
+async def list_history(
+    conn: Connection, *, limit: int = DEFAULT_LIMIT, cursor: str | None = None
+) -> dict[str, Any]:
+    """One page of write groups, newest first, each with what undo would say about it."""
+    limit = max(1, min(limit, MAX_LIMIT))
+    having = ""
+    params: list[Any] = []
+    if cursor:
+        created_at, group_id = _decode_cursor(cursor)
+        having = "HAVING (min(created_at), group_id) < ($1::timestamptz, $2::text)"
+        params.extend([created_at, group_id])
+    groups = await conn.fetch(
+        f"""
+        SELECT group_id, min(created_at) AS created_at, max(actor) AS actor,
+               max(message_id) AS message_id
+        FROM audit_log
+        GROUP BY group_id
+        {having}
+        ORDER BY min(created_at) DESC, group_id DESC
+        LIMIT ${len(params) + 1}
+        """,  # noqa: S608 - `having` is a fixed fragment, never user text
+        *params,
+        limit + 1,
+    )
+    has_more = len(groups) > limit
+    groups = groups[:limit]
+    items = []
+    for group in groups:
+        group_id = str(group["group_id"])
+        check = await check_undo(conn, group_id)
+        conversation_id = None
+        if group["message_id"]:
+            conversation_id = await conn.fetchval(
+                "SELECT conversation_id FROM messages WHERE id = $1", group["message_id"]
+            )
+        summary = await _group_summary(conn, group_id, check.entries, group["created_at"])
+        items.append(
+            {
+                "undo_id": group_id,
+                "created_at": group["created_at"].isoformat(),
+                "actor": group["actor"],
+                "message_id": group["message_id"],
+                "conversation_id": conversation_id,
+                "summary": summary,
+                "records": [
+                    {"table": entry["table_name"], "id": entry["row_id"]} for entry in check.entries
+                ],
+                "undoable": check.reason is None,
+                "reason": check.reason,
+            }
+        )
+    next_cursor = (
+        _encode_cursor(groups[-1]["created_at"], str(groups[-1]["group_id"]))
+        if has_more and groups
+        else None
+    )
+    return {"items": items, "next_cursor": next_cursor}
+
+
 async def _update_row(
     conn: Connection,
     group: WriteGroup,
@@ -465,21 +887,20 @@ async def undo_group(
     later writes; they are the previous step of one undo, such as an import's categorization
     groups before its commit groups.
     """
-    entries = await _load_group(conn, undo_id)
+    check = await check_undo(conn, undo_id, ignore=ignore_groups)
+    entries = check.entries
     if not entries:
         raise NotFoundLedgerError(f"No write group {undo_id}")
-    if all(entry["undone_at"] is not None for entry in entries):
+    if check.undone:
         return {
             "status": "already_undone",
             "undo_id": undo_id,
             "summary": "That write was already undone.",
         }
-
-    conflicts = await _conflicts(conn, undo_id, ignore=ignore_groups)
-    if conflicts:
-        names = sorted({f"{row['table_name']}:{row['row_id']}" for row in conflicts})
+    if check.conflicts:
+        names = sorted({f"{row['table_name']}:{row['row_id']}" for row in check.conflicts})
         raise ConflictLedgerError(
-            _describe_conflicts(conflicts),
+            _describe_conflicts(check.conflicts),
             details={"conflicts": names},
         )
 

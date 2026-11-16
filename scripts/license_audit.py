@@ -121,8 +121,7 @@ def _expressions(raw: str) -> set[str]:
         }
     else:
         found = {_classify(expression)}
-    known = {item for item in found if item != "UNKNOWN"}
-    return known or {"UNKNOWN"}
+    return found or {"UNKNOWN"}
 
 
 def _license_text(dist: metadata.Distribution) -> str:
@@ -145,8 +144,8 @@ def python_packages() -> dict[str, dict[str, str]]:
         name = (dist.metadata.get("Name") or "").strip()
         if not name or name.lower() in SKIP_PYTHON:
             continue
+        declared_expression = dist.metadata.get("License-Expression") or ""
         candidates = [
-            dist.metadata.get("License-Expression") or "",
             dist.metadata.get("License") or "",
             " ".join(
                 value
@@ -154,13 +153,16 @@ def python_packages() -> dict[str, dict[str, str]]:
                 if value.startswith("License ::")
             ),
         ]
-        expressions: set[str] = set()
-        for candidate in candidates:
-            if candidate.strip():
-                expressions |= _expressions(candidate)
-        expressions.discard("UNKNOWN")
-        if not expressions:
-            expressions = _expressions(_license_text(dist))
+        if declared_expression.strip():
+            expressions = _expressions(declared_expression)
+        else:
+            expressions: set[str] = set()
+            for candidate in candidates:
+                if candidate.strip():
+                    expressions |= _expressions(candidate)
+            expressions.discard("UNKNOWN")
+            if not expressions:
+                expressions = _expressions(_license_text(dist))
         packages[name] = {
             "version": dist.version,
             "license": " AND ".join(sorted(expressions or {"UNKNOWN"})),
@@ -203,7 +205,7 @@ def failures(packages: dict[str, dict[str, str]]) -> list[str]:
     bad: list[str] = []
     for name, info in sorted(packages.items()):
         licenses = {part.strip() for part in info["license"].split(" AND ")}
-        if any(part in FORBIDDEN for part in licenses) or licenses & {"UNKNOWN"}:
+        if licenses & FORBIDDEN or licenses - ALLOWED:
             bad.append(f"{name} {info['version']}: {info['license']}")
     return bad
 

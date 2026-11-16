@@ -177,6 +177,15 @@ async def link_payment(
             amount,
         )
         group.record_created("schedule_payments", row)
+        from arno.notifications import sync_payment_alerts_in_group
+
+        await sync_payment_alerts_in_group(
+            conn,
+            group,
+            schedule_id=schedule_id,
+            due_date=due_date,
+            movement_id=movement_id,
+        )
     return {
         "status": "linked",
         "payment_id": row["id"],
@@ -289,6 +298,14 @@ async def unlink_payment(
             return {"status": "not_linked", "undo_id": None}
         await conn.execute("DELETE FROM schedule_payments WHERE id = $1", row["id"])
         group.record_deleted("schedule_payments", row)
+        from arno.notifications import sync_payment_alerts_in_group
+
+        await sync_payment_alerts_in_group(
+            conn,
+            group,
+            schedule_id=schedule_id,
+            due_date=due_date,
+        )
     return {"status": "unlinked", "payment_id": row["id"], "undo_id": group.group_id}
 
 

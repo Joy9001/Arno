@@ -28,11 +28,11 @@ from arno.agent.presentation import (
 )
 from arno.agent.write_models import Movement, MovementChanges, SetupData
 from arno.db.conn import Connection, connect, quote_ident
+from arno.engine.money import Offer, money
 from arno.engine.money import Prepay as PrepayPayload
 from arno.engine.money import amortize as amortize_fn
 from arno.engine.money import compound as compound_fn
 from arno.engine.money import infer_rate as infer_rate_fn
-from arno.engine.money import money
 from arno.ledger.accounts import LoanTermsError, loan_terms
 from arno.ledger.common import today as ledger_today
 from arno.tools import money as money_tools
@@ -278,8 +278,11 @@ async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
     (next_dates, each with date and weekday), the next 30 days of events (each with date and
     weekday; a null amount carries a note saying why), goals, who owes what, remembered
     preferences, scheduled_questions, open imports (status, account, period, line counts; read
-    them before saying anything about an import), what setup is missing, and data warnings. The
-    sandbox has no clock, so get today's date here."""
+    them before saying anything about an import), what setup is missing, and data warnings. A memory
+    that changed shows its previous value with changed_at; a floor, schedule amount, or goal
+    priority shows the same as floor_history, amount_history, or priority_history. Name both values
+    and the old one's date when the user states a value that contradicts one. The sandbox has no
+    clock, so get today's date here."""
     payload = await _read_call(read_tools.get_financial_context)
     return await _finish_read(ctx, payload, kind="context")
 
@@ -455,24 +458,45 @@ async def project(
     scenario change."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
+    purchase = hypothetical.model_dump(exclude_none=True) if hypothetical else None
+    raw_changes = (
+        [change.model_dump(exclude_none=True) for change in changes]
+        if changes is not None
+        else None
+    )
     async with connect() as conn:
         try:
             result = await projection_tools.project(
                 conn,
                 horizon_days=horizon_days,
-                hypothetical=(hypothetical.model_dump(exclude_none=True) if hypothetical else None),
-                changes=(
-                    [change.model_dump(exclude_none=True) for change in changes]
-                    if changes is not None
-                    else None
-                ),
+                hypothetical=purchase,
+                changes=raw_changes,
             )
         except ValueError as exc:
             if has_mark(str(exc)):
                 await flag_outside_text(conn, ctx.deps.conversation_id)
             raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
-    payload["_card"] = projection_tools.card(result)
+    # The card echoes its own arguments so it can download a workbook of this same request.
+    request: dict[str, Any] = {"horizon_days": horizon_days}
+    if purchase is not None:
+        request["hypothetical"] = {
+            key: purchase[key]
+            for key in (
+                "amount_paise",
+                "date",
+                "method",
+                "emi_months",
+                "account",
+                "emi_rate_percent",
+                "emi_fee_paise",
+                "no_cost",
+            )
+            if purchase.get(key) not in (None, False)
+        }
+    if raw_changes is not None:
+        request["changes"] = raw_changes
+    payload["_card"] = projection_tools.card(result, request)
     return await _finish_read(
         ctx,
         payload,
@@ -498,7 +522,8 @@ async def amortize(
     get net_disbursed, total_cost, and apr_percent. Add prepay to compare a lump-sum prepayment, for
     example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a bank's
     rounding when its statement differs by paise. Use this instead of writing the formula. It
-    returns the schedule, not a card: show it with present."""
+    returns the schedule, not a card: show it with present. When complete_cost is false, do not
+    call the total the full cost; explain not_included."""
     start: date | None = ledger_today()
     rate: float | None
     if loan:
@@ -585,7 +610,8 @@ async def card_payoff(
     passed here overrides the card's stored term. Leave payment_paise unset to model paying only
     the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
     minimum_percent and minimum_floor_paise. Use this instead of writing the formula. It returns
-    the schedule, not a card: show it with present."""
+    the schedule, not a card: show it with present. When complete_cost is false, do not call the
+    total the full cost; explain not_included."""
     start: date | None = ledger_today()
     if card is not None:
         async with connect() as conn:
@@ -621,6 +647,25 @@ async def card_payoff(
     registered = ctx.deps.presentation.register_calculation("card_payoff", result, card_payload)
     card_payload["result_id"] = registered.result_id
     return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
+
+
+async def compare_offers(ctx: RunContext[AgentDeps], offers: list[Offer]) -> ToolReturn:
+    """Compare two or more offers for one purchase in input order; it never chooses a product.
+    Each result has cash_price_paise, discount_paise, cashback_paise, interest_paise,
+    gst_on_interest_paise, processing_fee_paise, gst_on_fee_paise, total_paid_paise,
+    net_cost_paise after cashback, difference_vs_cash_paise (net cost minus cash price),
+    difference_vs_offers (this offer's net cost minus each other offer's; quote these instead of
+    subtracting), instalments_paise (each month's charge, empty for cash), and apr_percent (null
+    when no offer is financed). The apr interval uses annual bps_x100 units.
+    Financing needs kind (card_emi or loan), annual_rate_bps, months, and processing_fee_paise;
+    a missing rate is refused, so ask for it. If complete_cost is false, do not call
+    total_paid_paise the full cost; explain not_included.
+    """
+    try:
+        result = money_tools.compare_offers(offers)
+    except (ValueError, KeyError) as exc:
+        raise ModelRetry(str(exc)) from exc
+    return ToolReturn(return_value={"offers": result})
 
 
 async def compound(
@@ -758,6 +803,7 @@ def build_read_toolset() -> SetMetadataToolset[AgentDeps]:
             run_query,
             amortize,
             card_payoff,
+            compare_offers,
             compound,
             rupees,
             show_chart,
@@ -895,6 +941,9 @@ async def correct_movement(
     or delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
     category or payee, scope sets how far it goes: this row, this row and future ones, or all rows
     past and future ('ramesh@okaxis is my landlord')."""
+    if scope != "this":
+        change = changes.model_dump(exclude_none=True)
+        await _gate(ctx, f"Correct movement {movement_id} ({scope}): {change}")
     payload = await _call_write(
         lambda conn: write_tools.correct_movement(
             conn,
@@ -998,13 +1047,16 @@ async def preference(
     text: str | None = None,
     id: str | None = None,
     kind: Literal["preference", "fact", "rule"] | None = None,
+    subject: str | None = None,
 ) -> ToolReturn:
     """Remember a lasting preference, fact, or rule about the user, forget one, or reclassify one.
     A preference is how the user wants you to behave or talk, such as "Use Hinglish when I do." A
     fact is true about the user's world, such as "Mira is my flatmate." A rule is how the user
     wants their money data treated, such as "Family transfers are essential expenses." Call it
     unprompted when you notice one, and choose the kind. Use classify with the memory id and the
-    new kind to change an existing memory's kind. Never store a number the ledger owns."""
+    new kind to change an existing memory's kind. Pass a stable subject for the same topic; when a
+    newly stated fact contradicts the active value, name both values and the date of the old one,
+    then save the new value with the same kind and subject. Never store a number the ledger owns."""
     await _gate(ctx, f"{action} {kind or 'memory'}: {text or id}")
     payload = await _call_write(
         lambda conn: write_tools.preference(
@@ -1014,6 +1066,7 @@ async def preference(
             preference_id=id,
             message_id=ctx.deps.message_id,
             kind=kind,
+            subject=subject,
         )
     )
     return _write_return(payload)

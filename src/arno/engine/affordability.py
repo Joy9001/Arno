@@ -374,7 +374,11 @@ def _plans(
     needed: int,
     spend_paise: int,
 ) -> list[_Plan]:
-    """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest."""
+    """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest.
+
+    `goals` comes most important first; between equally cheap plans, the one that delays the
+    less important goals comes first, so a priority change revises which goal is offered.
+    """
     found: list[_Plan] = []
     for matrix in matrices:
         clearing: dict[tuple[str, ...], int] = {}
@@ -394,7 +398,16 @@ def _plans(
     # Across methods too: a plan that changes no more, skips a subset of the goals, cuts no more,
     # and costs no more leaves the other nothing to offer (card float beside a paid EMI).
     kept = [plan for plan in found if not any(_dominates(other, plan) for other in found)]
-    kept.sort(key=lambda plan: (plan.levers, plan.cost_paise, plan.method, plan.goals))
+    rank = {goal: index for index, goal in enumerate(goals)}
+    kept.sort(
+        key=lambda plan: (
+            plan.levers,
+            plan.cost_paise,
+            sorted(-rank[goal] for goal in plan.goals),
+            plan.method,
+            plan.goals,
+        )
+    )
     return kept
 
 

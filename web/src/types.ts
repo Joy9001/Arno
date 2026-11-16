@@ -212,6 +212,25 @@ export type UncategorizedList = {
   total: number;
 };
 
+export type DeletionRemoval = { table: string; count: number };
+
+export type DeletionRetention = { what: string; why: string };
+
+export type DeletionProvider = {
+  role: "chat" | "vision" | "stt";
+  provider: string;
+  host: string;
+  note: string;
+};
+
+export type DeletionPreview = {
+  scope: "memory" | "statement" | "everything";
+  removes: DeletionRemoval[];
+  retains: DeletionRetention[];
+  backups: { policy: string; note: string };
+  providers: DeletionProvider[];
+};
+
 export type BackupStatus = {
   last_success_at: string | null;
   last_success_age_seconds: number | null;
@@ -302,6 +321,7 @@ export type ImportRecord = {
     | "committed"
     | "rejected";
   attachment: {
+    id: string;
     filename: string | null;
     content_type: string | null;
     size_bytes: number | null;
@@ -338,6 +358,10 @@ export type ImportRecord = {
     adjustment_paise?: number | null;
   } | null;
   reason: string | null;
+  /** Upload it again, the fallback when the stored file is gone. */
+  recovery_action?: "reupload" | null;
+  /** A failed import whose stored file is still here can run the parser again. */
+  can_retry_parse?: boolean;
   parser_saved: boolean;
   /** Null until the import is committed, or when no categorization job exists. */
   categorize?: CategorizeState | null;
@@ -358,6 +382,8 @@ export type ImportList = {
     check: ImportRecord["check"];
     counts: ImportCounts | null;
     reason: string | null;
+    recovery_action?: "reupload" | null;
+    can_retry_parse?: boolean;
     created_at: string | null;
     committed_at: string | null;
     undone_at: string | null;

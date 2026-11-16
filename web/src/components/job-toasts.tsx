@@ -23,7 +23,7 @@ function uncategorizedCount(job: JobView): number {
   return typeof value === "number" ? value : 0;
 }
 
-function copyFor(job: JobView): { title: string; body: string; actions: ToastAction[] } {
+export function copyFor(job: JobView): { title: string; body: string; actions: ToastAction[] } {
   if (job.status === "failed") {
     return {
       title: `${jobTitle(job)} failed`,

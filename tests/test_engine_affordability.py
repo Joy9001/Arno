@@ -66,6 +66,98 @@ def test_plenty_of_cash_is_a_yes_with_no_tradeoffs():
     assert result["goal_slips"] == []
 
 
+def test_unconfirmed_income_cannot_fund_a_yes_verdict():
+    inputs = _inputs(
+        start=50_000,
+        events=(
+            CashEvent(
+                date=date(2026, 1, 2),
+                amount_paise=500_000,
+                name="Unconfirmed salary",
+                kind="income_variable",
+                confirmed=False,
+            ),
+        ),
+    )
+    result = afford(inputs, Hypothetical(amount_paise=100_000, date=date(2026, 1, 3)), runs=10)
+    assert result["verdict"] != "yes"
+    assert result["floor_probability"] == 0.0
+    # The same unconfirmed income does clear the floor when counted, so the no is its exclusion.
+    assert result["optimistic"] is not None
+    assert result["optimistic"]["floor_probability"] == 1.0
+
+
+def test_a_goal_priority_change_revises_which_goal_the_plan_delays():
+    base = _inputs(
+        start=1_700_000,
+        floor=1_000_000,
+        goals=(
+            GoalPlan(id="goal_a", name="Goa", target_paise=200_000, saved_paise=0, priority=1),
+            GoalPlan(id="goal_b", name="Car", target_paise=200_000, saved_paise=0, priority=3),
+        ),
+        events=(
+            CashEvent(
+                date=date(2026, 1, 10),
+                amount_paise=-200_000,
+                name="Goa contribution",
+                kind="goal_contribution",
+                goal_id="goal_a",
+            ),
+            CashEvent(
+                date=date(2026, 1, 10),
+                amount_paise=-200_000,
+                name="Car contribution",
+                kind="goal_contribution",
+                goal_id="goal_b",
+            ),
+        ),
+    )
+    swapped = replace(
+        base,
+        goals=(replace(base.goals[0], priority=3), replace(base.goals[1], priority=1)),
+    )
+
+    before = project(base, runs=50)
+    after = project(swapped, runs=50)
+    assert [goal["name"] for goal in before["goals"]] == ["Goa", "Car"]
+    assert [goal["name"] for goal in after["goals"]] == ["Car", "Goa"]
+
+    def amounts(result: Projection) -> dict[str, tuple[int, int, int, str | None]]:
+        return {
+            goal["id"]: (
+                goal["target_paise"],
+                goal["saved_paise"],
+                goal["remaining_after_plan_paise"],
+                goal["completes_on"],
+            )
+            for goal in result["goals"]
+        }
+
+    assert amounts(before) == amounts(after)
+    assert before["median_low"] == after["median_low"]
+    assert before["floor_probability"] == after["floor_probability"]
+
+    # The baseline projection is unchanged; what changes is which goal a plan offers to delay.
+    # Both contributions cost the same, so the less important goal is offered first.
+    purchase = Hypothetical(amount_paise=500_000, date=date(2026, 1, 1))
+    plans_before = afford(base, purchase, runs=50)
+    plans_after = afford(swapped, purchase, runs=50)
+
+    def first_delayed(result: Projection) -> str | None:
+        return next(
+            (t.get("goal_id") for t in result["tradeoffs"] if t["kind"] == "delay_goal"), None
+        )
+
+    assert first_delayed(plans_before) == "goal_b"
+    assert first_delayed(plans_after) == "goal_a"
+    assert plans_before["verdict"] == plans_after["verdict"]
+    for trade in plans_before["tradeoffs"]:
+        if trade["kind"] != "delay_goal":
+            continue
+        goal_row = next(goal for goal in plans_before["goals"] if goal["id"] == trade["goal_id"])
+        assert trade["goal"] == goal_row["name"]
+
+
 def test_a_later_salary_alone_keeps_the_verdict_no_and_shows_the_wait():
     result = afford(
         _inputs(
@@ -157,6 +249,7 @@ def test_card_float_is_a_yes_but_when_the_bank_balance_is_short():
     assert result["verdict"] == "yes-but"
     card_trade = next(trade for trade in result["tradeoffs"] if trade["kind"] == "pay_by_card")
     assert card_trade["method"] == "card"
+    assert card_trade["account"] == "Slice card"
     assert card_trade["due_date"] == "2026-01-25"
 
 

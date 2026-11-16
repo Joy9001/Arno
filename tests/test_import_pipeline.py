@@ -121,6 +121,22 @@ async def test_a_saved_layout_replays_with_no_model_and_commits(ledger):
     assert str(account_row["statement_balance_as_of"]) == "2026-03-31"
 
 
+async def test_reuploading_identical_bytes_does_not_import_or_book_twice(ledger):
+    account = await _account(ledger)
+    first = await create_import(
+        ledger, attachment_id=await _attachment(ledger, sbi_csv()), account_id=account["id"]
+    )
+    await _submit(ledger, first)
+    await commit_import(ledger, first["id"])
+    count = await ledger.fetchval("SELECT count(*) FROM movements")
+    second = await create_import(
+        ledger, attachment_id=await _attachment(ledger, sbi_csv()), account_id=account["id"]
+    )
+    assert second["id"] == first["id"]
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
+    assert await ledger.fetchval("SELECT count(*) FROM movements") == count
+
+
 async def test_a_verified_import_anchors_an_unknown_account_and_undo_removes_it(ledger):
     account = await create_account(
         ledger, kind="bank", name="SBI savings", institution="SBI", last4="6789"
@@ -380,6 +396,9 @@ async def test_a_non_statement_ends_with_a_plain_answer(ledger):
 
 async def test_a_failed_check_writes_no_rows(ledger):
     account = await _account(ledger)
+    await set_statement_balance(
+        ledger, account["id"], balance_paise=30_000_000, as_of=date(2026, 5, 31)
+    )
     attachment_id = await _attachment(ledger, sbi_csv())
     row = await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
 
@@ -393,6 +412,36 @@ async def test_a_failed_check_writes_no_rows(ledger):
     assert detail["lines"] == []
     with pytest.raises(InvalidLedgerError):
         await commit_import(ledger, row["id"])
+    account_row = await ledger.fetchrow_required(
+        "SELECT statement_balance_as_of, statement_balance_paise FROM accounts WHERE id = $1",
+        account["id"],
+    )
+    assert account_row["statement_balance_as_of"] == date(2026, 5, 31)
+    assert account_row["statement_balance_paise"] == 30_000_000
+    assert (
+        await ledger.fetchval(
+            "SELECT count(*) FROM statement_lines WHERE import_id = $1", row["id"]
+        )
+        == 0
+    )
+
+
+async def test_failed_import_exposes_reupload_recovery_over_api(authed_client, ledger):
+    row = await create_import(ledger, attachment_id=await _attachment(ledger, sbi_csv()))
+    await ledger.execute(
+        "UPDATE imports SET status = 'failed', reason = 'Parser stopped' WHERE id = $1", row["id"]
+    )
+    response = authed_client.get(f"/api/imports/{row['id']}")
+    assert response.status_code == 200
+    assert response.json()["reason"] == "Parser stopped"
+    assert response.json()["recovery_action"] == "reupload"
+    items = authed_client.get("/api/imports").json()["items"]
+    assert (
+        next(item for item in items if item["import_id"] == row["id"])["recovery_action"]
+        == "reupload"
+    )
+    retry = await create_import(ledger, attachment_id=await _attachment(ledger, sbi_csv()))
+    assert retry["id"] != row["id"]
 
 
 async def _review_import(conn, account: dict, rows: list[dict]) -> tuple[str, dict]:

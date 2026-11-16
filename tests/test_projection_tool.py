@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from pydantic_ai import Agent
@@ -18,6 +18,177 @@ from arno.agent.deps import AgentDeps
 from arno.db.conn import quote_ident
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
+
+
+async def test_yearly_commitment_occurs_on_its_actual_date_with_a_goal_funding_plan(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.goals import create_goal
+    from arno.ledger.schedules import create_schedule
+
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="Bills",
+        opening_balance_paise=500_000,
+        opening_balance_as_of=date(2026, 1, 1),
+    )
+    bill = await create_schedule(
+        ledger,
+        kind="obligation",
+        name="Insurance",
+        account_id=bank["id"],
+        amount_paise=120_000,
+        rule="FREQ=YEARLY;BYMONTH=6;BYMONTHDAY=1",
+        starts=date(2026, 6, 1),
+    )
+    contribution = await create_schedule(
+        ledger,
+        kind="goal_contribution",
+        name="Insurance reserve monthly",
+        account_id=bank["id"],
+        amount_paise=24_000,
+        rule="FREQ=MONTHLY",
+        starts=date(2026, 1, 1),
+    )
+    goal = await create_goal(
+        ledger,
+        name="Insurance reserve",
+        target_paise=120_000,
+        contribution_schedule_id=contribution["id"],
+    )
+    inputs = await projection_tools.load_inputs(ledger, as_of=date(2026, 1, 1), horizon_days=365)
+    events = [event for event in inputs.events if event.name == "Insurance"]
+    assert len(events) == 1
+    assert events[0].date == date(2026, 6, 1)
+    assert events[0].amount_paise == -120_000
+
+    result = await projection_tools.project(
+        ledger, as_of=date(2026, 1, 1), horizon_days=365, runs=10
+    )
+    row = next(goal_row for goal_row in result["goals"] if goal_row["id"] == goal["id"])
+    assert row["target_paise"] == 120_000
+    assert row["completes_on"] == "2026-06-01"
+    assert row["reached"] is True
+    assert date.fromisoformat(row["completes_on"]) <= events[0].date
+    assert {bill["id"], contribution["id"]} <= set(result["source_ids"]["schedules"])
+    assert goal["id"] in result["source_ids"]["goals"]
+
+
+async def test_goal_reserves_are_excluded_from_liquid_cash_and_contributed_once(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.goals import create_goal
+    from arno.ledger.movements import record_transfer
+    from arno.ledger.schedules import create_schedule
+
+    today = ledger_today()
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="Reserve bank",
+        opening_balance_paise=1_000_000,
+        opening_balance_as_of=today,
+    )
+    schedule = await create_schedule(
+        ledger,
+        kind="goal_contribution",
+        name="Reserve monthly",
+        rule="FREQ=MONTHLY",
+        starts=today,
+        amount_paise=50_000,
+        account_id=bank["id"],
+    )
+    goal = await create_goal(
+        ledger, name="Reserve", target_paise=500_000, contribution_schedule_id=schedule["id"]
+    )
+    await record_transfer(
+        ledger,
+        from_account_id=bank["id"],
+        to_account_id=goal["account_id"],
+        amount_paise=250_000,
+        date=today,
+    )
+    inputs = await projection_tools.load_inputs(ledger, as_of=today, horizon_days=90)
+    assert inputs.starting_balance_paise == 750_000
+    assert sum(account.balance_paise for account in inputs.liquid) == 750_000
+    assert inputs.goals[0].saved_paise == 250_000
+    assert all(account.id != goal["account_id"] for account in inputs.liquid)
+    events = [event for event in inputs.events if event.goal_id == goal["id"]]
+    assert events
+    assert all(event.amount_paise == -50_000 for event in events)
+
+    result = await projection_tools.project(ledger, as_of=today, horizon_days=90, runs=10)
+    assert result["curve"][0]["median_paise"] == 750_000
+    goal_row = next(row for row in result["goals"] if row["id"] == goal["id"])
+    assert goal_row["saved_paise"] == 250_000
+
+
+async def test_purchase_projection_labels_follow_corrected_goal_contribution(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.goals import create_goal
+    from arno.ledger.movements import correct_movement, record_transfer
+
+    today = ledger_today()
+    bank = await create_account(
+        ledger,
+        kind="bank",
+        name="Main bank",
+        opening_balance_paise=1_000_000,
+        opening_balance_as_of=today,
+    )
+    goal = await create_goal(ledger, name="Travel reserve", target_paise=500_000)
+    movement = await record_transfer(
+        ledger,
+        from_account_id=bank["id"],
+        to_account_id=goal["account_id"],
+        amount_paise=100_000,
+        date=today,
+    )
+
+    async def forecast():
+        return await projection_tools.project(
+            ledger,
+            as_of=today,
+            horizon_days=90,
+            runs=10,
+            hypothetical={
+                "amount_paise": 10_000,
+                "date": today.isoformat(),
+                "method": "account",
+                "account": "Main bank",
+            },
+        )
+
+    before = await forecast()
+    await correct_movement(ledger, movement["id"], changes={"amount_paise": 200_000})
+    after = await forecast()
+    for result, cash, saved in ((before, 900_000, 100_000), (after, 800_000, 200_000)):
+        assert result["as_of"] == today.isoformat()
+        assert (
+            result["end"]
+            == (
+                date.fromisoformat(result["as_of"]) + timedelta(days=result["horizon_days"])
+            ).isoformat()
+        )
+        assert result["hypothetical"]["account"] == "Main bank"
+        assert result["hypothetical"]["date"] == today.isoformat()
+        account = next(
+            row for row in result["data_quality"]["balance_ages"] if row["id"] == bank["id"]
+        )
+        assert account["account"] == "Main bank"
+        assert account["balance_paise"] == cash
+        row = next(row for row in result["goals"] if row["id"] == goal["id"])
+        assert row["name"] == "Travel reserve"
+        assert row["saved_paise"] == saved
+        summary = projection_tools.summary(result)
+        card = projection_tools.card(result)
+        assert (summary["as_of"], summary["horizon_days"]) == (
+            result["as_of"],
+            result["horizon_days"],
+        )
+        assert (card["as_of"], card["end"]) == (result["as_of"], result["end"])
+        assert (
+            summary["floor_probability"] == card["floor_probability"] == result["floor_probability"]
+        )
 
 
 async def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
@@ -868,3 +1039,36 @@ async def test_agent_project_turns_validation_errors_into_model_retry(demo_ledge
         "SELECT outside_text_at FROM conversations WHERE id = 'cnv_retry'"
     )
     assert flagged is not None
+
+
+async def test_the_project_tool_echoes_the_request_it_was_asked(demo_ledger):
+    today = ledger_today()
+    arguments = {
+        "horizon_days": 120,
+        "hypothetical": {
+            "amount_paise": 5_000_000,
+            "date": today.isoformat(),
+            "method": "card",
+            "account": "Slice card",
+        },
+        "changes": [{"kind": "stop_income", "start": (today + timedelta(days=3)).isoformat()}],
+    }
+
+    def script(messages, info: AgentInfo) -> ModelResponse:
+        if len(messages) == 1:
+            return ModelResponse(parts=[ToolCallPart("project", arguments)])
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    agent = Agent(
+        FunctionModel(script),
+        deps_type=AgentDeps,
+        toolsets=[FunctionToolset(tools=[agent_tools.project])],
+    )
+    result = await agent.run("project", deps=AgentDeps(conversation_id="cnv_test"))
+    card = next(
+        part.metadata[0].data
+        for message in result.all_messages()
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "project"
+    )
+    assert card["request"] == arguments

@@ -1415,6 +1415,7 @@ async def preference(
     preference_id: str | None,
     message_id: str | None,
     kind: str | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     # None means "not given": remember defaults to preference and keeps an existing memory's kind;
     # classify must name the kind it sets.
@@ -1424,6 +1425,57 @@ async def preference(
         if not text or not text.strip():
             raise ToolInputError("what should I remember?")
         text = text.strip()
+        subject = " ".join(subject.lower().split()) if subject else None
+        if subject:
+            async with write_group(conn, actor="agent", message_id=message_id) as group:
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))",
+                    (kind or "preference") + ":" + subject,
+                )
+                existing_subject = await conn.fetchrow(
+                    "SELECT * FROM preferences WHERE active AND kind = $1 "
+                    "AND subject = $2 FOR UPDATE",
+                    kind or "preference",
+                    subject,
+                )
+                if existing_subject:
+                    if existing_subject["body"] == text:
+                        return {
+                            "status": "remembered",
+                            "id": existing_subject["id"],
+                            "undo_id": None,
+                            "text": text,
+                            "kind": existing_subject["kind"],
+                            "card": _card("preference", title="Remembered", text=text),
+                        }
+                    row = await conn.fetchrow_required(
+                        "UPDATE preferences SET body = $1, updated_at = now() "
+                        "WHERE id = $2 RETURNING *",
+                        text,
+                        existing_subject["id"],
+                    )
+                    group.record_updated("preferences", row["id"], existing_subject, row)
+                else:
+                    row = await conn.fetchrow_required(
+                        "INSERT INTO preferences "
+                        "(body, created_by, source_message_id, kind, subject) "
+                        "VALUES ($1, 'agent', $2, $3, $4) RETURNING *",
+                        text,
+                        message_id,
+                        kind or "preference",
+                        subject,
+                    )
+                    group.record_created("preferences", row)
+            return {
+                "status": "remembered",
+                "id": row["id"],
+                "undo_id": group.group_id,
+                "text": row["body"],
+                "kind": row["kind"],
+                "card": _card(
+                    "preference", title="Remembered", text=row["body"], undo_id=group.group_id
+                ),
+            }
         existing = await conn.fetchrow(
             """
             SELECT * FROM preferences

@@ -60,6 +60,7 @@ export type Preference = {
   active: boolean;
   created_at: string;
   updated_at: string;
+  previous: { text: string; changed_at: string; superseded_at: string } | null;
 };
 
 export type PreferenceList = {

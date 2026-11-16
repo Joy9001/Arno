@@ -55,6 +55,14 @@ def _movements(registry: ResultRegistry):
                     "id": "mov_1",
                     "date": "2026-09-02",
                     "description": "Lunch",
+                    "transfers": [
+                        {
+                            "from_name": "Salary bank",
+                            "from_kind": "bank",
+                            "to_name": "Spending",
+                            "to_kind": "spending",
+                        }
+                    ],
                     "payee": None,
                     "category": "Food",
                     "amount_paise": 45_000,
@@ -66,6 +74,12 @@ def _movements(registry: ResultRegistry):
         },
         context={"period": {"label": "2026-09"}},
     )
+
+
+def test_movement_table_identifies_each_account():
+    result = _movements(ResultRegistry()).results[0].snapshot["table"]
+    columns = [column["key"] for column in result["columns"]]
+    assert result["rows"][0][columns.index("account")] == {"type": "text", "text": "Salary bank"}
 
 
 def test_a_composed_stack_can_show_summary_table_and_chart_from_one_result():
