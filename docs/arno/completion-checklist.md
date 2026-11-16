@@ -231,14 +231,24 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 ### Watch and capture (L6, L7), on real endpoints and a phone
 
 - [ ] Get HTTPS working through `tailscale serve` on the host, and reach it from a phone. This
-      covers milestone 4, which was never exercised.
+      covers milestone 4, which was never exercised. The host half works: on November 16, 2026,
+      `https://<host>.ts.net/api/health` answered `200` over a verified certificate from this
+      machine (tailnet only). The phone half remains.
 - [ ] Install the PWA on Android and receive a real web push (`web/src/sw.ts:4`,
       `notifications.py:204`).
-- [ ] Walk through Home's notifications dialog and Settings in a real browser (`web/src/pages/Home.tsx:1`).
-- [ ] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
-      timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`). The briefing passed on
-      the owner instance on November 16, 2026: the W46 job finished `done` with model-written prose
-      and no prose error. Open: a scheduled question and the timeout path.
+- [x] Walk through Home's notifications dialog and Settings in a real browser. `pages/Home.tsx` is
+      gone; the walk covers today's surfaces. On November 16, 2026, `browser_journey walkthrough`
+      ([e2e README](../../tests/e2e/README.md)) enrolled a passkey in Chromium, opened the home
+      page's "What I noticed", opened an inbox item and the notifications surface, and opened all
+      11 Settings sections, with no console error.
+- [x] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
+      timeout behavior. The briefing passed on the owner instance on November 16, 2026: the W46 job
+      finished `done` with model-written prose and no prose error. The same day, on a scratch
+      demo database against the configured chat endpoint: a scheduled question's job finished
+      `done` and its inbox answer stated the food totals with coverage and no untraced number; the
+      same job under a 2-second limit recorded `timed out after 2s`, scheduled its retry, and wrote
+      no partial answer; and a briefing with a 10 ms model timeout fell back to the template with
+      `prose_error: ModelTimeoutError`. The two `TODO(L6)` notes in the job code are gone.
 - [ ] Configure `STT_*` (`local-stt`'s native whisper.cpp, or Qwen3-ASR), then record real
       Hinglish voice notes. Compare cloud against local, and keep or drop `STT_PAYEE_CONTEXT` based
       on the results (`capture/transcribe.py:9`).
@@ -442,8 +452,57 @@ adds nothing to them and closes none of them.
 
 ### Found and not yet fixed
 
-- [ ] **Two imports on one account, committed and undone at once.** Commit and undo take the
-      `accounts` and `payees` row locks in opposite orders, so a commit of one import racing an undo
-      of another on the same account can deadlock. Postgres aborts one side and nothing is
-      half-written; the user retries. One import's own commit, undo, and categorizer are ordered
-      (`ccdd6a6`).
+- [x] **Two imports on one account, committed and undone at once.** The Postgres log showed the
+      real cycle: a commit held its own import row and waited for the account's money rows, while an
+      undo held those and waited for the other import's row to release the duplicates it hid. Both
+      paths now take the account row first through one helper (`_lock_import_scope` in
+      `importers/commit.py`), then the import row, then its payees in id order; `import.md` records
+      the order. `test_a_commit_and_an_undo_of_two_imports_on_one_account_never_deadlock` deadlocked
+      on every run before the fix and passes 20 concurrent rounds after it (November 16, 2026).
+
+## G. Tier-0 acceptance, November 16, 2026
+
+Milestone 46 ([`plan.md`](plan.md) §5, L9) closed every tier-0 checklist box in the [capability
+catalog](capability-catalog.md); each box there names its evidence and its kind. Groups B and C
+still gate "shipped": this section closes none of their human, device, or calendar items.
+
+### Closed here
+
+- [x] **The tier-0 catalog boxes.** C01–C04, C06, C07, C09, C11, C18–C22, C28, C30, and the shared
+      completion gates. A read-only audit found many boxes already proven by existing tests, which are now cited;
+      the rest needed new code or tests: offer comparison and `complete_cost` (C11), alerts
+      resolved by payment evidence (migration `0043`, C18), the History section and the deletion
+      preview with delete everything (C21), the projection workbook (C20), memory history keyed on
+      `subject` (migration `0044`, C01), one outside-text boundary and document and vision
+      redaction (C21), parse retry and textless recovery (C04), the recap coverage guard (C06),
+      goal priority in plan order (C06), the shared safe-to-spend block (C28), and the price-change
+      payment rows (C30).
+- [x] **Browser journeys.** `tests/e2e/browser_journey.py` drives Chromium with a virtual passkey
+      through the real server. With the real model: `enroll` (empty database to a first answer)
+      and `home-vs-chat` (the same figure, as-of date, binding, and 15 notes on both surfaces)
+      passed; `walkthrough` passed without a model.
+- [x] **Real-model evals, targeted.** The 11 decision-tool and onboarding cases passed 3 of 3
+      trials each. `ans_offer_cost_components` first failed the number check because the model
+      subtracted the two offers itself; `compare_offers` now returns `difference_vs_offers` and the
+      instalments, and the rerun passed. The C28 honesty case now also requires the missing
+      account's name (`must_also_say`). A regression run of the writes and injection categories
+      (219 trials) passed: writes 23/23, injection gate 150/150, fooled 7%, no number flags.
+- [x] **Review fixes.** An independent review of the whole change found that a parse retry could
+      start a turn beside a live reply (now one guarded `start_server_turn` for wake and retry),
+      that the projection panel printed its notes twice, and that card-bill reminders never
+      resolved (they now resolve on a covering card payment, and undo reopens them).
+- [x] **Release gate on the change.** 1,826 tests passed and 5 skipped (from 1,719); Ruff, Pyrefly,
+      `uv lock --check`, and the license audit clean; web lint, typecheck, build, and 35
+      answer-contract tests passed; the invariant checker passed 779 checks on the demo persona.
+
+### Still open, outside tier 0's code
+
+- [ ] Group B's device, real-data, and calendar items: the phone half of `tailscale serve`, PWA
+      install and real web push, the 48-hour backup alert, Union Bank statements and milestone 24,
+      milestone 29's real backtest and the accuracy target, the local-model scorecard (a trial on
+      `qwen3:4b` through Ollama on this host's 4 GB GPU took over ten minutes for two trials, so the
+      full scorecard needs a larger GPU or a long unattended run), the latency targets, the L2
+      questions from real-use traces, real voice notes, receipts, and share-target screenshots,
+      the Linux Compose check, and milestone 37 on a second machine.
+- [ ] Group C's human gates: milestone 41's four weeks, the categorizer measure, milestone 40,
+      and the freeze week.

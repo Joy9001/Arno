@@ -623,6 +623,18 @@ in parentheses.
 45. What a debt costs (C11): `amortize` takes a processing fee and returns the APR; `card_payoff`
     walks a card balance under the minimum due or a fixed payment, at the card's own stored or
     stated finance charge.
+46. Tier-0 acceptance (every tier-0 entry in the catalog): two or more offers for one purchase
+    compare side by side in `compare_offers`, and every debt figure carries `complete_cost` and
+    what it leaves out (C11). Payment evidence resolves a reminder, a missed-payment alert, or a
+    card bill inside the payment's own undoable write (migration `0043`, C18). Settings gains a
+    History section over `audit_log` and a deletion preview with a delete-everything flow behind
+    a fresh passkey (C21). The projection exports as a workbook through XlsxWriter, moved up from
+    tier 4 (C20). A memory with the same kind and an optional `subject` replaces the active one,
+    and its previous value is read from `audit_log` (migration `0044`, C01). Any tool return with
+    outside text flags the conversation at one boundary, and document and vision text is redacted
+    before a model reads it; image-reading runs record no trace content, because an image cannot
+    be redacted (C21). A failed parse is retried from the import screen (C04). Between equally
+    cheap plans, the engine offers to delay the less important goal (C06).
 
 **L9 status, November 16, 2026.** Milestones 42 to 45 are built and on `main`, each with its tests,
 its instruction rules, and eval cases for those rules. A streamed reply now keeps the provider's

@@ -10,7 +10,8 @@ against commit `1567975`, Pydantic AI 2.64.0, and Pydantic AI Harness 0.64.0. Th
 here from `docs/research/personal-finance-agent-2026/` on November 15; the research it rests on
 stays there. Updated on November 16, 2026, after tier 1 was built as `plan.md` §5 milestones 42 to
 45; the four entries that describe it, the index, the priority order, and the registry now state
-what exists. Nothing here approves a scope change, selects a paid service, or claims that an
+what exists. On the same day every tier-0 checklist box was closed with named evidence
+(`plan.md` §5, milestone 46). Nothing here approves a scope change, selects a paid service, or claims that an
 unfinished feature works. A capability is adopted only when `plan.md` §5 gives it a milestone, and
 a parked one only after the `plan.md` §2 change that [`parked.md`](parked.md) requires.
 
@@ -70,6 +71,7 @@ The following table records what landed since the November 12 baseline and which
 | A recurring charge that steps to a new amount raises one `price_change` proposal, for a detected series and for a confirmed schedule | C30 | `0719711` |
 | `amortize` returns a loan's processing fee, GST, net disbursed amount, total cost, and APR; `card_payoff` walks a card balance under the minimum due or a fixed payment, from the card's stored rate; a card stores its finance rate and minimum-due rule | C11 | `b91c33d`, `2bffa51` |
 | A streamed reply keeps the provider's reported cost, so the spend gate sees what a paid run cost | C21, C22 | `eb59a6a` |
+| Tier-0 acceptance: offer comparison, payment-resolved alerts, History, deletion preview, projection workbook, memory history, one outside-text boundary, document redaction, parse retry, and browser journeys | C01–C04, C06, C07, C09, C11, C18–C22, C28, C30 | milestone 46 |
 
 XIRR is specified in the [engine blueprint](engine-blueprint.md) but was not built, because nothing
 uses it yet. Seven capabilities were added on November 15 (C28–C34), and C10 now covers only saved
@@ -78,40 +80,41 @@ to 44, and C11's fee and card-payoff paths as milestone 45; the rows above recor
 
 ## Index
 
-The index maps each capability to its coverage on November 16, 2026, and its tier.
+The index maps each capability to its coverage on November 16, 2026, and its tier. _Accepted_
+means every box in the entry's checklist is closed with named evidence.
 
 | ID | Capability | Coverage | Tier |
 |---|---|---|---|
-| [C01](#c01-progressive-onboarding-and-personal-context) | Progressive onboarding and personal context | Partial: setup and typed memory exist | 0 |
-| [C02](#c02-a-trustworthy-financial-picture) | A trustworthy financial picture | Partial: anchors and coverage exist; ongoing review needs depth | 0 |
-| [C03](#c03-transactions-splits-and-corrections) | Transactions, splits, and corrections | Existing; broader live acceptance remains | 0 |
-| [C04](#c04-capture-import-and-reconciliation) | Capture, import, and reconciliation | Existing paths; real-device and import proof remains | 0 |
+| [C01](#c01-progressive-onboarding-and-personal-context) | Progressive onboarding and personal context | Accepted: setup, typed memory with its history, and the browser journey | 0 |
+| [C02](#c02-a-trustworthy-financial-picture) | A trustworthy financial picture | Accepted: anchors, coverage, and conflicts | 0 |
+| [C03](#c03-transactions-splits-and-corrections) | Transactions, splits, and corrections | Accepted | 0 |
+| [C04](#c04-capture-import-and-reconciliation) | Capture, import, and reconciliation | Accepted; real-device capture is in group B of the completion checklist | 0 |
 | [C05](#c05-financial-contract-understanding) | Financial contract understanding | Proposed beyond existing document readers | 2 |
-| [C06](#c06-spending-insight-and-an-adaptive-plan) | Spending insight and an adaptive plan | Partial; category budgets are parked | 0 |
-| [C07](#c07-goals-and-irregular-expense-reserves) | Goals and irregular expense reserves | Partial: goals, yearly schedules, and projected series exist; contribution planning is C29 | 0 |
+| [C06](#c06-spending-insight-and-an-adaptive-plan) | Spending insight and an adaptive plan | Accepted; category budgets are parked | 0 |
+| [C07](#c07-goals-and-irregular-expense-reserves) | Goals and irregular expense reserves | Accepted: goals, yearly schedules, and projected series; contribution planning is C29 | 0 |
 | [C08](#c08-cash-flow-and-account-funding-readiness) | Cash flow and account funding readiness | Aggregate forecast exists; account forecasts are parked | 3 |
-| [C09](#c09-purchase-affordability-and-payment-comparisons) | Purchase affordability and payment comparisons | Existing: minimal verified plans and card EMI cost | 0 |
+| [C09](#c09-purchase-affordability-and-payment-comparisons) | Purchase affordability and payment comparisons | Accepted: minimal verified plans and card EMI cost | 0 |
 | [C10](#c10-saved-scenarios) | Saved scenarios | Proposed; depends on C29 | 3 |
-| [C11](#c11-debt-and-credit-lifecycle-cost) | Debt and credit lifecycle cost | Built: amortization, prepayment, rate inference, card EMI cost, loan fee with APR, and the card minimum-due path; foreclosure charges and a contract-driven rate reset proposed | 0 |
+| [C11](#c11-debt-and-credit-lifecycle-cost) | Debt and credit lifecycle cost | Accepted: amortization, prepayment, rate inference, card EMI cost, loan fee with APR, the card minimum-due path, and offer comparison; foreclosure charges and a contract-driven rate reset wait on C05 | 0 |
 | [C12](#c12-holdings-and-dated-net-worth) | Holdings and dated net worth | Manual assets exist; statement-based wealth is parked | 4 |
 | [C13](#c13-investment-performance-and-benchmarks) | Investment performance and benchmarks | Proposed; XIRR specified, not built | 4 |
 | [C14](#c14-retirement-and-life-event-planning) | Retirement and life-event planning | Proposed beyond generic goals and compounding | 4 |
 | [C15](#c15-india-tax-estimates-and-obligation-calendar) | India tax estimates and obligation calendar | Tax engine is parked | 4 |
 | [C16](#c16-emergency-reserves-and-financial-protection) | Emergency reserves and financial protection | Premium schedules exist; runway is C29; policy and deposit review proposed | 4 |
 | [C17](#c17-current-financial-research-with-evidence) | Current financial research with evidence | Proposed; ledger citations already exist | 2 |
-| [C18](#c18-proactive-review-and-scheduled-questions) | Proactive review and scheduled questions | Existing jobs; live delivery and usefulness need proof | 0 |
-| [C19](#c19-connection-health-and-recoverable-ingestion) | Connection health and recoverable ingestion | Existing job recovery; external connectors proposed | 0 |
-| [C20](#c20-inspectable-answers-and-portable-models) | Inspectable answers and portable models | Cards and data exports exist; workbook export proposed | 0 |
-| [C21](#c21-privacy-authorization-and-user-control) | Privacy, authorization, and user control | Existing core controls; external boundaries need extension | 0 |
-| [C22](#c22-measured-reliability-and-recovery) | Measured reliability and recovery | Evals, distributional backtest, HackerRank, and restore tools exist; real-data gaps remain | 0 |
+| [C18](#c18-proactive-review-and-scheduled-questions) | Proactive review and scheduled questions | Accepted; phone push is in group B of the completion checklist | 0 |
+| [C19](#c19-connection-health-and-recoverable-ingestion) | Connection health and recoverable ingestion | Accepted for jobs and imports; each external connector re-proves it | 0 |
+| [C20](#c20-inspectable-answers-and-portable-models) | Inspectable answers and portable models | Accepted, with the projection workbook | 0 |
+| [C21](#c21-privacy-authorization-and-user-control) | Privacy, authorization, and user control | Accepted: gates, redaction, history, and deletion preview | 0 |
+| [C22](#c22-measured-reliability-and-recovery) | Measured reliability and recovery | Accepted; the real-ledger backtest is milestone 29 | 0 |
 | [C23](#c23-foreign-currency-valuation) | Foreign-currency valuation | Parked | 5 |
 | [C24](#c24-freelancer-receivables-and-net-payouts) | Freelancer receivables and net payouts | Variable income exists; external settlement is not pursued | 5 |
 | [C25](#c25-merchant-identity-enrichment) | Merchant identity enrichment | Internal rules exist; external enrichment is parked | 5 |
 | [C26](#c26-additional-notification-and-approval-channels) | Additional notification and approval channels | In-app channels exist; chat integrations are parked | 5 |
 | [C27](#c27-business-system-and-accountant-handoff) | Business-system and accountant handoff | Not pursued | 5 |
-| [C28](#c28-safe-to-spend) | Safe-to-spend | Built: the figure is on the home page and the projection card | 0 |
-| [C29](#c29-multi-event-what-ifs) | Multi-event what-ifs | Built: 1 to 12 dated changes, with or without a purchase | 0 |
-| [C30](#c30-price-changes-in-recurring-charges) | Price changes in recurring charges | Built: one proposal for each step, for a detected series or a confirmed schedule | 0 |
+| [C28](#c28-safe-to-spend) | Safe-to-spend | Accepted: the same figure on the home page and the projection card | 0 |
+| [C29](#c29-multi-event-what-ifs) | Multi-event what-ifs | Accepted: 1 to 12 dated changes, with or without a purchase | 0 |
+| [C30](#c30-price-changes-in-recurring-charges) | Price changes in recurring charges | Accepted: one proposal for each step, with its payments shown | 0 |
 | [C31](#c31-arno-as-an-mcp-server) | Arno as an MCP server | Proposed; reopens the parked chat-app bridge | 3 |
 | [C32](#c32-statement-collection-from-email) | Statement collection from email | Proposed; reopens parked email capture | 3 |
 | [C33](#c33-settle-up-reminders) | Settle-up reminders | Partial: balances owed exist | 4 |
@@ -140,7 +143,8 @@ milestone 29's real backtest, a phone with web push, and milestone 41's four wee
 start once two conditions hold: the engine redesign has landed, which it did on November 15
 (`plan.md` §6, L5 redesign, release gate), and group B's durability and import work is done, which
 is still open. Tier 1's four capabilities joined this tier on November 16: C28, C29, C30, and C11's
-fee and card paths are built, and their acceptance targets in this catalog stay open.
+fee and card paths are built. Every tier-0 checklist box in this catalog was closed on November
+16, 2026 (milestone 46); groups B and C of the completion checklist still gate "shipped".
 
 **Tier 1: built on November 15 and 16 as milestones 42 to 45.** Each one fixed an answer Arno got
 wrong or could not give:
@@ -232,11 +236,27 @@ uncertainties, and preferences that the user can inspect and revise.
 
 **Completion checklist:**
 
-- [ ] A fresh user reaches a supported first answer from a balance and income snapshot.
-- [ ] A missing required card field keeps the card pending; no balance, limit, or date is invented.
-- [ ] Profile conflicts and changed priorities are visible, editable, and retained across restart.
-- [ ] The real enrollment-to-first-answer UI journey passes with no hidden operator intervention.
-      Milestone 40's install covers the steps before enrollment, not this journey.
+- [x] A fresh user reaches a supported first answer from a balance and income snapshot.
+      Automated: `test_a_fresh_balance_and_income_support_a_qualified_first_answer`
+      (`tests/test_home_api.py`) on an empty ledger with one stated balance and one salary.
+      Real UI journey: `browser_journey enroll`, below, November 16, 2026.
+- [x] A missing required card field keeps the card pending; no balance, limit, or date is invented.
+      Automated: `test_missing_card_dates_are_refused_through_the_agent_setup_tool` and
+      `test_missing_card_fields_refuse_setup_without_inventing_values`. Real model:
+      `wr_card_missing_dates` passed 3 of 3 trials.
+- [x] Profile conflicts and changed priorities are visible, editable, and retained across restart.
+      A memory saved with the same kind and `subject` replaces the active one, and its previous
+      value and dates come from `audit_log` (migration `0044`); the context shows the previous
+      floor, income amount, and goal priority. Automated: `tests/test_memory_history.py` (four
+      tests, including a restart through a new connection and a new app) and
+      `test_a_marked_tool_return_makes_a_superseding_memory_ask_first`, November 16, 2026.
+- [x] The real enrollment-to-first-answer UI journey passes with no hidden operator intervention.
+      Real UI journey with the real model, November 16, 2026: `uv run --with playwright==1.64.0 python -m
+      tests.e2e.browser_journey enroll` on an empty database enrolled a passkey through the setup
+      screen in Chromium, set up a bank balance and a salary in chat, and asked for the safe amount;
+      the answer stated the engine's ₹85,000 and named the missing floor, obligations, and
+      spending baseline. No console error. Milestone 40's install covers the steps before
+      enrollment, not this journey.
 
 ### C02: A trustworthy financial picture
 
@@ -266,10 +286,20 @@ balances and explain disagreements between user statements and imported records.
 
 **Completion checklist:**
 
-- [ ] Known zero renders as zero; an unanchored account never establishes a known starting balance.
-- [ ] One missing liquid balance prevents a complete-cash claim; any subtotal is explicitly scoped.
-- [ ] History coverage and balance evidence are separate, with useful account and period details.
-- [ ] A stated/imported conflict shows both dates and resolves through an audited, undoable path.
+- [x] Known zero renders as zero; an unanchored account never establishes a known starting balance.
+      Automated: `test_an_explicit_zero_opening_is_known_and_stays_zero`,
+      `test_a_movement_alone_does_not_make_an_unknown_balance_known`,
+      `test_financial_context_known_zero_card_keeps_zero_outstanding`, and
+      `test_home_treats_an_explicit_zero_opening_as_known`, November 16, 2026.
+- [x] One missing liquid balance prevents a complete-cash claim; any subtotal is explicitly scoped.
+      Automated: `test_liquid_total_quality_separates_unknown_zero_and_empty` and
+      `test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total`, November 16, 2026.
+- [x] History coverage and balance evidence are separate, with useful account and period details.
+      Automated: `test_a_committed_statement_covers_its_month_and_leaves_older_months_gaps` and
+      `test_balance_age_is_measured_from_the_latest_evidence`, November 16, 2026.
+- [x] A stated/imported conflict shows both dates and resolves through an audited, undoable path.
+      Automated: `test_a_stated_balance_inside_the_period_that_disagrees_needs_confirmation`,
+      November 16, 2026.
 
 ### C03: Transactions, splits, and corrections
 
@@ -299,10 +329,20 @@ understandable.
 
 **Completion checklist:**
 
-- [ ] Purchase, refund, transfer, split, and partial settlement agree across all spending surfaces.
-- [ ] A retry cannot duplicate a movement or apply the same approval twice.
-- [ ] Schedule matching uses recorded payment evidence; a due date alone never marks a bill paid.
-- [ ] Correction and undo preserve balanced entries and explain any later-edit conflict.
+- [x] Purchase, refund, transfer, split, and partial settlement agree across all spending surfaces.
+      Automated: the cross-path invariant in `tests/invariants.py` (`test_each_invariant_is_caught`)
+      and `test_expense_and_refund_net_spending`, November 16, 2026.
+- [x] A retry cannot duplicate a movement or apply the same approval twice.
+      Automated: `test_idempotency_key_returns_the_same_movement`,
+      `test_concurrent_retries_with_the_same_key_write_one_movement`, and
+      `test_a_duplicate_approval_post_replays_and_never_writes_twice`, November 16, 2026.
+- [x] Schedule matching uses recorded payment evidence; a due date alone never marks a bill paid.
+      Automated: `test_clock_alone_is_not_payment_and_unknown_amount_is_not_zero` and
+      `test_an_elapsed_due_date_alone_never_resolves_an_alert`, November 16, 2026.
+- [x] Correction and undo preserve balanced entries and explain any later-edit conflict.
+      Automated: `test_a_later_write_to_the_same_row_blocks_undo`,
+      `test_undoing_a_created_movement_after_a_correction_is_refused`,
+      `test_undo_of_undo_restores_the_movement`, and the random-operation invariants, November 16, 2026.
 
 ### C04: Capture, import, and reconciliation
 
@@ -335,11 +375,22 @@ rows.
 
 **Completion checklist:**
 
-- [ ] Locked, unfamiliar, malformed, and textless documents have explicit success or recovery paths.
-- [ ] A second supported statement replays the saved parser and overlapping captures do not
-      duplicate.
-- [ ] Passwords never appear in model context, database, logs, or exports; a restart may request one
-      again.
+- [x] Locked, unfamiliar, malformed, and textless documents have explicit success or recovery paths.
+      A textless page with no `VISION_*` endpoint now ends in `needs_input` naming the fix, and a
+      failed parse can be retried from the import screen (`POST /api/imports/{id}/retry`).
+      Automated: `test_a_textless_statement_ends_in_a_visible_vision_recovery_state`,
+      `test_a_statement_that_needs_a_password_shows_why_and_survives_a_restart`,
+      `test_a_wrong_password_leaves_an_explained_needs_password_state`, and
+      `test_a_failed_parse_can_be_retried_as_a_new_parser_turn`, November 16, 2026.
+- [x] A second supported statement replays the saved parser and overlapping captures do not
+      duplicate. Automated: `test_a_second_statement_replays_the_saved_parser_cleanly`,
+      `test_reimport_dedupes_by_content_hash`,
+      `test_replaying_the_same_statement_bytes_books_one_import_and_one_set_of_movements`, and
+      `test_retrying_a_logged_photo_does_not_log_it_twice`, November 16, 2026.
+- [x] Passwords never appear in model context, database, logs, or exports; a restart may request one
+      again. Automated: `test_password_is_write_only_and_never_stored` and
+      `test_the_statement_password_never_reaches_a_log_and_a_restart_asks_again` (a DEBUG log
+      capture and a fresh password vault), November 16, 2026.
 
 The real upload, password, review, commit, undo, restart-mid-parse, voice, photo, and phone-share
 journeys are tracked in groups A2 and B of the completion checklist.
@@ -403,10 +454,20 @@ adjustments while respecting essential commitments and the user's priorities.
 
 **Completion checklist:**
 
-- [ ] Transfers, card repayments, and investment contributions do not inflate consumption.
-- [ ] Refunds and corrections reconcile to the rows and period actually analyzed.
-- [ ] Incomplete history prevents an unqualified monthly total or misleading trend comparison.
-- [ ] A changed income or priority can revise the plan with visible before/after consequences.
+- [x] Transfers, card repayments, and investment contributions do not inflate consumption.
+      Automated: `test_a_goal_contribution_is_savings_not_consumption` and
+      `test_every_read_path_agrees_on_the_spending_total`, November 16, 2026.
+- [x] Refunds and corrections reconcile to the rows and period actually analyzed.
+      Automated: `test_a_refund_only_month_keeps_its_real_figure_and_is_not_new` and
+      `test_every_figure_opens_rows_that_sum_to_it`, November 16, 2026.
+- [x] Incomplete history prevents an unqualified monthly total or misleading trend comparison.
+      A recap no longer compares totals or categories when either period has a coverage gap.
+      Automated: `test_a_known_total_with_a_gap_cannot_imply_a_complete_trend`, November 16, 2026.
+- [x] A changed income or priority can revise the plan with visible before/after consequences.
+      Income: C29's `stop_income` and `change_amount` report the unchanged baseline beside the
+      changed result. Priority: between equally cheap plans the engine now offers to delay the
+      less important goal, so swapping two goals' priorities changes which goal the plan delays.
+      Automated: `test_a_goal_priority_change_revises_which_goal_the_plan_delays`, November 16, 2026.
 
 ### C07: Goals and irregular expense reserves
 
@@ -437,10 +498,14 @@ clear.
 
 **Completion checklist:**
 
-- [ ] Annual and one-off commitments appear on their real dates and receive an explicit funding
-      plan.
-- [ ] Reserved cash is counted once across accounts, goals, and forecast outflows.
-- [ ] Unconfirmed future income does not fund a confident affordability verdict.
+- [x] Annual and one-off commitments appear on their real dates and receive an explicit funding
+      plan. Automated: `test_yearly_commitment_occurs_on_its_actual_date_with_a_goal_funding_plan`
+      (the goal row carries target, saved, remaining, and completion date), November 16, 2026.
+- [x] Reserved cash is counted once across accounts, goals, and forecast outflows.
+      Automated: `test_goal_reserves_are_excluded_from_liquid_cash_and_contributed_once`, November 16, 2026.
+- [x] Unconfirmed future income does not fund a confident affordability verdict.
+      Automated: `test_unconfirmed_income_cannot_fund_a_yes_verdict` and
+      `test_unconfirmed_variable_income_is_only_an_optimistic_case`, November 16, 2026.
 
 ### C08: Cash flow and account funding readiness
 
@@ -509,9 +574,17 @@ verdict, uncertainty, and tradeoffs without substituting a model-written financi
 
 **Completion checklist:**
 
-- [ ] Verdicts and every suggested tradeoff are engine outputs computed on the same baseline.
-- [ ] Limit breaches, unsupported product costs, and unknown funding facts are surfaced.
-- [ ] Account, period, goal, and probability labels match the result, including after corrections.
+- [x] Verdicts and every suggested tradeoff are engine outputs computed on the same baseline.
+      Automated: `test_every_verdict_is_one_of_the_three_and_yes_clears_the_threshold`,
+      `test_purchase_plus_rent_rise_verifies_tradeoffs_against_changed_inputs`, and
+      `test_two_what_ifs_share_the_same_baseline_and_write_nothing`, November 16, 2026.
+- [x] Limit breaches, unsupported product costs, and unknown funding facts are surfaced.
+      Automated: `test_a_card_purchase_over_the_available_limit_is_infeasible`,
+      `test_an_emi_with_no_known_rate_carries_the_labeled_default_cost`, and
+      `test_an_unknown_starting_balance_gets_no_verdict_and_no_tradeoffs`, November 16, 2026.
+- [x] Account, period, goal, and probability labels match the result, including after corrections.
+      Automated: `test_purchase_projection_labels_follow_corrected_goal_contribution` and
+      `test_card_float_is_a_yes_but_when_the_bank_balance_is_short`, November 16, 2026.
 
 ### C28: Safe-to-spend
 
@@ -553,16 +626,25 @@ already accounts for bills, card dues, goals, and simulated everyday spending.
       difference is named, such as an obligation the floor test doesn't cover. Automated:
       `test_safe_to_spend_matches_the_affordability_boundary_across_personas` and
       `test_safe_to_spend_obligation_can_be_the_binding_constraint`, 0.3.0.
-- [ ] With no known liquid balance there is no figure, and the answer names the missing account.
+- [x] With no known liquid balance there is no figure, and the answer names the missing account.
+      Automated: `test_safe_to_spend_is_none_when_no_liquid_balance_is_known` and
+      `test_a_project_tool_call_on_an_unknown_balance_has_no_verdict`; the projection card and home
+      name the account. Real model: `hn_safe_to_spend_unknown_balance`, which now also requires the
+      account's name (`must_also_say`), passed 3 of 3 trials.
 - [x] No headroom renders as ₹0 with the binding date, never as a negative amount. Automated:
       `test_safe_to_spend_is_zero_when_a_passing_baseline_has_no_headroom` and
       `test_safe_to_spend_returns_zero_with_binding_constraint_when_baseline_fails`, 0.3.0.
-- [ ] Chat and the home page show the same figure, as-of date, and data-quality notes.
+- [x] Chat and the home page show the same figure, as-of date, and data-quality notes.
+      One `SafeToSpend` block renders both. Automated: the web test `safe_to_spend renders on home
+      and projection cards and hides when null or invalid`, with distinct as-of and binding dates.
+      Real UI journey with the real model, November 16, 2026: `browser_journey home-vs-chat` read
+      "₹8,39,858 safe to spend today · as of 16 Nov 2026 · Floor binds on 29 Nov 2026." and the
+      same 15 data-quality notes on the home page and on the chat card.
 
 Automated evidence: `tests/test_engine_projection.py`, `tests/test_projection_tool.py`,
-`tests/test_home_api.py`, and `web/scripts/answer-contract.test.mjs`. The real-model eval cases
-`ans_safe_to_spend` and `hn_safe_to_spend_unknown_balance` are in `evals/cases.py`; a live run and a
-UI journey remain.
+`tests/test_home_api.py`, and `web/scripts/answer-contract.test.mjs`. Real model, November 16, 2026: `ans_safe_to_spend`
+passed 3 of 3 trials and `hn_safe_to_spend_unknown_balance`
+passed 3 of 3 trials; the UI journeys are above.
 
 ### C29: Multi-event what-ifs
 
@@ -623,9 +705,11 @@ above the floor with income stopped, comes with it.
       figure traced to the `project` return.
 
 Automated evidence: `tests/test_engine_scenario.py`, `tests/test_engine_affordability.py`,
-`tests/test_projection_tool.py`, and `web/scripts/answer-contract.test.mjs`. The real-model eval
-cases `ans_whatif_job_loss`, `ans_whatif_purchase_rent_rise`, and `hn_whatif_unknown_schedule` are
-in `evals/cases.py`; a live run and a UI journey remain.
+`tests/test_projection_tool.py`, and `web/scripts/answer-contract.test.mjs`. Real model, November 16, 2026:
+`ans_whatif_job_loss` passed 3 of 3 trials, `ans_whatif_purchase_rent_rise`
+passed 3 of 3 trials, and `hn_whatif_unknown_schedule`
+passed 3 of 3 trials. The projection card downloads a workbook of the
+same request (C20).
 
 ### C10: Saved scenarios
 
@@ -704,20 +788,34 @@ distinguish card minimum payment, full statement payment, available credit, and 
       Automated: `test_amortize_prepay_shortens_tenure_and_saves_interest`,
       `test_conventions_emi_rounding_and_interest_unit`, and
       `test_no_prepayment_option_ever_reports_a_negative_saving_or_a_longer_loan`, 0.3.0.
-- [ ] Fee, tax, discount, and cash-price differences appear separately in a supported offer
-      comparison.
+- [x] Fee, tax, discount, and cash-price differences appear separately in a supported offer
+      comparison. `compare_offers` (engine, tool, and agent tool) returns, for each offer in input
+      order, the cash price, discount, cashback, interest, GST on interest, processing fee, GST on
+      the fee, total paid, and difference against paying cash, and never picks one. Automated:
+      `test_offer_comparison_separates_each_charge_and_preserves_order`,
+      `test_offer_loan_fee_gst_and_cashback_are_not_counted_as_interest`, and
+      `test_compare_offers_adapter_separates_components_and_refuses_a_missing_rate`. Real model:
+      `ans_offer_cost_components` passed 3 of 3 trials after the tool began returning offer-to-offer differences (the first run failed the number check on a model-computed gap).
 - [x] Minimum-only card results use issuer or stated terms and show the continuing balance and the
       lost interest-free period. Automated:
       `test_card_payoff_by_name_uses_ledger_balance_and_stored_terms`,
       `test_card_payoff_passed_terms_override_stored_ones`, and
       `test_card_payoff_three_month_minimum_due_hand_computed`; the result's assumptions say a
       carried balance loses the interest-free period, 0.3.0.
-- [ ] Missing rates, reset rules, or contingent charges prevent an unsupported complete-cost claim.
+- [x] Missing rates, reset rules, or contingent charges prevent an unsupported complete-cost claim.
+      `amortize`, `card_payoff`, and `compare_offers` return `complete_cost` and `not_included`
+      (prepayment or foreclosure charges, late and contingent charges, and a floating rate with no
+      stated reset), and a missing rate refuses. Automated:
+      `test_debt_costs_identify_omitted_charges_and_rate_resets` and
+      `test_a_stated_reset_schedule_still_leaves_other_charges_incomplete`. Real model:
+      `hn_loan_cost_excludes_contingent_charges`
+      passed 3 of 3 trials.
 
 Automated evidence: `tests/test_engine_money.py`, `tests/test_tools_money.py`,
-`tests/test_ledger_accounts.py`, `tests/test_migrations.py`, and `tests/test_agent_tools.py`. The
-real-model eval cases `ans_card_payoff_rate`, `ans_loan_fee_apr`, and `hn_card_payoff_no_rate` are
-in `evals/cases.py`; a live run and a UI journey remain.
+`tests/test_ledger_accounts.py`, `tests/test_migrations.py`, and `tests/test_agent_tools.py`. Real
+model, November 16, 2026: `ans_card_payoff_rate` passed 3 of 3 trials, `ans_loan_fee_apr`
+passed 3 of 3 trials, and `hn_card_payoff_no_rate`
+passed 3 of 3 trials.
 
 ### C33: Settle-up reminders
 
@@ -1043,11 +1141,23 @@ run user-scheduled questions with read-only tools and defined resource ceilings.
 
 **Completion checklist:**
 
-- [ ] One unchanged risk episode or due occurrence produces one actionable alert, with controlled
-      re-arming.
-- [ ] Supported payment evidence resolves a warning; undo restores the appropriate state.
-- [ ] Missed schedules, model outages, opt-outs, and permission failures have visible recovery
-      behavior.
+- [x] One unchanged risk episode or due occurrence produces one actionable alert, with controlled
+      re-arming. Automated: `test_risk_warns_once_then_rearms_after_recovery` and
+      `test_reminders_are_created_once_inside_the_lead_window`, November 16, 2026.
+- [x] Supported payment evidence resolves a warning; undo restores the appropriate state.
+      Migration `0043` adds `resolved_at` and `resolved_by` to notifications. A payment the
+      schedule matcher links to an occurrence, or a card payment that covers the bill, resolves
+      its reminder or missed-payment alert inside the same audited write, so undo reopens it; a
+      resolved alert leaves the inbox. A risk warning keeps its own re-arm rule. Automated:
+      `tests/test_notification_resolution.py`, November 16, 2026.
+- [x] Missed schedules, model outages, opt-outs, and permission failures have visible recovery
+      behavior. Automated: `tests/test_watch_recovery.py` (push opt-out and permission failure
+      status), `test_a_failed_parse_can_be_retried_as_a_new_parser_turn`, and the web tests `failed
+      jobs and import categorization offer retry and missed schedules open in chat`, `blocked push
+      and an opted-out subscription explain recovery`, and `a failed parse offers retry only while
+      its stored file is still here`. Live, November 16, 2026: a scheduled question run against the real chat
+      endpoint landed in the inbox, and the same job under a 2-second limit recorded "timed out
+      after 2s", scheduled its retry, and wrote no partial answer.
 
 Real phone push and a real scheduled question are tracked in group B of the completion checklist.
 
@@ -1090,15 +1200,16 @@ new date, and the payments behind it, as a proposal.
       Automated: `test_a_price_step_notifies_once_and_rearms_on_the_next_step`, 0.3.0.
 - [x] A variable bill, such as electricity, never raises a step alert from ordinary variation.
       Automated: `test_a_variable_bill_is_never_a_step`, 0.3.0.
-- [ ] The old amount, new amount, step date, and payment rows are shown and cited. The alert shows
-      the first three and the proposal carries the payment rows' `movement_ids`, but no screen
-      shows those rows yet.
+- [x] The old amount, new amount, step date, and payment rows are shown and cited. The inbox and
+      home show the old and new amounts, the step date, and the cited payments (date, payee,
+      account, amount). Automated: `test_notifications_preserve_the_payment_ids_behind_a_price_change`
+      and the web test `price changes show the amounts and cited payment rows`, November 16, 2026.
 - [x] Dismissing the proposal writes nothing. Automated:
       `test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing`, 0.3.0.
 
 Automated evidence: `tests/test_engine_series.py`, `tests/test_audit_engine3.py`, and
-`tests/test_watch_workflows.py`. No real-model eval case covers price changes yet; a live run and a
-UI journey remain.
+`tests/test_watch_workflows.py`. A price change needs no model: the job raises it and the inbox
+renders it.
 
 ### C19: Connection health and recoverable ingestion
 
@@ -1126,10 +1237,21 @@ access while preserving source identity and preventing a stale connection from a
 
 **Completion checklist:**
 
-- [ ] Replaying or reordering an external event does not duplicate or misstate a movement.
-- [ ] Retry, restart, expired credentials, and changed input schema produce persistent, explainable
-      states.
-- [ ] A failed refresh leaves the old data date visible and never marks new data as reconciled.
+- [x] Replaying or reordering an external event does not duplicate or misstate a movement.
+      Proven on the ingestion that exists, statements: the same bytes dedupe by content hash, a
+      replayed parser must reproduce every row, and a commit books once. Automated:
+      `test_replaying_the_same_statement_bytes_books_one_import_and_one_set_of_movements`,
+      `test_reimport_dedupes_by_content_hash`, and `test_committing_twice_books_once`, November 16, 2026. Each
+      external connector (C32, a C12 broker) re-proves this for its own event IDs.
+- [x] Retry, restart, expired credentials, and changed input schema produce persistent, explainable
+      states. A statement password is the credential that exists: a missing or wrong one persists
+      `needs_password` with its reason through a restart. Automated:
+      `test_a_statement_that_needs_a_password_shows_why_and_survives_a_restart`,
+      `test_a_wrong_password_leaves_an_explained_needs_password_state`, and the parser version
+      checks (`needs_repair`), November 16, 2026.
+- [x] A failed refresh leaves the old data date visible and never marks new data as reconciled.
+      Automated: `test_a_failed_refresh_keeps_the_old_statement_date_visible_and_reconciles_nothing`
+      and the web account-row test, November 16, 2026.
 
 The parser's restart-mid-parse journey is tracked in groups A2 and E of the completion checklist.
 
@@ -1183,21 +1305,33 @@ dates, formulas where appropriate, and trustworthy computed results.
 
 **Enabling tools and status:**
 
-- Internal, partial: `present`, `show_chart`, `show_table`, and [JSON/CSV/dump
-  exports](../../src/arno/ledger/export.py) exist; a model-workbook export doesn't.
+- Internal, existing: `present`, `show_chart`, `show_table`, [JSON/CSV/dump
+  exports](../../src/arno/ledger/export.py), and the [projection
+  workbook](../../src/arno/ledger/workbook.py) built with XlsxWriter.
 - Library candidates: XlsxWriter or openpyxl in [T08](#t08-spreadsheets-and-model-export).
 - External: Sheets API or Graph is optional and separately authorized; neither a cloud account nor
   an MCP spreadsheet server is required for a downloadable `.xlsx` artifact.
 
 **Completion checklist:**
 
-- [ ] Displayed figures resolve to the correct source, account, unit, and period, not merely
-      matching digits.
-- [ ] A model export includes input snapshot, assumptions, calculation version, and result date.
-- [ ] Formula cells have verified calculated values for non-calculating viewers; text cannot inject
-      formulas.
-- [ ] Export scope, credential exclusions, and any cloud destination are explicit and verified in
-      the UI.
+- [x] Displayed figures resolve to the correct source, account, unit, and period, not merely
+      matching digits. A movement table now names each row's account. Automated:
+      `test_movement_table_identifies_each_account` and the presentation contract tests, November 16, 2026.
+- [x] A model export includes input snapshot, assumptions, calculation version, and result date.
+      `GET /api/projection/workbook` takes the projection's own parameters and returns an `.xlsx`
+      with Inputs, Assumptions, Result, and About sheets; the projection card and home link to it.
+      Automated: `test_workbook_contains_the_projection_snapshot_assumptions_and_versions` and
+      `test_the_projection_routes_take_the_emi_terms_the_card_was_asked_with`, November 16, 2026.
+- [x] Formula cells have verified calculated values for non-calculating viewers; text cannot inject
+      formulas. Every formula is written with its cached value, text is always a string cell, and
+      the CSV export prefixes formula-leading text. Automated:
+      `test_workbook_formulas_have_verified_cached_values_and_names_are_strings` and
+      `test_csv_neutralizes_formula_prefixes_only_for_text`, November 16, 2026.
+- [x] Export scope, credential exclusions, and any cloud destination are explicit and verified in
+      the UI. Settings lists what each export holds, the excluded secret tables from the server's
+      own `SECRET_TABLES`, that the full dump includes them for recovery, and that every export is
+      a download to this device. Automated: `test_export_scope_reports_the_actual_excluded_tables`
+      and the web test `export scope renders the server exclusion list and destination`, November 16, 2026.
 
 ### C31: Arno as an MCP server
 
@@ -1260,8 +1394,8 @@ records.
   marking](../../src/arno/tools/mark.py), audit groups, `preference`, `undo`, and [the write
   gate](../../src/arno/agent/toolset.py) exist. Since November 14 the `app` role owns the
   databases without superuser, and native spend budgets cap every agent run.
-- Proposed: user-visible deletion scope and retention controls, including derived evidence and the
-  limits of deletion from backups and external providers.
+- Internal, existing: the deletion preview and delete-everything flow
+  ([deletion.py](../../src/arno/ledger/deletion.py)) and the History section over `audit_log`.
 - Pydantic: `ApprovalRequired`/`DeferredToolRequests`, local tool controls, and structured returns.
   Web/MCP results and external-tool credentials require explicit integration with these controls.
 - External: OAuth/API keys stay in host transport/storage, never prompts or arbitrary fetch headers.
@@ -1269,15 +1403,37 @@ records.
 
 **Completion checklist:**
 
-- [ ] Malicious statements, pages, and MCP results cannot create lasting changes without the
-      required card.
-- [ ] Secret fields cannot enter prompts, traces, source URLs, ordinary exports, or unauthorized
-      requests.
-- [ ] Approval binds the reviewed change/version; denial, replay, and stale approval write nothing.
-- [ ] Users can revise memory, inspect history, disable external access, and see undo conflicts
-      honestly.
-- [ ] A deletion request shows affected records, retained audit/backup data, and provider-retention
-      limits.
+- [x] Malicious statements, pages, and MCP results cannot create lasting changes without the
+      required card. Any tool return that carries outside-text markers now flags the conversation
+      at one boundary (`OutsideToolReturns` in `agent/capabilities.py`), so a future page or MCP
+      result inherits the gate; a wide `correct_movement` is gated too. Automated:
+      `tests/test_profile_security_boundaries.py` (memory, setup, and wide correction ask first
+      after a synthetic marked tool return; an everyday expense stays instant), November 16, 2026.
+- [x] Secret fields cannot enter prompts, traces, source URLs, ordinary exports, or unauthorized
+      requests. Document and vision text is redacted before the model sees it, and the image-reading
+      runs record no spans. Automated:
+      `test_parser_document_tool_return_redacts_card_and_keeps_raw_document`,
+      `test_a_parser_document_return_keeps_a_card_number_out_of_every_span`,
+      `test_a_card_number_the_vision_model_reads_never_reaches_the_chat_model`,
+      `test_root_span_preview_redacts_input_before_the_guardrail`, and
+      `test_no_credential_table_is_in_any_export`, November 16, 2026. No source URL or outside request exists
+      yet; C17 brings its own check.
+- [x] Approval binds the reviewed change/version; denial, replay, and stale approval write nothing.
+      Automated: `test_a_denied_approval_writes_nothing_and_the_thread_keeps_working`,
+      `test_a_duplicate_approval_post_replays_and_never_writes_twice`, and
+      `test_a_stale_card_id_is_refused_with_words`, November 16, 2026.
+- [x] Users can revise memory, inspect history, disable external access, and see undo conflicts
+      honestly. Settings has a History section over `audit_log` (`GET /api/history`) that offers
+      Undo only where undo would succeed and otherwise shows the same reason undo gives. The
+      external access that exists, web push, is switched off in Settings. Automated:
+      `tests/test_history_api.py`, `test_delete_for_good_scrubs_the_edit_history_too`, and
+      `tests/test_watch_recovery.py`; the real browser walkthrough below opened History, November 16, 2026.
+- [x] A deletion request shows affected records, retained audit/backup data, and provider-retention
+      limits. `GET /api/deletion/preview` covers a memory, a statement file, and everything:
+      the rows and parser files removed, what stays and why, the restic retention (7 daily, 4
+      weekly), and what each configured model provider already holds. Delete everything needs a
+      fresh passkey and a typed phrase, keeps sign-in, and waits for a running job. Automated:
+      `tests/test_deletion.py` (15 tests) and the web deletion test, November 16, 2026.
 
 ### C22: Measured reliability and recovery
 
@@ -1311,10 +1467,16 @@ fails.
 
 **Completion checklist:**
 
-- [ ] Unit, property, invariant, and semantic cases cover wrong account, wrong period, rounding, and
-      missing data.
-- [ ] Usable real-history evaluation distinguishes synthetic results and controls historical
-      look-ahead.
+- [x] Unit, property, invariant, and semantic cases cover wrong account, wrong period, rounding, and
+      missing data. Automated: `test_a_wallet_statement_is_not_filed_as_the_cash_account`,
+      `test_this_month_ends_today_not_at_the_end_of_the_month`,
+      `test_conventions_emi_rounding_and_interest_unit`, `test_infer_rate_property_round_trips`,
+      `test_a_covered_month_with_no_spend_is_zero_not_unknown`, and the invariant checker, November 16, 2026.
+- [x] Usable real-history evaluation distinguishes synthetic results and controls historical
+      look-ahead. `arno backtest --source db` labels its source and reads nothing after each
+      forecast's origin. Automated: `test_the_db_backtest_reads_no_spend_after_its_origin` and
+      `test_backtest_results_are_labeled_synthetic_or_real`, November 16, 2026. The measured run on the owner's
+      ledger is milestone 29 in group B of the completion checklist.
 
 The local-model scorecard, median cost, latency, fresh-machine restore, and human gates are tracked
 in groups B and C of the completion checklist.
@@ -1606,16 +1768,27 @@ database rows the agent reads, the model context, or exports. Only matching atta
 
 These gates apply to every capability selected for implementation, in addition to its own checklist.
 
-- [ ] Inputs distinguish facts, user assumptions, derived results, and retrieved external evidence.
-- [ ] Monetary units, signs, dates, source IDs, completeness, and uncertainty survive API/UI
-      boundaries.
-- [ ] Missing information and unavailable services have a truthful, actionable failure state.
-- [ ] Stateful user facts, scenarios, jobs, and required evidence survive the supported
-      backup/restore path.
-- [ ] Access, privacy, software/model licenses, and data-use terms are verified before adding a
-      dependency.
-- [ ] Relevant invariant, semantic, adversarial, and UI acceptance evidence is recorded with its
-      limits.
+- [x] Inputs distinguish facts, user assumptions, derived results, and retrieved external evidence.
+      For tier 0: `test_a_computed_table_keeps_ledger_ids_assumptions_and_unknown_coverage`, the
+      scenario `assumptions` block, and the number check. Tier 0 retrieves no external evidence;
+      C17 adds that input with its own label.
+- [x] Monetary units, signs, dates, source IDs, completeness, and uncertainty survive API/UI
+      boundaries. Automated: `test_unknown_money_and_coverage_gaps_stay_unknown_not_zero`,
+      `test_the_json_export_labels_its_money_unit`, and the 35 web answer-contract tests, November 16, 2026.
+- [x] Missing information and unavailable services have a truthful, actionable failure state.
+      Automated: `test_a_model_failure_saves_a_plain_note`,
+      `test_api_503_handler_maps_connection_and_shutdown_errors`,
+      `test_retry_resets_a_failed_job_and_clears_its_alert`, and the import recovery tests, November 16, 2026.
+- [x] Stateful user facts, scenarios, jobs, and required evidence survive the supported
+      backup/restore path. Automated: `test_restic_backup_and_restore_round_trip` now reads back a
+      scheduled question, its job, and a preference after a real restic restore, November 16, 2026.
+- [x] Access, privacy, software/model licenses, and data-use terms are verified before adding a
+      dependency. `scripts/license_audit.py` now enforces its allowlist, so an unknown or
+      non-permissive licence fails; XlsxWriter (BSD-2-Clause) passed it and is in
+      `THIRD_PARTY_NOTICES.md`. Automated: `test_license_audit_rejects_forbidden_and_unrecognized_licenses`.
+- [x] Relevant invariant, semantic, adversarial, and UI acceptance evidence is recorded with its
+      limits. This file names each box's evidence and its kind; the browser journeys are in
+      `tests/e2e/README.md`, and the run is recorded in section G of the completion checklist.
 
 No capability is complete merely because a tool exists, a model called it, or a source URL was
 cited. The [completion checklist](completion-checklist.md) retains the current live and human gates.
