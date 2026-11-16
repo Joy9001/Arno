@@ -992,9 +992,7 @@ async def _run_eval(
             def fresh_model(model_name: str = name) -> Model:
                 # Each trial gets its own provider session so one trial's wording cannot leak
                 # into the next, and the pass^3 trials stay independent.
-                return model_for(
-                    model_name, session_id=f"arno-eval-{model_name}-{uuid.uuid4()}"
-                )
+                return model_for(model_name, session_id=f"arno-eval-{model_name}-{uuid.uuid4()}")
 
             report = await evaluate_model(
                 model_factory=fresh_model,
