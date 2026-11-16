@@ -1,12 +1,13 @@
 # Completion checklist
 
 - [ ] **Inference accounting and budgets, November 12 scope.** The
-      [feature definition of done](cost-tracking.md#completion-checklist) is implemented but not
-      owner deployed. Pricing/budget/recovery tests, Ruff, Pyrefly, financial invariants, scratch
-      restore, both image builds, app smoke, and rendered Phoenix checks pass. The full suite has
-      1,408 passes and 4 skips. Paid-provider parity, a real ChatGPT sign-in, and owner acceptance
-      remain. The [acceptance log](cost-tracking-acceptance.md) separates synthetic proof from those
-      live checks.
+      [feature definition of done](cost-tracking.md#completion-checklist) is implemented and, since
+      November 16, 2026, owner deployed in 0.3.0. Pricing/budget/recovery tests, Ruff, Pyrefly,
+      financial invariants, scratch restore, both image builds, app smoke, and rendered Phoenix
+      checks pass. On the owner instance the weekly briefing's paid call landed its
+      provider-reported cost in the day's shared spend counter. Paid-provider parity, a real ChatGPT
+      sign-in, and owner acceptance remain. The [acceptance log](cost-tracking-acceptance.md)
+      separates synthetic proof from those live checks.
 
 Audit on November 3, 2026, at `109c7ea`. It checks [`plan.md`](plan.md) §5 and "What 'shipped'
 means" against the code, CI, the live instance, and the TODOs in the source.
@@ -104,9 +105,10 @@ and pushed to `main`. Group B's import items wait for this group.
       layout replays, and categorizing finishes in minutes with no timeouts. Compare with Phoenix
       session `__LOCALID_y8OJ3G9`.
       Operator run on November 7 (see the run log): responsive chat, a verified 939-row parse,
-      commit, replay of the saved parser, and categorizing in 3-5 minutes all pass. Open: the
-      restart and the same run through the UI with a passkey. The categorizing chunks that hit
-      the request limit were fixed on November 8: every chunk returned, 591 of 939 labelled.
+      commit, replay of the saved parser, and categorizing in 3-5 minutes all pass. The restart
+      passed on November 16 on a scratch database (section E). Open: the same run through the UI
+      with a passkey. The categorizing chunks that hit the request limit were fixed on November 8:
+      every chunk returned, 591 of 939 labelled.
 
 ## B. Owner setup and measurements
 
@@ -114,7 +116,7 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 ### Durability, first and before any real money
 
-- [ ] Point `RESTIC_REPOSITORY` **off-site**. Google Drive for now, through restic's `rclone:`
+- [x] Point `RESTIC_REPOSITORY` **off-site**. Google Drive for now, through restic's `rclone:`
       backend. R2 or S3 later is a `.env`-only switch (`self-hosting.md` §6.1).
   - [x] Both images ship rclone 1.71.2. Before this, neither had `ssh` or `rclone`, so the documented
         SFTP and rclone targets couldn't work. SFTP is still unsupported, and the docs say so.
@@ -234,7 +236,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
       `notifications.py:204`).
 - [ ] Walk through Home's notifications dialog and Settings in a real browser (`web/src/pages/Home.tsx:1`).
 - [ ] Run a weekly briefing and a scheduled question against the real chat endpoint, including the
-      timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`).
+      timeout behavior (`jobs/briefing.py:222`, `jobs/questions.py:48`). The briefing passed on
+      the owner instance on November 16, 2026: the W46 job finished `done` with model-written prose
+      and no prose error. Open: a scheduled question and the timeout path.
 - [ ] Configure `STT_*` (`local-stt`'s native whisper.cpp, or Qwen3-ASR), then record real
       Hinglish voice notes. Compare cloud against local, and keep or drop `STT_PAYEE_CONTEXT` based
       on the results (`capture/transcribe.py:9`).
@@ -282,10 +286,10 @@ exceptions. The operator path is [`observability.md`](observability.md).
       and tool spans with one root, real parent links, and no SQL spans.
 - [x] **Standard logs.** `logging.basicConfig` plus Uvicorn; Docker `json-file` rotation at three
       10 MB files per service; no central log store.
-- [ ] **Owner deployment update.** Rebuild and recreate the API and Phoenix on the host with the
+- [x] **Owner deployment update.** Rebuild and recreate the API and Phoenix on the host with the
       commands in [`observability.md`](observability.md#owner-commands), without deleting volumes.
-      Phoenix now builds Arno's pinned supplied-cost image. Defaults are not claimed as deployed
-      until the owner does this.
+      Done on November 16, 2026: the API and the backup sidecar run the published 0.3.0 images, and
+      Phoenix was rebuilt from current source and recreated, healthy, with its volumes kept.
 - [x] **Trace authentication.** Compose maps `PHOENIX_API_KEY` to the local
       `PHOENIX_ADMIN_SECRET` by default, so the normal start exports with no API-key creation or
       second restart. An explicit `PHOENIX_API_KEY` overrides the fallback.
@@ -429,6 +433,12 @@ adds nothing to them and closes none of them.
 - [x] **Release gate.** 1,716 tests passed and 5 skipped; Ruff, Pyrefly, and `uv lock --check`
       clean; web lint, typecheck, build, and `test:answers` passed; the invariant checker passed on
       the demo persona.
+
+- [x] **Released and deployed.** `v0.3.0` (run 43840771108) published both images. The owner
+      instance moved from 0.2.0: the API wrote its pre-migration dump, then applied migrations 39
+      to 42. The weekly briefing that failed on November 15 (`weekly_briefing:2026-W46`) was
+      re-queued and finished `done`. `tests/test_release.py` now also checks the version in
+      `src/arno/__init__.py`, `.env.example`, and `web/package.json`.
 
 ### Found and not yet fixed
 

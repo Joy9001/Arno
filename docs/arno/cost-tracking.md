@@ -384,8 +384,10 @@ This is the definition of done. Checked items have the evidence recorded in the
       dependency/license checks, both image builds, and scratch app smoke checks also pass.
       The acceptance log records the evidence and limits.
 - [ ] The owner deployment adopts its existing counters and pending batches, verifies credentials
-      and provider responses, and accepts cutover/rollback. No owner service or paid provider has
-      been exercised by this implementation pass.
+      and provider responses, and accepts cutover/rollback. Partly done on November 16, 2026: the
+      owner instance runs 0.3.0, kept its existing daily counters, and recorded the weekly
+      briefing's provider-reported cost in the day's counter. The owner's credential check and
+      cutover/rollback acceptance remain.
 - [x] Current plan, harness, observability, platform, self-hosting, system-design, `.env.example`,
       notices, and global checklist agree. Paid model and owner-deployment acceptance remain
       pending until separately authorized and executed; synthetic checks are labeled as such.

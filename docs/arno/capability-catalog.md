@@ -33,10 +33,10 @@ checklist](completion-checklist.md), so those entries keep only the acceptance t
 checklist doesn't track and point to it for the rest. Portfolio analysis never authorizes trading,
 a tax estimate never authorizes filing, and modeling a payment never executes it.
 
-All completion boxes are unchecked: they are acceptance targets for the full capability, not a
-claim that existing subfeatures are missing. Close a box only with recorded evidence for the
-selected version and installation. Label automated fixtures, provider sandbox tests, and real UI
-journeys separately, and don't copy an old tick.
+Completion boxes are acceptance targets for the full capability, not a claim that existing
+subfeatures are missing. Close a box only with recorded evidence for the selected version and
+installation; a ticked box names its evidence. Label automated fixtures, provider sandbox tests,
+and real UI journeys separately, and don't copy an old tick.
 
 The evidence comes from the November 12 [implementation
 audit](../research/personal-finance-agent-2026/verification-arno-coverage.md), the [framework
@@ -549,10 +549,14 @@ already accounts for bills, card dues, goals, and simulated everyday spending.
 
 **Completion checklist:**
 
-- [ ] The safe amount and `project`'s verdict agree at the boundary on the same inputs and seed; any
-      difference is named, such as an obligation the floor test doesn't cover.
+- [x] The safe amount and `project`'s verdict agree at the boundary on the same inputs and seed; any
+      difference is named, such as an obligation the floor test doesn't cover. Automated:
+      `test_safe_to_spend_matches_the_affordability_boundary_across_personas` and
+      `test_safe_to_spend_obligation_can_be_the_binding_constraint`, 0.3.0.
 - [ ] With no known liquid balance there is no figure, and the answer names the missing account.
-- [ ] No headroom renders as ₹0 with the binding date, never as a negative amount.
+- [x] No headroom renders as ₹0 with the binding date, never as a negative amount. Automated:
+      `test_safe_to_spend_is_zero_when_a_passing_baseline_has_no_headroom` and
+      `test_safe_to_spend_returns_zero_with_binding_constraint_when_baseline_fails`, 0.3.0.
 - [ ] Chat and the home page show the same figure, as-of date, and data-quality notes.
 
 Automated evidence: `tests/test_engine_projection.py`, `tests/test_projection_tool.py`,
@@ -603,12 +607,20 @@ above the floor with income stopped, comes with it.
 
 **Completion checklist:**
 
-- [ ] Each event kind changes only the intended flows; no live balance, schedule, or goal changes.
-- [ ] Income stopped from a date reports the runway and first floor crossing from the engine.
-- [ ] The same events give the same result in any order, on the same inputs and seed.
-- [ ] An added or raised inflow is counted and the result says it assumes income not yet confirmed,
-      while income the ledger holds as unconfirmed still never funds a `yes`.
-- [ ] An eval case answers a job-loss question from engine output, not `run_code` arithmetic.
+- [x] Each event kind changes only the intended flows; no live balance, schedule, or goal changes.
+      Automated: one `tests/test_engine_scenario.py` test per kind, and
+      `test_project_changes_summary_card_horizon_and_writes_nothing`, 0.3.0.
+- [x] Income stopped from a date reports the runway and first floor crossing from the engine.
+      Automated: `test_stop_income_reports_first_floor_crossing_and_runway_days`, 0.3.0.
+- [x] The same events give the same result in any order, on the same inputs and seed. Automated:
+      `test_any_permutation_gives_identical_projection`, 0.3.0.
+- [x] An added or raised inflow is counted and the result says it assumes income not yet confirmed,
+      while income the ledger holds as unconfirmed still never funds a `yes`. Automated:
+      `test_assumed_raise_is_flagged_in_scenario_assumptions` and
+      `test_unconfirmed_variable_income_is_only_an_optimistic_case`, 0.3.0.
+- [x] An eval case answers a job-loss question from engine output, not `run_code` arithmetic.
+      Real model: `ans_whatif_job_loss` passed three of three trials on November 16, 2026, every
+      figure traced to the `project` return.
 
 Automated evidence: `tests/test_engine_scenario.py`, `tests/test_engine_affordability.py`,
 `tests/test_projection_tool.py`, and `web/scripts/answer-contract.test.mjs`. The real-model eval
@@ -688,11 +700,18 @@ distinguish card minimum payment, full statement payment, available credit, and 
 
 **Completion checklist:**
 
-- [ ] Existing prepayment outputs reconcile principal, interest, payoff, and rounded paise.
+- [x] Existing prepayment outputs reconcile principal, interest, payoff, and rounded paise.
+      Automated: `test_amortize_prepay_shortens_tenure_and_saves_interest`,
+      `test_conventions_emi_rounding_and_interest_unit`, and
+      `test_no_prepayment_option_ever_reports_a_negative_saving_or_a_longer_loan`, 0.3.0.
 - [ ] Fee, tax, discount, and cash-price differences appear separately in a supported offer
       comparison.
-- [ ] Minimum-only card results use issuer or stated terms and show the continuing balance and the
-      lost interest-free period.
+- [x] Minimum-only card results use issuer or stated terms and show the continuing balance and the
+      lost interest-free period. Automated:
+      `test_card_payoff_by_name_uses_ledger_balance_and_stored_terms`,
+      `test_card_payoff_passed_terms_override_stored_ones`, and
+      `test_card_payoff_three_month_minimum_due_hand_computed`; the result's assumptions say a
+      carried balance loses the interest-free period, 0.3.0.
 - [ ] Missing rates, reset rules, or contingent charges prevent an unsupported complete-cost claim.
 
 Automated evidence: `tests/test_engine_money.py`, `tests/test_tools_money.py`,
@@ -1067,10 +1086,15 @@ new date, and the payments behind it, as a proposal.
 
 **Completion checklist:**
 
-- [ ] One alert for each step, keyed by series and step date; it re-arms only on another step.
-- [ ] A variable bill, such as electricity, never raises a step alert from ordinary variation.
-- [ ] The old amount, new amount, step date, and payment rows are shown and cited.
-- [ ] Dismissing the proposal writes nothing.
+- [x] One alert for each step, keyed by series and step date; it re-arms only on another step.
+      Automated: `test_a_price_step_notifies_once_and_rearms_on_the_next_step`, 0.3.0.
+- [x] A variable bill, such as electricity, never raises a step alert from ordinary variation.
+      Automated: `test_a_variable_bill_is_never_a_step`, 0.3.0.
+- [ ] The old amount, new amount, step date, and payment rows are shown and cited. The alert shows
+      the first three and the proposal carries the payment rows' `movement_ids`, but no screen
+      shows those rows yet.
+- [x] Dismissing the proposal writes nothing. Automated:
+      `test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing`, 0.3.0.
 
 Automated evidence: `tests/test_engine_series.py`, `tests/test_audit_engine3.py`, and
 `tests/test_watch_workflows.py`. No real-model eval case covers price changes yet; a live run and a
