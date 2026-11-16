@@ -134,8 +134,9 @@ changes need their documented procedures, not a container restart: see
 ## Release maintenance
 
 Before tagging, run the applicable checks and review the release and recovery implications. The
-`pyproject.toml` version, the default API and backup image versions in `compose.yaml`, and the git
-tag must agree; `tests/test_release.py` checks the release contract. A `v*` tag push starts the
+`pyproject.toml` version, its mirrors (`src/arno/__init__.py`, `.env.example`, `web/package.json`,
+`uv.lock`, and the README badge), the default API and backup image versions in `compose.yaml`, and
+the git tag must agree; `tests/test_release.py` checks the release contract. A `v*` tag push starts the
 release workflow, which verifies the tag against `pyproject.toml`, builds and pushes both images
 to GHCR with version and `v` tags, and creates a GitHub Release. The workflow is separate from CI,
 so inspect the CI result and the release run explicitly. Publishing does not update an installed

@@ -67,6 +67,19 @@ def test_compose_pins_a_versioned_image_and_rotates_logs():
     assert "pre-migration-data:/app/pre-migration" in compose
 
 
+def test_every_version_mirror_matches_pyproject():
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "version"
+    ]
+    web = json.loads((ROOT / "web" / "package.json").read_text(encoding="utf-8"))
+    init = (ROOT / "src" / "arno" / "__init__.py").read_text(encoding="utf-8")
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert web["version"] == version
+    assert f'__version__ = "{version}"' in init
+    assert f"ARNO_VERSION={version}\n" in example
+
+
 def test_release_workflow_pushes_the_pinned_images():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
