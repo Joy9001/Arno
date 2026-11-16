@@ -274,8 +274,9 @@ headroom that spend has already used.
   rejected: at ten years it leaves 512 scenarios and ±2.6 points.
 - **Cost.** _Estimate_: 50 to 80 ms per projection with NumPy, against 3.5 s measured today.
   NumPy became a runtime dependency for it (section 11). As built, _measured_ on November 16,
-  2026: about 1 s for the demo persona's 210-day horizon, most of it hashing the draws and
-  walking the cards (section 12).
+  2026: about 1 s for the demo persona's 210-day horizon. Drawing the days' spend takes about
+  0.6 s of it (a quarter of a second hashing the draws) and walking the cards about 0.2 s
+  (section 12).
 
 ### 4.4 Statistics, all from the same matrix
 

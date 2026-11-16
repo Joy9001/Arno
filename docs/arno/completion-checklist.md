@@ -368,7 +368,7 @@ it could not; the groups above keep their original detail.
       schedule in the ledger, no origin was a measurement. The salary schedule was confirmed on
       November 13, after the ledger's last scoreable origin, and an origin also needs that
       salary's payments linked to their occurrences (`plan.md` §6, "Backtest outcome"). Link each
-      salary payment in chat or on the schedule; once 90 days follow, run
+      salary payment in chat; once 90 days follow, run
       `uv run arno backtest --source db --publish` and set the accuracy target in
       `system-design.md` from the result.
 - [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
