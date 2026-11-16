@@ -495,6 +495,10 @@ still gate "shipped": this section closes none of their human, device, or calend
       `uv lock --check`, and the license audit clean; web lint, typecheck, build, and 35
       answer-contract tests passed; the invariant checker passed 779 checks on the demo persona.
 
+- [x] **Released and deployed.** `v0.4.0` (run 43902418921) published both images. The owner
+      instance moved from 0.3.0: the API wrote its pre-migration dump, applied migrations 43 and
+      44, and reports schema version 44 and healthy over the tailnet.
+
 ### Still open, outside tier 0's code
 
 - [ ] Group B's device, real-data, and calendar items: the phone half of `tailscale serve`, PWA
