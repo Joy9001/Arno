@@ -29,7 +29,7 @@ Chat in English, Hindi, or Hinglish, by text or voice.
 
 | You say | Arno does |
 |---|---|
-| "Can I buy a ₹68,000 laptop on the Slice card?" | Simulates 1,000 runs of the coming months and answers yes, yes with a change, or no, with the probability of staying above your floor |
+| "Can I buy a ₹68,000 laptop on the Slice card?" | Simulates 16,384 versions of the coming months from your own history and answers yes, yes with a change, or no, with the probability of staying above your floor |
 | "Where did October go?" | Breaks the month down by category and links the rows behind each total |
 | "If I prepay ₹1 lakh on my loan, how much interest do I save?" | Writes a short Python script over your data, runs it in a sandbox, and shows you the script |
 | "Paid ₹480 for chai with the team, Ravi owes me half" | Logs the spend and Ravi's share at once, with undo |

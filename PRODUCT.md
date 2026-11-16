@@ -99,9 +99,10 @@ Durable constraints:
 
 ## Evidence on Hand
 
-- `README.md` carries a real model eval scorecard for `deepseek-v4.1-flash`, a synthetic-history
-  backtest with its calibration result, and the L4 gate result. These are measurements, not
-  marketing claims; the full-run table and the targeted reruns are labelled separately.
+- `README.md` carries a real model eval scorecard for `deepseek-v4.1-flash`, a backtest on
+  held-out synthetic households scored against three baselines, and the L4 gate result. These are
+  measurements, not marketing claims; the full-run table and the targeted reruns are labelled
+  separately.
 - `arno demo seed` builds a deterministic synthetic persona for demos and evals.
 - `evals/` holds the pydantic_evals suite and the demo-persona dataset.
 
@@ -110,7 +111,7 @@ Absences future work must not fabricate:
 - No real 12-month statement backfill exists on this machine; the published backtest is synthetic
   and says so.
 - The HackerRank "Buy or Wait" dataset has no license, so it stays in gitignored `private/`; the
-  score measured on its 25 labeled samples is 88.8% and is published in the README.
+  shipped engine scores 86.8% on its 25 labeled samples, published in the README.
 - No customer testimonials, logos, press, case studies, or usage benchmarks exist.
 - No pricing or hosted-service claims apply: the product is self-hosted and MIT licensed.
 

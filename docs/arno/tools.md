@@ -384,9 +384,10 @@ not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal 
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
 
-Steps 1 to 6 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
-projection model, the verdict and plan rules above, the money conventions, and pattern detection
-with payment-level attribution. Variable spend now comes from the attributed rows, and a detected
+Every step of [`engine-blueprint.md`](engine-blueprint.md)'s build order is done: the scenario
+kernel, the projection model, the verdict and plan rules above, the money conventions, pattern
+detection with payment-level attribution, and the HackerRank adapter. Calibration was measured and
+not shipped. Variable spend now comes from the attributed rows, and a detected
 recurring spend the user has not confirmed is simulated as an outflow; the tool's surface does not
 change.
 

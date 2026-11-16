@@ -1,28 +1,30 @@
-# Engine blueprint: the next projection, affordability, pattern, and money engine
+# Engine blueprint: the projection, affordability, pattern, and money engine redesign
 
-**Status: decided on November 13, 2026; every step of the build order is done.** The
-decisions of section 11 are recorded in [`plan.md`](plan.md) §6, which owns them. Written against
-`src/arno/engine` at commit `4d37028`. Step 1 landed on November 15, 2026: on the held-out synthetic
-households the shipped engine's P10-P90 band holds 23% to 33% of outcomes, and at 90 days a flat
-balance forecasts the end balance better than it does (README, "Projection backtest"). Step 2
-landed the same day: `project()` runs on the scenario kernel, which matches a plain day-by-day walk
-to the paisa and the old walk within its sampling error on card-free inputs.
-Steps 3 to 5 landed on November 15, 2026: the admitted switches ship as
-`Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8))`, which lifts P10-P90
-coverage on the tuning seeds from 25% to 34% under the old engine to 51% to 62%; the 80% target
-waits on the backtest's next measurement. Step 6 landed the same day: the calendar-rule detector
-in `engine/series.py`, the pattern job that stores `series_detections` and proposes new spend and
-income series, payment-level attribution in the projection, and the one-off mark. Affordability
-reports critical-value minimal plans verified by rerun, and the money kernel carries bank
-conventions, rate inversion, cumulative rounding, and allocation; XIRR was not built, because
-nothing uses it and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe
-steps 1 to 6. Step 8 landed the same day: the HackerRank scorer is an adapter over the shipped
+**Status: decided on November 13, 2026; every step of the build order is done.** The decisions of
+section 11 are recorded in [`plan.md`](plan.md) §6, which owns them. Written against
+`src/arno/engine` at commit `4d37028`, before the build: "today" and "current" anywhere below
+mean that engine, and the "As built" notes say where the build departed from the proposal. Step 1
+landed on November 15, 2026: on the held-out synthetic households the old engine's P10-P90 band held
+23% to 33% of outcomes, and at 90 days a flat balance forecast the end balance better than it did.
+Both were scored on the outcome of the time, which still counted income the base case is told to
+leave out (section 8.1), so they are not comparable with the published numbers. Step 2 landed the
+same day: `project()` runs on the scenario kernel, which matches a plain day-by-day walk to the
+paisa and the old walk within its sampling error on card-free inputs. Steps 3 to 5 landed on
+November 15, 2026: the admitted switches ship as `Model(pooling="day", rare_mad_multiple=3,
+prior_quarters=(0, 2, 4, 6, 8))`, which lifted P10-P90 coverage on the tuning seeds from 25% to 34%
+under the old engine to 51% to 62% on that outcome. Step 6 landed the same day: the calendar-rule
+detector in `engine/series.py`, the pattern job that stores `series_detections` and proposes new
+spend and income series, payment-level attribution in the projection, and the one-off mark.
+Affordability reports critical-value minimal plans verified by rerun, and the money kernel carries
+bank conventions, rate inversion, cumulative rounding, and allocation; XIRR was not built, because
+nothing uses it and `plan.md` keeps investment returns out. `design.md` and `tools.md` describe the
+built engine. Step 8 landed the same day: the HackerRank scorer is an adapter over the shipped
 engine. Step 7 was measured and not shipped (section 4.6): with the backtest scoring the base case
-on the income it was given and resampled card spend kept on its card, coverage on the tuning seeds
-is 74% to 77% (66% to 74% on the held-out seeds, where the engine now beats every baseline in
-every cell), and a calibration map raised it without lowering CRPS.
-Revised the same day after two external reviews; each accepted finding was first checked against
-the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
+on the income it was given and resampled card spend kept on its card (`limit_spend=False`, admitted
+at 1.2%), coverage on the tuning seeds is 74% to 77% (66% to 74% on the held-out seeds, where the
+engine now beats every baseline in every cell), and a calibration map raised it without lowering
+CRPS. Revised the same day after two external reviews; each accepted finding was first checked
+against the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 
 The code facts below come from a line-by-line read-out of every engine module, its callers, its
 tests, and the docs. Timings marked _measured_ were run on this machine; everything marked
@@ -32,7 +34,7 @@ _estimate_ is an operation count, not a benchmark.
 
 ## 1. The short version
 
-| Subsystem | Today | Proposed | What it buys |
+| Subsystem | Before | Proposed | What it buys |
 |---|---|---|---|
 | Projection | 1,000 walks, one independent draw per category per day, plug-in pools | One integer scenario matrix: whole-day vectors, per-scenario pool resampling, class-matched blocks, 16,384 scenarios | Bands that widen honestly with short history; verdict noise ±0.5 points instead of ±1.9; about 50× faster |
 | Affordability | Four levers tried one at a time, each a full re-simulation; six-step cut scan | Per-scenario critical values and an order statistic; exact minimal multi-lever plans; one verification rerun per reported plan | The smallest change that works, provably, with no scan resolution and no missed combinations |
@@ -46,7 +48,11 @@ consumer product or paper we could find publishes a calibrated probability that 
 balance crosses a floor, a provably minimal affordability plan, or a reproducible scorecard with
 baselines. The prior-art search found only deterministic "balance minus committed" rules.
 
-## 2. What the current engine does, and where it breaks
+As built, blocks, recency weights, and per-scenario pool resampling were not admitted; calibration
+did not ship; XIRR was not built; the pattern scorer runs in float64; and the speed fell short of
+its estimate: `project()` on the demo persona takes about 1 s (section 12).
+
+## 2. What the engine did before the redesign, and where it broke
 
 Ranked by how much each one distorts an answer.
 
@@ -258,13 +264,18 @@ headroom that spend has already used.
   charged total at two statement closes. Segments run in order, three or four per card in 90
   days, each vectorized across scenarios. The opening balance is split at the last statement
   close into a billed part, due first, and an unbilled part, due with the next bill (section
-  2.11); the loader derives the split from card spend since that close.
+  2.11); the loader derives the split from card spend since that close. As built, resampled
+  spend keeps its card past the limit and goes on first each day; only a new charge is
+  capped, at the headroom left that day, so within a segment the closed form gives way to a
+  day-by-day walk (section 4.2).
 - **Size.** 16,384 scenarios at every horizon. Days are processed in 127-day chunks that carry
   each scenario's state forward, which the counter-based draws allow, so memory stays near 16 MB
   and cost grows linearly with the horizon. Halving the count on long horizons was considered and
   rejected: at ten years it leaves 512 scenarios and ±2.6 points.
 - **Cost.** _Estimate_: 50 to 80 ms per projection with NumPy, against 3.5 s measured today.
-  This needs NumPy, which the project does not have (section 11).
+  NumPy became a runtime dependency for it (section 11). As built, _measured_ on November 16,
+  2026: about 1 s for the demo persona's 210-day horizon, most of it hashing the draws and
+  walking the cards (section 12).
 
 ### 4.4 Statistics, all from the same matrix
 
@@ -502,7 +513,8 @@ every period, so the convention decides the answer, not the precision.
   integer interval with no tolerance to tune, and the interval's width says how precisely the
   statement pins the rate. A change between statements is a floating-rate reset.
 - **XIRR.** Bracketed bisection, returned only when the cash flows have one sign change;
-  otherwise the function says the rate is not unique.
+  otherwise the function says the rate is not unique. Not built: nothing uses it, and
+  `plan.md` keeps investment returns out.
 - **Cumulative rounding.** Round the running total and take differences, so a scaled series is
   exact to half a paisa at every point of any horizon. Today's per-day rounding drifts by up to
   half a paisa per day. This is what makes a cut exactly linear in section 5.
@@ -563,8 +575,9 @@ detected series never joins the cut. The adapter searches those levers and check
 4. The kernel builds one scenario matrix and its statistics.
 5. Affordability applies lever transforms to the same matrix, finds minimal plans, and verifies
    them. The money kernel supplies EMI schedules and costs.
-6. The backtest replays steps 1 to 4 at past origins and scores them; its residuals feed
-   calibration.
+6. The backtest replays steps 1 to 4 at past origins and scores them, and a model change ships
+   only when it scores better. Calibration from its residuals was measured and not shipped
+   (section 4.6).
 
 Each stage is a pure function of the previous stage's output.
 
@@ -628,9 +641,12 @@ Decided on November 15, 2026: "shipped" (plan.md) waits for this redesign.
 
 ## 12. What is not yet known
 
-- Every latency figure for the new kernel is an operation count.
-- Each model switch is a hypothesis until the backtest scores it. Section 2.1 is a derivation,
-  and the 75% result is consistent with it but too small a sample to confirm it.
+- Latency is measured once: about 1 s per `project()` for the demo persona's 210-day horizon on this
+  machine (November 16, 2026), against the 50 to 80 ms estimated in section 4.3. The ten-year target
+  of section 2.10 is not yet measured.
+- Every model switch of section 4.2 has been scored (plan.md §6). The 80% target is not met: the
+  held-out P10-P90 band holds 66% to 74%, and most of the shortfall is spend that drifts upward,
+  which recency weights did not fix, and ledgers too young to show their spread (section 4.6).
 - The pattern priors are a design choice, not a measured quantity; only the confidence thresholds
   were tuned.
 - The NPCI presentation rule for mandates and the ISDA business-day text could not be opened at

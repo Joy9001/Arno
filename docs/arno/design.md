@@ -419,9 +419,10 @@ agent replies render as plain text ([`platform.md`](platform.md#security)).
 One function in code, seeded so the same inputs always give the same output. No LLM
 involvement—this is the tested arithmetic every affordability verdict comes from.
 
-Steps 1 to 6 of [`engine-blueprint.md`](engine-blueprint.md) have landed: the scenario kernel, the
-admitted model switches, affordability on the kernel, the money conventions, and pattern detection
-with payment-level attribution.
+Every step of [`engine-blueprint.md`](engine-blueprint.md)'s build order is done: the scenario
+kernel, the admitted model switches, affordability on the kernel, the money conventions, pattern
+detection with payment-level attribution, and the HackerRank adapter. Calibration was measured and
+not shipped.
 
 ### Inputs
 
@@ -458,8 +459,9 @@ with payment-level attribution.
 16,384 seeded scenarios run at once, in whole paise. The draw for a scenario on a day is a hash of
 the seed, the pool, the scenario, and the date, so a scenario never depends on how many run. Each
 day applies events in a fixed order: income, card bills due, obligations and installments, one-off
-payments and goal contributions, then variable spend. Card spend is charged up to the card's
-limit and the rest leaves cash that day; used credit falls only when a bill is paid.
+payments and goal contributions, then variable spend. A drawn day's card spend goes on its card
+first; a new charge gets only the headroom left, and the rest leaves cash that day. Used credit
+falls only when a bill is paid.
 
 ### Output
 
@@ -555,7 +557,7 @@ results are published in the README:
 | Measure | How |
 |---|---|
 | Backtest | From each of 52 weekly origins, forecast 90 days using only the rows that existed then—an account, schedule, or goal created later is excluded, though a later edit to one that already existed is read in its current form. Score each forecast as a distribution at 7, 14, 30, 60, and 90 days, on the balance then and the lowest balance up to then: CRPS, pinball loss at P10/P50/P90, how often the outcome fell inside P10-P90 (close to 80% means the band is honest) and how wide the band was, and the Brier score of a floor breach. The outcome leaves out later income that pays no income schedule confirmed by the origin, because the base case is told not to count it; on the real ledger that payment must be linked to its occurrence, or the origin is dropped. Every score is set beside three baselines (a flat balance, schedules only, and schedules plus mean daily spend), with intervals and Diebold-Mariano tests that allow for overlapping horizons. Origins with no usable starting point are dropped and counted. The source is the real ledger (`--source db`), or ten synthetic households (`engine/personas.py`) that share no code with the engine and break its assumptions on purpose: settings are chosen on their tuning seeds and published from the held-out seeds |
-| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. Each sample's flows become `CashEvent`s on a `project()` input with no sampled spend categories, so the score is the engine's own `safe_amount_today`, `first_full_payment_date`, and floor probability, and one run is exact. Used locally, never committed—its source repository has no license. The current run scores 88.8% (23/25 status, 21/25 amount, 22/25 earliest) |
+| HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. The adapter infers each sample's streams with the production series detector (`engine/series.py`), and the flows become `CashEvent`s on a `project()` input with no sampled spend categories, so the score is the engine's own `safe_amount_today`, `first_full_payment_date`, and floor probability, and one run is exact. Used locally, never committed—its source repository has no license. The shipped engine scores 86.8% (22/25 status, 21/25 amount, 22/25 earliest) |
 
 ### Why it's built, not bought
 

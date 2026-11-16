@@ -16,7 +16,7 @@ it gets built. _This file owns decisions._ Detail lives in the following docs:
 | [`web-interface-design.md`](web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
 | [`observability.md`](observability.md) | Operator view: Phoenix tracing, logs, settings, recovery, owner commands |
 | [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
-| [`engine-blueprint.md`](engine-blueprint.md) | The engine redesign: what the shipped engine gets wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
+| [`engine-blueprint.md`](engine-blueprint.md) | The engine redesign: what the previous engine got wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
 | [`capability-catalog.md`](capability-catalog.md) | Capabilities proposed beyond the built product: acceptance targets, plan rules for external tools, the tool registry, and a proposed priority order. Proposals only; a capability is adopted through §5 |
 
 **Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
@@ -502,12 +502,16 @@ local code rather than the review screen, and those two import gaps remain. Deta
 
 ### L5: Engine
 
-27. `project()`: day-by-day curve over income, obligations, installments, card cycles, fenced
-    goals, and simulated variable spend, against the floor (median, band, and floor
-    probability). Seeded; unit and property tests.
-28. Affordability: verdict plus the four tradeoffs, all computed in code.
-29. **Backtest:** the `project()` function run as of past dates over the backfill; median 30-day
-    error and band calibration published.
+27. `project()`: 16,384 seeded scenarios on an integer kernel, day by day over income,
+    obligations, installments, card cycles, fenced goals, detected series, and resampled whole
+    days of spend, against the floor (median, P10-P90 band, floor probability, first crossing, and
+    safe to spend). A pure-Python walk is its test oracle.
+28. Affordability: the verdict and up to four minimal plans that combine a card or EMI, a skipped
+    goal contribution, and a spending cut, each rerun on the same scenarios; a wait date is
+    context only. All computed in code.
+29. **Backtest:** `project()` run from weekly past origins over the real backfill, scored as a
+    distribution beside three baselines, and published. Until the real ledger has a measurable
+    origin, the README carries the synthetic households' held-out run.
 30. **HackerRank "Buy or Wait":** the shipped engine scores 86.8% on the 25 labeled samples
     (status 22/25, amount within 5% 21/25, earliest within 3 days 22/25), published in the README.
     The scorer is an adapter: stream inference is the pattern engine, and the safe amount, the
@@ -683,7 +687,9 @@ Answer each when its layer arrives, not before.
     verdict and the band describe different things.
   - **Card share of variable spend—learned or set?** Learned for each category from the last 90
     days of spending on that card. With too little card history the share is zero (cash) and
-    `data_quality` says so; there is no per-account setting to keep in sync.
+    `data_quality` says so; there is no per-account setting to keep in sync. Since the L5
+    redesign, a whole past day keeps its own cash and card split, so the share applies only to a
+    category drawn on its own, from a stated estimate or a short history.
 - **L5 redesign:** decided November 13, 2026, and built through the last step of its build
   order. The engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's
   build order. A model change ships only if it beats the one before it on the new backtest.
@@ -834,8 +840,9 @@ Answer each when its layer arrives, not before.
     ([harness.md](harness.md#day-one)).
   - **Approval sentences.** When the model writes none, the host writes one plain sentence per
     confirm card from the tool and its arguments ([design.md](design.md#untrusted-text-and-write-tiers)).
-  - **Backtest publishing.** A month without a usable starting balance is not a measurement, and
-    `arno backtest --publish` refuses to write one (`engine/backtest.py`).
+  - **Backtest publishing.** An origin without a usable starting point is not a measurement: it
+    is dropped and counted, and `arno backtest --publish` refuses a run with no scored origin
+    (`engine/backtest.py`).
 - **Schema redesign on November 13, 2026.** One spine and one source of truth across the ledger
   ([`design.md`](design.md), migrations `0031`-`0038`):
   - **`movement_legs` spine.** Every `pgledger_transfers` row pairs 1:1 with `movement_legs`,

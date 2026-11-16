@@ -17,7 +17,8 @@ The repository has the following layout:
 src/arno/
   db/          connection, migrations/*.sql, roles, vendor/pgledger/ (unmodified, with licenses)
   ledger/      plain functions over the DB — the tools live here (no PydanticAI types)
-  engine/      projection, affordability, backtest, pattern detection
+  engine/      projection on the scenario kernel, affordability, pattern detection, money,
+               backtest and scoring, the HackerRank adapter
   importers/   readers, parser-subagent host functions, the gate, reconciliation, photo extraction
   agent/       PydanticAI agent, system prompt, tool wrappers, the parser subagent
   api/         FastAPI app, routers, auth

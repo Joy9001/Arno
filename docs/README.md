@@ -33,7 +33,7 @@ plan wins. The project has the following docs:
 | [`web-interface-design.md`](arno/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
 | [`completion-checklist.md`](arno/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
 | [`capability-catalog.md`](arno/capability-catalog.md) | Capabilities proposed beyond the built product: acceptance targets, plan rules for external tools, the tool registry, and a proposed priority order |
-| [`engine-blueprint.md`](arno/engine-blueprint.md) | The engine redesign: what the shipped engine gets wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
+| [`engine-blueprint.md`](arno/engine-blueprint.md) | The engine redesign: what the previous engine got wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
 | [`e2e-user-journeys.md`](arno/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
 | [`e2e-run-log.md`](arno/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
 | [`release-hardening.md`](arno/release-hardening.md) | The November 2026 hardening pass: method, findings with commit SHAs, decisions, and what remains simulated, blocked, or impossible here |

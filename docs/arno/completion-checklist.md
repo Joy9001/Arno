@@ -206,7 +206,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 - [x] **Milestone 30:** `arno hackerrank --dataset <folder>` scored 88.8% on the 25 samples:
       status 23/25, amount within 5% 21/25, earliest within 3 days 22/25. The README block is
       published, the target is set in `system-design.md`, and the TODO is gone. The dataset stays
-      in gitignored `private/`.
+      in gitignored `private/`. Since November 15 the scorer is an adapter over the shipped
+      engine, which scores 86.8% (status 22/25); the earlier 88.8% came from a parallel
+      implementation and is retired.
 
 ### Evals and models (L2, L4)
 
@@ -363,9 +365,12 @@ it could not; the groups above keep their original detail.
 ### Blocked on the owner
 
 - [ ] **Milestone 29, the backtest.** A run against the copy refused to publish: with no income
-      schedule in the ledger, every month is unusable as a measurement. Add the salary schedule in
-      chat (or setup), then `uv run arno backtest --source db --publish`, and set the accuracy
-      target in `system-design.md` from the result.
+      schedule in the ledger, no origin was a measurement. The salary schedule was confirmed on
+      November 13, after the ledger's last scoreable origin, and an origin also needs that
+      salary's payments linked to their occurrences (`plan.md` §6, "Backtest outcome"). Link each
+      salary payment in chat or on the schedule; once 90 days follow, run
+      `uv run arno backtest --source db --publish` and set the accuracy target in
+      `system-design.md` from the result.
 - [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
       months under `private/statements/union-bank/` and run `arno import-spike`.
 - [ ] **Milestone 24 and the remaining Slice cycles.** Several repayments are missing from the

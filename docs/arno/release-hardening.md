@@ -452,7 +452,7 @@ except where a row says otherwise. The "why" column is the reason a future chang
 | A statement's opening is booked at the statement's first day, and `arno repair-openings` applies that to imports already committed | An opening inside a later adjustment shifted every historical balance the statement covered | [`import.md`](import.md), `plan.md` §5 L3 |
 | Secret redaction is keyword-anchored and shape-aware: an OTP, PIN, CVV, password, passcode, or API key is redacted next to its keyword in English, Hinglish, and Devanagari, and in either word order; plain words, amounts, dates, and UPI ids stay | A value typed in chat must not reach the model, storage, titles, or traces, and an over-broad rule would eat real amounts | [`harness.md`](harness.md#day-one), [`system-design.md`](system-design.md#decisions) |
 | The host writes one plain approval sentence per confirm card when the model writes none | A card with no words made the user read JSON to know what they were approving | [`design.md`](design.md#untrusted-text-and-write-tiers), `agent/turns.py` |
-| A backtest month without a usable starting balance is not a measurement, and `--publish` refuses it | An error that measures missing setup would read as a claim about the engine | `engine/backtest.py` (the report says so in words) |
+| A backtest origin without a usable starting point is not a measurement: it is dropped and counted, and `--publish` refuses a run with no scored origin | An error that measures missing setup would read as a claim about the engine | `engine/backtest.py` (the report says so in words) |
 | Python type checking uses Pyrefly, pinned, under the `strict` preset, in the hook and in CI | It reads the Pydantic models without a plugin, its per-path strictness keeps the money core strictest, and one checker means one answer | `plan.md` §3, [`typing.md`](typing.md) |
 | The release waited for the rename to Arno, then shipped as 0.2.0 | 0.2.0 rather than 1.0.0, because `plan.md` defines shipped as four weeks of real use and a freeze week, which have not happened | `plan.md` (rename note, November 10, 2026), [`self-hosting.md` §6.6](self-hosting.md#66-upgrading-from-fin-agent) |
 
@@ -475,8 +475,8 @@ each kind of item has.
 | The live instance's move to Arno and its repair | Done for real | Followed [`self-hosting.md` §6.6](self-hosting.md#66-upgrading-from-fin-agent) on November 11, 2026: a `pg_dump` first, the five volumes copied byte-identical, the database and settings renamed, 0.2.0 started healthy with every balance unchanged; then `repair-openings` booked SBI's ₹16,548.42 opening at November 3, 2025 (a second dry run reports nothing), a live copy passed 6,729 invariant checks, and the first Arno backup wrote restic snapshot `3f070fcd`. The old `fin-agent_*` volumes and images, and the `fin-agent` and `fin-agent-backup` packages on GHCR, were deleted the same day; the `pg_dump` taken first is kept locally |
 | Fresh install from the docs alone (milestone 40) | Simulated | Same owner, same Windows host, `127.0.0.1`, software passkey, no tailnet and no phone |
 | Restore into a fresh cluster (milestone 37) | Simulated | A second Compose project with new volumes; restic password plus the OAuth client |
-| Backtest (milestone 29) | Blocked on the owner | The live ledger has no income schedule, so the backtest correctly refuses to publish; add one, then `arno backtest --publish` |
-| HackerRank score (milestone 30) | Done | `arno hackerrank` scored 88.8% on the 25 labeled samples (status 23/25, amount within 5% 21/25, earliest within 3 days 22/25); the dataset stays in gitignored `private/`, and the README block is published |
+| Backtest (milestone 29) | Blocked on the owner | The live ledger has no income schedule, so the backtest correctly refuses to publish; add one, then `arno backtest --publish`. Since November 13 it has one; the real ledger becomes a measurement once 90 days follow it with its payments linked |
+| HackerRank score (milestone 30) | Done | `arno hackerrank` scored 88.8% on the 25 labeled samples (status 23/25, amount within 5% 21/25, earliest within 3 days 22/25); the dataset stays in gitignored `private/`, and the README block is published. Since November 15 the scorer is an adapter over the shipped engine, which scores 86.8% (status 22/25); the earlier figure came from a parallel implementation and is retired |
 | Union Bank statements | Blocked on the owner | No statement has been provided, so no format decision exists |
 | Statement passwords | Impossible here | The owner types them on the import card; they never enter chat, a test, or this record |
 | Corrected Slice exports | Blocked on the owner | Several repayments are missing from the PDFs, so the remaining cycles wait on corrected exports or manual rows |
@@ -503,14 +503,15 @@ each kind of item has.
 - **Sandbox helper docstrings are parsed into stubs.** `run_code` builds each helper's stub from its
   docstring, so a docstring that reads like a call example can break positional calls. Keep helper
   docstrings in the existing simple form; `money()` is the formatting helper scripts use.
-- **Card billed versus unbilled is a simplification.** The projection pays the whole current
-  outstanding, including spend not yet billed, on the next due date, so a purchase made after the
-  statement day is paid a cycle early. A precise model needs the billed balance and its date on the
-  card plus a billed/unbilled split; keep the simplification unless real statements show it changes
-  a verdict.
+- **Card billed versus unbilled was a simplification, since fixed.** The projection paid the
+  whole current outstanding, including spend not yet billed, on the next due date, so a purchase
+  made after the statement day was paid a cycle early. The engine redesign splits the outstanding
+  at the last statement close: the billed part is due first, and spend since the close joins the
+  next bill ([`design.md`](design.md#inputs)).
 - **A backtest needs an income schedule.** Without one, every month is unusable as a measurement
   and the command refuses to publish. That is the honest behavior, but it means milestone 29 cannot
-  close from the current ledger.
+  close from the current ledger. Since the engine redesign an origin also needs that income's
+  payments linked to their schedule (`plan.md` §6, "Backtest outcome").
 - **The number check stays a note.** It flags amounts a reply cannot trace; it is not a gate, and a
   model can still produce a plausible wrong sentence that the check misses.
 - **Two one-trial model slips in the published scorecard, since fixed at their cause.** A grocery
