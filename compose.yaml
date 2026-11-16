@@ -36,7 +36,7 @@ services:
 
   api:
     build: .
-    image: ghcr.io/joy9001/arno:${ARNO_VERSION:-0.3.0}
+    image: ghcr.io/joy9001/arno:${ARNO_VERSION:-0.4.0}
     restart: unless-stopped
     logging: *default-logging
     env_file:
@@ -96,7 +96,7 @@ services:
     build:
       context: .
       dockerfile: backup/Dockerfile
-    image: ghcr.io/joy9001/arno-backup:${ARNO_VERSION:-0.3.0}
+    image: ghcr.io/joy9001/arno-backup:${ARNO_VERSION:-0.4.0}
     restart: unless-stopped
     logging: *default-logging
     env_file:
