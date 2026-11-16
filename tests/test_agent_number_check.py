@@ -142,6 +142,13 @@ def test_money_and_percent_only_ignores_bare_numbers():
     assert check("You have about ₹1.52 lakh.", BAL, kinds=("money", "percent")) == ["₹1.52 lakh"]
 
 
+def test_a_percent_range_signed_only_at_its_end_reads_as_percents():
+    returns = {"floor_probability": 0.788, "floor_interval": [0.7816, 0.7942]}
+    assert check("78.8% (band 78.16–79.42%)", returns) == []
+    assert check("78.8% (band 78.16 to 79.42 percent)", returns) == []
+    assert check("78.8% (band 71.16–79.42%)", returns) == ["71.16"]
+
+
 def test_a_pinned_snapshot_counts_as_a_source():
     from pydantic_ai.messages import ModelRequest
     from pydantic_ai_harness.compaction import pin

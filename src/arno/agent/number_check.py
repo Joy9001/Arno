@@ -53,6 +53,10 @@ MONEY = re.compile(
     re.I,
 )
 PERCENT = re.compile(rf"\b({NUM})\s?(?:%|percent\b|per cent\b)", re.I)
+# The opening number of a percent range that signs only its end ("78.16–79.42%") is a percent too.
+PERCENT_RANGE_START = re.compile(
+    rf"\b({NUM})(?=\s?%?\s?(?:[-–—]|to)\s?(?:{NUM})\s?(?:%|percent\b|per cent\b))", re.I
+)
 BARE = re.compile(rf"(?<![\w.,/-])({NUM})(?![\w/-]|[.,]\d)")
 MONTHS = (
     "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|"
@@ -237,11 +241,12 @@ def extract(
         scale = SCALE.get(scale_word, 1.0)
         return ("money", _value(raw) * scale, _unit(raw, scale), match.group().strip())
 
+    def percent(match: re.Match[str]) -> tuple[str, float, float, str]:
+        return ("percent", _value(match.group(1)), _unit(match.group(1)), match.group().strip())
+
     found += take(MONEY, money)
-    found += take(
-        PERCENT,
-        lambda m: ("percent", _value(m.group(1)), _unit(m.group(1)), m.group().strip()),
-    )
+    found += take(PERCENT_RANGE_START, percent)
+    found += take(PERCENT, percent)
 
     def plain(prefix: str = "") -> Callable[[re.Match[str]], tuple[str, float, float, str]]:
         def handler(match: re.Match[str]) -> tuple[str, float, float, str]:
