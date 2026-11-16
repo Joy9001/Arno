@@ -137,9 +137,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 - [x] Get the backup sidecar running. The `Exited (137)` was a SIGKILL. Dash defers the TERM trap
       until the foreground `sleep 3600` exits, so every stop hit the 30-second grace period. The
       sleep now runs in the background under `wait`, and a stop takes 0.66 s with exit 0.
-- [ ] Confirm that a new `backup_runs` success lands within 24 hours. The loop's last local
-      success was 12:18:20 UTC on November 3. This item closes when the restart after the alert
-      test produces a scheduled off-site success.
+- [x] Confirm that a new `backup_runs` success lands within 24 hours. The live instance logged a
+      scheduled off-site success every day from November 12 to 15, 2026 (the latest at 08:19 UTC on
+      November 15), each within 24 hours of the one before.
 - [ ] Stop the sidecar on purpose and confirm the 48-hour backup alert fires once. **Running:**
       the sidecar was stopped at 12:51 UTC on November 3. The alert line is 12:56 UTC on
       November 5, and `backup_check` runs daily at 03:00 IST (21:30 UTC):
@@ -210,14 +210,14 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 - [ ] **Milestones 15 and 26:** run the scorecard on at least one local model through Ollama (for
       example, `qwen3:4b`). Today the table has one cloud model.
-- [x] Rerun the cloud model on the full suite. The suite is 134 cases now, and the published run is
-      402 trials on November 10, 2026 (`e445680`); it includes the projection and affordability
-      cases for the first time, every gate passed, and two categories each slipped once in three
-      trials (section E).
-- [ ] Fill the **median cost** column. It's `—` today, so the scorecard is missing price data.
+- [x] Rerun the cloud model on the full suite. The suite is 142 cases now, and the published run is
+      426 trials on November 16, 2026, with the decision-tool cases for the first time; every gate
+      passed (section F).
+- [x] Fill the **median cost** column. The November 16 run reports $0.0035 a trial, from the
+      provider's own billing now that a streamed reply keeps it (`eb59a6a`).
 - [x] Run `wr_chai_voice_hinglish` against the configured chat endpoint (`evals/cases.py:441`). It
       is a write case and passed all three trials in the published run.
-- [ ] **Latency:** the measured median is 16.5 s against the targets of about 5 s for one lookup
+- [ ] **Latency:** the measured median is 23.4 s (November 16, 2026) against the targets of about 5 s for one lookup
       and about 15 s for a multistep what-if. Either meet the targets or restate them in plan.md
       with the measured numbers.
 - [ ] Answer the open L2 questions from real-use traces, and record the answers in plan.md §6:
@@ -340,8 +340,11 @@ it could not; the groups above keep their original detail.
 - [ ] **Milestone 37, restore on a different machine.** Simulated: a second Compose project with new
       volumes, restored from the off-site backup. On Drive it also needed the OAuth client, so the
       drill tested the recovery kit, not the restic password alone.
-- [ ] **The restart mid-parse.** Simulatable, not run this pass: the driver and the `jobs` table now
-      make it reproducible with `driver up --keep` after a kill.
+- [x] **The restart mid-parse.** Run on November 16, 2026, on a scratch database with the real
+      model: the API was killed during the parse, the job settled as cancelled, the wake turn after
+      the restart resumed the same task, and the import reached review with 48 lines verified and a
+      zero closing adjustment. Commit wrote 48 rows, undo reversed them, and the invariant checker
+      passed 1,734 checks. The run found an undo/categorizer deadlock, fixed in `ccdd6a6`.
 
 ### Blocked on the owner
 
@@ -375,12 +378,62 @@ it could not; the groups above keep their original detail.
 
 ### Found and not yet fixed
 
-- [ ] **Install documentation.** The fresh-install rehearsal found twelve gaps, the costly ones
+- [x] **Install documentation.** The fresh-install rehearsal found twelve gaps, the costly ones
       being: passwords generated with `openssl rand -base64` break `DATABASE_URL` (use `-hex`); the
       README omits the four `PHOENIX_*` values, so Phoenix restart-loops; `restic snapshots` needs
       `--entrypoint restic`; `.env.example` pins an old `ARNO_VERSION`; and a second stack
-      needs `COMPOSE_PROJECT_NAME` and `PHOENIX_UI_PORT`. They are being fixed in the same release
-      step and are not yet re-checked by a second installer.
-- [ ] **`observability.md` and host tracing.** The settings table still gives a host default of
-      `http://127.0.0.1:6006/v1/traces`, while tracing is now opt-in and nothing is registered
-      without a collector endpoint. The code is right; the guide needs the same correction.
+      needs `COMPOSE_PROJECT_NAME` and `PHOENIX_UI_PORT`. Fixed in `af14477`, which also makes
+      install and update pull only the published images. A second installer (milestone 40) is
+      still the check.
+- [x] **`observability.md` and host tracing.** The settings table gave a host default of
+      `http://127.0.0.1:6006/v1/traces`, while tracing is opt-in and nothing is registered without a
+      collector endpoint. The guide now says the default is unset and tracing is off (`af14477`).
+
+## F. Decision tools (L9), November 16, 2026
+
+Milestones 42 to 45 ([`plan.md`](plan.md) §5, L9), promoted from tier 1 of the
+[capability catalog](capability-catalog.md). Groups B and C still gate "shipped"; this section
+adds nothing to them and closes none of them.
+
+### Closed here
+
+- [x] **Milestone 42, safe to spend (C28).** `project` returns the largest cash payment today that
+      keeps the floor and every obligation at the verdict's thresholds, read from the same run's
+      order statistics; the home page and the projection card show it (`456020a`).
+- [x] **Milestone 43, what-ifs with several changes (C29).** Up to twelve dated changes (stop an
+      income, pause or change a schedule, add a recurring item, a one-time amount) through the pure
+      `engine/scenario.py`, with runway and the unchanged baseline in the result, and the same
+      changes on `GET /api/projection` (`fe36bd9`).
+- [x] **Milestone 44, price-change alerts (C30).** A recurring charge that steps to a new amount
+      raises one `price_change` proposal at the first payment at the new level (`0719711`).
+- [x] **Milestone 45, what a debt costs (C11).** `amortize` takes a processing fee and returns the
+      APR; `card_payoff` walks a card balance at its own stored or stated finance charge and never
+      assumes one; migration `0042` stores a card's finance and minimum-due terms (`b91c33d`,
+      `2bffa51`, `234c8fd`).
+- [x] **Streamed replies keep their reported cost.** Before `eb59a6a` a streamed paid reply lost the
+      provider's billing, and the spend gate stopped the weekly briefing.
+- [x] **Tool descriptions and graders after the first real-model run.** The model stopped every
+      income for "my salary stops", ran a second projection for the before figures, and left out a
+      card's cost of carrying; the descriptions now say where each figure lives (`0450781`). Three
+      grader faults failed correct replies: an advice judge capped below what a reasoning model
+      needs, a Hinglish question read as a payment claim, and missing Hindi honesty phrases
+      (`7fcf47d`).
+- [x] **The scorecard, published.** The 142-case suite ran 426 trials on November 16, 2026:
+      injection gate 150/150, answer number gate 93/93, answers 31/31, writes 21/22, honesty 14/14,
+      advice 11/11, never-moving-money 10/10, long threads 4/4, fooled 8%. Ten injection trials
+      timed out or lost the connection with no reply to grade, and two answer cases failed only on
+      a number-check fault (`9a421f6`); those eight cases were re-run, passed all 24 trials, and
+      replace the full run's results, as the README's run note says. The one write miss,
+      `wr_auto_hinglish`, read "auto bhaiya" (the auto-rickshaw driver) as a person on the ledger
+      and asked instead of logging the fare.
+- [x] **Release gate.** 1,716 tests passed and 5 skipped; Ruff, Pyrefly, and `uv lock --check`
+      clean; web lint, typecheck, build, and `test:answers` passed; the invariant checker passed on
+      the demo persona.
+
+### Found and not yet fixed
+
+- [ ] **Two imports on one account, committed and undone at once.** Commit and undo take the
+      `accounts` and `payees` row locks in opposite orders, so a commit of one import racing an undo
+      of another on the same account can deadlock. Postgres aborts one side and nothing is
+      half-written; the user retries. One import's own commit, undo, and categorizer are ordered
+      (`ccdd6a6`).

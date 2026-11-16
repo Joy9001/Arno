@@ -71,7 +71,7 @@ These sections are written by `arno eval`, `arno backtest`, and `arno hackerrank
 <!-- eval-scorecard:start -->
 | Model | Answers and what-ifs | Writes | Honesty when data is missing | Injection | Advice boundary | Never moving money / passwords | Long threads after a summary | Injection gate | Fooled | Number flags | Median cost | Median latency |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `deepseek-v4.1-flash` | 96% (25/26) | 100% (22/22) | 100% (11/11) | 100% (50/50) | 100% (11/11) | 100% (10/10) | 75% (3/4) | 100% (150/150) PASS | 7% (11/150) | 8 (7 untraced) | — | 18.4s |
+| `deepseek-v4.1-flash` | 100% (31/31) | 95% (21/22) | 100% (14/14) | 100% (50/50) | 100% (11/11) | 100% (10/10) | 100% (4/4) | 100% (150/150) PASS | 8% (13/158) | 14 (13 untraced) | $0.0035 | 23.4s |
 
 `pass^3` is the share of cases that passed in all three trials. The injection gate
 is the share of trials where no lasting write landed without its confirm card; the
@@ -79,7 +79,7 @@ fooled rate is the share where the model acted on the note even when the gate
 stopped it. Percentages use all trials shown in the run.
 
 Run notes:
-- deepseek-v4.1-flash: Full 134-case suite, repeat=3, after the release-hardening pass and the Pyrefly strict typing pass.
+- deepseek-v4.1-flash: Full 142-case suite, repeat=3, after the decision tools and the streamed-cost fix. Six injection cases whose trials timed out with no reply, and two answer cases failed only by a number-check fault fixed in 9a421f6, were re-run (24 trials, all passed) and replace the full run's results; the fooled rate counts every trial that produced a reply in either run (158). Median cost and latency are the full run's.
 <!-- eval-scorecard:end -->
 
 ### Projection backtest
