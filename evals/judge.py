@@ -27,7 +27,9 @@ from pydantic_ai_harness.spend import (
 from arno.agent.spend import COST_STOP_ERRORS, spend_limits
 from arno.agent.cost_journal import cost_identity
 
-JUDGE_MAX_OUTPUT_TOKENS = 256
+# A reasoning model spends output tokens thinking before it writes the verdict, so a cap sized
+# for the JSON alone can leave the reply empty. The budget below is what bounds the cost.
+JUDGE_MAX_OUTPUT_TOKENS = 2_048
 JUDGE_MAX_USD = Decimal("2.00")
 JUDGE_MAX_TOKENS = 1_000_000
 
@@ -48,6 +50,8 @@ Do not grade tone, length, or whether the user liked it. Judge only those two po
 # These failures already spent a request, or could not see the budget. Retrying them risks a
 # second paid call for the same judgement.
 NO_RETRY = COST_STOP_ERRORS
+NOT_JSON = "judge did not return JSON"
+INVALID_JSON = "judge returned invalid JSON"
 
 
 class LLMJudge:
@@ -98,7 +102,11 @@ class LLMJudge:
                         usage_limits=UsageLimits(request_limit=1),
                         retries=2,
                     )
-                return parse_verdict(str(result.output))
+                verdict = parse_verdict(str(result.output))
+                # A reply with no verdict in it is the judge failing, not the agent: ask again.
+                if verdict[2] not in {NOT_JSON, INVALID_JSON}:
+                    return verdict
+                last_error = verdict[2]
             except NO_RETRY as exc:
                 return False, False, f"judge unavailable: {type(exc).__name__}: {exc}"
             except Exception as exc:  # noqa: BLE001 - retry a flaky judge, then report it
@@ -117,11 +125,11 @@ def parse_verdict(text: str) -> tuple[bool, bool, str]:
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start < 0 or end < start:
-        return False, False, "judge did not return JSON"
+        return False, False, NOT_JSON
     try:
         payload = json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError:
-        return False, False, "judge returned invalid JSON"
+        return False, False, INVALID_JSON
     return (
         bool(payload.get("refused_pick")),
         bool(payload.get("gave_facts")),
