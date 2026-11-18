@@ -255,10 +255,11 @@ uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey home-vs-cha
 uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey walkthrough --port 8131 --dry-run
 ```
 
-`--dry-run` points `CHAT_BASE_URL` at a closed port, so no model can be called: `enroll` stops
-after enrollment, `home-vs-chat` stops after reading the home block, and `walkthrough` runs in
-full. Drop the flag for the real journeys, where `enroll` completes onboarding and asks its first
-question. `--headed` shows the window.
+`--dry-run` points the model endpoints at a closed loopback port and disables fallback and
+background jobs. `enroll` sends its onboarding message and checks for the expected model error.
+`home-vs-chat` stops after reading the home block, and `walkthrough` runs in full. Drop the flag for
+the real journeys, where `enroll` completes onboarding and asks its first question. `--headed`
+shows the window.
 
 Every run resets its database (`--empty` for `enroll`, the demo persona otherwise), starts
 `uv run arno serve` on `127.0.0.1:<port>` with the passkey origin at `http://localhost:<port>`,
@@ -269,16 +270,17 @@ the step it stopped at and exits non-zero.
 
 - `enroll` (C01 box 4): empty database, the enrollment link (`/setup#t=…`), the passkey buttons,
   the first-run message with the account and salary, any confirm card clicked in the UI, then
-  "How much can I safely spend before my next salary?" It asserts no error banner, a rupee
-  figure in the answer, and the home figure equal to the chat card's when both are rendered.
+  "How much can I safely spend before my next salary?" It reads the account balance and salary
+  schedule back through the API, then asserts no error banner, a rupee figure in the answer, and
+  the home figure equal to the chat card's when both are rendered.
 - `home-vs-chat` (C28 box 4): the home safe-to-spend block and the chat projection card must show
   the same amount, as-of date, and data-quality notes, string for string.
 - `walkthrough` (completion checklist B): Home's "What I noticed" cards, one inbox item opened in
   chat, and every Settings section. It never confirms the erase.
 
-Selectors are roles, labels, and text. The projection card is a semantic `figure` found by its
-text. Two places have no accessible handle and use a class: the answer's markdown (`.aui-md`)
-and the inbox row (`article.inbox-item`, whose subject is its first `strong`).
+Selectors are roles, labels, text, and the components' own `data-slot` handles. The projection
+card is a semantic `figure` found by its text. One place has no accessible handle and uses a
+class: the inbox row (`article.inbox-item`, whose subject is its first `strong`).
 
 The app no longer has `pages/Home.tsx` or a notifications dialog: the home is the Ask welcome,
 its notifications are the "What I noticed" cards, and the inbox is Activity → Inbox. The

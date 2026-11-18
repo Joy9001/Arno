@@ -8,8 +8,9 @@ types in the composer, reads rendered cards, and walks Settings.
 
 Playwright 1.64.0 is the release whose bundled Chromium revision, 1248, is the one in the local
 browser cache. It is not a project dependency; `--with` puts it in the process that runs a
-journey. `--dry-run` points `CHAT_BASE_URL` at a closed port, so no model is ever called and the
-journeys stop before their first chat message. `tests/e2e/README.md` documents each journey.
+journey. `--dry-run` isolates the server's model endpoints on a closed loopback port. `enroll`
+sends its onboarding message and records the expected model error before the ledger assertions.
+`tests/e2e/README.md` documents each journey.
 """
 
 from __future__ import annotations
@@ -21,13 +22,16 @@ import os
 import re
 import sys
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 import playwright.async_api as pw  # pyrefly: ignore[missing-import]  # optional: --with playwright
+from dateutil.relativedelta import relativedelta
 
+from arno.india.recurrence import expand_rule
 from tests.e2e.driver import (
     LOG_FILE,
     _require_free_port,
@@ -47,7 +51,7 @@ DEFAULT_TIMEOUT = 300.0
 SAFE_PHRASE = "safe to spend today"
 STOP_BUTTONS = 'button[aria-label="Stop generating"], button[aria-label="Cancel sending"]'
 CONFIRM_BUTTON = '[data-slot="approval-card-allow-once"]'
-PROSE = '[data-slot="aui_assistant-message-root"] .aui-md'
+PROSE = '[data-slot="aui_assistant-message-root"] [data-slot="aui_assistant-message-text"]'
 RECEIPT = "figure"
 RUPEE = re.compile(r"₹[\d,]+(?:\.\d{2})?")
 
@@ -334,7 +338,85 @@ async def _answer_confirm_cards(page: pw.Page, report: Report, limit: int = 4) -
     return answered
 
 
+async def _json(page: pw.Page, report: Report, url: str) -> Any:
+    """A read through the app's own API, with the browser's session."""
+    response = await page.request.get(url)
+    if not response.ok:
+        raise JourneyFailure(report.current, f"GET {url} returned {response.status}")
+    return await response.json()
+
+
 # --- the journeys -----------------------------------------------------------------------------
+
+
+async def _onboarding_ui(page: pw.Page, report: Report) -> None:
+    """The first-run home and the composer, with the model closed: the dry run's step 2."""
+    async with Step(report, page, "first-run home and composer"):
+        region = page.get_by_role("region", name="Get started")
+        await region.wait_for(timeout=60_000)
+        await page.get_by_text(re.compile(r"I don.t know your money yet")).wait_for(timeout=60_000)
+        await report.shot(page, "first-run-home")
+
+        field = page.get_by_label("Message Arno")
+        await field.fill(ONBOARDING)
+        await page.get_by_label("Send message").click()
+        await _settle(page, report, timeout=45.0)
+        sent = page.locator('[data-slot="aui_user-message-root"]').first
+        await sent.wait_for(timeout=15_000)
+        if "85,000" not in _one_space(await sent.inner_text()):
+            raise JourneyFailure(report.current, "the composer did not send the onboarding message")
+        error = page.get_by_role("alert").filter(has_text="The model failed.")
+        await error.wait_for(timeout=15_000)
+        report.figure("dry_run_model_error", _one_space(await error.inner_text()))
+        report.note("--dry-run: stopped after the onboarding message, before the writes")
+
+
+async def _onboarding_state(page: pw.Page, base_url: str, report: Report) -> None:
+    """The account and salary the onboarding turn wrote, read back through the app's API."""
+    accounts = await _json(page, report, f"{base_url}/api/accounts")
+    bank = next(
+        (row for row in accounts["accounts"] if row["kind"] == "bank" and row["active"]), None
+    )
+    if bank is None:
+        raise JourneyFailure(report.current, "onboarding wrote no active bank account")
+    report.figure(
+        "onboarding_account",
+        {"name": bank["name"], "statement_balance_paise": bank["statement_balance_paise"]},
+    )
+    if int(bank["statement_balance_paise"] or 0) != 8_500_000:
+        raise JourneyFailure(
+            report.current, f"the bank account has no ₹85,000 stated balance: {bank['name']}"
+        )
+
+    schedules = await _json(page, report, f"{base_url}/api/schedules")
+    salary = next(
+        (row for row in schedules["items"] if row["kind"] == "income_fixed" and row["active"]),
+        None,
+    )
+    if salary is None:
+        raise JourneyFailure(report.current, "onboarding wrote no active income schedule")
+    report.figure(
+        "onboarding_schedule",
+        {"name": salary["name"], "amount_paise": salary["amount_paise"], "rule": salary["rule"]},
+    )
+    starts = date.fromisoformat(salary["starts"])
+    first_month = starts.replace(day=1)
+    if first_month < starts:
+        first_month += relativedelta(months=1)
+    expected = [first_month + relativedelta(months=month) for month in range(12)]
+    dates = expand_rule(
+        salary["rule"],
+        starts,
+        start=starts,
+        end=first_month + relativedelta(months=12, days=-1),
+        ends=date.fromisoformat(salary["ends"]) if salary["ends"] else None,
+        holiday_adjust=salary["holiday_adjust"],
+    )
+    if salary["amount_paise"] != 6_000_000 or dates != expected:
+        raise JourneyFailure(
+            report.current,
+            f"expected ₹60,000 on the 1st of each month: {salary['name']} {salary['rule']}",
+        )
 
 
 async def _enroll(page: pw.Page, base_url: str, token: str, report: Report) -> None:
@@ -392,6 +474,7 @@ async def _first_answer(page: pw.Page, report: Report) -> None:
         report.figure("onboarding_confirm_cards", answered)
         report.figure("onboarding_reply", (await _last_prose(page))[:400])
         await _assert_no_alert(page, report)
+        await _onboarding_state(page, report.base_url, report)
 
     async with Step(report, page, "ask for the safe-to-spend figure"):
         await _send(page, report, QUESTION)
@@ -548,7 +631,7 @@ async def _drive(
         await _walkthrough(page, report)
     elif args.journey == "enroll":
         if args.dry_run:
-            report.note("--dry-run: stopped after enrollment, before the first chat message")
+            await _onboarding_ui(page, report)
         else:
             await _first_answer(page, report)
     else:
@@ -578,14 +661,26 @@ async def _browse(args: argparse.Namespace, base_url: str, token: str, report: R
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     journey = args.journey
-    if args.dry_run:
-        os.environ["CHAT_BASE_URL"] = "http://127.0.0.1:9"
     database = prepare_database(empty=journey == "enroll", seed=journey != "enroll")
     if journey != "enroll":
         _cover_card_balances()
     if journey == "walkthrough":
         _seed_notification()
     os.environ.update(server_env(args.port))
+    if args.dry_run:
+        os.environ.update(
+            CHAT_FALLBACK_BASE_URL="", CHAT_FALLBACK_MODEL="", BATCH_MODEL="", ARNO_JOBS_ENABLED="0"
+        )
+        for role in ("CHAT", "PARSE", "VISION", "STT"):
+            os.environ.update(
+                {
+                    f"{role}_PROVIDER": "openai",
+                    f"{role}_BASE_URL": "http://127.0.0.1:9/v1",
+                    f"{role}_API_KEY": "dry-run",
+                    f"{role}_MODEL": "dry-run",
+                    f"{role}_BILLING_MODE": "local",
+                }
+            )
     _require_free_port(args.port)
 
     base_url = f"http://localhost:{args.port}"
@@ -623,7 +718,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="point CHAT_BASE_URL at a closed port and stop before any chat message",
+        help="use closed model endpoints and run the model-free steps",
     )
     parser.add_argument("--headed", action="store_true", help="show the browser window")
     parser.add_argument("--timeout", type=float, default=120.0, help="seconds to wait for health")
