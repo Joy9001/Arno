@@ -552,15 +552,14 @@ What the app opens to and how threads get their titles belong to
 - **The flag follows what the model read.** The snapshot goes through `mark()` like any read, so a
   new thread starts flagged only if a name in its snapshot still carries a mark
   ([write tiers](design.md#untrusted-text-and-write-tiers)).
-- **A fresh snapshot when you come back.** Before a turn, if `prompt_cache_outlook` says the cache
-  has expired and something has changed since `conversations.snapshot_at`, the server swaps in a new
-  snapshot. The history has to be cached again anyway, so the swap costs nothing extra. The rest of
-  the thread stays as it was.
+- **The snapshot is a thread-start baseline.** The server reads it once and keeps it pinned.
+  A current balance, due, goal progress, or another mutable financial fact needs a live tool
+  result from that turn. Elapsed time or a write in another thread can make the snapshot stale.
+  See [rule 1](plan.md#the-rules).
 - **A short reminder each turn.** `SystemReminders` adds a line such as "Today is 2 November. Since
   your snapshot: 3 writes; re-read before stating a balance." It counts writes from any source in
   `audit_log`: other threads, imports, and Settings. It sits after the cache, and only the newest
-  reaches the model. While the cache is live or its state is unknown, this is how the model learns
-  the snapshot is old.
+  reaches the model. The model reads live values for current claims regardless of the write count.
 
 ### Two records, both on the server
 
@@ -661,7 +660,7 @@ The following table records the other options that were considered:
 
 | Option | Why not |
 |---|---|
-| Starting a new thread after 6 idle hours | A hidden rule on top of threads you already control. The swap and reminder keep the snapshot fresh without it |
+| Starting a new thread after 6 idle hours | A hidden rule on top of threads you already control. A live read covers current facts; the reminder only says what changed |
 | Dynamic instructions for balances | They sit before the history, so each change would break the cache for the whole thread |
 | Reloading the whole context every turn | Uncached on every request, for data that rarely changes between turns |
 | `Spill` for big outputs | Adds a tool, a workspace, and statement data in temp files, when the data is already in Postgres |

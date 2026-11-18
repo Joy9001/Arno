@@ -111,72 +111,6 @@ async def ensure_history(conn: Connection, thread: dict[str, Any]) -> tuple[list
     return history, outside
 
 
-async def refresh_snapshot(
-    conn: Connection,
-    thread: dict[str, Any],
-    history: list[Any],
-    *,
-    cache_ttl_seconds: int = 300,
-) -> tuple[list[Any], bool]:
-    """Swap in a fresh snapshot when the cache has expired and something has changed.
-
-    The history has to be cached again anyway, so the swap costs nothing extra. The rest of the
-    thread stays as it was, and no second pin piles up.
-    """
-    from pydantic_ai.messages import ModelRequest
-    from pydantic_ai_harness.compaction import is_pinned
-
-    snapshot_at = thread.get("snapshot_at")
-    if snapshot_at is None:
-        return history, False
-    age = (datetime.now(UTC) - snapshot_at).total_seconds()
-    if age < cache_ttl_seconds:
-        return history, False
-    changed = await conn.fetchrow(
-        "SELECT 1 FROM audit_log WHERE created_at > $1 LIMIT 1", snapshot_at
-    )
-    if changed is None:
-        return history, False
-
-    content, outside = await snapshot_payload(conn)
-    from pydantic_ai.messages import ModelResponse, TextPart
-
-    replacement = [
-        ModelRequest(parts=[_pin(content)]),
-        ModelResponse(parts=[TextPart(SNAPSHOT_REPLY)]),
-    ]
-    rest = list(history)
-    if rest and isinstance(rest[0], ModelRequest) and any(is_pinned(p) for p in rest[0].parts):
-        rest = rest[1:]
-        if rest and isinstance(rest[0], ModelResponse) and _is_snapshot_reply(rest[0]):
-            rest = rest[1:]
-    history = replacement + rest
-    row = await conn.fetchrow_required(
-        """
-        UPDATE conversations
-        SET model_history = $1, snapshot_at = now(), updated_at = now(),
-            outside_text_at = CASE WHEN $2 THEN coalesce(outside_text_at, now())
-                                   ELSE outside_text_at END
-        WHERE id = $3 RETURNING *
-        """,
-        _dump(history),
-        outside,
-        thread["id"],
-    )
-    thread.update(row)
-    return history, outside
-
-
-def _is_snapshot_reply(message: Any) -> bool:
-    from pydantic_ai.messages import TextPart
-
-    return (
-        len(message.parts) == 1
-        and isinstance(message.parts[0], TextPart)
-        and message.parts[0].content == SNAPSHOT_REPLY
-    )
-
-
 async def append_outside_entry(
     conn: Connection,
     thread: dict[str, Any],
@@ -654,7 +588,6 @@ __all__ = [
     "mark_run_started",
     "recover_crashed_runs",
     "record_user_message",
-    "refresh_snapshot",
     "save_records",
     "snapshot_payload",
     "title_for",

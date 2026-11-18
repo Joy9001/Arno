@@ -6,9 +6,9 @@ first. The reminder and your turn come after the cache and are new each turn.
 
 **Diagram type:** Layer stack, split by the point where the cache ends. No semantic pattern matched.
 
-**What the budget forced out:** Compaction's settings, how the snapshot gets swapped, and memory
-other than the snapshot are in the step 6 text. 6 layers; the accent marks the snapshot and the point
-where the cache ends.
+**What the budget forced out:** Compaction's settings, when the thread-start snapshot is read, and
+memory other than the snapshot are in the step 6 text. 6 layers; the accent marks the snapshot and
+the point where the cache ends.
 
 ![What the model sees each turn, from unchanging to changing](./sd-context-stack.png)
 

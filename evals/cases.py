@@ -67,13 +67,15 @@ def _case(
 def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
     return [
         _case(
+            # The snapshot is moments old and no write reminder intervenes, so the balance still
+            # needs a live read from this turn.
             "ans_liquid_total",
             "answers",
             [
                 "What's my total balance across my bank accounts, cash, and wallet? Give just "
                 "the total, and note any balance that is stale."
             ],
-            {"check": "liquid_total"},
+            {"check": "liquid_total", "must_read": ["get_financial_context", "run_query"]},
         ),
         _case(
             "ans_food_last_month",

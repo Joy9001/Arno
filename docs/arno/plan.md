@@ -367,8 +367,10 @@ a future Android app or chat-app bridge—is a client of the same API. Detail:
 1. **The model decides what to compute; code computes it.** The model reasons freely: it decides
    what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
    tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
-   its own head. A check after each reply notes any amount it can't trace. Affordability verdicts come
-   only from the tested engine.
+   its own head. A claim about a current balance, a due, goal progress, or another mutable
+   financial fact needs a live tool result from that turn. Use the pinned snapshot and earlier
+   chat for historical context. A check after each reply notes any amount it can't trace.
+   Affordability verdicts come only from the tested engine.
 2. **Untrusted text never makes a lasting change unseen.** Statements are parsed in a run with no
    write or ledger tools, and photos by an isolated, tool-less model call into a typed schema.
    Fields that still carry other people's words—payee names, UPI notes—reach the agent marked as

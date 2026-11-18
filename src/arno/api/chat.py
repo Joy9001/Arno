@@ -7,7 +7,6 @@ from the turn's buffer. Reattach and Stop have their own endpoints; one turn run
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from dataclasses import replace
 from typing import Any, Literal
@@ -378,10 +377,6 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
             initial_cards.append(result["card"])
 
         history, outside = await history_mod.ensure_history(conn, thread)
-        ttl = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))
-        history, outside_swap = await history_mod.refresh_snapshot(
-            conn, thread, history, cache_ttl_seconds=ttl
-        )
         answered: set[str] = set()
         if approval_turn:
             answered = _answered_tool_calls(history)
@@ -456,7 +451,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         if capture_ref is None and photos:
             capture_ref = photos[0]["attachment_id"]
             capture_kind = "photo"
-        flagged = thread.get("outside_text_at") is not None or outside or outside_swap
+        flagged = thread.get("outside_text_at") is not None or outside
 
     from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 

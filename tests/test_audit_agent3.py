@@ -370,7 +370,8 @@ def test_the_prompt_carries_each_wave_three_rule():
         "say in one sentence what will change",
         "don't offer it again unless they ask",
         "Never write an example amount",
-        "before stating a current balance or",
+        "thread-start snapshot, not current",
+        "even when no reminder mentions a write",
         "Print rupees(paise) beside any figure",
         "The month-end clamp is automatic",
         "not marked as paid",
@@ -393,6 +394,7 @@ def test_each_new_rule_has_an_eval_case():
         "wr_split_refund_asks",
         "wr_forget_reverts_setup",
         "ans_food_difference",
+        "ans_liquid_total",
     } <= names
 
 

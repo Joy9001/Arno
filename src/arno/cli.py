@@ -29,7 +29,6 @@ from arno.agent.history import (
     get_thread,
     mark_run_started,
     record_user_message,
-    refresh_snapshot,
     save_records,
     title_for,
 )
@@ -353,7 +352,6 @@ async def _run_chat_command(settings: Settings, thread_id: str | None, message: 
                 thread = await create_thread(conn, title=title_for(message or "Terminal chat"))
             thread_id = str(thread["id"])
             history, _outside = await ensure_history(conn, thread)
-            history, _swap = await refresh_snapshot(conn, thread, history)
 
             if message is not None:
                 await _run_cli_turn(conn, agent, thread, history, message)

@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import (
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models.function import AgentInfo
 from pydantic_ai_harness.compaction import is_pinned
 
@@ -14,9 +21,9 @@ from arno.agent.deps import AgentDeps
 from arno.agent.history import (
     create_thread,
     ensure_history,
-    refresh_snapshot,
     save_records,
 )
+from arno.tools import write as write_tools
 from tests.agent_helpers import streaming_model
 
 
@@ -36,40 +43,105 @@ async def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
         "SELECT model_history, snapshot_at FROM conversations WHERE id = $1", thread["id"]
     )
     assert saved["snapshot_at"] is not None
-    assert (
-        _count_pins(
-            __import__("pydantic_ai").messages.ModelMessagesTypeAdapter.validate_python(
-                saved["model_history"]
-            )
-        )
-        == 1
-    )
+    assert _count_pins(ModelMessagesTypeAdapter.validate_python(saved["model_history"])) == 1
     assert outside in (True, False)
 
 
-async def test_a_stale_snapshot_is_swapped_without_piling_up_pins(demo_ledger):
-    thread = await create_thread(demo_ledger, title="new")
-    history, _ = await ensure_history(demo_ledger, thread)
-    # A write after the snapshot, and an old snapshot time, is the swap condition.
-    await demo_ledger.execute(
-        "INSERT INTO messages (conversation_id, client_id, role, content) "
-        "VALUES ($1, 'client-old', 'user', '{}')",
-        thread["id"],
+async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_read(
+    authed_client, demo_ledger
+):
+    def intro(messages, info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("Hello.")])
+
+    with authed_client.app.state.agent.override(model=streaming_model(intro)):
+        first = authed_client.post(
+            "/api/chat",
+            json={
+                "id": "thread-baseline",
+                "trigger": "submit-message",
+                "messages": [
+                    {
+                        "id": "client-baseline-intro",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "hi"}],
+                    }
+                ],
+            },
+        )
+    assert first.status_code == 200, first.text
+    initial_pin = await demo_ledger.fetchval(
+        "SELECT (model_history->0)::text FROM conversations WHERE id = 'thread-baseline'"
     )
-    message = await demo_ledger.fetchrow("SELECT id FROM messages WHERE client_id = 'client-old'")
+
+    old_snapshot_at = datetime.now(UTC) - timedelta(hours=1)
     await demo_ledger.execute(
-        "INSERT INTO audit_log (actor, message_id, group_id, table_name, row_id) "
-        "VALUES ('user', $1, 'und_old', 'settings', '1')",
-        message["id"],
+        "UPDATE conversations SET snapshot_at = $1 WHERE id = 'thread-baseline'",
+        old_snapshot_at,
     )
-    await demo_ledger.execute(
-        "UPDATE conversations SET snapshot_at = $1 WHERE id = $2",
-        datetime.now(UTC) - timedelta(hours=1),
-        thread["id"],
+    written = await write_tools.update_setup_item(
+        demo_ledger,
+        entity="balance",
+        action="update",
+        data={"account": "HDFC Savings", "balance_rupees": "234567.89"},
+        message_id=None,
     )
-    thread = await demo_ledger.fetchrow("SELECT * FROM conversations WHERE id = $1", thread["id"])
-    swapped, _ = await refresh_snapshot(demo_ledger, thread, history, cache_ttl_seconds=300)
-    assert _count_pins(swapped) == 1
+    assert written["undo_id"]
+    assert await demo_ledger.fetchval("SELECT max(created_at) FROM audit_log") > old_snapshot_at
+
+    code = (
+        "context = await get_financial_context()\n"
+        'for account in context["accounts"]:\n'
+        '    if account["name"] == "HDFC Savings":\n'
+        '        print(account["balance"]["text"])'
+    )
+
+    def answer(messages, info: AgentInfo) -> ModelResponse:
+        returns = [
+            part
+            for message in messages
+            if isinstance(message, ModelRequest)
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "run_code"
+        ]
+        if not returns:
+            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
+        balance = returns[-1].content
+        assert isinstance(balance, dict), balance
+        amount = balance["output"].strip()
+        assert amount == "₹2,34,567.89"
+        return ModelResponse(parts=[TextPart(f"HDFC Savings has {amount}.")])
+
+    with authed_client.app.state.agent.override(model=streaming_model(answer)):
+        second = authed_client.post(
+            "/api/chat",
+            json={
+                "id": "thread-baseline",
+                "trigger": "submit-message",
+                "messages": [
+                    {
+                        "id": "client-baseline-balance",
+                        "role": "user",
+                        "parts": [{"type": "text", "text": "What is my HDFC balance right now?"}],
+                    }
+                ],
+            },
+        )
+    assert second.status_code == 200, second.text
+
+    saved = await demo_ledger.fetchrow(
+        "SELECT (model_history->0)::text AS pin, snapshot_at, model_history "
+        "FROM conversations WHERE id = 'thread-baseline'"
+    )
+    assert saved["pin"] == initial_pin
+    assert saved["snapshot_at"] == old_snapshot_at
+    assert _count_pins(ModelMessagesTypeAdapter.validate_python(saved["model_history"])) == 1
+    thread = authed_client.get("/api/threads/thread-baseline/messages").json()
+    reply = next(
+        message for message in reversed(thread["messages"]) if message["role"] == "assistant"
+    )
+    assert "₹2,34,567.89" in "\n".join(
+        part["text"] for part in reply["parts"] if part["type"] == "text"
+    )
 
 
 async def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):

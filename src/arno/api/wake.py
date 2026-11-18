@@ -9,7 +9,6 @@ starts the same kind of turn, so both go through `start_server_turn` and its gua
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from typing import Any
 
@@ -65,16 +64,8 @@ async def start_server_turn(
     run_id: str | None = None
     try:
         history, outside = await history_mod.ensure_history(conn, thread)
-        ttl = int(os.environ.get("CHAT_CACHE_TTL_SECONDS", "300"))
-        history, outside_swap = await history_mod.refresh_snapshot(
-            conn, thread, history, cache_ttl_seconds=ttl
-        )
         deps.flagged = (
-            deps.flagged
-            or flagged
-            or thread.get("outside_text_at") is not None
-            or outside
-            or outside_swap
+            deps.flagged or flagged or thread.get("outside_text_at") is not None or outside
         )
         run_id = f"run_{uuid.uuid4().hex}"
         await history_mod.mark_run_started(conn, thread_id, run_id)

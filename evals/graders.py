@@ -826,6 +826,15 @@ async def grade_answers(
         )
 
     results.extend(_prose_checks(output, expected))
+    must_read = expected.get("must_read")
+    if must_read:
+        results.append(
+            CheckResult(
+                name="live_read",
+                passed=any(tool in output.completed_tools for tool in must_read),
+                reason=f"expected a successful read this turn via one of {must_read}",
+            )
+        )
     new_movements = await _new_movements(conn, output)
     results.append(
         CheckResult(

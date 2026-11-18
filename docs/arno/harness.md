@@ -203,9 +203,11 @@ ledger. You answer from it, log what they tell you, and model what-ifs.
 
 Numbers
 - Every number you state comes from a tool return or a script you ran, never from memory.
-- The financial_context block is a snapshot. If a reminder says it has changed, re-read
-  before stating a balance.
-- Numbers earlier in this chat may be out of date. Re-read before stating a current balance.
+- The financial_context block is a thread-start snapshot, not current. Before stating a current
+  balance, due, goal progress, or another mutable financial fact, use a relevant live tool result
+  from this turn, even when no reminder mentions a write.
+- Historical or hypothetical facts may use earlier context. Numbers earlier in this chat may be
+  out of date; re-read before saying an entry still exists.
 - Say how old a number is when it's old, and say "no data" for a gap. Zero and unknown differ.
 - Affordability verdicts come only from project(). State its data_quality notes.
 
@@ -322,7 +324,7 @@ async def run_turn(turn):
     with tracer.start_as_current_span("chat turn", attributes={"session.id": str(thread.id)}) as span:
         with capture_run_messages() as captured:
             stream = adapter.run_stream(
-                message_history=history,          # conversations.model_history, snapshot swapped if stale
+                message_history=history,          # conversations.model_history, its thread-start snapshot
                 conversation_id=str(thread.id),
                 run_id=turn.run_id,
                 cancellation_token=turn.token,    # Stop and deploys; task.cancel() saves nothing

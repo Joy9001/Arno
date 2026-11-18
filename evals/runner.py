@@ -31,6 +31,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import Model
@@ -118,6 +119,27 @@ def _approval_attempts(output: Any) -> list[ToolAttempt]:
     return attempts
 
 
+def _completed_tools(messages: list[ModelMessage]) -> list[str]:
+    names: set[str] = set()
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            continue
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart) or part.outcome != "success":
+                continue
+            names.add(part.tool_name)
+            if part.tool_name != "run_code" or not isinstance(part.metadata, dict):
+                continue
+            nested = part.metadata.get("tool_returns")
+            if isinstance(nested, dict):
+                names.update(
+                    tool.tool_name
+                    for tool in nested.values()
+                    if isinstance(tool, ToolReturnPart) and tool.outcome == "success"
+                )
+    return sorted(names)
+
+
 def _seed_long_thread(spec: Any) -> list[ModelMessage]:
     decision = spec.decision
     messages: list[ModelMessage] = [
@@ -199,6 +221,7 @@ async def _run_turn(
     replies: list[str] = []
     message_ids: list[str] = []
     run_ids: list[str] = []
+    completed_tools: list[str] = []
     attempts: list[ToolAttempt] = []
     approvals: list[ToolAttempt] = []
     number_flags: list[str] = []
@@ -299,6 +322,7 @@ async def _run_turn(
             turn_messages = [
                 message for message in history if getattr(message, "run_id", None) in turn_run_ids
             ]
+            completed_tools = _completed_tools(turn_messages)
             for turn_run_id in turn_run_ids:
                 attempts.extend(_tool_attempts(turn_messages, turn_run_id))
             if isinstance(result.output, DeferredToolRequests):
@@ -328,6 +352,7 @@ async def _run_turn(
         cost_usd=float(cost) if cost else None,
         latency_s=latency,
         started_at=started_at,
+        completed_tools=completed_tools,
         attempts=attempts,
         approvals=approvals,
         ending=ending,

@@ -780,8 +780,8 @@ exercise real compaction in the isolated run without flooding the personal conve
 | ☐ | J25.04 | Permanently delete a synthetic memory in Settings. | Explicit irreversible action; text is removed from the documented memory/audit surfaces, not just hidden. |
 | ☐ | J25.05 | Change floor/account/schedule from Settings while an old chat is idle. | Old thread rereads current state; names/IDs are not trusted solely from past context. |
 | ☐ | J25.06 | Reopen the next ledger day without any audited writes. | Time-derived dates, ages, upcoming events, and reminder wording are fresh or explicitly flagged stale. Known-risk case. |
-| ☐ | J25.07 | Make a change inside and outside the snapshot TTL. | No stale balance assertion; reminder and explicit reread cover the refresh policy. |
-| ☐ | J25.08 | Compact a long thread, then refresh its financial snapshot. | Exactly one effective current pinned snapshot; no stale duplicate after a leading summary. Known-risk case. |
+| ☐ | J25.07 | Change a balance from Settings while a thread is active, then ask for the current balance. | A live read supplies the new balance. The opening snapshot is identical. |
+| ☐ | J25.08 | Compact a long thread, then ask about a current balance. | Compaction keeps one opening snapshot. A live read supplies the current balance. |
 | ☐ | J25.09 | Ask about an old conversation no longer in visible model context. | Uses supported conversation search, discloses missing evidence if search fails; does not pretend recall. |
 | ☐ | J25.10 | Reopen a pre-tuning thread after schema changes and use an old card. | Stored calls/history remain readable; new calls use valid current contracts and current targets. |
 
@@ -1095,13 +1095,13 @@ The following files help diagnose failures. Their presence does not establish an
 | Agent writes, safety, and approvals | tests/test_agent_write_contract.py, tests/test_agent_tools.py, tests/test_approval_metrics.py, tests/test_agent_safety.py | Real model interpretation, actual card decisions, exact before/after UI money. |
 | Import extraction and reconciliation | tests/test_importers.py, tests/test_import_pipeline.py, tests/test_import_reconcile.py, tests/test_import_api.py | Real statements, passwords, row-by-row review, user transfer decisions, long-running jobs. |
 | Projection and dates | tests/test_engine_projection.py, tests/test_engine_affordability.py, tests/test_projection_tool.py, tests/test_schedules_india.py | Model chooses correct inputs and reports assumptions/verdicts faithfully through rendered cards. |
-| History and recovery | tests/test_agent_history.py, tests/test_agent_compaction.py, tests/test_agent_turns.py, tests/test_agent_reliability.py | Real reconnect/Stop/reload behavior, stale snapshot after time changes, compaction plus refresh. |
+| History and recovery | tests/test_agent_history.py, tests/test_agent_compaction.py, tests/test_agent_turns.py, tests/test_agent_reliability.py | Real reconnect/Stop/reload behavior, a live read after the ledger day changes, and pin preservation through compaction. |
 | Trace previews | tests/test_agent_trace_preview.py, tests/test_native_tracing_smoke.py | Phoenix columns in actual UI, stable authenticated identity, privacy/deferred/multimodal paths. |
 | Proactive and capture | tests/test_watch_workflows.py, tests/test_watch_notifications.py, tests/test_capture.py, tests/test_image_runtime.py | Real devices, voice/vision quality, due-time behavior, notification-to-chat continuity. |
 | Access and views | tests/test_auth.py, tests/test_enrollment.py, tests/test_ledger_api.py, tests/test_import_history_pagination.py | Human passkey ceremonies, device/session lifecycle, pagination controls, focus and stale view states. |
 
-Known follow-ups from the greeting investigation are snapshot date rollover, snapshot replacement
-after compaction, Flag-to-trace navigation, unpriced model cost reporting, and synchronous export
+Known follow-ups from the greeting investigation are live reads after date rollover, pin preservation
+through compaction, Flag-to-trace navigation, unpriced model cost reporting, and synchronous export
 configuration. Deferred approval and multimodal preview privacy were reviewed but were not separately
 exercised by the reported preview tests. This catalog gives those issues explicit tests instead of
 implying they were fixed with the greeting patch. Do not invent new feature requirements such as

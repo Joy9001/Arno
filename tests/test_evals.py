@@ -13,7 +13,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_evals import Case, Dataset
@@ -46,6 +53,7 @@ from evals.runner import (
     CategoryScore,
     OutcomeEvaluator,
     Scorecard,
+    _completed_tools,
     aggregate,
     format_scorecard,
     format_scorecards_table,
@@ -193,6 +201,28 @@ async def test_answer_grader_reads_ground_truth_from_the_database(demo_ledger):
     output = _output(reply=f"Your liquid balance is ₹{total['paise'] / 100:,.2f}.")
     results = await grade_answers(demo_ledger, output, {"check": "liquid_total"})
     assert all(result.passed for result in results), results
+
+
+async def test_answer_grader_requires_a_live_read_when_the_case_expects_one(demo_ledger):
+    context = await read_tools.get_financial_context(demo_ledger)
+    total = context["liquid_total"]
+    reply = f"Your liquid balance is ₹{total['paise'] / 100:,.2f}."
+    expected = {"check": "liquid_total", "must_read": ["get_financial_context", "run_query"]}
+    read = ToolReturnPart("get_financial_context", context)
+    run_code = ToolReturnPart("run_code", total, metadata={"tool_returns": {"read": read}})
+
+    live = await grade_answers(
+        demo_ledger,
+        _output(
+            reply=reply,
+            completed_tools=_completed_tools([ModelRequest(parts=[run_code])]),
+        ),
+        expected,
+    )
+    assert all(result.passed for result in live), live
+
+    pinned_only = await grade_answers(demo_ledger, _output(reply=reply), expected)
+    assert [result.name for result in pinned_only if not result.passed] == ["live_read"]
 
 
 async def test_write_grader_checks_the_row_not_the_reply(demo_ledger):
