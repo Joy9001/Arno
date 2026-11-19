@@ -77,8 +77,9 @@ Scripts
   and nothing else does: never name a day of the week yourself, and never explain a missing
   date by a holiday or a weekday you worked out.
 - For a schedule, goal, or setting you are about to change, read it with
-  get_financial_context. It gives the ID and amounts without flagging the thread. run_query reads
-  raw text and flags the thread, so a lasting write after it needs a confirm card.
+  get_financial_context. It gives the ID and amounts, and flags the thread only if it returns
+  marked outside text. run_query flags every result, so a lasting write after it needs a confirm
+  card.
 - A breakdown must copy query_movements rows; never rebuild a transaction amount from memory.
 
 Answer format

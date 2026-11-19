@@ -226,6 +226,19 @@ async def test_root_span_preview_respects_include_content_off():
     assert _text(root, "user.id") == "usr_opaque"
 
 
+async def test_root_span_counts_approvals_even_when_content_is_off():
+    agent, exporter = _agent(_reply, include_content=False)
+
+    await agent.run(
+        message_history=_history(),
+        deps=AgentDeps(conversation_id="cnv", approvals_offered=2, approvals=1),
+    )
+
+    attributes = _attributes(_root(exporter))
+    assert attributes["arno.approvals.offered"] == 2
+    assert attributes["arno.approvals.approved"] == 1
+
+
 async def test_root_span_preview_keeps_one_user_across_conversations():
     agent, exporter = _agent(_reply)
 

@@ -123,11 +123,13 @@ def _current_user_text(ctx: RunContext[Any]) -> str | None:
 
 
 class RootSpanIO(AbstractCapability[Any]):
-    """Put the current message and final reply on the native `invoke_agent` span.
+    """Put the current message, final reply, and approval counts on the native `invoke_agent` span.
 
     Phoenix's trace list reads `input.value`/`output.value`; Pydantic AI's root span carries the
     full history and `final_result` but not those two view attributes. This capability writes only
-    those attributes on the existing span, inside the instrumentation's outermost layer.
+    those attributes, plus the numeric `arno.approvals.offered` and `arno.approvals.approved` tap
+    counts, on the existing span, inside the instrumentation's outermost layer. The counts are
+    recorded even when content is off.
     """
 
     @override
@@ -147,7 +149,13 @@ class RootSpanIO(AbstractCapability[Any]):
                 # guardrail, so the preview would otherwise show the raw prompt.
                 span.set_attribute("input.value", redact_text(text))
                 span.set_attribute("input.mime_type", "text/plain")
-        result = await handler()
+        try:
+            result = await handler()
+        finally:
+            # A tap still counts when the approved write fails and ends the run.
+            if isinstance(ctx.deps, AgentDeps) and span.is_recording():
+                span.set_attribute("arno.approvals.offered", ctx.deps.approvals_offered)
+                span.set_attribute("arno.approvals.approved", ctx.deps.approvals)
         if ctx.trace_include_content and span.is_recording():
             output = result.output
             if isinstance(output, str) and output.strip():
