@@ -373,7 +373,10 @@ def _apply_change_amount(
             _in_window(event.date, change.start, change.until, end_date)
             and event.source_id == change.source_id
         ):
-            new_signed = change.amount_paise if event.amount_paise >= 0 else -change.amount_paise
+            # `amount_paise` is the remaining amount; an occurrence already partly paid keeps
+            # that payment and changes only the unpaid part.
+            magnitude = max(0, change.amount_paise - event.paid_paise)
+            new_signed = magnitude if event.amount_paise >= 0 else -magnitude
             if event.kind.startswith("income") and new_signed > event.amount_paise:
                 raised_inflow = True
             changed += 1
@@ -483,6 +486,18 @@ def apply_changes(
     }
     _validate_changes(inputs.as_of, changes, income_ids)
     end_date = inputs.as_of + timedelta(days=horizon_days(inputs))
+    for change in changes:
+        if isinstance(change, OneTime):
+            assert change.date <= end_date, (
+                "apply_changes horizon must cover every change date; "
+                "set ask_horizon_days from scenario_horizon_days first"
+            )
+        else:
+            last = change.until if change.until is not None else change.start
+            assert change.start <= end_date and last <= end_date, (
+                "apply_changes horizon must cover every change window; "
+                "set ask_horizon_days from scenario_horizon_days first"
+            )
     events = list(inputs.events)
     series_list = list(inputs.series)
     added_events: list[CashEvent] = []

@@ -55,7 +55,7 @@ def rule_interval_days(rule: str | None) -> int | None:
     interval_match = re.search(r"INTERVAL=(\d+)", upper)
     step = int(interval_match.group(1)) if interval_match else 1
     if freq == "DAILY":
-        return 28 if step == 28 else None
+        return step
     if freq == "WEEKLY":
         return 7 * step
     if freq == "MONTHLY":
@@ -65,13 +65,21 @@ def rule_interval_days(rule: str | None) -> int | None:
             return 180
         if step == 1:
             bymonthday = re.search(r"BYMONTHDAY=([0-9,-]+)", upper)
-            if bymonthday and "," in bymonthday.group(1):
+            positions = re.search(r"BYSETPOS=([0-9,-]+)", upper)
+            # A clamped date list can still select two occurrences per month.
+            if (
+                bymonthday
+                and "," in bymonthday.group(1)
+                and (positions is None or "," in positions.group(1))
+            ):
                 return 15
             return 30
         return 30 * step
     return 365 * step
 
 
+# shortcut: one detected series per payee and raw token overlap in same_merchant, revisit when a
+# real payee holds two plans or false-matches generic words
 def same_merchant(schedule: KnownSchedule, normalized: str) -> bool:
     """Whether a schedule name and normalized merchant share identity."""
     if not schedule.normalized or not normalized:
@@ -96,7 +104,7 @@ def same_charge(
     """
     if not schedule.category_id or schedule.category_id not in categories:
         return False
-    if schedule.interval_days is not None and schedule.interval_days != interval_days:
+    if schedule.interval_days != interval_days:
         return False
     if not schedule.amount_paise:
         return False

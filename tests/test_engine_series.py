@@ -13,6 +13,7 @@ from arno.engine.series import (
     _E,
     _END_GRID,
     _JITTER_GRID,
+    _MAX_CANDIDATES,
     _SKIP_GRID,
     PROJECT_CONFIDENCE,
     PROPOSE_ALIVE,
@@ -24,8 +25,10 @@ from arno.engine.series import (
     _censoring_skip_probs,
     _detect_with,
     _dp_likelihood_ratio,
+    _generate_candidates,
     _jitter_weights,
     _precompute_matches,
+    _summarize_amounts,
     detect,
     normalize,
     price_step,
@@ -49,7 +52,7 @@ def _brute_force_lr(
     """Exact Fraction enumeration over every (s, t, labeling) for the generative model."""
     m = len(payment_ordinals)
     n = len(expected_ordinals)
-    t_days = as_of_ord - win_start_ord + 1
+    t_days = as_of_ord - win_start_ord
 
     q_f = Fraction(str(q))
     c_f = Fraction(str(c))
@@ -181,7 +184,7 @@ def test_dp_matches_brute_force_oracle() -> None:
     checks = 0
     for u in (1.0, 0.1, 0.37):
         for as_of_ord, obs_ords, exp_ords in instances:
-            t_days = float(as_of_ord - win_start_ord + 1)
+            t_days = float(as_of_ord - win_start_ord)
             m = len(obs_ords)
             n = len(exp_ords)
             background_scale = _E * t_days / m
@@ -713,7 +716,7 @@ def test_determinism() -> None:
 
 def test_a_dense_payee_is_capped_to_the_last_200_payments(monkeypatch) -> None:
     start = date(2024, 1, 1)
-    payments = _make_payments([start + timedelta(days=offset) for offset in range(800)])
+    payments = _make_payments([start + timedelta(days=offset) for offset in range(801)])
     seen: list[list[Payment]] = []
     original = series_mod._detect_with
 
@@ -722,8 +725,63 @@ def test_a_dense_payee_is_capped_to_the_last_200_payments(monkeypatch) -> None:
         return original(candidates, rows, **kwargs)
 
     monkeypatch.setattr(series_mod, "_detect_with", spy)
-    detect(payments, as_of=start + timedelta(days=799), window_start=start)
+    detect(payments, as_of=start + timedelta(days=800), window_start=start)
     assert len(seen) == 1
     assert [payment.movement_id for payment in seen[0]] == [
         f"m_{index:03d}" for index in range(600, 800)
     ]
+
+
+def test_a_payment_dated_as_of_is_not_an_observation() -> None:
+    # The as_of day is censored as possibly unposted, so its payment is not evidence of a series.
+    assert (
+        detect(
+            _make_payments([date(2026, 3, 5), date(2026, 4, 5), date(2026, 5, 5)]),
+            as_of=date(2026, 5, 5),
+            window_start=date(2026, 1, 1),
+        )
+        is None
+    )
+
+
+def test_summarized_amounts_follow_price_step() -> None:
+    two_steps = _summarize_amounts([50_000] * 6 + [70_000] * 3 + [90_000] * 3)
+    assert two_steps.kind == "stepped"
+    assert two_steps.level_paise == 90_000
+    assert two_steps.samples == (90_000, 90_000, 90_000)
+
+    one_step = _summarize_amounts([50_000] * 3 + [90_000] * 3)
+    assert one_step.kind == "stepped"
+    assert one_step.level_paise == 90_000
+    assert one_step.samples == (90_000, 90_000, 90_000)
+
+    # Two payments at each level is below price_step's three-payment run, so it stays variable.
+    short = _summarize_amounts([50_000, 50_000, 90_000, 90_000])
+    assert short.kind == "variable"
+    assert short.level_paise == 70_000
+
+    fixed = _summarize_amounts([64_900] * 4)
+    assert fixed.kind == "fixed"
+    assert fixed.level_paise == 64_900
+
+
+def test_the_top_eight_candidates_keep_a_twice_monthly_cadence() -> None:
+    dates = [
+        date(2025 + (month - 1) // 12, (month - 1) % 12 + 1, day)
+        for month in range(1, 15)
+        for day in (1, 15)
+    ]
+    as_of = date(2026, 3, 20)
+    window_start = as_of - timedelta(days=800)
+    payments = _make_payments(dates, 64_900)
+    cal = calendar_for(window_start - timedelta(days=21), as_of + timedelta(days=421))
+    candidates = _generate_candidates(payments, window_start=window_start)
+    assert len(candidates) > _MAX_CANDIDATES
+    # The full candidate set is the oracle; detect() scores only the top eight by pruning score.
+    oracle = _detect_with(
+        candidates, payments, as_of=as_of, window_start=window_start, calendar=cal
+    )
+    detected = detect(payments, as_of=as_of, window_start=window_start, calendar=cal)
+    assert oracle is not None and detected is not None
+    assert oracle.rule.family == "twice_monthly"
+    assert (detected.rule.family, detected.rule.rrule) == (oracle.rule.family, oracle.rule.rrule)

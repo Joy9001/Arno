@@ -43,6 +43,7 @@ async def _record_risk(conn: Connection, projection: Projection) -> dict[str, An
         row.get("known") and row.get("kind") in {"bank", "cash", "wallet"} for row in ages
     ):
         # No verified liquid balance: the curve is a provisional net change, not a low balance.
+        await conn.execute("UPDATE risk_state SET last_checked_at = now() WHERE id = 1")
         return None
     state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1 FOR UPDATE")
     last_crossing = state["first_floor_crossing"] if state else None

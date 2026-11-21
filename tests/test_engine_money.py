@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import random
 from datetime import date
+from decimal import ROUND_DOWN, Decimal, localcontext
 from fractions import Fraction
+from typing import cast
 
 import pytest
 
 from arno.engine.money import (
     MAX_PAISE,
     CardPayoff,
+    DayCount,
     _add_months,
     _compute_apr,
+    _days_30_360,
+    _period_interest,
     add_months,
     allocate,
     amortize,
@@ -23,6 +28,7 @@ from arno.engine.money import (
     infer_rate,
     scale_cumulative,
 )
+from arno.india.formatting import format_paise
 
 
 def test_offer_comparison_separates_each_charge_and_preserves_order():
@@ -295,19 +301,99 @@ def test_conventions_daily_rest_and_day_count():
         amortize(1_000_000_00, 8.5, 12, rest="daily")
 
     monthly = amortize(1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1))
-    daily_30_360 = amortize(
-        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="30/360"
+    daily_30e_360 = amortize(
+        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="30e/360"
     )
-    assert daily_30_360["schedule"] == monthly["schedule"]
-    assert any("daily rest (30/360)" in note for note in daily_30_360["assumptions"])
+    assert daily_30e_360["schedule"] == monthly["schedule"]
+    assert any("daily rest (30e/360)" in note for note in daily_30e_360["assumptions"])
 
-    daily_act_365 = amortize(
-        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="actual/365"
+    daily_act_365f = amortize(
+        1_000_000_00,
+        12.0,
+        12,
+        start_date=date(2026, 1, 1),
+        rest="daily",
+        day_count="actual/365f",
     )
     # January has 31 days (31/365 > 1/12); February 2026 has 28 days (28/365 < 1/12).
-    assert daily_act_365["schedule"][0]["interest_paise"] > monthly["schedule"][0]["interest_paise"]
-    assert daily_act_365["schedule"][1]["interest_paise"] < monthly["schedule"][1]["interest_paise"]
-    assert any("daily rest (actual/365)" in note for note in daily_act_365["assumptions"])
+    assert (
+        daily_act_365f["schedule"][0]["interest_paise"] > monthly["schedule"][0]["interest_paise"]
+    )
+    assert (
+        daily_act_365f["schedule"][1]["interest_paise"] < monthly["schedule"][1]["interest_paise"]
+    )
+    assert any("daily rest (actual/365f)" in note for note in daily_act_365f["assumptions"])
+
+    # The pre-rename spellings stay accepted and label as the canonical conventions.
+    legacy_30e = amortize(
+        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="30/360"
+    )
+    legacy_365f = amortize(
+        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="actual/365"
+    )
+    assert legacy_30e == daily_30e_360
+    assert legacy_365f == daily_act_365f
+    with pytest.raises(ValueError, match="30e/360"):
+        amortize(1_000_000_00, 12.0, 12, day_count=cast(DayCount, "actual/364"))
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "days"),
+    [
+        # 31st clamps to the 30th; February keeps its real last day.
+        (date(2026, 1, 31), date(2026, 2, 28), 28),
+        (date(2028, 1, 31), date(2028, 2, 29), 29),
+        (date(2026, 2, 28), date(2026, 3, 31), 32),
+        (date(2026, 3, 31), date(2026, 4, 30), 30),
+        (date(2026, 4, 30), date(2026, 5, 31), 30),
+        (date(2026, 1, 30), date(2026, 1, 31), 0),
+        (date(2026, 1, 31), date(2026, 1, 31), 0),
+        # Year boundary: 31 December to 1 January is one day, not minus 329.
+        (date(2026, 12, 31), date(2027, 1, 1), 1),
+        (date(2026, 1, 1), date(2026, 12, 31), 359),
+        (date(2026, 2, 1), date(2026, 3, 1), 30),
+        (date(2026, 1, 29), date(2026, 2, 28), 29),
+    ],
+)
+def test_30e_360_day_count_boundaries(first: date, second: date, days: int):
+    assert _days_30_360(first, second) == days
+
+
+def test_actual_365f_counts_the_leap_day_and_every_31_day_month():
+    # ₹36,500 at 12% a year is ₹12 a day: 365 days * 1,200 paise == 12% of 36,500.
+    balance = Decimal(3_650_000)
+    rate = Decimal(12)
+    leap = _period_interest(
+        balance,
+        rate,
+        1,
+        rest="daily",
+        day_count="actual/365f",
+        start_date=date(2028, 2, 15),
+        interest_unit_paise=1,
+    )
+    march = _period_interest(
+        balance,
+        rate,
+        2,
+        rest="daily",
+        day_count="actual/365f",
+        start_date=date(2028, 2, 15),
+        interest_unit_paise=1,
+    )
+    thirty = _period_interest(
+        balance,
+        rate,
+        4,
+        rest="daily",
+        day_count="30e/360",
+        start_date=date(2028, 2, 15),
+        interest_unit_paise=1,
+    )
+    assert leap == Decimal(29 * 1_200)  # 15 Feb to 15 Mar includes 29 February.
+    assert march == Decimal(31 * 1_200)  # 15 Mar to 15 Apr.
+    # 30E/360 charges May's 31 days as 30, on a 360-day basis: 30 * 12% / 360 of 36,500.
+    assert thirty == Decimal(36_500)
 
 
 def test_conventions_floating_rate_changes_tenure_and_emi_reset():
@@ -349,6 +435,41 @@ def test_conventions_floating_rate_changes_tenure_and_emi_reset():
 
     with pytest.raises(ValueError, match="increasing"):
         amortize(1_000_000_00, 8.5, 120, rate_changes=((12, 9.0), (12, 10.0)))
+
+
+def test_amortize_rejects_a_rate_reset_beyond_the_tenure():
+    with pytest.raises(ValueError, match="beyond the 12-month tenure"):
+        amortize(1_000_000, 8.0, 12, rate_changes=[(24, 20.0)])
+    # A reset on the last EMI is inside the horizon.
+    assert amortize(1_000_000, 8.0, 12, rate_changes=[(12, 9.0)], reset="emi")["months"] == 12
+
+
+def test_amortize_notes_a_balloon_from_a_coarse_emi_unit():
+    result = amortize(2_000_000, 8.73, 240, emi_unit_paise=100)
+    assert result["emi"]["paise"] == 17_600
+    assert result["schedule"][-1]["principal_paise"] + result["schedule"][-1]["interest_paise"] == (
+        49_057
+    )
+    assert any("the last instalment is ₹490.57, not ₹176" in note for note in result["assumptions"])
+
+
+def test_prepay_tenure_keeps_the_emi_charged_when_a_rate_reset_coincides():
+    reset = amortize(10_000_000, 8.0, 24, rate_changes=[(13, 12.0)], reset="emi")
+    result = amortize(
+        10_000_000,
+        8.0,
+        24,
+        rate_changes=[(13, 12.0)],
+        reset="emi",
+        prepay={"amount_paise": 2_000_000, "at_emi": 13, "reduce": "tenure"},
+    )
+    applied = result["prepay"]
+    assert applied is not None
+    # The EMI kept is the one the reset put in force at EMI 13, not the pre-reset one.
+    month_13 = reset["schedule"][12]
+    assert applied["new_emi"]["paise"] == month_13["principal_paise"] + month_13["interest_paise"]
+    assert applied["new_emi"]["paise"] != 452_273
+    assert applied["months_saved"] > 0
 
 
 def test_edge_case_emi_too_low_keeps_paying_and_reports_real_months():
@@ -393,11 +514,18 @@ def test_edge_case_prepayment_larger_than_balance_raises_with_balance():
 
 
 def test_infer_rate_round_trip_and_edge_cases():
-    # Known bank figure round-trip: 8.5% = 85_000 bps_x100
+    # Known bank figure round-trip: 8.5% = 85_000 bps_x100, and one unit reproduces the EMI.
     fit = infer_rate(1_000_000_00, 240, 867_823)
     assert fit["exact"] is True
-    assert fit["low_bps_x100"] is not None and fit["high_bps_x100"] is not None
-    assert fit["low_bps_x100"] <= 85_000 <= fit["high_bps_x100"]
+    assert fit["low_bps_x100"] == 85_000
+    assert fit["high_bps_x100"] == 85_000
+
+    # Several rate units can round to the same EMI; that is an interval, not an exact rate.
+    plateau = infer_rate(10_000_000, 240, 86_782)
+    assert plateau["low_bps_x100"] == 84_999
+    assert plateau["high_bps_x100"] == 85_000
+    assert plateau["exact"] is False
+    assert "8.4999% to 8.5000% a year" in plateau["note"]
 
     # Zero-rate loan
     zero = infer_rate(120_000_00, 12, 10_000_00)
@@ -431,6 +559,13 @@ def test_infer_rate_round_trip_and_edge_cases():
     assert bracket["high_bps_x100"] == bracket["low_bps_x100"] + 1
 
 
+def test_infer_rate_rejects_a_daily_rest_instead_of_ignoring_it():
+    with pytest.raises(ValueError, match="monthly rest only"):
+        infer_rate(1_000_000, 12, 90_000, rest="daily")
+    with pytest.raises(ValueError, match="monthly rest only"):
+        infer_rate(1_000_000, 12, 90_000, rest="daily", day_count="actual/365f")
+
+
 def test_infer_rate_property_round_trips():
     from typing import Literal
 
@@ -457,9 +592,12 @@ def test_infer_rate_property_round_trips():
             emi_rounding=rounding,
             emi_unit_paise=unit_paise,
         )
-        assert fit["exact"] is True
         assert fit["low_bps_x100"] is not None and fit["high_bps_x100"] is not None
         assert fit["low_bps_x100"] <= unit <= fit["high_bps_x100"]
+        # exact means one unit reproduces the EMI; a plateau is an interval, not a rate.
+        assert fit["exact"] is (fit["low_bps_x100"] == fit["high_bps_x100"])
+        if not fit["exact"]:
+            assert " to " in fit["note"]
 
 
 def test_allocate_properties_and_edge_cases():
@@ -587,6 +725,17 @@ def test_card_emi_fee_no_cost_and_validation():
         card_emi(100_000, annual_rate_bps=1500, months=49)
 
 
+def test_card_emi_stops_when_a_small_principal_clears_early():
+    # 72 paise over 48 months rounds to a 2-paise instalment that clears the loan in 36.
+    result = card_emi(72, annual_rate_bps=0, months=48)
+    assert result["emi_paise"] == 2
+    assert len(result["schedule"]) == 36
+    assert result["schedule"][-1]["principal_paise"] == 2
+    assert sum(row["principal_paise"] for row in result["schedule"]) == 72
+    assert sum(row["total_paise"] for row in result["schedule"]) == result["total_paise"]
+    assert result["months"] == 48
+
+
 def _pv_at_bps_x100(payments: list[int], bps_x100: int) -> Fraction:
     monthly_rate = Fraction(bps_x100, 12_000_000)
     one_plus_r = 1 + monthly_rate
@@ -697,6 +846,44 @@ def test_amortize_zero_fee_leaves_return_unchanged_and_zero_fee_apr_matches_rate
     assert zero_apr["low_bps_x100"] == 0
     assert zero_apr["high_bps_x100"] == 0
     assert zero_apr["exact"] is True
+
+
+def test_compute_apr_refuses_a_negative_irr():
+    # Payments that total less than the net amount disbursed need a negative rate.
+    with pytest.raises(ValueError, match="APR is negative"):
+        _compute_apr(10_000, [4_000, 4_000])
+    # Exactly zero is still a valid, exact 0% APR.
+    zero = _compute_apr(10_000, [10_000])
+    assert zero == {
+        "low_bps_x100": 0,
+        "high_bps_x100": 0,
+        "exact": True,
+        "note": "exact APR 0.0000% a year",
+    }
+
+
+def test_rbi_kfs_annex_b_apr_matches_the_published_vector():
+    # RBI circular 12663, Annex B illustration (lines 525-551 of the published reprint): a
+    # ₹20,000 loan, ₹400 charges deducted, ₹19,600 net disbursed, 24 monthly instalments of
+    # ₹969.73 before rupee rounding, at a nominal APR of 17.07% (12 * monthly IRR).
+    # https://www.rbi.org.in/scripts/NotificationUser.aspx?Id=12987&Mode=0
+    fit = _compute_apr(1_960_000, [96_973] * 24)
+    low, high = fit["low_bps_x100"], fit["high_bps_x100"]
+    assert low is not None and high is not None
+    assert (low, high) == (170_702, 170_703)
+    midpoint = (low + high) / 2 / 10_000
+    assert 17.0702 <= midpoint <= 17.0703
+    assert f"{midpoint:.2f}" == "17.07"
+
+    # The loan path reaches the same vector: 15% for 24 months is that EMI, and the fee lifts
+    # the nominal APR by about two points.
+    loan = amortize(2_000_000, 15.0, 24, processing_fee_paise=40_000, gst_bps=0)
+    assert loan["emi"]["paise"] == 96_973
+    assert loan["net_disbursed"]["paise"] == 1_960_000
+    apr = loan["apr"]
+    apr_low, apr_high = apr["low_bps_x100"], apr["high_bps_x100"]
+    assert apr_low is not None and apr_high is not None
+    assert f"{(apr_low + apr_high) / 2 / 10_000:.2f}" == "17.07"
 
 
 def test_amortize_fee_validation_repricing_monotone_and_prepay():
@@ -908,8 +1095,8 @@ def test_card_payoff_zero_rate_edges_and_errors():
         card_payoff(100_000, annual_rate_bps=3600, payment=3_540)
     with pytest.raises(ValueError, match="never clears"):
         card_payoff(100_000, annual_rate_bps=3600, payment=0)
-    # A slowly shrinking balance hits the same 600-month limit as a stated loan tenure.
-    with pytest.raises(ValueError, match="600"):
+    # A minimum due at or below the month's charges can never shrink the balance.
+    with pytest.raises(ValueError, match="never falls"):
         card_payoff(
             1_000_000,
             annual_rate_bps=7200,
@@ -917,6 +1104,9 @@ def test_card_payoff_zero_rate_edges_and_errors():
             minimum_bps=100,
             minimum_floor_paise=20_000,
         )
+    # A balance that shrinks too slowly hits the same 600-month limit as a stated loan tenure.
+    with pytest.raises(ValueError, match="600"):
+        card_payoff(50_000_000, annual_rate_bps=4200, payment="minimum", minimum_bps=400)
 
 
 def test_card_payoff_property_conservation_and_termination():
@@ -963,3 +1153,30 @@ def test_money_refuses_amounts_and_tenures_beyond_the_engine_limits():
         compound(100_000, 10, 601)
     # 600 months is allowed; rounding may clear the loan one month early.
     assert 0 < amortize(100_000, 10, 600)["months"] <= 600
+
+
+def test_an_explicit_emi_that_cannot_finish_inside_six_hundred_months_is_refused():
+    # ₹10,000 at 8% with a ₹67 EMI first pays ₹66.67 of interest, so it would need 799 months.
+    with pytest.raises(ValueError, match="600 months"):
+        amortize(1_000_000, 8.0, 120, emi_paise=6_700)
+    # Just inside the cap still completes and reports its real tenure.
+    result = amortize(1_000_000, 8.0, 120, emi_paise=6_800)
+    assert result["months"] == 592
+    assert sum(row["principal_paise"] for row in result["schedule"]) == 1_000_000
+
+
+def test_decimal_math_is_pinned_against_the_callers_context():
+    baseline = amortize(1_000_000_00, 8.5, 240)
+    fit = _compute_apr(1_960_000, [96_973] * 24)
+    with localcontext() as ctx:
+        ctx.prec = 5
+        ctx.rounding = ROUND_DOWN
+        assert amortize(1_000_000_00, 8.5, 240) == baseline
+        assert _compute_apr(1_960_000, [96_973] * 24) == fit
+
+
+def test_format_paise_rounds_half_up_instead_of_truncating():
+    assert format_paise(Decimal("123.4")) == "₹1.23"
+    assert format_paise(Decimal("123.5")) == "₹1.24"
+    assert format_paise(Decimal("-123.5")) == "-₹1.24"
+    assert format_paise(123) == "₹1.23"

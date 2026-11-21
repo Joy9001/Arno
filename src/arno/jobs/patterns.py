@@ -25,30 +25,9 @@ _CADENCE_LABEL = {
 }
 
 
-def _suggested_rule(interval: int, last_date: date) -> str:
-    if interval == 7:
-        days = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
-        return f"FREQ=WEEKLY;BYDAY={days[last_date.weekday()]}"
-    if interval == 14:
-        days = ("MO", "TU", "WE", "TH", "FR", "SA", "SU")
-        return f"FREQ=WEEKLY;INTERVAL=2;BYDAY={days[last_date.weekday()]}"
-    if interval == 28:
-        return "FREQ=DAILY;INTERVAL=28"
-    if interval == 90:
-        return f"FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY={last_date.day}"
-    if interval == 180:
-        return f"FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY={last_date.day}"
-    if interval == 365:
-        return f"FREQ=YEARLY;BYMONTH={last_date.month};BYMONTHDAY={last_date.day}"
-    # BYMONTHDAY=31 has no occurrence in a short month; the last day is the charge's real day.
-    day = -1 if last_date.day >= 29 else last_date.day
-    return f"FREQ=MONTHLY;BYMONTHDAY={day}"
-
-
 def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     interval = int(proposal["interval_days"])
     cadence = _CADENCE_LABEL.get(interval, f"{interval} days")
-    last = date.fromisoformat(proposal["last_date"])
     amount = format_paise(int(proposal["amount_paise"]))
     title = f"New recurring charge: {proposal['merchant']}"
     body = (
@@ -59,7 +38,7 @@ def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str
     key = f"pattern:new:{proposal['normalized']}:{interval}:{proposal['last_date']}"
     data = {
         **proposal,
-        "suggested_rule": _suggested_rule(interval, last),
+        "suggested_rule": proposal["rule"]["rrule"],
         "suggestion": "Add it as an obligation if it is yours.",
     }
     return title, body, key, data
@@ -68,7 +47,6 @@ def _new_subscription(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str
 def _new_income(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]]:
     interval = int(proposal["interval_days"])
     cadence = _CADENCE_LABEL.get(interval, f"{interval} days")
-    last = date.fromisoformat(proposal["last_date"])
     amount = format_paise(int(proposal["amount_paise"]))
     title = f"New recurring income: {proposal['merchant']}"
     body = (
@@ -79,7 +57,7 @@ def _new_income(proposal: dict[str, Any]) -> tuple[str, str, str, dict[str, Any]
     key = f"pattern:income:{proposal['normalized']}:{interval}:{proposal['last_date']}"
     data = {
         **proposal,
-        "suggested_rule": _suggested_rule(interval, last),
+        "suggested_rule": proposal["rule"]["rrule"],
         "suggestion": "Add it as recurring income if it is yours.",
     }
     return title, body, key, data

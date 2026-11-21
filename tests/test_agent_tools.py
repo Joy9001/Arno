@@ -656,6 +656,22 @@ async def test_amortize_infers_the_rate_from_the_emi():
     assert "8.5000% to 8.5000% a year, inferred from the EMI" in result["assumptions"]
 
 
+async def test_amortize_accepts_an_emi_that_matches_a_rate_range():
+    result = await _amortize(principal_paise=10_000_000, months=240, emi_paise=86_782)
+    assert result["emi"]["paise"] == 86_782
+    assert "8.4999% to 8.5000% a year, inferred from the EMI" in result["assumptions"]
+
+
+async def test_amortize_requests_a_rate_for_daily_rest():
+    with pytest.raises(ModelRetry, match="monthly rest only"):
+        await _amortize(
+            principal_paise=10_000_000,
+            months=240,
+            emi_paise=86_782,
+            conventions=LoanConventions(rest="daily"),
+        )
+
+
 async def test_amortize_conventions_round_the_emi_like_the_bank():
     plain = await _amortize(principal_paise=100_000_000, annual_rate=8.5, months=240)
     rounded = await _amortize(

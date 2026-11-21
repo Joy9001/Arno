@@ -147,7 +147,7 @@ async def test_an_unknown_card_bill_keeps_its_reason_in_the_context(ledger):
         account_id=card["id"],
         amount_paise=194_700,
         description="Shoes",
-        date=today - timedelta(days=3),
+        date=today - timedelta(days=31),
     )
     bank = (
         await create_account(ledger, kind="bank", name="Bank", opening_balance_paise=5_000_000)

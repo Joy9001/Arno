@@ -404,7 +404,7 @@ async def test_concurrent_matches_cannot_spend_the_same_allocation_twice(ledger)
 
 
 @pytest.mark.parametrize("state", ["expired", "unknown", "prepaid", "scheduled"])
-async def test_a_covered_category_keeps_its_baseline_and_its_payments_leave_spend(ledger, state):
+async def test_category_baselines_follow_explicit_schedule_attribution(ledger, state):
     bank, _, due = await _plan(ledger)
     category_id = await ledger.fetchval("SELECT id FROM categories ORDER BY id LIMIT 1")
     await ledger.execute(
@@ -438,24 +438,60 @@ async def test_a_covered_category_keeps_its_baseline_and_its_payments_leave_spen
 
     snapshot = await load_snapshot(ledger, horizon_days=30)
     inputs = build_inputs(snapshot)
-    # A covered category still carries its baseline: the schedule's own payments are attributed
-    # instead of the whole category being dropped.
     represented = [category for category in inputs.categories if category.id == category_id]
-    assert represented
-    assert represented[0].baseline_per_day_paise == 10_000
-    assert not any("covered by an obligation" in gap for gap in inputs.data_quality["gaps"])
+    if state in {"scheduled", "expired"}:
+        assert not represented
+        assert any("covered by an obligation" in gap for gap in inputs.data_quality["gaps"])
+    else:
+        assert represented[0].baseline_per_day_paise == 10_000
 
     if paid is not None:
         assert not any(
             row.date == paid["date"] and row.amount_paise == paid["amount_paise"]
             for row in snapshot.spend
         )
+    else:
+        assert await ledger.fetchval("SELECT count(*) FROM schedule_payments") == 0
 
     open_events = [event for event in inputs.events if event.source_id == schedule["id"]]
     if state == "scheduled":
         assert (open_events[0].date, open_events[0].amount_paise) == (due, -100_000)
     elif state == "prepaid":
         assert not any(event.date == due for event in open_events)
+    elif state == "expired":
+        assert open_events
+        assert all(event.date == today() + timedelta(days=1) for event in open_events)
     else:
-        # Expired or unknown-amount schedules reserve nothing, so the baseline stands alone.
         assert open_events == []
+        assert any("has no known amount" in gap for gap in inputs.data_quality["gaps"])
+
+
+async def test_projection_carries_recent_unpaid_and_due_today_to_tomorrow(ledger):
+    day = today()
+    bank = await create_account(
+        ledger, kind="bank", name="Payment bank", opening_balance_paise=1_000_000
+    )
+    schedules = []
+    for name, age in (("Old", 4), ("Recent", 2), ("Today", 0)):
+        schedules.append(
+            await create_schedule(
+                ledger,
+                kind="obligation",
+                name=name,
+                amount_paise=100_000,
+                account_id=bank["id"],
+                rule="FREQ=DAILY;COUNT=1",
+                starts=day - timedelta(days=age),
+            )
+        )
+    await _pay(ledger, bank, schedules[1], day - timedelta(days=2), 40_000)
+    inputs = await load_inputs(ledger, as_of=day)
+    tomorrow = day + timedelta(days=1)
+    assert [(event.name, event.date, event.amount_paise) for event in inputs.events] == [
+        ("Recent", tomorrow, -60_000),
+        ("Today", tomorrow, -100_000),
+    ]
+    assert inputs.events[0].paid_paise == 40_000
+    assert any(
+        "Recent due" in gap and "unpaid balance" in gap for gap in inputs.data_quality["gaps"]
+    )

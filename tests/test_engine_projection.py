@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from arno.engine.inputs import build_inputs
 from arno.engine.money import MAX_PAISE
 from arno.engine.projection import (
     LEGACY_MODEL,
+    MODEL,
     CardAccount,
     CashEvent,
     CurvePoint,
@@ -22,7 +24,9 @@ from arno.engine.projection import (
     SeriesForecast,
     SpendCategory,
     SpendRow,
+    card_bills,
     first_full_payment_date,
+    prepare,
     project,
     safe_amount_today,
 )
@@ -639,3 +643,141 @@ def test_amounts_beyond_the_signed_64_bit_balance_are_rejected():
     for inputs in cases:
         with pytest.raises(ValueError, match="supported maximum"):
             project(inputs, runs=5)
+
+
+def test_card_bills_follow_the_statement_cycle_and_clamp_the_overdue_day():
+    split = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=100_000,
+        credit_limit_paise=500_000,
+        unbilled_paise=30_000,
+    )
+    assert card_bills(split, date(2026, 1, 10)) == (
+        (date(2026, 1, 25), 70_000),
+        (date(2026, 2, 25), 30_000),
+    )
+    # The closed bill's due day has passed: it is paid today, the unbilled part keeps its cycle.
+    assert card_bills(split, date(2026, 1, 30)) == (
+        (date(2026, 1, 30), 70_000),
+        (date(2026, 2, 25), 30_000),
+    )
+
+
+def test_an_unknown_card_split_uses_the_same_due_date_cycle_at_month_ends():
+    unknown = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=31,
+        due_day=31,
+        outstanding_paise=50_000,
+        credit_limit_paise=500_000,
+    )
+    # A February close clamps to the 28th, so its bill is due on March 31, not February 28.
+    assert card_bills(unknown, date(2026, 2, 28)) == ((date(2026, 3, 31), 50_000),)
+    # Closed on January 31 and due February 28: still upcoming, so it keeps that day.
+    assert card_bills(unknown, date(2026, 2, 27)) == ((date(2026, 2, 28), 50_000),)
+
+    due_today = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=5,
+        due_day=28,
+        outstanding_paise=50_000,
+        credit_limit_paise=500_000,
+    )
+    assert card_bills(due_today, date(2026, 2, 28)) == ((date(2026, 2, 28), 50_000),)
+
+
+def test_a_category_split_over_two_cards_uses_each_share_in_the_legacy_pool():
+    cards = (
+        CardAccount(
+            id="a",
+            name="A",
+            statement_day=5,
+            due_day=25,
+            outstanding_paise=0,
+            credit_limit_paise=1_000_000,
+        ),
+        CardAccount(
+            id="b",
+            name="B",
+            statement_day=5,
+            due_day=25,
+            outstanding_paise=0,
+            credit_limit_paise=1_000_000,
+        ),
+    )
+    history = tuple((date(2025, 10, 1) + timedelta(days=index), 10_000) for index in range(90))
+    category = SpendCategory(
+        id="cat",
+        name="Food",
+        baseline_per_day_paise=10_000,
+        card_shares=(("a", 0.5), ("b", 0.5)),
+        history=history,
+    )
+    prepared = prepare(_inputs(cards=cards, categories=(category,)), LEGACY_MODEL)
+    columns = prepared.spec.pools[0].columns
+    assert set(columns["card0"].tolist()) == {5_000}
+    assert set(columns["card1"].tolist()) == {5_000}
+    assert not columns["cash"].any()
+
+    direct = replace(category, card_shares=(), card_id="b", card_share=0.25)
+    prepared = prepare(_inputs(cards=cards, categories=(direct,)), LEGACY_MODEL)
+    columns = prepared.spec.pools[0].columns
+    assert "card0" not in columns
+    assert set(columns["card1"].tolist()) == {2_500}
+    assert set(columns["cash"].tolist()) == {7_500}
+
+
+def test_a_whole_day_pool_keeps_the_card_each_payment_actually_used():
+    as_of = date(2026, 1, 1)
+    start = as_of - timedelta(days=90)
+    days = [start + timedelta(days=index) for index in range(90)]
+    spend = tuple(
+        [SpendRow(day, "cat", "a", 200_000) for day in days[-20:]]
+        + [SpendRow(day, "cat", "b", 100_000) for day in days[-20:]]
+    )
+    category = SpendCategory(
+        id="cat",
+        name="Food",
+        baseline_per_day_paise=300_000,
+        baseline_source="computed",
+        card_shares=(("a", 0.5), ("b", 0.5)),
+        history=tuple((day, 300_000 if day in days[-20:] else 0) for day in days),
+    )
+    cards = (
+        CardAccount(
+            id="a",
+            name="A",
+            statement_day=5,
+            due_day=25,
+            outstanding_paise=0,
+            credit_limit_paise=100_000_000,
+        ),
+        CardAccount(
+            id="b",
+            name="B",
+            statement_day=5,
+            due_day=25,
+            outstanding_paise=0,
+            credit_limit_paise=100_000_000,
+        ),
+    )
+    inputs = ProjectionInput(
+        as_of=as_of,
+        floor_paise=0,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=10_000_000),),
+        cards=cards,
+        categories=(category,),
+        spend=spend,
+        history_start=start,
+        ask_horizon_days=90,
+    )
+    prepared = prepare(inputs, MODEL)
+    columns = prepared.spec.pools[0].columns
+    assert int(columns["card0"].sum()) == 20 * 200_000
+    assert int(columns["card1"].sum()) == 20 * 100_000
+    assert not columns["cash"].any()

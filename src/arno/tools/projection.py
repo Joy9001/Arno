@@ -26,6 +26,7 @@ from arno.engine.inputs import (
 )
 from arno.engine.money import MAX_PAISE, _add_months, money
 from arno.engine.patterns import (
+    MISSED_AFTER_DAYS,
     KnownSchedule,
     family_interval_days,
     is_covered,
@@ -50,7 +51,6 @@ from arno.engine.projection import (
     SeriesForecast,
     SourceRef,
     SpendRow,
-    last_statement_close,
 )
 from arno.engine.projection import (
     project as run_projection,
@@ -67,7 +67,7 @@ from arno.engine.scenario import (
 )
 from arno.india.workdays import calendar_for
 from arno.ledger import schedules as schedules_mod
-from arno.ledger.common import balance_anchor, has_known_balance
+from arno.ledger.common import balance_anchor, has_known_balance, ledger_balances_at
 from arno.ledger.common import today as ledger_today
 from arno.ledger.settings import read_settings
 from arno.tools.mark import mark
@@ -95,32 +95,8 @@ async def run_compute[**P, R](fn: Callable[P, R], /, *args: P.args, **kwargs: P.
     return await asyncio.shield(worker)
 
 
-async def _balances_at(
-    conn: Connection, ledger_account_ids: list[str], as_of: date
-) -> dict[str, int]:
-    if not ledger_account_ids:
-        return {}
-    # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
-    # generic plan while still using the `pgledger_entries (account_id)` index.
-    rows = await conn.fetch(
-        """
-        SELECT e.account_id, coalesce(sum(e.amount), 0)::bigint AS balance_paise
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-        JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
-          AND m.date <= $2
-        GROUP BY e.account_id
-        """,
-        ledger_account_ids,
-        as_of,
-    )
-    by_id = {str(row["account_id"]): int(row["balance_paise"]) for row in rows}
-    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
-
-
 async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> int:
-    return (await _balances_at(conn, [ledger_account_id], as_of))[ledger_account_id]
+    return (await ledger_balances_at(conn, [ledger_account_id], as_of))[ledger_account_id]
 
 
 async def _horizon_for_loading(
@@ -153,7 +129,7 @@ async def _last_movements(
     """The date of each account's last movement on or before ``as_of``."""
     if not ledger_account_ids:
         return {}
-    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `_balances_at`.
+    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `ledger_balances_at`.
     rows = await conn.fetch(
         """
         SELECT e.account_id, max(m.date) AS last_date
@@ -191,40 +167,6 @@ _KNOWN_ON_DAY = """
 """
 
 
-async def _unbilled(conn: Connection, rows: list[Any], as_of: date) -> dict[str, int]:
-    """Each card's net charges since its last statement closed: the part of its outstanding that
-    joins the next bill, not the one already billed. Payments from the user's own accounts are not
-    charges."""
-    if not rows:
-        return {}
-    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
-    closes = [last_statement_close(int(row["statement_day"]), as_of) for row in rows]
-    charged = await conn.fetch(
-        """
-        SELECT c.ledger_id,
-               coalesce(sum(CASE WHEN t.from_account_id = c.ledger_id THEN t.amount
-                                 ELSE -t.amount END), 0)::bigint AS charged_paise
-        FROM unnest($1::text[], $2::date[]) AS c(ledger_id, closed)
-        JOIN pgledger_transfers t
-          ON t.from_account_id = c.ledger_id OR t.to_account_id = c.ledger_id
-        JOIN movement_legs ml ON ml.transfer_id = t.id
-        JOIN movements m ON m.id = ml.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        JOIN accounts other ON other.ledger_account_id = CASE
-            WHEN t.from_account_id = c.ledger_id THEN t.to_account_id ELSE t.from_account_id END
-        WHERE m.date > c.closed AND m.date <= $3
-          AND ms.is_effective
-          AND NOT other.liquid AND other.kind <> 'card'
-        GROUP BY c.ledger_id
-        """,
-        ledger_ids,
-        closes,
-        as_of,
-    )
-    by_ledger = {str(row["ledger_id"]): int(row["charged_paise"]) for row in charged}
-    return {ledger_id: by_ledger.get(ledger_id, 0) for ledger_id in ledger_ids}
-
-
 async def _card_rows(
     conn: Connection, as_of: date, *, known_then: bool
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -238,9 +180,9 @@ async def _card_rows(
         known_then,
     )
     ledger_ids = [str(row["ledger_account_id"]) for row in rows]
-    balances = await _balances_at(conn, ledger_ids, as_of)
+    balances = await ledger_balances_at(conn, ledger_ids, as_of)
     last_dates = await _last_movements(conn, ledger_ids, as_of)
-    unbilled = await _unbilled(conn, rows, as_of)
+    unbilled = await schedules_mod.card_unbilled(conn, rows, as_of)
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
@@ -286,7 +228,7 @@ async def _liquid_rows(
         known_then,
     )
     ledger_ids = [str(row["ledger_account_id"]) for row in rows]
-    balances = await _balances_at(conn, ledger_ids, as_of)
+    balances = await ledger_balances_at(conn, ledger_ids, as_of)
     last_dates = await _last_movements(conn, ledger_ids, as_of)
     accounts: list[dict[str, Any]] = []
     gaps: list[str] = []
@@ -342,7 +284,7 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
             account_ids,
         )
         ledger_by_account = {str(acc["id"]): str(acc["ledger_account_id"]) for acc in account_rows}
-    balances = await _balances_at(conn, list(ledger_by_account.values()), as_of)
+    balances = await ledger_balances_at(conn, list(ledger_by_account.values()), as_of)
     goals: list[dict[str, Any]] = []
     for row in rows:
         ledger_id = ledger_by_account.get(str(row["account_id"]))
@@ -653,8 +595,19 @@ async def _load_snapshot(
         as_of,
         known_then,
     )
+    tomorrow = as_of + timedelta(days=1)
+    recent_due = as_of - timedelta(days=MISSED_AFTER_DAYS)
     expanded_by_id = await schedules_mod.expand_schedules(
-        conn, schedule_rows, as_of + timedelta(days=1), end, as_of=as_of
+        conn,
+        schedule_rows,
+        tomorrow,
+        end,
+        as_of=as_of,
+        starts_by_id={
+            str(row["id"]): recent_due
+            for row in schedule_rows
+            if row["kind"] in {"obligation", "instalment"}
+        },
     )
     for row in schedule_rows:
         amount = row["amount_paise"]
@@ -791,6 +744,35 @@ async def _load_snapshot(
         category_reducible={row.id: row.reducible for row in category_rows},
     )
 
+    scheduled_categories = {
+        (item.schedule_id, item.category_id)
+        for item in occurrences
+        if item.kind in {"obligation", "instalment"}
+        and item.category_id is not None
+        and (item.remaining_paise or 0) > 0
+    }
+    linked = set()
+    if scheduled_categories:
+        linked = {
+            (str(row["schedule_id"]), str(row["category_id"]))
+            for row in await conn.fetch(
+                """
+                SELECT DISTINCT o.schedule_id, o.category_id
+                FROM schedule_occurrences o
+                JOIN schedule_payments p ON p.occurrence_id = o.id
+                JOIN movements m ON m.id = p.movement_id
+                JOIN v_movement_state ms ON ms.movement_id = m.id
+                WHERE o.schedule_id = ANY($1::text[]) AND ms.is_effective
+                  AND m.date BETWEEN $2 AND $3
+                """,
+                sorted({schedule_id for schedule_id, _ in scheduled_categories}),
+                as_of - timedelta(days=RARE_WINDOW_DAYS),
+                as_of,
+            )
+        }
+    # Keep variable spend only where all projected schedules in the category are attributed.
+    unattributed = {category_id for _, category_id in scheduled_categories - linked}
+
     return LedgerSnapshot(
         as_of=as_of,
         floor_paise=int(settings["floor_paise"] or 0),
@@ -811,7 +793,11 @@ async def _load_snapshot(
             "SELECT min(date) FROM movements WHERE date <= $1", as_of
         ),
         series=series_forecasts,
-        attributed=True,
+        attributed_categories=frozenset(
+            category_id
+            for _, category_id in scheduled_categories
+            if category_id not in unattributed
+        ),
         ask_horizon_days=horizon_days,
         gaps=tuple(gaps),
         balance_ages=tuple(balance_ages),

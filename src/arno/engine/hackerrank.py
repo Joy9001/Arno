@@ -409,7 +409,8 @@ def _detect_rule(
     ]
     detection = series.detect(
         payments,
-        as_of=as_of,
+        # Settled rows and explicit anchors are observed through the adapter's cutoff day.
+        as_of=as_of + timedelta(days=1),
         window_start=window_start,
         calendar=calendar,
     )

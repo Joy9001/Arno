@@ -610,3 +610,35 @@ def test_a_change_amount_beyond_the_balance_limit_is_rejected():
     ):
         with pytest.raises(ValueError, match="supported maximum"):
             apply_changes(_inputs(), [change])
+
+
+def test_change_amount_keeps_a_partial_payment():
+    base = _inputs(
+        events=(
+            CashEvent(
+                date=date(2026, 1, 5),
+                amount_paise=-60_000,
+                name="Rent",
+                kind="obligation",
+                source_id="sch_rent",
+                paid_paise=40_000,
+            ),
+        )
+    )
+    applied = apply_changes(
+        base,
+        [ChangeAmount(source_id="sch_rent", amount_paise=150_000, start=date(2026, 1, 1))],
+    )
+    event = applied.inputs.events[0]
+    # The schedule now charges 1,50,000; 40,000 of this occurrence was already linked.
+    assert event.amount_paise == -110_000
+    assert event.paid_paise == 40_000
+
+
+def test_apply_changes_asserts_the_horizon_covers_every_change():
+    base = _inputs(horizon=90)
+    with pytest.raises(AssertionError, match="scenario_horizon_days"):
+        apply_changes(
+            base,
+            [OneTime(name="Tax", amount_paise=10_000, direction="out", date=date(2026, 5, 1))],
+        )

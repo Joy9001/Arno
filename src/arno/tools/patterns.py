@@ -337,6 +337,8 @@ async def detect(
         for row in rows:
             grouped.setdefault(row.payee_id, []).append(row)
 
+        # shortcut: one detected series per payee and raw token overlap in same_merchant, revisit
+        # when a real payee holds two plans or false-matches generic words
         for payee_id in sorted(grouped):
             group = sorted(grouped[payee_id], key=lambda item: (item.date, item.movement_id))
             payments = [
@@ -445,6 +447,7 @@ async def detect(
                     "confidence": detection.confidence,
                     "rule": {
                         "family": detection.rule.family,
+                        "rrule": detection.rule.rrule,
                         "description": detection.rule.description,
                     },
                     "next_date": next_date,

@@ -5,12 +5,19 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 
+import numpy as np
 import pytest
 
 from arno.engine import affordability
 from arno.engine.affordability import (
     MAX_DEFERRABLE_GOALS,
     Hypothetical,
+    _Applied,
+    _dominates,
+    _least_cut,
+    _Matrix,
+    _min_held,
+    _Plan,
     afford,
     project_scenario,
 )
@@ -25,6 +32,7 @@ from arno.engine.projection import (
     SpendCategory,
     Tradeoff,
     project,
+    reduce_categories,
 )
 from arno.engine.scenario import ChangeAmount, StopIncome
 
@@ -714,3 +722,299 @@ def test_plans_defer_only_the_top_eight_goals(monkeypatch):
     assert result["verdict"] == "yes-but"
     delayed = {trade["goal_id"] for trade in result["tradeoffs"] if "goal_id" in trade}
     assert delayed and delayed <= top_eight
+
+
+def test_min_held_reads_the_threshold_as_written():
+    assert _min_held(25, 0.28) == 7
+    assert _min_held(16_384, 0.90) == 14_746
+    assert _min_held(100, 0.99) == 99
+
+
+def test_a_card_bill_is_an_obligation_the_verdict_cannot_ignore():
+    card = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=50_000,
+        credit_limit_paise=500_000,
+        unbilled_paise=0,
+    )
+    inputs = _inputs(start=10_000, floor=-100_000, cards=(card,))
+    result = project(inputs, runs=50)
+    assert result["floor_probability"] == 1.0
+    assert result["obligations_met"] is False
+    verdict = afford(inputs, Hypothetical(amount_paise=1_000, date=date(2026, 1, 1)), runs=50)
+    assert verdict["verdict"] != "yes"
+
+
+def test_a_cut_can_fix_an_obligation_that_the_floor_alone_would_pass():
+    category = SpendCategory(
+        id="cat_food",
+        name="Food",
+        baseline_per_day_paise=5_000,
+        reducible=True,
+        history=tuple((date(2026, 1, 1) - timedelta(days=index + 1), 5_000) for index in range(60)),
+    )
+    inputs = _inputs(
+        start=60_000,
+        floor=-500_000,
+        categories=(category,),
+        events=(
+            CashEvent(
+                date=date(2026, 1, 11),
+                amount_paise=-15_000,
+                name="Rent",
+                kind="obligation",
+            ),
+        ),
+    )
+    purchase = Hypothetical(amount_paise=2_000, date=date(2026, 1, 2))
+    applied = replace(
+        inputs,
+        events=inputs.events
+        + (
+            CashEvent(
+                date=date(2026, 1, 2),
+                amount_paise=-2_000,
+                name="Hypothetical purchase",
+                kind="hypothetical",
+            ),
+        ),
+    )
+    result = afford(inputs, purchase, runs=512, seed=7)
+    assert result["floor_probability"] == 1.0
+    assert result["obligations_met"] is False
+    assert result["verdict"] == "yes-but"
+    trade = next(row for row in result["tradeoffs"] if row["kind"] == "cut_category")
+    assert 0 < trade["ratio"] <= 0.5
+    reduced, _rows = reduce_categories(
+        applied, trade["ratio"], until=date.fromisoformat(trade["until"])
+    )
+    assert project(reduced, runs=512, seed=7)["obligations_met"] is True
+
+
+def test_a_future_card_purchase_uses_credit_freed_by_an_earlier_bill():
+    card = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=100_000,
+        credit_limit_paise=150_000,
+        unbilled_paise=0,
+    )
+    result = afford(
+        _inputs(start=1_000_000, cards=(card,)),
+        Hypothetical(
+            amount_paise=100_000,
+            date=date(2026, 2, 20),
+            method="card",
+            account="Card",
+        ),
+        runs=20,
+    )
+    assert result["hypothetical"]["feasible"] is True
+
+
+def test_strict_dominance_keeps_card_and_emi_peers_with_equal_values():
+    card = _Plan("card", (), 100, 500)
+    emi = _Plan("emi", (), 100, 500)
+    assert not _dominates(card, emi)
+    assert not _dominates(emi, card)
+    assert _dominates(_Plan("asked", (), 0, 0), card)
+    assert _dominates(_Plan("card", (), 50, 500), card)
+
+
+def test_a_tradeoff_lists_every_goal_it_delays():
+    goals = (
+        GoalPlan(id="goal_a", name="Goa", target_paise=100_000, saved_paise=0, priority=1),
+        GoalPlan(id="goal_b", name="Car", target_paise=100_000, saved_paise=0, priority=2),
+    )
+    inputs = _inputs(
+        start=10_000,
+        floor=0,
+        goals=goals,
+        events=(
+            CashEvent(
+                date=date(2026, 1, 9),
+                amount_paise=-4_000,
+                name="Goa contribution",
+                kind="goal_contribution",
+                goal_id="goal_a",
+            ),
+            CashEvent(
+                date=date(2026, 1, 8),
+                amount_paise=-4_000,
+                name="Car contribution",
+                kind="goal_contribution",
+                goal_id="goal_b",
+            ),
+            CashEvent(
+                date=date(2026, 1, 11),
+                amount_paise=-6_000,
+                name="Rent",
+                kind="obligation",
+            ),
+        ),
+    )
+    result = afford(
+        inputs,
+        Hypothetical(amount_paise=2_000, date=date(2026, 1, 2)),
+        runs=50,
+    )
+    trade = next(row for row in result["tradeoffs"] if row["kind"] == "delay_goal")
+    assert {goal["id"] for goal in trade["goals"]} == {"goal_a", "goal_b"}
+    assert trade["goal_id"] == trade["goals"][0]["id"]
+
+
+def test_a_skipped_goal_contribution_before_an_obligation_counts():
+    goal = GoalPlan(id="goal", name="Goa", target_paise=100_000, saved_paise=0)
+    inputs = _inputs(
+        start=8_000,
+        floor=-100_000,
+        goals=(goal,),
+        events=(
+            CashEvent(
+                date=date(2026, 1, 10),
+                amount_paise=-4_000,
+                name="Goa contribution",
+                kind="goal_contribution",
+                goal_id="goal",
+            ),
+            CashEvent(
+                date=date(2026, 1, 11),
+                amount_paise=-6_000,
+                name="Rent",
+                kind="obligation",
+            ),
+        ),
+    )
+    result = afford(
+        inputs,
+        Hypothetical(amount_paise=2_000, date=date(2026, 1, 2)),
+        runs=512,
+        seed=7,
+    )
+    assert result["obligations_met"] is False
+    assert result["verdict"] == "yes-but"
+    trade = next(row for row in result["tradeoffs"] if row["kind"] == "delay_goal")
+    assert trade["goal_id"] == "goal"
+
+
+def test_obligation_days_are_gated_independently_across_a_percent():
+    scenarios = 512
+    needed = _min_held(scenarios, 0.99)
+    payables = np.zeros((scenarios, 2), np.int64)
+    payables[:5, 0] = -10
+    payables[5:10, 1] = -10
+    reducible = np.zeros((scenarios, 2), np.int64)
+    reducible[:10, :] = 100
+    matrix = _Matrix(
+        method="asked",
+        applied=_Applied(_inputs(), {}, None),
+        marks=(1, 2),
+        balances=np.zeros((scenarios, 2), np.int64),
+        reducible=None,
+        capped=False,
+        obligation_days=(1, 2),
+        payables=payables,
+        obligation_reducible=reducible,
+    )
+    # Five scenarios fail each day, disjoint; each day is inside its own 1% allowance, so no
+    # cut is needed. A scenario-max gate would see ten failing scenarios and demand a cut.
+    assert _least_cut(matrix, matrix.balances, payables, 0, needed, needed) == 0
+
+
+def test_a_provisional_capped_candidate_does_not_prune_a_goal_superset(monkeypatch):
+    goals = (
+        GoalPlan(id="a", name="A", target_paise=100_000, saved_paise=0),
+        GoalPlan(id="b", name="B", target_paise=100_000, saved_paise=0),
+    )
+    inputs = _inputs(
+        goals=goals,
+        events=(
+            CashEvent(
+                date=date(2026, 1, 9),
+                amount_paise=-1_000,
+                name="A contribution",
+                kind="goal_contribution",
+                goal_id="a",
+            ),
+            CashEvent(
+                date=date(2026, 1, 9),
+                amount_paise=-1_000,
+                name="B contribution",
+                kind="goal_contribution",
+                goal_id="b",
+            ),
+        ),
+    )
+    matrix = _Matrix(
+        method="asked",
+        applied=_Applied(inputs, {}, None),
+        marks=(0,),
+        balances=np.zeros((4, 1), np.int64),
+        reducible=np.zeros((4, 1), np.int64),
+        capped=True,
+        obligation_days=(),
+        payables=None,
+        obligation_reducible=None,
+    )
+    monkeypatch.setattr(affordability, "_least_cut", lambda *args, **kwargs: None)
+    plans = affordability._plans(
+        [matrix],
+        ("a", "b"),
+        date(2026, 1, 1),
+        floor=0,
+        needed=3,
+        obligation_needed=4,
+        spend_paise=0,
+    )
+    assert ("a", "b") in {plan.goals for plan in plans}
+    assert all(plan.provisional for plan in plans)
+
+
+def test_verify_recomputes_the_cost_at_the_bisected_cut(monkeypatch):
+    category = SpendCategory(
+        id="cat",
+        name="Food",
+        baseline_per_day_paise=10_000,
+        reducible=True,
+        history=tuple(
+            (date(2026, 1, 1) - timedelta(days=index + 1), 10_000) for index in range(60)
+        ),
+    )
+    inputs = _inputs(start=1_000_000, categories=(category,))
+    plan = _Plan("asked", (), 5_000, 999_999, provisional=True)
+    matrix = _Matrix(
+        method="asked",
+        applied=_Applied(inputs, {}, None),
+        marks=(0,),
+        balances=np.zeros((4, 1), np.int64),
+        reducible=np.ones((4, 1), np.int64),
+        capped=True,
+        obligation_days=(),
+        payables=None,
+        obligation_reducible=None,
+    )
+
+    def fake_project(current, *, runs, seed, threshold):
+        ratio = current.categories[0].reduce_ratio
+        return {"floor_probability": 1.0 if ratio >= 0.25 else 0.0, "obligations_met": True}
+
+    monkeypatch.setattr(affordability, "project", fake_project)
+    verified = affordability._verify(
+        plan,
+        matrix,
+        when=date(2026, 1, 1),
+        until=date(2026, 2, 1),
+        runs=4,
+        seed=1,
+        threshold=0.9,
+        spend_paise=10_000,
+    )
+    assert verified is not None
+    assert verified.plan.cut_bps == 2_500
+    assert verified.plan.cost_paise == 2_500
+    assert verified.plan.provisional is False

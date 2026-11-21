@@ -6,10 +6,11 @@ money is rounded back to whole paise at every step.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Context, Decimal, localcontext
+from functools import wraps
 from typing import Literal, NotRequired, TypedDict, overload
 
 from arno.india.formatting import format_paise
@@ -27,6 +28,32 @@ _MAX_RATE_UNIT = 1_000_000  # 100.0000% a year in 0.0001% (bps_x100) units
 # The kernel keeps balances in signed 64-bit integers; a larger amount would wrap silently.
 MAX_PAISE = 9_223_372_036_854_775_807
 _MAX_MONTHS = 600
+
+# A caller's global Decimal context (precision, rounding, traps) must not move a paisa.
+_DECIMAL_CONTEXT = Context(prec=28, rounding=ROUND_HALF_UP)
+
+DayCount = Literal["30e/360", "actual/365f", "30/360", "actual/365"]
+_CanonicalDayCount = Literal["30e/360", "actual/365f"]
+# 30E/360 is the Eurobond basis; actual/365 fixed is ISDA's Actual/365 (Fixed).
+_DAY_COUNT_ALIASES = {"30/360": "30e/360", "actual/365": "actual/365f"}
+
+
+def _pinned[**P, R](function: Callable[P, R]) -> Callable[P, R]:
+    """Run the function in the module's Decimal context, whatever the caller set globally."""
+
+    @wraps(function)
+    def run(*args: P.args, **kwargs: P.kwargs) -> R:
+        with localcontext(_DECIMAL_CONTEXT):
+            return function(*args, **kwargs)
+
+    return run
+
+
+def _canonical_day_count(day_count: str) -> _CanonicalDayCount:
+    canonical = _DAY_COUNT_ALIASES.get(day_count, day_count)
+    if canonical not in ("30e/360", "actual/365f"):
+        raise ValueError("day_count must be '30e/360' or 'actual/365f'")
+    return canonical
 
 
 def check_paise(value: int) -> None:
@@ -96,6 +123,7 @@ class RateFit(TypedDict):
     high_bps_x100: int | None
     exact: bool
     note: str
+    matches_emi: NotRequired[bool]
 
 
 class Amortization(TypedDict):
@@ -268,6 +296,7 @@ _add_months = add_months
 
 
 def _days_30_360(first: date, second: date) -> int:
+    """30E/360 day count: both endpoints clamp to the 30th of their month."""
     day1 = min(first.day, 30)
     day2 = min(second.day, 30)
     return (second.year - first.year) * 360 + (second.month - first.month) * 30 + (day2 - day1)
@@ -276,7 +305,7 @@ def _days_30_360(first: date, second: date) -> int:
 def _validate_amortize_conventions(
     *,
     rest: Literal["monthly", "daily"],
-    day_count: Literal["30/360", "actual/365"],
+    day_count: DayCount,
     interest_unit_paise: int,
     emi_rounding: Literal["half_up", "up"],
     emi_unit_paise: int,
@@ -285,8 +314,7 @@ def _validate_amortize_conventions(
 ) -> None:
     if rest not in ("monthly", "daily"):
         raise ValueError("rest must be 'monthly' or 'daily'")
-    if day_count not in ("30/360", "actual/365"):
-        raise ValueError("day_count must be '30/360' or 'actual/365'")
+    _canonical_day_count(day_count)
     if require_start_date_for_daily and rest == "daily" and start_date is None:
         raise ValueError("daily rest requires start_date")
     if interest_unit_paise <= 0:
@@ -324,7 +352,7 @@ def _period_interest(
     index: int,
     *,
     rest: Literal["monthly", "daily"],
-    day_count: Literal["30/360", "actual/365"],
+    day_count: _CanonicalDayCount,
     start_date: date | None,
     interest_unit_paise: int,
 ) -> Decimal:
@@ -335,7 +363,7 @@ def _period_interest(
         raise ValueError("daily rest requires start_date")
     prev_date = start_date if index == 1 else add_months(start_date, index - 1)
     curr_date = add_months(start_date, index)
-    if day_count == "actual/365":
+    if day_count == "actual/365f":
         days = (curr_date - prev_date).days
         basis = 365
     else:
@@ -365,7 +393,7 @@ def _walk(
     start_index: int = 1,
     start_date: date | None = None,
     rest: Literal["monthly", "daily"] = "monthly",
-    day_count: Literal["30/360", "actual/365"] = "30/360",
+    day_count: _CanonicalDayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
@@ -391,7 +419,9 @@ def _walk(
         index = start_index + offset
         if rate_changes_map is not None and index in rate_changes_map:
             current_rate = rate_changes_map[index]
-            if reset == "emi" and index > 1:
+            # A prepayment path runs its own first month from the EMI the caller kept, so a reset
+            # coinciding with it must not recompute that EMI.
+            if reset == "emi" and index > start_index:
                 remaining_for_reset = max(end_index - index + 1, 1)
                 current_emi = _compute_emi(
                     balance, current_rate, remaining_for_reset, emi_rounding, emi_unit_paise
@@ -443,6 +473,7 @@ def _schedule_pv(payments: Sequence[int], unit: int) -> Decimal:
     return pv
 
 
+@_pinned
 def _compute_apr(net_disbursed_paise: int, payments: Sequence[int]) -> RateFit:
     if net_disbursed_paise <= 0:
         raise ValueError("net disbursed amount must be positive")
@@ -450,7 +481,13 @@ def _compute_apr(net_disbursed_paise: int, payments: Sequence[int]) -> RateFit:
         raise ValueError("schedule payments must be positive")
 
     target = Decimal(net_disbursed_paise)
-    if _schedule_pv(payments, 0) == target:
+    undiscounted = _schedule_pv(payments, 0)
+    if undiscounted < target:
+        # Every rate above zero discounts the payments further, so no non-negative APR exists.
+        raise ValueError(
+            "payments repay less than the net amount disbursed, so the APR is negative"
+        )
+    if undiscounted == target:
         return {
             "low_bps_x100": 0,
             "high_bps_x100": 0,
@@ -489,6 +526,7 @@ def _compute_apr(net_disbursed_paise: int, payments: Sequence[int]) -> RateFit:
     }
 
 
+@_pinned
 def amortize(
     principal_paise: int,
     annual_rate: float,
@@ -499,7 +537,7 @@ def amortize(
     prepay: Prepay | None = None,
     assumptions: list[str] | None = None,
     rest: Literal["monthly", "daily"] = "monthly",
-    day_count: Literal["30/360", "actual/365"] = "30/360",
+    day_count: DayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
@@ -537,6 +575,7 @@ def amortize(
         total_fee_paise = processing_fee_paise + fee_gst_paise
         if total_fee_paise >= principal_paise:
             raise ValueError("processing fee and GST must be less than principal")
+    day_count = _canonical_day_count(day_count)
     _validate_amortize_conventions(
         rest=rest,
         day_count=day_count,
@@ -556,6 +595,11 @@ def amortize(
             raise ValueError("rate_changes EMI numbers must be positive")
         if change_emi <= prev_change_emi:
             raise ValueError("rate_changes must be in strictly increasing EMI order")
+        if change_emi > months:
+            # A reset beyond the stated tenure would silently stretch the loan.
+            raise ValueError(
+                f"a rate reset at EMI {change_emi} is beyond the {months}-month tenure"
+            )
         if new_rate < 0:
             raise ValueError("rate cannot be negative")
         rate_changes_map[change_emi] = Decimal(str(new_rate))
@@ -614,7 +658,7 @@ def amortize(
     )
     if rest != "monthly":
         notes.append(f"daily rest ({day_count})")
-    elif day_count != "30/360":
+    elif day_count != "30e/360":
         notes.append(f"day count: {day_count}")
     if interest_unit_paise != 1:
         notes.append(f"interest rounded half-up to {interest_unit_paise} paise")
@@ -625,6 +669,15 @@ def amortize(
         notes.append(f"rate resets ({reset}): {summary}")
     if emi_paise is not None and len(walk.principal) > months:
         notes.append(f"this EMI takes {len(walk.principal)} months, not {months}")
+    if emi_paise is None and emi_unit_paise > 1 and len(walk.principal) > 0:
+        last_total = walk.principal[-1] + walk.interest[-1]
+        if abs(last_total - emi) > emi_unit_paise:
+            # Rounding the EMI to a coarse unit leaves a balloon the EMI figure hides.
+            notes.append(
+                f"the last instalment is {money(int(last_total))['text']}, not "
+                f"{money(int(emi))['text']}: the EMI was rounded to {emi_unit_paise} paise, so "
+                "the last month pays the remainder"
+            )
 
     total_interest = sum(walk.interest, Decimal(0))
     schedule_rows = schedule(walk)
@@ -700,7 +753,8 @@ def amortize(
 
         rate_at_emi = walk.annual_rates[before]
         if reduce == "tenure":
-            new_emi = walk.emis[before - 1] if before > 0 else walk.emi
+            # The EMI actually charged at at_emi, including a reset that lands on the same month.
+            new_emi = walk.emis[before]
         else:
             new_emi = _compute_emi(balance, rate_at_emi, remaining, emi_rounding, emi_unit_paise)
 
@@ -734,18 +788,24 @@ def amortize(
     return result
 
 
+@_pinned
 def infer_rate(
     principal_paise: int,
     months: int,
     emi_paise: int,
     *,
     rest: Literal["monthly", "daily"] = "monthly",
-    day_count: Literal["30/360", "actual/365"] = "30/360",
+    day_count: DayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
 ) -> RateFit:
-    """Infer the annual rate interval in 0.0001% (bps x 100) units for an observed EMI."""
+    """Infer the annual rate interval in 0.0001% (bps x 100) units for an observed EMI.
+
+    The EMI is assumed monthly-rest, so a daily rest is refused rather than silently ignored.
+    ``exact`` is true only when one rate unit reproduces the EMI; a wider interval means several
+    rates round to the same instalment, and the note carries the range.
+    """
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
     _check_months(months)
@@ -753,6 +813,9 @@ def infer_rate(
     if emi_paise < 0:
         raise ValueError("emi cannot be negative")
     check_paise(emi_paise)
+    if rest != "monthly":
+        raise ValueError("infer_rate supports monthly rest only")
+    day_count = _canonical_day_count(day_count)
     _validate_amortize_conventions(
         rest=rest,
         day_count=day_count,
@@ -775,12 +838,14 @@ def infer_rate(
                 "low_bps_x100": None,
                 "high_bps_x100": None,
                 "exact": False,
+                "matches_emi": False,
                 "note": "EMI cannot repay the principal in the given tenure (below 0% EMI)",
             }
         return {
             "low_bps_x100": None,
             "high_bps_x100": None,
             "exact": False,
+            "matches_emi": False,
             "note": "EMI is below the rounded 0% EMI under these conventions",
         }
 
@@ -790,6 +855,7 @@ def infer_rate(
             "low_bps_x100": None,
             "high_bps_x100": None,
             "exact": False,
+            "matches_emi": False,
             "note": "EMI exceeds the 100% annual rate search range",
         }
 
@@ -816,20 +882,22 @@ def infer_rate(
     last_le = lo
 
     if first_ge <= last_le:
+        exact = first_ge == last_le
         if first_ge == 0:
             note = (
                 f"zero-rate loan (0% to {last_le / 10_000:.4f}% a year)"
                 if last_le > 0
                 else "zero-rate loan (0% a year)"
             )
-        elif first_ge == last_le:
+        elif exact:
             note = f"exact rate {first_ge / 10_000:.4f}% a year"
         else:
             note = f"{first_ge / 10_000:.4f}% to {last_le / 10_000:.4f}% a year"
         return {
             "low_bps_x100": first_ge,
             "high_bps_x100": last_le,
-            "exact": True,
+            "exact": exact,
+            "matches_emi": True,
             "note": note,
         }
 
@@ -837,6 +905,7 @@ def infer_rate(
         "low_bps_x100": last_le,
         "high_bps_x100": first_ge,
         "exact": False,
+        "matches_emi": False,
         "note": (
             f"no exact unit match; bracketed between {last_le / 10_000:.4f}% and "
             f"{first_ge / 10_000:.4f}% a year"
@@ -907,6 +976,7 @@ def allocate(total_paise: int, weights: Sequence[int]) -> list[int]:
     return parts
 
 
+@_pinned
 def card_emi(
     principal_paise: int,
     *,
@@ -943,6 +1013,9 @@ def card_emi(
     interests: list[int] = []
     principals: list[int] = []
     for _ in range(months):
+        if balance <= 0:
+            # A small principal can clear before the last named instalment; the rest are zero.
+            break
         month_interest = int(
             (balance * monthly_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         )
@@ -1018,8 +1091,9 @@ def card_payoff(
     ``"minimum"``, the larger of ``minimum_bps`` of the statement balance (rounded up to a whole
     paisa) and ``minimum_floor_paise``, capped at the statement balance, or for a fixed integer
     payment, that amount capped at the statement balance; (5) closing balance = statement balance -
-    payment. Stops when closing reaches zero. Assumes no new spending and no interest-free period
-    while a balance is carried.
+    payment. Stops when closing reaches zero. A payment that does not reduce the balance is
+    refused at once, not walked to the horizon. Assumes no new spending and no interest-free
+    period while a balance is carried.
     """
     if balance_paise <= 0:
         raise ValueError("balance must be positive")
@@ -1070,6 +1144,11 @@ def card_payoff(
             due = fixed_payment
         paid = min(due, statement)
         closing = statement - paid
+        if closing >= balance:
+            # A minimum due at or below the month's charges grows the balance forever.
+            raise ValueError(
+                "the payment does not cover the finance charge, so the balance never falls"
+            )
         schedule.append(
             {
                 "n": month,
@@ -1227,6 +1306,7 @@ def compare_offers(offers: Sequence[Offer]) -> list[OfferComparison]:
     return comparisons
 
 
+@_pinned
 def compound(
     monthly_paise: int,
     annual_rate: float,
@@ -1277,6 +1357,7 @@ __all__ = [
     "CardPayoff",
     "CardPayoffRow",
     "CompoundResult",
+    "DayCount",
     "Money",
     "Offer",
     "OfferComparison",

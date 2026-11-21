@@ -91,6 +91,28 @@ async def ledger_balance(conn: Connection, ledger_account_id: str) -> int:
     return (await ledger_balances(conn, [ledger_account_id]))[ledger_account_id]
 
 
+async def ledger_balances_at(
+    conn: Connection, ledger_account_ids: list[str], as_of: date
+) -> dict[str, int]:
+    if not ledger_account_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT e.account_id, coalesce(sum(e.amount), 0)::bigint AS balance_paise
+        FROM pgledger_entries e
+        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+          AND m.date <= $2
+        GROUP BY e.account_id
+        """,
+        ledger_account_ids,
+        as_of,
+    )
+    by_id = {str(row["account_id"]): int(row["balance_paise"]) for row in rows}
+    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
+
+
 async def balance_as_of_many(
     conn: Connection, ledger_account_ids: list[str]
 ) -> dict[str, date | None]:

@@ -84,6 +84,7 @@ class LedgerSnapshot:
     history_start: date | None = None
     series: tuple[SeriesForecast, ...] = ()
     attributed: bool = False
+    attributed_categories: frozenset[str] = frozenset()
     ask_horizon_days: int | None = None
     gaps: tuple[str, ...] = ()
     balance_ages: tuple[BalanceAge, ...] = ()
@@ -96,27 +97,36 @@ def _events(snapshot: LedgerSnapshot) -> tuple[list[CashEvent], set[str], list[s
     events: list[CashEvent] = []
     covered: set[str] = set()
     gaps: list[str] = []
+    unknown_obligations: set[str] = set()
     for occurrence in snapshot.occurrences:
-        if (
-            occurrence.kind in {"obligation", "instalment"}
-            and occurrence.amount_paise is not None
-            and occurrence.category_id
-        ):
-            covered.add(occurrence.category_id)
+        obligation = occurrence.kind in {"obligation", "instalment"}
         remaining = occurrence.remaining_paise
+        if remaining is None and obligation and occurrence.schedule_id not in unknown_obligations:
+            unknown_obligations.add(occurrence.schedule_id)
+            gaps.append(f"{occurrence.name} has no known amount and is not reserved")
         if remaining is None or remaining <= 0:
             continue
+        if obligation and occurrence.category_id:
+            covered.add(occurrence.category_id)
+        when = occurrence.date
+        if obligation and when <= snapshot.as_of:
+            when = snapshot.as_of + timedelta(days=1)
+            gaps.append(
+                f"{occurrence.name} due {occurrence.date.isoformat()} has an unpaid balance; "
+                f"reserved on {when.isoformat()}"
+            )
         common = {
-            "date": occurrence.date,
+            "date": when,
             "name": occurrence.name,
             "kind": occurrence.kind,
             "source_id": occurrence.schedule_id,
+            "paid_paise": (occurrence.amount_paise or remaining) - remaining,
         }
         if occurrence.kind.startswith("income"):
             events.append(
                 CashEvent(**common, amount_paise=remaining, confirmed=occurrence.confirmed)
             )
-        elif occurrence.kind in {"obligation", "instalment"}:
+        elif obligation:
             events.append(CashEvent(**common, amount_paise=-remaining, card_id=occurrence.card_id))
         elif occurrence.kind == "goal_contribution":
             events.append(CashEvent(**common, amount_paise=-remaining, goal_id=occurrence.goal_id))
@@ -160,7 +170,7 @@ def _spend_categories(
     uncategorized = 0
     rows_by_category: dict[str, int] = {}
     for row in snapshot.spend:
-        if row.amount_paise <= 0 or row.date < window_start:
+        if row.amount_paise <= 0 or not first <= row.date < snapshot.as_of:
             continue
         if row.category_id is not None:
             rows_by_category[row.category_id] = rows_by_category.get(row.category_id, 0) + 1
@@ -181,9 +191,12 @@ def _spend_categories(
         )
     result: list[SpendCategory] = []
     baseline_rows: list[BaselineSource] = []
-    days = [window_start + timedelta(days=offset) for offset in range(HISTORY_DAYS)]
+    days = [first + timedelta(days=offset) for offset in range((snapshot.as_of - first).days)]
+    active_cards = {card.id for card in snapshot.cards}
     for category in snapshot.categories:
-        if category.id in covered and not snapshot.attributed:
+        if category.id in covered and not (
+            snapshot.attributed or category.id in snapshot.attributed_categories
+        ):
             gaps.append(
                 f"{category.name} is covered by an obligation and is not simulated as variable "
                 "spend"
@@ -213,19 +226,12 @@ def _spend_categories(
             source = "computed"
         history = tuple((day, max(0, by_day.get(day, 0))) for day in days)
         total_spend = sum(by_day.values())
-        cards = by_card.get(category.id, {})
-        # The card with the largest share; ties keep the first card met, as the loader always has.
-        chosen: tuple[str, int] | None = None
-        for card_id, amount in cards.items():
-            if chosen is None or amount > chosen[1]:
-                chosen = (card_id, amount)
-        share = round(chosen[1] / total_spend, 4) if chosen is not None and total_spend > 0 else 0.0
-        card_id = chosen[0] if chosen is not None and share > 0 else None
-        if len(cards) > 1:
-            gaps.append(
-                f"{category.name} was charged to more than one card; its variable spend uses the "
-                "card with the largest share"
-            )
+        shares = tuple(
+            (card_id, amount / total_spend)
+            for card_id, amount in sorted(by_card.get(category.id, {}).items())
+            if card_id in active_cards
+        )
+        share = round(sum(value for _, value in shares), 4)
         if real_days < MIN_REAL_DAYS:
             gaps.append(
                 f"{category.name} has only {day_label}; its "
@@ -244,7 +250,8 @@ def _spend_categories(
                 baseline_source=source,
                 reducible=category.reducible,
                 card_share=share,
-                card_id=card_id,
+                card_id=max(shares, key=lambda item: item[1])[0] if shares else None,
+                card_shares=shares,
                 history=history,
             )
         )
@@ -374,7 +381,12 @@ def build_inputs(snapshot: LedgerSnapshot) -> ProjectionInput:
             "outside_text": snapshot.outside_text,
         },
         sources=tuple(_sources(snapshot, baseline_rows)),
-        spend=snapshot.spend,
+        spend=tuple(
+            row
+            for row in snapshot.spend
+            if row.date < snapshot.as_of
+            and (snapshot.history_start is None or snapshot.history_start <= row.date)
+        ),
         history_start=snapshot.history_start,
         series=snapshot.series,
         attributed=snapshot.attributed,

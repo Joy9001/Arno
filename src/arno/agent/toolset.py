@@ -28,7 +28,7 @@ from arno.agent.presentation import (
 )
 from arno.agent.write_models import Movement, MovementChanges, SetupData
 from arno.db.conn import Connection, connect, quote_ident
-from arno.engine.money import MAX_PAISE, Offer, money
+from arno.engine.money import MAX_PAISE, DayCount, Offer, money
 from arno.engine.money import Prepay as PrepayPayload
 from arno.engine.money import amortize as amortize_fn
 from arno.engine.money import compound as compound_fn
@@ -94,8 +94,8 @@ class LoanConventions(BaseModel):
     rest: Literal["monthly", "daily"] = Field(
         default="monthly", description="Interest on the balance each month, or each day."
     )
-    day_count: Literal["30/360", "actual/365"] = Field(
-        default="30/360", description="Days in a year, for a daily rest."
+    day_count: DayCount = Field(
+        default="30e/360", description="Day-count convention for a daily rest."
     )
     interest_unit_paise: int = Field(
         default=1, gt=0, description="Round each month's interest to this many paise."
@@ -560,10 +560,13 @@ async def amortize(
     if rate is None:
         if emi_paise is None:
             raise ModelRetry("Pass annual_rate, or an EMI to infer it from")
-        fit = infer_rate_fn(int(principal), int(count), int(emi_paise), **conventions_args)
+        try:
+            fit = infer_rate_fn(int(principal), int(count), int(emi_paise), **conventions_args)
+        except ValueError as exc:
+            raise ModelRetry(str(exc)) from exc
         low = fit["low_bps_x100"]
         high = fit["high_bps_x100"]
-        if not fit["exact"] or low is None or high is None:
+        if not fit.get("matches_emi") or low is None or high is None:
             raise ModelRetry(fit["note"])
         # An EMI a zero rate explains is a zero-rate loan (a no-cost EMI), not a small rate.
         rate = 0.0 if low == 0 else (low + high) / 2 / 10_000

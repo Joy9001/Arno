@@ -199,16 +199,13 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
                     int(card.obligation[t]) if card.obligation is not None else 0,
                     int(card.other[t]) if card.other is not None else 0,
                 ]
+                loose = 0
                 if card.limit_spend:
                     charges = [*new, spend[f"card{k}"]]
                 else:
                     # Resampled spend goes on the card first, past the limit; a series is new.
                     series_part = day_series.get(f"card{k}", 0) if t > 0 else 0
                     loose = spend[f"card{k}"] - series_part
-                    used[k] += loose
-                    due = int(card.due_of_day[t])
-                    if due >= 0:
-                        bills[k][due] = bills[k].get(due, 0) + loose
                     charges = [*new, series_part]
                 for charge_index, amount in enumerate(charges):
                     charged = min(amount, max(card.limit - used[k], 0))
@@ -220,6 +217,12 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
                     due = int(card.due_of_day[t])
                     if due >= 0:
                         bills[k][due] = bills[k].get(due, 0) + charged
+                if not card.limit_spend and loose:
+                    # Loose spend keeps the card and takes headroom after the day's new charges.
+                    used[k] += loose
+                    due = int(card.due_of_day[t])
+                    if due >= 0:
+                        bills[k][due] = bills[k].get(due, 0) + loose
             balance -= int(spec.later[t])
             balance -= spend["cash"]
             path.append(balance)
@@ -368,11 +371,12 @@ def test_the_kernel_matches_a_plain_day_by_day_walk(
         ]
         assert run.crossings.tolist() == [sum(day) for day in breached]
         rank = settings.scenarios // 100
+        obligation_days = kernel.obligation_days(spec)
         expected_failures = [
-            sum(1 for row in payables if row[int(day)] < 0) for day in spec.obligation_days
+            sum(1 for row in payables if row[int(day)] < 0) for day in obligation_days
         ]
         expected_margins = [
-            sorted(row[int(day)] for row in payables)[rank] for day in spec.obligation_days
+            sorted(row[int(day)] for row in payables)[rank] for day in obligation_days
         ]
         assert run.obligation_failures.tolist() == expected_failures
         assert run.obligation_margins.tolist() == expected_margins
@@ -392,13 +396,13 @@ def test_checkpoints_and_obligations_come_from_the_same_walk():
     run = kernel.run(spec, settings)
     assert run.paths is not None and run.checkpoints is not None
     assert run.checkpoints.tolist() == run.paths[:, [0, 10, 60]].tolist()
-    assert len(run.obligation_failures) == len(spec.obligation_days)
-    assert len(run.obligation_margins) == len(spec.obligation_days)
+    assert len(run.obligation_failures) == len(kernel.obligation_days(spec))
+    assert len(run.obligation_margins) == len(kernel.obligation_days(spec))
     _paths, payables = _reference_walk(spec, settings)
     rank = settings.scenarios // 100
     assert rank == 2
     assert run.obligation_margins.tolist() == [
-        sorted(row[int(day)] for row in payables)[rank] for day in spec.obligation_days
+        sorted(row[int(day)] for row in payables)[rank] for day in kernel.obligation_days(spec)
     ]
 
 
@@ -634,8 +638,10 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
         # Two days of spend fit; on day 3 the spend and the purchase share the last 1,000.
         assert drops == [0, 0, 6_000, 2_000, 2_000, 2_000]
     else:
-        # Spend stays on the card and fills it by day 3, so the late purchase is all cash.
-        assert drops == [0, 0, 5_000, 0, 0, 0]
+        # Spend stays on the card. By day 3 it has used 9,000 of the 10,000 limit, so the
+        # day-3 purchase gets the last 1,000 and 4,000 leaves cash; then the spend passes the
+        # limit on the card.
+        assert drops == [0, 0, 4_000, 0, 0, 0]
 
 
 def test_below_requires_a_bound_under_two_to_the_32():
@@ -644,3 +650,82 @@ def test_below_requires_a_bound_under_two_to_the_32():
     for bound in (0, -1, 2**32):
         with pytest.raises(AssertionError, match="2\\*\\*32"):
             kernel.below(draws, bound)
+
+
+def test_a_card_bill_due_day_and_a_day_zero_obligation_are_gated():
+    days = 10
+    total = days + 1
+    card = CardSpec(
+        limit=100_000,
+        used=50_000,
+        due_of_day=np.full(total, -1, np.int64),
+        bills={5: 50_000},
+    )
+    spec = Spec(
+        start_balance=10_000,
+        days=days,
+        first_day=739_000,
+        classes=np.zeros(total, np.int8),
+        inflow=np.zeros(total, np.int64),
+        obligation=np.zeros(total, np.int64),
+        later=np.zeros(total, np.int64),
+        obligation_days=np.zeros(0, np.int64),
+        unconfirmed=np.zeros(total, np.int64),
+        floor=-100_000,
+        cards=(card,),
+    )
+    run = kernel.run(spec, Settings(scenarios=8, seed=1))
+    assert kernel.obligation_days(spec).tolist() == [5]
+    assert run.obligation_failures.tolist() == [8]
+
+    today = replace(
+        spec,
+        cards=(),
+        obligation=np.array([15_000, *([0] * days)], np.int64),
+        obligation_days=np.array([0], np.int64),
+    )
+    run = kernel.run(today, Settings(scenarios=8, seed=1))
+    assert kernel.obligation_days(today).tolist() == [0]
+    assert run.obligation_failures.tolist() == [8]
+
+
+def test_card_obligations_are_charged_before_loose_spend():
+    # The card has 10,000 of room; day 1's 8,000 obligation gets it before the 5,000 of
+    # discretionary spend, which then keeps the card past its limit instead of crowding the
+    # obligation out into cash.
+    days = 3
+    total = days + 1
+    obligation = np.zeros(total, np.int64)
+    obligation[1] = 8_000
+    card = CardSpec(
+        limit=10_000,
+        used=0,
+        due_of_day=np.full(total, -1, np.int64),
+        obligation=obligation,
+        limit_spend=False,
+    )
+    spec = Spec(
+        start_balance=100_000,
+        days=days,
+        first_day=739_000,
+        classes=np.zeros(total, np.int8),
+        inflow=np.zeros(total, np.int64),
+        obligation=np.zeros(total, np.int64),
+        later=np.zeros(total, np.int64),
+        obligation_days=np.array([1], np.int64),
+        unconfirmed=np.zeros(total, np.int64),
+        floor=0,
+        cards=(card,),
+        pools=(
+            Pool(
+                columns={"card0": np.array([5_000], dtype=np.int64)},
+                classes=np.array([0], dtype=np.int8),
+                stream=0,
+            ),
+        ),
+    )
+    run = kernel.run(spec, Settings(scenarios=4, seed=1, keep_days=total))
+    assert run.paths is not None
+    assert run.obligation_failures.tolist() == [0]
+    assert (run.paths == 100_000).all()
+    assert run.credit_exceeded

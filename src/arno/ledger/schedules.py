@@ -11,10 +11,11 @@ from datetime import date, timedelta
 from typing import Any
 
 from arno.db.conn import Connection
+from arno.engine.projection import CardAccount, card_bills, last_statement_close
 from arno.india.recurrence import expand_rule, first_occurrence, parse_rule
 from arno.india.workdays import HOLIDAY_ADJUSTMENTS, calendar_for
 from arno.ledger.audit import write_group
-from arno.ledger.common import get_account_row, has_known_balance, today
+from arno.ledger.common import get_account_row, has_known_balance, ledger_balances_at, today
 from arno.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 from arno.ledger.schedule_payments import payment_evidence_for_schedules, payment_status
 
@@ -466,53 +467,38 @@ async def expand_schedule(
     return (await expand_schedules(conn, [row], start, end, as_of=as_of))[str(row["id"])]
 
 
-def _card_due_dates(card: dict[str, Any], start: date, end: date) -> list[date]:
-    """Each statement's due date, matching the engine's `card_due_date` rule.
-
-    The due day must follow the statement close, so a 30/31 pair does not fall due on the close
-    itself in a short month. Start a month early because that close can roll into the window.
-    """
-    due_day = card["due_day"]
-    if not due_day:
-        return []
-    statement_day = card["statement_day"]
-    if start.month == 1:
-        cursor = date(start.year - 1, 12, 1)
-    else:
-        cursor = date(start.year, start.month - 1, 1)
-    dates: list[date] = []
-    while cursor <= end:
-        if statement_day:
-            close = date(
-                cursor.year,
-                cursor.month,
-                min(statement_day, _calendar.monthrange(cursor.year, cursor.month)[1]),
-            )
-            due = date(
-                close.year,
-                close.month,
-                min(due_day, _calendar.monthrange(close.year, close.month)[1]),
-            )
-            if due <= close:
-                close = date(close.year + (close.month == 12), close.month % 12 + 1, 1)
-                due = date(
-                    close.year,
-                    close.month,
-                    min(due_day, _calendar.monthrange(close.year, close.month)[1]),
-                )
-        else:
-            due = date(
-                cursor.year,
-                cursor.month,
-                min(due_day, _calendar.monthrange(cursor.year, cursor.month)[1]),
-            )
-        if start <= due <= end and due not in dates:
-            dates.append(due)
-        if cursor.month == 12:
-            cursor = date(cursor.year + 1, 1, 1)
-        else:
-            cursor = date(cursor.year, cursor.month + 1, 1)
-    return dates
+async def card_unbilled(
+    conn: Connection, rows: list[dict[str, Any]], as_of: date
+) -> dict[str, int]:
+    """Net card charges since the last close, excluding payments and balance adjustments."""
+    if not rows:
+        return {}
+    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    closes = [last_statement_close(int(row["statement_day"]), as_of) for row in rows]
+    charged = await conn.fetch(
+        """
+        SELECT c.ledger_id,
+               coalesce(sum(CASE WHEN t.from_account_id = c.ledger_id THEN t.amount
+                                 ELSE -t.amount END), 0)::bigint AS charged_paise
+        FROM unnest($1::text[], $2::date[]) AS c(ledger_id, closed)
+        JOIN pgledger_transfers t
+          ON t.from_account_id = c.ledger_id OR t.to_account_id = c.ledger_id
+        JOIN movement_legs ml ON ml.transfer_id = t.id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN accounts other ON other.ledger_account_id = CASE
+            WHEN t.from_account_id = c.ledger_id THEN t.to_account_id ELSE t.from_account_id END
+        WHERE m.date > c.closed AND m.date <= $3
+          AND ms.is_effective
+          AND NOT other.liquid AND other.kind NOT IN ('card', 'equity')
+        GROUP BY c.ledger_id
+        """,
+        ledger_ids,
+        closes,
+        as_of,
+    )
+    by_ledger = {str(row["ledger_id"]): int(row["charged_paise"]) for row in charged}
+    return {ledger_id: by_ledger.get(ledger_id, 0) for ledger_id in ledger_ids}
 
 
 async def get_occurrence(conn: Connection, schedule_id: str, due_date: date) -> dict[str, Any]:
@@ -524,11 +510,7 @@ async def get_occurrence(conn: Connection, schedule_id: str, due_date: date) -> 
 
 
 def card_amount_due(card: dict[str, Any]) -> int:
-    """What a card bill is for: the outstanding balance, or zero when the card is in credit.
-
-    `upcoming` and the reminder job state this figure, so payment evidence is judged against
-    the same number the bill was announced with.
-    """
+    """Total card debt, or zero when the card is in credit."""
     return max(-int(card["balance_paise"]), 0)
 
 
@@ -555,16 +537,34 @@ async def upcoming(
         expanded = expanded_by_id[str(row["id"])]
         events.extend(event for event in expanded if row["active"] or event["occurrence_id"])
 
-    for card in await conn.fetch(
+    cards = await conn.fetch(
         "SELECT * FROM v_accounts WHERE kind = 'card' AND active ORDER BY name"
-    ):
-        outstanding = card_amount_due(card)
+    )
+    balances = await ledger_balances_at(
+        conn, [str(card["ledger_account_id"]) for card in cards], start
+    )
+    unbilled = await card_unbilled(conn, cards, start)
+    for card in cards:
+        ledger_id = str(card["ledger_account_id"])
+        outstanding = max(-balances[ledger_id], 0)
         if outstanding <= 0:
             continue
         # A ledger balance is not a statement: without one, the outstanding is unknown and the
         # bill amount must stay unknown rather than becoming a certain figure.
-        known = has_known_balance(card)
-        for due in _card_due_dates(card, start, end):
+        anchor = card["statement_balance_as_of"]
+        known = has_known_balance(card) and anchor is not None and anchor <= start
+        account = CardAccount(
+            id=card["id"],
+            name=card["name"],
+            statement_day=card["statement_day"],
+            due_day=card["due_day"],
+            outstanding_paise=outstanding,
+            credit_limit_paise=card["credit_limit_paise"] or 0,
+            unbilled_paise=unbilled[ledger_id],
+        )
+        for due, amount in card_bills(account, start):
+            if not first <= due <= end:
+                continue
             events.append(
                 {
                     "date": due.isoformat(),
@@ -573,11 +573,11 @@ async def upcoming(
                     "name": f"{card['name']} bill due",
                     "kind": "card_due",
                     "subtype": None,
-                    "amount_paise": outstanding if known else None,
+                    "amount_paise": amount if known else None,
                     "confirmed": True,
                     "payment_status": "untracked",
                     "paid_paise": None,
-                    "remaining_paise": outstanding if known else None,
+                    "remaining_paise": amount if known else None,
                     "note": (
                         None
                         if known

@@ -124,7 +124,10 @@ async def test_variable_income_keeps_its_confirmed_flag(ledger):
     assert all(event["confirmed"] is False for event in freelance)
 
 
-async def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
+async def test_upcoming_uses_the_projection_card_split_once(ledger):
+    from arno.engine.projection import card_bills
+    from arno.tools.projection import load_snapshot
+
     card = await create_account(
         ledger,
         kind="card",
@@ -135,17 +138,36 @@ async def test_upcoming_includes_a_card_due_with_its_outstanding(ledger):
         # A stated anchor (zero here) is what makes the outstanding known; a card's ledger
         # balance alone is not a statement, so its bill amount would be unknown (wave 3, e1 F1).
         opening_balance_paise=0,
+        opening_balance_as_of=date(2026, 10, 1),
     )
     food = await _category(ledger, "Food & Dining")
     await record_expense(
-        ledger, account_id=card["id"], amount_paise=300_000, description="Dinner", category_id=food
+        ledger,
+        account_id=card["id"],
+        amount_paise=300_000,
+        description="Dinner",
+        category_id=food,
+        date=date(2026, 11, 1),
+    )
+    await record_expense(
+        ledger,
+        account_id=card["id"],
+        amount_paise=80_000,
+        description="Groceries",
+        category_id=food,
+        date=date(2026, 11, 8),
     )
 
-    events = (await upcoming(ledger, days=60, start=date(2026, 11, 1)))["events"]
-    dues = [event for event in events if event["kind"] == "card_due"]
-    assert dues
-    assert dues[0]["date"] == "2026-11-25"
-    assert dues[0]["amount_paise"] == 300_000
+    as_of = date(2026, 11, 10)
+    events = (await upcoming(ledger, days=150, start=as_of))["events"]
+    dues = [
+        (date.fromisoformat(event["date"]), event["amount_paise"])
+        for event in events
+        if event["kind"] == "card_due"
+    ]
+    snapshot = await load_snapshot(ledger, as_of=as_of)
+    assert dues == list(card_bills(snapshot.cards[0], as_of))
+    assert dues == [(date(2026, 11, 25), 300_000), (date(2026, 12, 25), 80_000)]
 
 
 async def test_family_transfer_is_an_obligation_subtype(ledger):

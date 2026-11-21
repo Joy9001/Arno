@@ -22,7 +22,7 @@ from arno.engine.projection import (
     project,
 )
 from arno.india.recurrence import expand_rule
-from arno.jobs.patterns import _suggested_rule
+from arno.jobs.patterns import _new_subscription
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
 from arno.jobs.schedules import INDIA, enqueue_due_schedules, period_for
@@ -456,9 +456,24 @@ def test_ist_midnight_selects_the_right_day_and_period():
     assert period_for("risk_check", datetime(2026, 11, 8, 18, 30, tzinfo=UTC)) == "2026-11-09"
 
 
-def test_a_monthly_charge_on_a_short_month_end_suggests_the_last_day():
-    assert _suggested_rule(30, date(2026, 1, 31)) == "FREQ=MONTHLY;BYMONTHDAY=-1"
-    assert _suggested_rule(30, date(2026, 1, 15)) == "FREQ=MONTHLY;BYMONTHDAY=15"
+def test_a_proposed_rule_is_the_rule_the_detector_found():
+    proposal = {
+        "kind": "new_subscription",
+        "merchant": "Rent",
+        "normalized": "rent",
+        "interval_days": 15,
+        "amount_paise": 2_800_000,
+        "occurrences": 6,
+        "first_date": "2026-01-01",
+        "last_date": "2026-03-31",
+        "rule": {
+            "family": "twice_monthly",
+            "rrule": "FREQ=MONTHLY;BYMONTHDAY=1,31",
+            "description": "twice monthly on the 1st and 31st",
+        },
+    }
+    _, _, _, data = _new_subscription(proposal)
+    assert data["suggested_rule"] == "FREQ=MONTHLY;BYMONTHDAY=1,31"
 
 
 def test_backtest_summary_scores_each_forecaster_with_an_interval():
@@ -555,7 +570,13 @@ async def test_a_card_due_forecast_follows_the_statement_close(ledger):
         statement_day=30,
         due_day=31,
     )
-    await record_expense(ledger, account_id=card["id"], amount_paise=300_000, description="Dinner")
+    await record_expense(
+        ledger,
+        account_id=card["id"],
+        amount_paise=300_000,
+        description="Dinner",
+        date=date(2026, 4, 1),
+    )
     events = (await upcoming(ledger, days=60, start=date(2026, 4, 1)))["events"]
     dues = [event for event in events if event["kind"] == "card_due"]
     assert dues
@@ -626,6 +647,7 @@ async def test_risk_does_not_warn_from_an_unknown_balance(ledger):
         ledger, account_id=account["id"], amount_paise=150_000, description="Lunch"
     )
     assert await risk_warning(ledger) is None
+    assert await ledger.fetchval("SELECT last_checked_at IS NOT NULL FROM risk_state WHERE id = 1")
     assert (
         await ledger.fetchval("SELECT count(*) FROM notifications WHERE kind = 'risk_warning'") == 0
     )

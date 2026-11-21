@@ -16,6 +16,8 @@ from arno.agent.builder import build_agent
 from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
 from arno.db.conn import quote_ident
+from arno.engine.inputs import CategoryRow, LedgerSnapshot, build_inputs
+from arno.engine.projection import CardAccount, SpendRow
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
 
@@ -31,6 +33,51 @@ async def test_snapshot_reads_in_one_read_only_repeatable_read_transaction(ledge
     monkeypatch.setattr(projection_tools, "read_settings", check_isolation)
     await projection_tools.load_snapshot(ledger)
     assert not ledger.is_in_transaction()
+
+
+async def test_a_card_with_no_bill_does_not_fail_the_obligation_gate(ledger):
+    from arno.ledger.accounts import create_account
+
+    await create_account(ledger, kind="bank", name="Overdrawn bank", opening_balance_paise=-1_000)
+    await create_account(
+        ledger,
+        kind="card",
+        name="Unused card",
+        statement_day=5,
+        due_day=25,
+        credit_limit_paise=20_000,
+        opening_balance_paise=0,
+    )
+    result = await projection_tools.project(ledger, runs=1)
+    assert result["floor_probability"] == 0
+    assert result["obligations_met"]
+
+
+def test_inputs_censor_today_and_share_history_across_cards():
+    first = date(2026, 11, 1)
+    second = first + timedelta(days=1)
+    as_of = second + timedelta(days=1)
+    inputs = build_inputs(
+        LedgerSnapshot(
+            as_of=as_of,
+            floor_paise=0,
+            history_start=first,
+            cards=tuple(CardAccount(name, name, 5, 25, 0, 50_000) for name in ("a", "b")),
+            categories=(CategoryRow("food", "Food", True),),
+            spend=(
+                SpendRow(first, "food", "a", 200),
+                SpendRow(first, "food", "b", 100),
+                SpendRow(second, "food", None, 100),
+                SpendRow(as_of, "food", "b", 100_000),
+            ),
+        )
+    )
+    category = inputs.categories[0]
+    assert category.history == ((first, 300), (second, 100))
+    assert category.baseline_per_day_paise == 200
+    assert category.card_shares == (("a", 0.5), ("b", 0.25))
+    assert category.card_share == 0.75
+    assert all(row.date < as_of for row in inputs.spend)
 
 
 async def test_yearly_commitment_occurs_on_its_actual_date_with_a_goal_funding_plan(ledger):
@@ -590,7 +637,6 @@ async def test_load_snapshot_excludes_schedule_paid_and_one_off_movements_from_s
     )
 
     snapshot = await projection_tools.load_snapshot(ledger, as_of=date(2026, 10, 1))
-    assert snapshot.attributed is True
     assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 20), 45_000)]
 
 
@@ -645,7 +691,6 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     await patterns.detect(ledger, as_of=as_of)
     snapshot = await projection_tools.load_snapshot(ledger, as_of=as_of)
 
-    assert snapshot.attributed is True
     assert len(snapshot.series) == 1
     forecast = snapshot.series[0]
     assert forecast.amounts == (64_900,)

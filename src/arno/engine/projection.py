@@ -19,6 +19,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
+from fractions import Fraction
 from functools import lru_cache
 from typing import Literal, NotRequired, Required, TypedDict
 
@@ -29,7 +30,7 @@ from arno.engine import kernel
 from arno.engine.money import check_paise
 
 # Increment when the projection or affordability calculation changes materially.
-CALCULATION_VERSION = "1"
+CALCULATION_VERSION = "2"
 DEFAULT_RUNS = 16_384
 DEFAULT_SEED = 20261103
 FLOOR_THRESHOLD = 0.90
@@ -237,6 +238,9 @@ class Tradeoff(TypedDict, total=False):
     goal_id: str
     slips_days: int | None
     completes_on: str | None
+    # Every goal the plan delays, in the plan's priority order; the scalar fields above
+    # repeat the first one for callers written before this list existed.
+    goals: list[GoalSlip]
     until: str
     ratio: float
     categories: list[CategoryCutRow]
@@ -386,6 +390,9 @@ class CashEvent:
     goal_id: str | None = None
     card_id: str | None = None
     at_start: bool = False
+    # For a schedule occurrence, what is already linked as paid. `amount_paise` is the
+    # remaining amount, so a what-if that changes the amount keeps this part untouched.
+    paid_paise: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -408,6 +415,10 @@ class SpendCategory:
     reducible: bool = False
     card_share: float = 0.0
     card_id: str | None = None
+    # When a category's history was charged to several cards, each card's share of it.
+    # `card_share` stays their total, as the display reports it. Empty for a direct caller
+    # that still states one `card_id` and its `card_share`.
+    card_shares: tuple[tuple[str, float], ...] = ()
     history: tuple[tuple[date, int], ...] = ()
     covered_by_obligation: bool = False
     # A tradeoff cut: spend (1 - reduce_ratio) of the baseline until reduce_until, then the full
@@ -531,14 +542,6 @@ def card_due_date(card: CardAccount, spend_date: date) -> date:
     later than the due day, or when a short month clamps the due day onto the close itself.
     """
     return _due_date(card.statement_day, card.due_day, spend_date)
-
-
-def _first_due_on_or_after(card: CardAccount, day: date) -> date:
-    due = _clamped_day(day.year, day.month, card.due_day)
-    if due >= day:
-        return due
-    next_month = _add_months(date(day.year, day.month, 1), 1)
-    return _clamped_day(next_month.year, next_month.month, card.due_day)
 
 
 def horizon_days(inputs: ProjectionInput) -> int:
@@ -665,6 +668,39 @@ def last_statement_close(statement_day: int, as_of: date) -> date:
     return _clamped_day(previous.year, previous.month, statement_day)
 
 
+def card_bills(card: CardAccount, as_of: date) -> tuple[tuple[date, int], ...]:
+    """The card's outstanding bills as (due date, amount), from its statement split.
+
+    The billed part is the last closed statement's balance, due on the cycle's due date and
+    moved to ``as_of`` when that day has passed. The unbilled part is spend since that close,
+    due with the next bill. Both due dates come from the same `card_due_date` cycle the write
+    and read tools quote, so a month-end clamp cannot put them a month apart.
+    """
+    # shortcut: unknown unbilled split front-loads 100% balance to first due date and projection
+    # assumes cards pay in full, revisit if user revolves a card balance or imports balances
+    # without recent spend
+    outstanding = card.outstanding_paise
+    if outstanding <= 0:
+        return ()
+    bills: dict[date, int] = {}
+
+    def add(due: date, amount: int) -> None:
+        if amount > 0:
+            bills[due] = bills.get(due, 0) + amount
+
+    next_due = card_due_date(card, as_of)
+    closed_due = card_due_date(card, last_statement_close(card.statement_day, as_of))
+    if card.unbilled_paise is None:
+        add(closed_due if closed_due >= as_of else next_due, outstanding)
+    else:
+        unbilled = max(0, min(card.unbilled_paise, outstanding))
+        billed = outstanding - unbilled
+        if billed > 0:
+            add(max(closed_due, as_of), billed)
+        add(next_due, unbilled)
+    return tuple(sorted((due, amount) for due, amount in bills.items() if amount > 0))
+
+
 def _card_spec(
     card: CardAccount, as_of: date, days: int, total: int, *, limit_spend: bool = True
 ) -> kernel.CardSpec:
@@ -677,31 +713,13 @@ def _card_spec(
         count=total,
     )
     bills: dict[int, int] = {}
-    outstanding = card.outstanding_paise
-    if outstanding > 0:
-        if card.unbilled_paise is None:
-            # With no split known, the whole balance is due on the first due date.
-            # shortcut: unknown unbilled split front-loads 100% balance to first due date and
-            # projection assumes cards pay in full, revisit if user revolves a card balance or
-            # imports balances without recent spend
-            due = _day_index(as_of, _first_due_on_or_after(card, as_of), days)
-            if due >= 0:
-                bills[due] = outstanding
-        else:
-            unbilled = max(0, min(card.unbilled_paise, outstanding))
-            billed = outstanding - unbilled
-            if billed > 0:
-                # An unpaid closed bill is due on its due date, or today if that has passed.
-                due_day = card_due_date(card, last_statement_close(card.statement_day, as_of))
-                due = 0 if due_day < as_of else _day_index(as_of, due_day, days)
-                if due >= 0:
-                    bills[due] = bills.get(due, 0) + billed
-            if unbilled > 0 and int(due_of_day[0]) >= 0:
-                first = int(due_of_day[0])
-                bills[first] = bills.get(first, 0) + unbilled
+    for due, amount in card_bills(card, as_of):
+        index = _day_index(as_of, due, days)
+        if index >= 0:
+            bills[index] = bills.get(index, 0) + amount
     return kernel.CardSpec(
         limit=card.credit_limit_paise,
-        used=outstanding - card.credit_paise,
+        used=card.outstanding_paise - card.credit_paise,
         due_of_day=due_of_day,
         bills=bills,
         obligation=np.zeros(total, dtype=np.int64),
@@ -810,46 +828,63 @@ def _recency(ages: npt.NDArray[np.int64], half_life: int) -> kernel.I64:
     return np.maximum(weights, 1)
 
 
-def _card_for(
+def _card_split(
     category: SpendCategory, cards: tuple[CardAccount, ...], index: dict[str, int]
-) -> int | None:
-    # The card a category's share goes to, as the walk always chose it: its own card, else the
-    # first card; a share with no card at all, or an unknown card, is cash.
+) -> tuple[tuple[int, float], ...]:
+    """The card indices a category's spend goes to, and each one's share.
+
+    A category that recorded its spending per card splits across all of them. A direct caller
+    that still states one ``card_id`` and ``card_share`` keeps that placement, including its
+    old fallbacks: no card means the first card, an unknown card means cash.
+    """
+    shares = tuple(
+        (index[card_id], share)
+        for card_id, share in category.card_shares
+        if card_id in index and share > 0
+    )
+    if len(shares) > 0:
+        return shares
     if category.card_share <= 0 or len(cards) == 0:
-        return None
-    if category.card_id is None:
-        return 0
-    return index.get(category.card_id)
+        return ()
+    card = 0 if category.card_id is None else index.get(category.card_id)
+    return () if card is None else ((card, category.card_share),)
+
+
+def _split_value(value: int, split: tuple[tuple[int, float], ...]) -> list[int]:
+    """Split one amount by the card shares, with any rounding excess taken from the largest."""
+    parts = [max(0, min(int(round(value * share)), value)) for _card, share in split]
+    excess = sum(parts) - value
+    if excess > 0:
+        largest = max(range(len(parts)), key=parts.__getitem__)
+        parts[largest] -= excess
+    return parts
+
+
+def _split_columns(
+    values: kernel.I64, category: SpendCategory, split: tuple[tuple[int, float], ...]
+) -> dict[str, kernel.I64]:
+    columns: dict[str, kernel.I64] = {}
+    if len(split) > 0:
+        parts = np.array(
+            [_split_value(int(value), split) for value in values], dtype=np.int64
+        ).reshape(len(values), len(split))
+        for row, (card, _share) in enumerate(split):
+            columns[f"card{card}"] = parts[:, row].copy()
+        cash = values - parts.sum(axis=1)
+    else:
+        cash = values
+    columns["cash"] = cash
+    if _cuttable(category):
+        columns["cash_cut"] = cash
+        for card, _share in split:
+            columns[f"card{card}_cut"] = columns[f"card{card}"].copy()
+    return columns
 
 
 def _cuttable(category: SpendCategory) -> bool:
     """A category a cut may reduce: reducible with a positive estimate, the set
     `reduce_categories` reports."""
     return category.reducible and category.baseline_per_day_paise > 0
-
-
-def _split_columns(
-    values: kernel.I64, category: SpendCategory, card: int | None
-) -> dict[str, kernel.I64]:
-    if card is None:
-        card_part = np.zeros_like(values)
-    else:
-        card_part = np.array(
-            [
-                max(0, min(int(round(int(value) * category.card_share)), int(value)))
-                for value in values
-            ],
-            dtype=np.int64,
-        )
-    cash = values - card_part
-    columns: dict[str, kernel.I64] = {"cash": cash}
-    if card is not None:
-        columns[f"card{card}"] = card_part
-    if _cuttable(category):
-        columns["cash_cut"] = cash
-        if card is not None:
-            columns[f"card{card}_cut"] = card_part
-    return columns
 
 
 def _coverage_start(inputs: ProjectionInput, window: int) -> date:
@@ -860,7 +895,7 @@ def _coverage_start(inputs: ProjectionInput, window: int) -> date:
 def _category_pool(
     inputs: ProjectionInput,
     category: SpendCategory,
-    card: int | None,
+    split: tuple[tuple[int, float], ...],
     stream: int,
     model: Model,
 ) -> kernel.Pool | None:
@@ -882,7 +917,7 @@ def _category_pool(
     if not bool((values > 0).any()):
         return None
     return kernel.Pool(
-        columns=_split_columns(np.maximum(values, 0), category, card),
+        columns=_split_columns(np.maximum(values, 0), category, split),
         classes=classes,
         weights=weights,
         stream=stream,
@@ -933,7 +968,7 @@ def _day_rows(
     """The rows whole-day pools read, and where their history starts when it is not the ledger's.
 
     Inputs built without spend rows (tests, the HackerRank adapter) carry only each category's
-    history: it is split into cash and card the way the category's card share always split it.
+    history: it is split into cash and each card the way the category's shares always split it.
     """
     if len(inputs.spend) > 0:
         return inputs.spend, None
@@ -944,18 +979,16 @@ def _day_rows(
         if len(history) == 0:
             continue
         earliest = history[0][0] if earliest is None else min(earliest, history[0][0])
-        card = _card_for(category, inputs.cards, card_index)
-        card_id = inputs.cards[card].id if card is not None else None
+        split = _card_split(category, inputs.cards, card_index)
         for day, amount in history:
             if amount <= 0:
                 continue
-            on_card = 0
-            if card_id is not None:
-                on_card = max(0, min(int(round(amount * category.card_share)), amount))
-                if on_card > 0:
-                    rows.append(SpendRow(day, category.id, card_id, on_card))
-            if amount - on_card > 0:
-                rows.append(SpendRow(day, category.id, None, amount - on_card))
+            parts = _split_value(amount, split)
+            for (card, _share), part in zip(split, parts, strict=True):
+                if part > 0:
+                    rows.append(SpendRow(day, category.id, inputs.cards[card].id, part))
+            if amount - sum(parts) > 0:
+                rows.append(SpendRow(day, category.id, None, amount - sum(parts)))
     return rows, earliest
 
 
@@ -1125,13 +1158,19 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
                 unconfirmed[index] += amount
             continue
         if start:
-            # Today's events all apply, whatever their kind; a card charge joins its bill.
+            # Today's events all apply, whatever their kind; a card charge joins its bill, and
+            # an obligation is still tested for cash today.
             if charged is not None:
                 other = cards[card_index[charged]].other
                 assert other is not None
                 other[0] += -amount
+                if event.kind in _OBLIGATION_KINDS:
+                    obligation_days.add(0)
             elif amount > 0:
                 inflow[0] += amount
+            elif event.kind in _OBLIGATION_KINDS:
+                obligation[0] += -amount
+                obligation_days.add(0)
             else:
                 later[0] += -amount
             continue
@@ -1185,7 +1224,7 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
         if model.pooling == "day" and category.id in sampled_ids:
             continue
         pool = _category_pool(
-            inputs, category, _card_for(category, inputs.cards, card_index), stream, model
+            inputs, category, _card_split(category, inputs.cards, card_index), stream, model
         )
         if pool is not None:
             pools.append(pool)
@@ -1234,15 +1273,29 @@ def order_rank(count: int, share: float) -> int:
     return max(1, math.ceil(share * count)) - 1
 
 
-def _first_crossing(as_of: date, crossings: kernel.I64, scenarios: int) -> str | None:
-    # More than 10% of scenarios below the floor: absent exactly when the floor probability passes.
-    over = np.flatnonzero(crossings * 10 > scenarios)
+def _min_held(scenarios: int, threshold: float) -> int:
+    """The fewest scenarios that must hold for the share to reach ``threshold``.
+
+    One integer on the exact scenario count replaces every rounded-share comparison, so the
+    verdict, the first crossing, safe to spend, and a plan all agree on the last scenario. The
+    threshold is read as the decimal the caller wrote, so 0.28 * 25 is 7 and not 8.
+    """
+    held = Fraction(str(threshold)) * scenarios
+    return max(1, min(scenarios, -(-held.numerator // held.denominator)))
+
+
+def _first_crossing(
+    as_of: date, crossings: kernel.I64, scenarios: int, min_held: int
+) -> str | None:
+    # Crossed scenarios plus the required holds exceed the run: absent exactly when the floor
+    # probability reaches the threshold the verdict uses.
+    over = np.flatnonzero(crossings + min_held > scenarios)
     return (as_of + timedelta(days=int(over[0]))).isoformat() if len(over) > 0 else None
 
 
 def _floor_share(held: int, scenarios: int) -> float:
-    """The floor probability the verdict compares: ``held / scenarios`` rounded to four places."""
-    return round(held / scenarios, 4)
+    """The floor probability as the exact share the run held; callers round for display."""
+    return held / scenarios
 
 
 def _median_low(as_of: date, medians: kernel.I64) -> MedianLow:
@@ -1251,21 +1304,19 @@ def _median_low(as_of: date, medians: kernel.I64) -> MedianLow:
 
 
 def _safe_to_spend(
-    inputs: ProjectionInput, prepared: Prepared, run: kernel.Run
+    inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, threshold: float
 ) -> SafeToSpend | None:
     if not any(account.known for account in inputs.liquid):
         return None
     scenarios = run.scenarios
-    # Invert the rounded floor test the verdict compares, so the safe boundary agrees with
-    # `afford()` to the paisa for any run count.
-    min_held = max(0, math.floor((FLOOR_THRESHOLD - 1e-4) * scenarios))
-    while min_held < scenarios and _floor_share(min_held, scenarios) < FLOOR_THRESHOLD:
-        min_held += 1
+    min_held = _min_held(scenarios, threshold)
     max_fail = scenarios - min_held
     floor_headroom = int(np.partition(run.minima, max_fail)[max_fail]) - inputs.floor_paise
     floor_date = (inputs.as_of + timedelta(days=int(np.argmin(run.curve[:, 0])))).isoformat()
 
-    obl_days = prepared.spec.obligation_days
+    obl_days = (
+        run.obligation_days if run.obligation_days is not None else prepared.spec.obligation_days
+    )
     if len(obl_days) > 0:
         obl_index = int(np.argmin(run.obligation_margins))
         obl_headroom = int(run.obligation_margins[obl_index])
@@ -1283,11 +1334,18 @@ def _safe_to_spend(
     }
 
 
-def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed: int) -> Projection:
+def _summary(
+    inputs: ProjectionInput,
+    prepared: Prepared,
+    run: kernel.Run,
+    seed: int,
+    threshold: float,
+) -> Projection:
     days = run.days
     floor = inputs.floor_paise
     scenarios = run.scenarios
     as_of = inputs.as_of
+    min_held = _min_held(scenarios, threshold)
     curve: list[CurvePoint] = [
         {
             "date": (as_of + timedelta(days=index)).isoformat(),
@@ -1329,10 +1387,10 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
             else "projected card spend exceeds the card limit; a new charge past it is treated "
             "as cash spend"
         )
-    if low < FLOOR_THRESHOLD <= high:
+    if low < threshold <= high:
         gaps.append(
             f"borderline: the floor probability's 95% interval ({low:.1%} to {high:.1%}) "
-            f"contains the {FLOOR_THRESHOLD:.0%} threshold"
+            f"contains the {threshold:.0%} threshold"
         )
     # Only a series that can actually pay inside the horizon is a gap or a citation.
     paying = [
@@ -1402,15 +1460,15 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
         "end": (as_of + timedelta(days=days)).isoformat(),
         "floor_paise": floor,
         "floor_set": floor > 0,
-        "floor_threshold": FLOOR_THRESHOLD,
+        "floor_threshold": threshold,
         "floor_probability": floor_probability,
         "median_low": _median_low(as_of, run.curve[:, 1]),
         "p10_low_paise": int(np.partition(run.minima, low_rank)[low_rank]),
-        "first_floor_crossing": _first_crossing(as_of, run.crossings, scenarios),
+        "first_floor_crossing": _first_crossing(as_of, run.crossings, scenarios, min_held),
         "curve": curve,
         "goals": goal_rows(inputs),
         "obligations_met": misses == 0,
-        "safe_to_spend": _safe_to_spend(inputs, prepared, run),
+        "safe_to_spend": _safe_to_spend(inputs, prepared, run, threshold),
         "data_quality": data_quality,
         "sources": sources,
         "source_ids": source_ids,
@@ -1431,11 +1489,13 @@ def _summary(inputs: ProjectionInput, prepared: Prepared, run: kernel.Run, seed:
     if optimistic_minima is not None and optimistic_crossings is not None and len(unconfirmed) > 0:
         shifted = run.curve[:, 1] + np.cumsum(prepared.spec.unconfirmed)
         result["optimistic"] = {
-            "floor_probability": round(
-                int(np.count_nonzero(optimistic_minima >= floor)) / scenarios, 4
+            "floor_probability": _floor_share(
+                int(np.count_nonzero(optimistic_minima >= floor)), scenarios
             ),
             "median_low": _median_low(as_of, shifted),
-            "first_floor_crossing": _first_crossing(as_of, optimistic_crossings, scenarios),
+            "first_floor_crossing": _first_crossing(
+                as_of, optimistic_crossings, scenarios, min_held
+            ),
             "income": [
                 {
                     "date": event.date.isoformat(),
@@ -1504,10 +1564,11 @@ def project(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     model: Model | None = None,
+    threshold: float = FLOOR_THRESHOLD,
 ) -> Projection:
     """Run the scenario kernel and return the curve, floor probability, and data quality."""
     prepared, run = _run(inputs, runs=runs, seed=seed, model=model)
-    return _summary(inputs, prepared, run, seed)
+    return _summary(inputs, prepared, run, seed, threshold)
 
 
 def simulate_paths(
@@ -1530,10 +1591,11 @@ def safe_amount_today(
     *,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
+    threshold: float = FLOOR_THRESHOLD,
 ) -> int:
     """The largest one-off payment today that keeps the floor probability at the threshold."""
     _prepared, run = _run(inputs, runs=runs, seed=seed)
-    rank = order_rank(run.scenarios, 1 - FLOOR_THRESHOLD)
+    rank = run.scenarios - _min_held(run.scenarios, threshold)
     headroom = int(np.partition(run.minima, rank)[rank]) - inputs.floor_paise
     return max(0, headroom)
 
@@ -1585,7 +1647,7 @@ def first_full_payment_date(
     prefix = np.minimum.accumulate(balances, axis=1)
     suffix = np.minimum.accumulate(balances[:, ::-1], axis=1)[:, ::-1]
     floor = inputs.floor_paise
-    needed = runs - order_rank(runs, 1 - threshold)
+    needed = _min_held(runs, threshold)
     candidates = sorted({start, *(day + 1 for day in marks if start < day + 1 <= days)})
     for day in candidates:
         later = [column for column, mark in enumerate(marks) if mark >= day]
@@ -1659,6 +1721,7 @@ __all__ = [
     "SpendCategory",
     "SeriesForecast",
     "SpendRow",
+    "card_bills",
     "card_due_date",
     "checkpoints_for",
     "first_full_payment_date",

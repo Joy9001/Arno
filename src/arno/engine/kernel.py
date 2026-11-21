@@ -170,6 +170,8 @@ class Settings:
     # With checkpoints: report the reducible spend through this day that has left cash by each
     # checkpoint, the quantity a spending cut acts on. -1 reports nothing.
     reducible_until: int = -1
+    # Report each scenario's payable on these days (an affordability obligation check).
+    payable_days: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)
@@ -193,6 +195,13 @@ class Run:
     reducible: I64 | None = None
     # Scenarios in which some card charge went past the limit and left cash early.
     capped: npt.NDArray[np.bool_] | None = None
+    # Every day whose obligation is tested: the spec's own days plus every card bill due day.
+    obligation_days: I64 | None = None
+    # The same measure as `reducible` but with cash spend only through the day before each
+    # checkpoint, which is what a cut can free before that day's obligations are paid.
+    reducible_before: I64 | None = None
+    # Payable on `settings.payable_days`, before the day's spending. (scenarios, len(days))
+    payables: I64 | None = None
 
 
 # --- Drawing days ------------------------------------------------------------------------------
@@ -440,6 +449,19 @@ def _scaled(cumulative: I64, bps: int) -> I64:
     return (cumulative * bps + 5_000) // 10_000
 
 
+def obligation_days(spec: Spec) -> I64:
+    """Every day the walk tests for a cash obligation.
+
+    The spec's own days plus every card bill due date, including the days a day's charges join
+    and the days of bills already owed at the start. A bill due today is tested today.
+    """
+    days = {int(day) for day in spec.obligation_days}
+    for card in spec.cards:
+        days.update(int(due) for due in card.bills if 0 <= int(due) <= spec.days)
+        days.update(int(due) for due in np.unique(card.due_of_day) if 0 <= int(due) <= spec.days)
+    return np.array(sorted(days), dtype=np.int64)
+
+
 def run(spec: Spec, settings: Settings) -> Run:
     """Walk every scenario over the horizon and return the statistics the projection reports."""
     scenarios = settings.scenarios
@@ -456,10 +478,16 @@ def run(spec: Spec, settings: Settings) -> Run:
     optimistic = bool(spec.unconfirmed.any())
     unconfirmed_total = np.cumsum(spec.unconfirmed)
     optimistic_crossings = np.empty(total_days, dtype=np.int64) if optimistic else None
-    obligation_index = {int(day): index for index, day in enumerate(spec.obligation_days)}
-    obligation_failures = np.zeros(len(spec.obligation_days), dtype=np.int64)
+    effective_obligations = obligation_days(spec)
+    obligation_index = {int(day): index for index, day in enumerate(effective_obligations)}
+    obligation_failures = np.zeros(len(effective_obligations), dtype=np.int64)
     obl_rank = scenarios // 100
-    obligation_margins = np.full(len(spec.obligation_days), np.iinfo(np.int64).max, dtype=np.int64)
+    obligation_margins = np.full(len(effective_obligations), np.iinfo(np.int64).max, dtype=np.int64)
+    payable_days = np.array(sorted({int(day) for day in settings.payable_days}), dtype=np.int64)
+    payable_index = {int(day): index for index, day in enumerate(payable_days)}
+    payables = (
+        np.empty((scenarios, len(payable_days)), dtype=np.int64) if len(payable_days) > 0 else None
+    )
     checkpoint_index = {day: index for index, day in enumerate(settings.checkpoints)}
     checkpoints = (
         np.empty((scenarios, len(settings.checkpoints)), dtype=np.int64)
@@ -491,6 +519,11 @@ def run(spec: Spec, settings: Settings) -> Run:
     reducible = (
         np.zeros((scenarios, len(settings.checkpoints)), dtype=np.int64)
         if settings.checkpoints and settings.reducible_until >= 0
+        else None
+    )
+    reducible_before = (
+        np.zeros((scenarios, len(settings.checkpoints)), dtype=np.int64)
+        if reducible is not None
         else None
     )
     # Cash reducible spend before this chunk; card reducible spend by the bill it joins.
@@ -563,23 +596,34 @@ def run(spec: Spec, settings: Settings) -> Run:
         for column in range(width):
             day = begin + column
             failures = obligation_index.get(day)
-            if failures is not None and day > 0:
+            payable_spot = payable_index.get(day)
+            if failures is not None or payable_spot is not None:
                 before = balances[:, column - 1] if column else balance
-                payable = (
-                    before
-                    + spec.inflow[day]
-                    - bill_paid[:, column]
-                    - spec.obligation[day]
-                    - obligation_overflow[:, column]
+                owed = bill_paid[:, column] + spec.obligation[day] + obligation_overflow[:, column]
+                payable = np.where(
+                    owed > 0, before + spec.inflow[day] - owed, np.iinfo(np.int64).max
                 )
-                obligation_failures[failures] += int(np.count_nonzero(payable < 0))
-                obligation_margins[failures] = int(np.partition(payable, obl_rank)[obl_rank])
+                if failures is not None:
+                    obligation_failures[failures] += int(np.count_nonzero(payable < 0))
+                    obligation_margins[failures] = int(np.partition(payable, obl_rank)[obl_rank])
+                if payable_spot is not None and payables is not None:
+                    payables[:, payable_spot] = payable
             spot = checkpoint_index.get(day)
             if spot is not None and checkpoints is not None:
                 checkpoints[:, spot] = balances[:, column]
                 if reducible is not None:
                     reducible[:, spot] = _realized(
                         settings, cash_cut, reducible_cash, reducible_bills, begin, day
+                    )
+                if reducible_before is not None:
+                    reducible_before[:, spot] = _realized(
+                        settings,
+                        cash_cut,
+                        reducible_cash,
+                        reducible_bills,
+                        begin,
+                        day,
+                        include_cash_today=False,
                     )
 
         curve[begin:end] = np.partition(balances, ranks, axis=0)[ranks].T
@@ -614,6 +658,9 @@ def run(spec: Spec, settings: Settings) -> Run:
         checkpoints=checkpoints,
         reducible=reducible,
         capped=capped,
+        obligation_days=effective_obligations,
+        reducible_before=reducible_before,
+        payables=payables,
     )
 
 
@@ -649,12 +696,19 @@ def _realized(
     bills: list[dict[int, I64]],
     begin: int,
     day: int,
+    *,
+    include_cash_today: bool = True,
 ) -> I64:
-    """Reducible spend through `reducible_until` that has left cash by the end of ``day``."""
+    """Reducible spend through `reducible_until` that has left cash by the end of ``day``.
+
+    With ``include_cash_today=False``, cash spend is counted only through the day before
+    ``day``: an obligation is paid before that day's spending.
+    """
     total = cash_after_chunk.copy()
-    if day < settings.reducible_until:
+    stop = day if include_cash_today else day - 1
+    if stop < settings.reducible_until:
         # The cut window runs past this checkpoint: only the chunk's days up to it have happened.
-        total -= cash_cut[:, day - begin + 1 :].sum(axis=1)
+        total -= cash_cut[:, max(0, stop - begin + 1) :].sum(axis=1)
     for card_bills in bills:
         for due, amount in card_bills.items():
             if due <= day:
@@ -820,10 +874,11 @@ def _charge_after_loose(
     obligation_overflow: I64,
     start: int,
 ) -> tuple[I64, I64]:
-    """One billing piece where ``kept`` spend goes on the card first each day, past the limit.
+    """One billing piece where each day's ``kept`` spend can stay on the card past the limit.
 
-    Return what of ``piece`` spills to cash and what each day adds to the card. Loose spend can
-    take headroom back mid-piece, so the new charges are walked a day at a time.
+    Return what of ``piece`` spills to cash and what each day adds to the card. The day's new
+    charges are tested against the card limit before its loose spend takes headroom, so an
+    obligation due today cannot be crowded out by discretionary spend.
     """
     if not piece.any():
         used += kept.sum(axis=1)
@@ -831,7 +886,6 @@ def _charge_after_loose(
     spilled = np.zeros_like(piece)
     taken = np.zeros_like(piece)
     for column in range(piece.shape[1]):
-        used += kept[:, column]
         room = np.maximum(card.limit - used, 0)
         take = np.minimum(piece[:, column], room)
         if obligation is not None and obligation[start + column]:
@@ -840,6 +894,7 @@ def _charge_after_loose(
         used += take
         taken[:, column] = take
         spilled[:, column] = piece[:, column] - take
+        used += kept[:, column]
     return spilled, taken + kept
 
 

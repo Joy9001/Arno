@@ -6,9 +6,10 @@ for CLI output, logs and tests. Money crossing the API is always integer paise.
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Context, Decimal, localcontext
 
 RUPEE = "\u20b9"
+_FORMAT_CONTEXT = Context(prec=28, rounding=ROUND_HALF_UP)
 
 
 def _group_indian(digits: str) -> str:
@@ -25,8 +26,16 @@ def _group_indian(digits: str) -> str:
 
 
 def format_paise(paise: int | Decimal) -> str:
-    """Format whole paise as rupees: 123456789 -> '₹12,34,567.89'."""
-    value = int(paise)
+    """Format money as rupees: 123456789 -> '₹12,34,567.89'.
+
+    A fractional paise rounds half up, so 123.5 paise is ₹1.24, not ₹1.23.
+    """
+    with localcontext(_FORMAT_CONTEXT):
+        value = (
+            paise
+            if isinstance(paise, int)
+            else int(Decimal(paise).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        )
     sign = "-" if value < 0 else ""
     rupees, fraction = divmod(abs(value), 100)
     return f"{sign}{RUPEE}{_group_indian(str(rupees))}.{fraction:02d}"

@@ -892,6 +892,7 @@ async def test_card_day_31_works_in_february_without_crashing(ledger):
         statement_day=31,
         due_day=31,
         opening_balance_paise=-50_000,
+        opening_balance_as_of=date(2026, 1, 31),
     )
 
     from arno.ledger.schedules import upcoming

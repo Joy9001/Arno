@@ -120,6 +120,7 @@ async def test_an_unknown_card_bill_has_no_certain_amount(ledger):
         amount_paise=300_000,
         description="Dinner",
         category_id=food,
+        date=date(2026, 11, 1),
     )
 
     events = (await upcoming(ledger, days=60, start=date(2026, 11, 1)))["events"]
@@ -147,9 +148,15 @@ async def test_a_known_card_bill_still_carries_its_amount(ledger):
         statement_day=5,
         due_day=25,
         opening_balance_paise=0,
+        opening_balance_as_of=date(2026, 11, 1),
     )
     await record_expense(
-        ledger, account_id=known["id"], amount_paise=300_000, description="Dinner", category_id=food
+        ledger,
+        account_id=known["id"],
+        amount_paise=300_000,
+        description="Dinner",
+        category_id=food,
+        date=date(2026, 11, 1),
     )
 
     events = (await upcoming(ledger, days=60, start=date(2026, 11, 1)))["events"]
@@ -177,6 +184,7 @@ async def test_the_briefing_lists_an_unknown_bill_and_keeps_it_out_of_the_total(
         amount_paise=300_000,
         description="Dinner",
         category_id=food,
+        date=date(2026, 10, 20),
     )
 
     payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))

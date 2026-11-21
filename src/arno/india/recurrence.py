@@ -21,13 +21,16 @@ from arno.india.workdays import (
     calendar_for,
 )
 
-_UNTIL_DATETIME = re.compile(r"UNTIL=(\d{8})T(\d{6})(Z?)", re.IGNORECASE)
+_UNTIL_DATETIME = re.compile(r"UNTIL=(\d{8})(?:T(\d{6}))?(Z?)", re.IGNORECASE)
 INDIA = ZoneInfo("Asia/Kolkata")
 
 
 def _inclusive_until(match: re.Match[str]) -> str:
     """A date-based schedule means "through" a date-time UNTIL, not up to its midnight."""
-    moment = datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
+    clock = match.group(2)
+    if clock is None:
+        clock = "000000"
+    moment = datetime.strptime(match.group(1) + clock, "%Y%m%d%H%M%S")
     if match.group(3) != "":
         moment = moment.replace(tzinfo=UTC).astimezone(INDIA)
     return f"UNTIL={moment:%Y%m%d}T235959"
@@ -38,8 +41,10 @@ def _clamp_month_end(text: str) -> str:
 
     RFC 5545 gives `BYMONTHDAY=31` no February occurrence, so a rent "on the 31st" would silently
     under-reserve one month a year. Every monthly obligation on a day 29-31 falls on min(day, the
-    last day of that month): the earliest of that day and the last day, which is
-    `BYMONTHDAY=<day>,-1;BYSETPOS=1`. Applied while parsing, so stored rules behave correctly too.
+    last day of that month): the earliest of that day and the last day. Adding `-1` to the days and
+    selecting the first as many positions as there were requested days keeps every date in a
+    multi-day rule too: in a short month the missing day is replaced by the last day, while a
+    `BYSETPOS`-driven rewrite of only the first position would drop the second payment.
     """
     parts = text.split(";")
     if not any(part.strip().upper() == "FREQ=MONTHLY" for part in parts):
@@ -49,11 +54,16 @@ def _clamp_month_end(text: str) -> str:
     monthdays = [part for part in parts if part.strip().upper().startswith("BYMONTHDAY=")]
     if len(monthdays) != 1:
         return text
-    day = monthdays[0].split("=", 1)[1]
-    if not day.isdigit() or not 29 <= int(day) <= 31:
+    days = monthdays[0].split("=", 1)[1].split(",")
+    if not all(day.isdigit() for day in days):
         return text
-    return ";".join(f"BYMONTHDAY={day},-1" if part is monthdays[0] else part for part in parts) + (
-        ";BYSETPOS=1"
+    if not any(29 <= int(day) <= 31 for day in days):
+        return text
+    days.append("-1")
+    clamped = f"BYMONTHDAY={','.join(days)}"
+    positions = ",".join(str(position) for position in range(1, len(days)))
+    return ";".join(clamped if part is monthdays[0] else part for part in parts) + (
+        f";BYSETPOS={positions}"
     )
 
 

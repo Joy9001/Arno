@@ -41,6 +41,7 @@ from arno.engine.projection import (
     CardAccount,
     CashEvent,
     GoalRow,
+    GoalSlip,
     HypotheticalMeta,
     Installment,
     Projection,
@@ -49,11 +50,12 @@ from arno.engine.projection import (
     ScenarioBaseline,
     ScenarioChange,
     Tradeoff,
+    _min_held,
+    card_bills,
     card_due_date,
     checkpoints_for,
     first_full_payment_date,
     goal_rows,
-    order_rank,
     prepare,
     project,
     reduce_categories,
@@ -106,6 +108,12 @@ def _pick_card(inputs: ProjectionInput, account: str | None) -> CardAccount | No
         (card for card in inputs.cards if card.id == account or card.name.lower() == wanted),
         None,
     )
+
+
+def _available_at(card: CardAccount, as_of: date, when: date) -> int:
+    """Available credit on ``when``, after every bill due before the purchase is paid."""
+    cleared = sum(amount for due, amount in card_bills(card, as_of) if due <= when)
+    return max(card.credit_limit_paise - card.outstanding_paise + cleared + card.credit_paise, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,12 +195,12 @@ def _apply(inputs: ProjectionInput, hypothetical: Hypothetical) -> _Applied:
             meta,
             f"{card.name} has no known outstanding balance, so its available credit is unknown.",
         )
-    if amount > card.available_credit_paise:
-        available = money(card.available_credit_paise)["text"]
+    available = _available_at(card, inputs.as_of, when)
+    if amount > available:
         return _Applied(
             inputs,
-            {**meta, "available_credit_paise": card.available_credit_paise},
-            f"{card.name} has only {available} of available credit",
+            {**meta, "available_credit_paise": available},
+            f"{card.name} has only {money(available)['text']} of available credit",
         )
     meta["card_id"] = card.id
     meta["card_name"] = card.name
@@ -281,21 +289,34 @@ class _Matrix:
     balances: kernel.I64  # (scenarios, checkpoints)
     reducible: kernel.I64 | None  # cash-realized reducible spend, same shape
     capped: bool  # a card went past its limit in some scenario, so a cut frees cash sooner
+    # Obligation days, and each scenario's payable there before the day's spending, with the
+    # reducible cash a cut frees by then.
+    obligation_days: tuple[int, ...]
+    payables: kernel.I64 | None
+    obligation_reducible: kernel.I64 | None
 
 
 def _matrix(method: str, applied: _Applied, *, cut_until: int, runs: int, seed: int) -> _Matrix:
     model = projection_mod.MODEL
     prepared = prepare(applied.inputs, model)
-    marks = checkpoints_for(prepared.spec)
+    obligation_days = kernel.obligation_days(prepared.spec)
+    marks = checkpoints_for(prepared.spec, tuple(int(day) for day in obligation_days))
     settings = kernel.Settings(
         scenarios=runs,
         seed=seed,
         block_length=model.block_length,
         checkpoints=marks,
         reducible_until=cut_until,
+        payable_days=tuple(int(day) for day in obligation_days),
     )
     run = kernel.run(prepared.spec, settings)
     assert run.checkpoints is not None
+    columns = {day: index for index, day in enumerate(marks)}
+    obligation_reducible = (
+        run.reducible_before[:, [columns[int(day)] for day in obligation_days]]
+        if run.reducible_before is not None
+        else None
+    )
     return _Matrix(
         method=method,
         applied=applied,
@@ -303,6 +324,9 @@ def _matrix(method: str, applied: _Applied, *, cut_until: int, runs: int, seed: 
         balances=run.checkpoints,
         reducible=run.reducible,
         capped=run.capped is not None and bool(run.capped.any()),
+        obligation_days=tuple(int(day) for day in obligation_days),
+        payables=run.payables,
+        obligation_reducible=obligation_reducible,
     )
 
 
@@ -337,15 +361,12 @@ def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> kernel.I64
     return shift
 
 
-def _least_cut(
+def _critical_cut(
     balances: kernel.I64, reducible: kernel.I64 | None, floor: int, needed: int
 ) -> int | None:
-    """The least cut in basis points that lets ``needed`` scenarios clear the floor.
-
-    A scenario clears it at cut b when every checkpoint has balance + b/10,000 * reducible >=
-    floor, so its critical value is the largest ceil(10,000 * (floor - balance) / reducible) over
-    its short checkpoints, compared in whole integers. None when no cut up to the cap does.
-    """
+    """The least cut in basis points that lets ``needed`` scenarios hold ``counts >= floor``."""
+    if needed <= 0:
+        return 0
     short = floor - balances
     if reducible is None:
         clearing = int(np.count_nonzero((short <= 0).all(axis=1)))
@@ -357,6 +378,41 @@ def _least_cut(
     return least if least <= MAX_CUT_BPS else None
 
 
+def _least_cut(
+    matrix: _Matrix,
+    balances: kernel.I64,
+    payables: kernel.I64 | None,
+    floor: int,
+    needed: int,
+    obligation_needed: int,
+) -> int | None:
+    """The least cut that clears the floor share and every obligation day's 0.99 share.
+
+    The obligation gate is per due day, as the projection tests it: each day needs
+    ``obligation_needed`` scenarios paying it, so the cut is the largest per-day critical value.
+    ``balances`` is already shifted by any skipped goals; obligations are paid before the day's
+    cash spending, so they use the reducible measure from the day before. A matrix with no
+    obligation column skips the gate.
+    """
+    floor_cut = _critical_cut(balances, matrix.reducible, floor, needed)
+    if floor_cut is None:
+        return None
+    if payables is None or payables.shape[1] == 0:
+        return floor_cut
+    obligation_cut = 0
+    for column in range(payables.shape[1]):
+        reducible = (
+            matrix.obligation_reducible[:, [column]]
+            if matrix.obligation_reducible is not None
+            else None
+        )
+        day_cut = _critical_cut(payables[:, [column]], reducible, 0, obligation_needed)
+        if day_cut is None:
+            return None
+        obligation_cut = max(obligation_cut, day_cut)
+    return max(floor_cut, obligation_cut)
+
+
 # --- Plans -------------------------------------------------------------------------------------
 
 
@@ -366,6 +422,9 @@ class _Plan:
     goals: tuple[str, ...]
     cut_bps: int
     cost_paise: int
+    # A capped card's fallback at MAX_CUT_BPS has not been verified or bisected yet, so it may
+    # not prune any other candidate.
+    provisional: bool = False
 
     @property
     def levers(self) -> int:
@@ -379,6 +438,7 @@ def _plans(
     *,
     floor: int,
     needed: int,
+    obligation_needed: int,
     spend_paise: int,
 ) -> list[_Plan]:
     """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest.
@@ -389,23 +449,55 @@ def _plans(
     goals = goals[:MAX_DEFERRABLE_GOALS]
     found: list[_Plan] = []
     for matrix in matrices:
+        obligation_marks = matrix.obligation_days
         clearing: dict[tuple[str, ...], int] = {}
+        provisional_clearings: set[tuple[str, ...]] = set()
         for size in range(len(goals) + 1):
             for subset in combinations(goals, size):
                 _skipped, removed = _goal_relief(matrix.applied.inputs, subset, when)
                 shifted = matrix.balances + _shift(matrix.marks, removed)[None, :]
-                cut = _least_cut(shifted, matrix.reducible, floor, needed)
+                # Obligations are paid before a same-day contribution, so a skipped goal's
+                # cash helps there only from the day after its contribution.
+                obligation_shift = _shift(
+                    obligation_marks, [(day + 1, amount) for day, amount in removed]
+                )
+                payables = (
+                    np.minimum(matrix.payables, np.iinfo(np.int64).max - obligation_shift[None, :])
+                    + obligation_shift[None, :]
+                    if matrix.payables is not None
+                    else None
+                )
+                cut = _least_cut(matrix, shifted, payables, floor, needed, obligation_needed)
+                provisional = False
                 if cut is None:
-                    continue
-                if any(set(other) < set(subset) and clearing[other] <= cut for other in clearing):
+                    if not matrix.capped:
+                        continue
+                    # Where a card cap binds, a cut also frees same-day cash spill, so the
+                    # critical value can exceed the cap while a smaller cut still passes.
+                    cut = MAX_CUT_BPS
+                    provisional = True
+                if any(
+                    set(other) < set(subset)
+                    and other not in provisional_clearings
+                    and clearing[other] <= cut
+                    for other in clearing
+                ):
                     continue
                 clearing[subset] = cut
+                if provisional:
+                    provisional_clearings.add(subset)
                 cost = matrix.applied.cost_paise + cut * spend_paise // 10_000
-                found.append(_Plan(matrix.method, subset, cut, cost))
+                found.append(_Plan(matrix.method, subset, cut, cost, provisional))
     found = [plan for plan in found if plan.levers > 0]
     # Across methods too: a plan that changes no more, skips a subset of the goals, cuts no more,
-    # and costs no more leaves the other nothing to offer (card float beside a paid EMI).
-    kept = [plan for plan in found if not any(_dominates(other, plan) for other in found)]
+    # and costs no more leaves the other nothing to offer (card float beside a paid EMI). A
+    # provisional candidate neither prunes nor is pruned until a rerun has accepted it.
+    kept = [
+        plan
+        for plan in found
+        if plan.provisional
+        or not any(not other.provisional and _dominates(other, plan) for other in found)
+    ]
     rank = {goal: index for index, goal in enumerate(goals)}
     kept.sort(
         key=lambda plan: (
@@ -420,13 +512,26 @@ def _plans(
 
 
 def _dominates(better: _Plan, plan: _Plan) -> bool:
+    """Strict Pareto dominance over method change, goals, cut, and cost.
+
+    One dimension must improve strictly, so two plans can never dominate each other and both be
+    dropped. The method dimension stays the existing yes/no (a lever was changed); ranking card
+    against EMI would be a new product decision.
+    """
     if better == plan:
         return False
-    return (
+    if not (
         int(better.method != "asked") <= int(plan.method != "asked")
         and set(better.goals) <= set(plan.goals)
         and better.cut_bps <= plan.cut_bps
         and better.cost_paise <= plan.cost_paise
+    ):
+        return False
+    return (
+        int(better.method != "asked") < int(plan.method != "asked")
+        or set(better.goals) < set(plan.goals)
+        or better.cut_bps < plan.cut_bps
+        or better.cost_paise < plan.cost_paise
     )
 
 
@@ -468,12 +573,13 @@ def _verify(
     runs: int,
     seed: int,
     threshold: float,
+    spend_paise: int,
 ) -> _Verified | None:
     """Apply the plan, rerun the kernel, and keep it only if it passes there.
 
-    Rounding can leave the cut a half paisa short, so a failing cut rises a basis point at a
-    time. Where a card limit binds, a cut frees cash sooner than its bill date, so the critical
-    value is an upper bound; the least passing cut below it is then found by bisection.
+    Uncapped cuts can rise a basis point at a time to cover rounding. When a card limit binds,
+    the exact walk can clear with a different cut. Try the cap if the estimate fails, then
+    bisect the passing interval and price the cut the walk accepted.
     """
     # shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per
     # bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
@@ -481,18 +587,28 @@ def _verify(
 
     def attempt(cut: int) -> _Verified | None:
         inputs = _with_plan(applied, plan, cut, when, until)
-        result = project(inputs, runs=runs, seed=seed)
+        result = project(inputs, runs=runs, seed=seed, threshold=threshold)
         if not _passes(result, threshold=threshold):
             return None
-        return _Verified(replace(plan, cut_bps=cut), result, inputs, applied.meta)
+        cost = applied.cost_paise + cut * spend_paise // 10_000
+        return _Verified(
+            replace(plan, cut_bps=cut, cost_paise=cost, provisional=False),
+            result,
+            inputs,
+            applied.meta,
+        )
 
     cut = plan.cut_bps
-    verified: _Verified | None = None
-    for _step in range(VERIFY_STEPS):
+    verified = attempt(cut)
+    if matrix.capped and verified is None and cut < MAX_CUT_BPS:
+        cut = MAX_CUT_BPS
         verified = attempt(cut)
-        if verified is not None or cut == 0 or cut >= MAX_CUT_BPS:
-            break
-        cut += 1
+    elif not matrix.capped:
+        for _step in range(VERIFY_STEPS - 1):
+            if verified is not None or not 0 < cut < MAX_CUT_BPS:
+                break
+            cut += 1
+            verified = attempt(cut)
     if verified is None or not matrix.capped or cut == 0:
         return verified
     low, high = 0, cut
@@ -535,6 +651,7 @@ def _describe(
         kinds.append("delay_goal")
         rows = {row["id"]: row for row in goal_rows(verified.inputs)}
         before = {row["id"]: row for row in baseline_goals}
+        goals: list[GoalSlip] = []
         skipped: list[str] = []
         for goal_id in plan.goals:
             row = rows[goal_id]
@@ -543,10 +660,14 @@ def _describe(
             slip: int | None = None
             if old is not None and new is not None:
                 slip = max(0, (date.fromisoformat(new) - date.fromisoformat(old)).days)
-            trade["goal"] = row["name"]
-            trade["goal_id"] = goal_id
-            trade["slips_days"] = slip
-            trade["completes_on"] = new
+            goals.append(
+                {
+                    "id": goal_id,
+                    "name": row["name"],
+                    "slips_days": slip,
+                    "completes_on": new,
+                }
+            )
             if new is None:
                 status = "no longer completes within the projection"
             elif slip:
@@ -554,6 +675,12 @@ def _describe(
             else:
                 status = "still completes on time"
             skipped.append(f"skip the next {row['name']} contribution (the goal {status})")
+        trade["goals"] = goals
+        # The scalar fields repeat the first goal for callers that predate the list.
+        trade["goal"] = goals[0]["name"]
+        trade["goal_id"] = goals[0]["id"]
+        trade["slips_days"] = goals[0]["slips_days"]
+        trade["completes_on"] = goals[0]["completes_on"]
         parts.append("; ".join(skipped))
     if plan.cut_bps > 0:
         kinds.append("cut_category")
@@ -615,7 +742,7 @@ def _wait_tradeoff(
         if not found:
             return None
         found_on = date.fromisoformat(found["date"])
-        paid = project(_pay_on(inputs, amount, found_on), runs=runs, seed=seed)
+        paid = project(_pay_on(inputs, amount, found_on), runs=runs, seed=seed, threshold=threshold)
         if _passes(paid, threshold=threshold):
             if found_on == when:
                 # Paying on the asked date is the ask, not a tradeoff.
@@ -648,7 +775,8 @@ def _tradeoffs(
         category.reducible and category.baseline_per_day_paise > 0 for category in inputs.categories
     )
     cut_until = (payday - inputs.as_of).days if reducible else -1
-    needed = runs - order_rank(runs, 1 - threshold)
+    needed = _min_held(runs, threshold)
+    obligation_needed = _min_held(runs, OBLIGATION_THRESHOLD)
 
     variants: list[tuple[str, _Applied]] = [("asked", applied)]
     for method in ("card", "emi"):
@@ -680,7 +808,13 @@ def _tradeoffs(
     first = matrices[0]
     spend = int(np.median(first.reducible[:, -1])) if first.reducible is not None else 0
     plans = _plans(
-        matrices, goals, when, floor=inputs.floor_paise, needed=needed, spend_paise=spend
+        matrices,
+        goals,
+        when,
+        floor=inputs.floor_paise,
+        needed=needed,
+        obligation_needed=obligation_needed,
+        spend_paise=spend,
     )
     by_method = {matrix.method: matrix for matrix in matrices}
     trades: list[Tradeoff] = []
@@ -695,6 +829,7 @@ def _tradeoffs(
             runs=runs,
             seed=seed,
             threshold=threshold,
+            spend_paise=spend,
         )
         if verified is not None:
             trades.append(_describe(verified, inputs, baseline_goals, payday))
@@ -750,7 +885,8 @@ def afford(
     validate_hypothetical(inputs.as_of, hypothetical)
     known_start = any(account.known for account in inputs.liquid)
     applied = _apply(inputs, hypothetical)
-    meta = applied.meta
+    # `_Applied` is frozen but its meta dict is not; copy it before extending the horizon.
+    meta: HypotheticalMeta = {**applied.meta}
     meta["last_cash_date"] = max(
         meta.get("last_cash_date") or hypothetical.date.isoformat(),
         hypothetical.date.isoformat(),
@@ -758,14 +894,15 @@ def afford(
     inputs = _extend_horizon(inputs, meta)
     applied = replace(
         applied,
+        meta=meta,
         inputs=_extend_horizon(applied.inputs, meta) if applied.reason is None else inputs,
     )
-    baseline = project(inputs, runs=runs, seed=seed)
+    baseline = project(inputs, runs=runs, seed=seed, threshold=threshold)
     if applied.reason is not None:
         result = baseline
         verdict_reason = applied.reason
     else:
-        result = project(applied.inputs, runs=runs, seed=seed)
+        result = project(applied.inputs, runs=runs, seed=seed, threshold=threshold)
         _passed_flag, verdict_reason = _outcome_reason(
             result, floor_paise=inputs.floor_paise, threshold=threshold
         )
@@ -846,11 +983,11 @@ def project_scenario(
         needed = max(needed, min(MAX_HORIZON_DAYS, hyp_days))
     base_inputs = replace(inputs, ask_horizon_days=needed)
     applied = apply_changes(base_inputs, changes, income_source_ids=income_source_ids)
-    unchanged = project(base_inputs, runs=runs, seed=seed)
+    unchanged = project(base_inputs, runs=runs, seed=seed, threshold=threshold)
     if hypothetical is not None:
         result = afford(applied.inputs, hypothetical, runs=runs, seed=seed, threshold=threshold)
     else:
-        result = project(applied.inputs, runs=runs, seed=seed)
+        result = project(applied.inputs, runs=runs, seed=seed, threshold=threshold)
 
     change_rows: list[ScenarioChange] = [
         {

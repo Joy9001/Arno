@@ -142,9 +142,8 @@ async def sync_card_due_alerts_in_group(
 ) -> int:
     """Make a card's bill reminders match what it still owes, audited in `group`.
 
-    A card bill has no schedule: the reminder job keys it by the card's account id and `upcoming`
-    states its amount from the same outstanding balance this reads. Money into the card that
-    leaves nothing owed resolves the bill reminders; a reversal of that payment reopens them.
+    A card bill has no schedule: the reminder job keys it by the card's account id. Money into the
+    card that leaves nothing owed resolves the bill reminders; a reversal reopens them.
     """
     from arno.ledger import audit
     from arno.ledger.common import has_known_balance

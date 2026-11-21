@@ -1,7 +1,7 @@
 """Pure Bayesian calendar-rule detector for recurring payment series.
 
 Compares calendar-rule hypotheses against a "no pattern" background modeled as a
-homogeneous Poisson process on the observation window [window_start, as_of] (length T
+homogeneous Poisson process on the observation window [window_start, as_of) (length T
 days) with fitted MLE rate Lambda = M (over T days), giving unordered-date likelihood
 L0 = (M / (e * T))^M = lambda^M where lambda = M / (e * T).
 """
@@ -475,12 +475,13 @@ def _pruning_score(
         if e_idx < n_exp and abs(expected_ordinals[e_idx] - po) <= _MAX_JITTER_HALF_WIDTH:
             matched_payments += 1
 
-    # Two-pointer check: expected dates inside [window_start, as_of] with no payment within 3d.
+    # Two-pointer check: expected dates inside [window_start, as_of) with no payment within 3d.
+    # as_of itself is unobserved (see `_censoring_skip_probs`), so it is not a miss.
     p_idx = 0
     in_window = 0
     unmatched_expected = 0
     for eo in expected_ordinals:
-        if eo < win_start_ord or eo > as_of_ord:
+        if eo < win_start_ord or eo >= as_of_ord:
             continue
         in_window += 1
         while p_idx < m and payment_ordinals[p_idx] < eo - _MAX_JITTER_HALF_WIDTH:
@@ -906,6 +907,19 @@ def _summarize_amounts(amounts: Sequence[int]) -> Amounts:
             samples=(),
         )
 
+    # price_step owns the fixed-run rule, so a stored level is always a level that was charged.
+    step = price_step(amounts)
+    if step is not None:
+        run = amounts[step.index :]
+        return Amounts(
+            kind="stepped",
+            level_paise=step.new_paise,
+            low_paise=min(run),
+            high_paise=max(run),
+            coverage=(len(run) - 1) / (len(run) + 1),
+            samples=tuple(run[-_MAX_SAMPLES:]),
+        )
+
     samples = tuple(amounts[-_MAX_SAMPLES:])
     fixed_ok, med = _is_fixed_run(amounts)
     if fixed_ok:
@@ -917,23 +931,6 @@ def _summarize_amounts(amounts: Sequence[int]) -> Amounts:
             coverage=(n - 1) / (n + 1),
             samples=samples,
         )
-
-    if n >= 4:
-        for split in range(2, n - 1):
-            run1 = amounts[:split]
-            run2 = amounts[split:]
-            ok1, med1 = _is_fixed_run(run1)
-            ok2, med2 = _is_fixed_run(run2)
-            if ok1 and ok2 and not _same_level(med2, med1):
-                r2_len = len(run2)
-                return Amounts(
-                    kind="stepped",
-                    level_paise=med2,
-                    low_paise=min(run2),
-                    high_paise=max(run2),
-                    coverage=(r2_len - 1) / (r2_len + 1),
-                    samples=samples,
-                )
 
     s_len = len(samples)
     return Amounts(
@@ -1001,7 +998,7 @@ def _detect_with(
     if len(candidates) == 0:
         return None
 
-    in_window = [p for p in payments if window_start <= p.date <= as_of]
+    in_window = [p for p in payments if window_start <= p.date < as_of]
     if len(in_window) < _MIN_PAYMENTS:
         return None
     in_window.sort(key=lambda p: (p.date, p.movement_id))
@@ -1017,7 +1014,8 @@ def _detect_with(
 
     win_start_ord = window_start.toordinal()
     as_of_ord = as_of.toordinal()
-    t_days = float(as_of_ord - win_start_ord + 1)
+    # The observation window ends the day before as_of, which the skip grid treats as unobserved.
+    t_days = float(as_of_ord - win_start_ord)
     background_scale = _E * t_days / len(in_window)
     payment_ordinals = [p.date.toordinal() for p in in_window]
 
@@ -1149,10 +1147,10 @@ def detect(
     """Detect the most probable calendar rule and its probabilities for one payee.
 
     Compares candidate calendar rules against the fitted-rate homogeneous Poisson background
-    (lambda = M / (e * T) on the T-day window). Returns None when fewer than 3 payments fall
-    in [window_start, as_of].
+    (lambda = M / (e * T) on the T-day window [window_start, as_of)). Returns None when fewer than
+    3 payments fall in that window; a payment dated as_of is not observed yet.
     """
-    in_window = [p for p in payments if window_start <= p.date <= as_of]
+    in_window = [p for p in payments if window_start <= p.date < as_of]
     if len(in_window) < _MIN_PAYMENTS:
         return None
     in_window.sort(key=lambda p: (p.date, p.movement_id))
