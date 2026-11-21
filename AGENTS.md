@@ -85,6 +85,15 @@ full set.
   AGPL, SSPL, or Elastic code in the image. `pydantic-ai-harness` is 0.x: keep it pinned.
 - Release: the git tag must equal the `pyproject.toml` version, and `compose.yaml`'s default image
   tags (`api` and `backup`) must carry the same version (`tests/test_release.py` fails otherwise).
+- Release notes: write them yourself; `release.yml`'s `--generate-notes` fallback lists merged PRs
+  and this repo has none. Read `git log <previous-tag>..<new-tag>` and the diff, then write plain
+  prose for the owner in `##` sections that apply: Highlights (what changed and why it matters),
+  Fixes, Upgrade notes (migrations, new env vars, anything to do before `docker compose pull`),
+  Known limitations. Skip chore, docs, and test commits unless they change behavior. Never paste
+  `private/` or real-statement data. After pushing the tag, publish with
+  `gh release create <tag> --verify-tag --title <tag> --notes-file <file>`, or
+  `gh release edit <tag> --notes-file <file>` if the workflow already created it. Confirm with
+  `gh release view <tag>`.
 - Sandbox helper docstrings: keep them in the existing simple form. `run_code` parses each one into
   a stub, so a docstring that reads like a call example can break positional calls.
 
