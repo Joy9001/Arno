@@ -315,6 +315,32 @@ def test_floor_breaches_across_personas() -> None:
     assert breaching == len(PERSONA_KEYS)
 
 
+def test_a_history_under_105_days_still_calibrates_a_floor() -> None:
+    from arno.engine.personas import _calibrate_opening_and_floor
+
+    end = date(2026, 6, 30)
+    # 100 days fits no scored origin: history_start + 14 to end - 90 is empty.
+    opening, floor = _calibrate_opening_and_floor(
+        end - timedelta(days=99),
+        end,
+        (),
+        base_opening=5_000_000,
+        target_share=0.16,
+    )
+    assert opening == 5_000_000
+    assert floor == 5_200_000
+
+    # Exactly 105 days fits the first and last scored origin, so that window is used.
+    _opening, floor = _calibrate_opening_and_floor(
+        end - timedelta(days=104),
+        end,
+        (),
+        base_opening=5_000_000,
+        target_share=0.16,
+    )
+    assert floor == 5_100_000
+
+
 def test_signature_salaried_steady_and_heavy_tails() -> None:
     steady = generate("salaried_steady", 101)
     heavy = generate("heavy_tails", 101)

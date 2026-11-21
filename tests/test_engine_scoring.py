@@ -71,6 +71,19 @@ def test_hac_with_no_lag_is_the_ordinary_standard_error():
     assert math.isclose(estimate.high - mean, scoring.Z95 * error)
 
 
+def test_hac_does_not_read_a_level_difference_between_groups_as_autocorrelation():
+    # Four flat households at different levels: no serial correlation exists inside any group, so
+    # the lagged estimate must equal the lag-0 one instead of inflating with the between-group
+    # spread as a spurious covariance.
+    groups = [[100.0] * 10, [200.0] * 10, [300.0] * 10, [400.0] * 10]
+    lag_zero = scoring.hac_estimate(groups, 0)
+    lagged = scoring.hac_estimate(groups, 12)
+    assert math.isclose(lagged.high, lag_zero.high)
+    # The lag-0 error is the ordinary standard error of the pooled values.
+    error = math.sqrt(500_000.0) / 40
+    assert math.isclose(lag_zero.high - lag_zero.mean, scoring.Z95 * error)
+
+
 def test_positive_autocorrelation_widens_the_interval():
     trend = [[float(value) for value in range(20)]]
     narrow = scoring.hac_estimate(trend, 0)
@@ -85,6 +98,12 @@ def test_diebold_mariano_favors_the_smaller_loss():
     statistic, p_value = scoring.diebold_mariano(good, bad, 2)
     assert statistic < 0
     assert p_value < 0.001
+
+
+def test_diebold_mariano_is_undefined_without_two_paired_forecasts():
+    statistic, p_value = scoring.diebold_mariano([[5.0]], [[0.0]], 12)
+    assert math.isnan(statistic)
+    assert math.isnan(p_value)
 
 
 def test_wilson_interval_brackets_the_proportion():

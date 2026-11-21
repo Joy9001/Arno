@@ -481,9 +481,14 @@ def _calibrate_opening_and_floor(
     balances = [opening + c for c in cum]
     # The floor is set on the windows a backtest scores: weekly, over the last year, each
     # reaching 90 days ahead. Calibrating on the whole history would put every breach early.
+    # A scored origin runs from history_start + 14 days to end - 90 days, both inclusive, so a
+    # history under 105 days fits none and has nothing to calibrate on.
     last = days_count - SCORED_DAYS - 1
     first = 14
     starts = [last - 7 * step for step in range(SCORED_ORIGINS) if last - 7 * step >= first]
+    if not starts:
+        return opening, max(1_000_000, ((opening + min_cum) // 100_000 + 2) * 100_000)
+
     window_mins = sorted(min(balances[i : i + SCORED_DAYS + 1]) for i in starts)
     total_windows = len(window_mins)
 

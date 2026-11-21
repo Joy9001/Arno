@@ -80,6 +80,13 @@ figure, what-ifs with several dated changes, price-change alerts, and what a deb
 fees. Each one fixes an answer Arno got wrong or could not give, and none reopens a parked
 decision, adds a dependency, or reaches the network. The decisions are in §6, L9.
 
+**Engine hardening on November 21, 2026.** An audit of the numerical core and its callers found
+financial-correctness, trust-boundary, and event-loop freeze bugs alongside an overbuilt external
+benchmark proposal. Layer L10 lands the correctness, safety, and backtest-honesty fixes in three
+ordered milestones with zero new dependencies and zero external corpora; low-ROI benchmark suites,
+micro-optimizations, and unmeasured modeling changes stay out, tracked as explicit `shortcut:`
+ceilings with triggers in §6, L10.
+
 ---
 
 ## 1. The product
@@ -648,6 +655,60 @@ reported cost for every read; before that fix the spend gate stopped the weekly 
 have stopped any streamed paid run on a provider that reports its own cost. What remains open is
 in [`completion-checklist.md`](completion-checklist.md), section F.
 
+### L10: Engine hardening
+
+Added on November 21, 2026, from an audit of the numerical core and its callers. Every milestone
+keeps zero new dependencies and zero external corpora, and runs before milestone 41's four-week
+clock starts. Decisions and deferred `shortcut:` ceilings are in §6, L10.
+
+47. Trust boundaries, leak safety, and off-loop compute: reject `arno backtest --source db
+    --publish`, default `arno hackerrank --publish` to off, and exit before writing when the local
+    dataset is absent (`cli.py`); enforce `MAX_PAISE` and a 600-month cap at every projection and
+    money boundary, cap `series.detect` input to the last 200 payments, and assert
+    `0 < bound < 2**32` in `kernel.below()`; wrap model-facing `median_low` figures through
+    `_money_low()`; run `load_snapshot` inside one read-only `REPEATABLE READ` transaction; cache
+    `IndiaCalendar` with `expand=False`, move `project()`, `afford()`, and workbook generation off
+    the FastAPI event loop via `asyncio.to_thread` behind `asyncio.Semaphore(2)`, cap fast-path
+    home and risk-check horizons to `BASE_HORIZON_DAYS` unless requested, and cap deferrable goals
+    in `_plans` to the top eight by priority.
+48. Financial correctness across projection, affordability, patterns, and money: include
+    credit-card bill due dates and day-0 obligations in `obligation_days`; switch `load_snapshot`
+    from global `attributed=True` to category-level attribution so unlinked schedules never
+    double-count; share one card billing split and due-date helper across projection and
+    `schedules.upcoming()`; include unpaid overdue and due-today obligations inside
+    `MISSED_AFTER_DAYS` clamped to tomorrow with a gap note; charge card obligations before loose
+    resampled spend in `_charge_after_loose`; unify `_min_held(scenarios, threshold)` across floor
+    probability, first crossing, safe to spend, and `afford()`; fix `inputs.py` marshaling (`as_of`
+    leak, multi-card share, `first`-based history window, unknown-amount obligation gaps),
+    `risk_state.last_checked_at`, partial-payment preservation in `ChangeAmount`, and
+    `ROUND_HALF_UP` in `format_paise`. In affordability, enforce the 0.99 obligation gate inside
+    `_least_cut`, make `_dominates` a strict partial order, carry a capped-card `MAX_CUT_BPS`
+    candidate into `_verify`, recompute `cost_paise` after bisection, account for bills clearing
+    before future card dates, keep every delayed goal in structured tradeoffs, copy `applied.meta`,
+    and assert the horizon precondition in `apply_changes`. In patterns and recurrence, handle
+    date-only `UNTIL=YYYYMMDD` and comma `BYMONTHDAY` clamping, fix `rule_interval_days`
+    (`BYSETPOS=1` and `FREQ=DAILY`) and `None` cadence matching in `same_charge`, unify
+    `_summarize_amounts` onto `price_step`, pass `Rule.rrule` into proposals, and align `series.py`
+    `as_of` censoring. In `money.py`, pin a local `Decimal` context, label or alias `30e/360` and
+    `actual/365f`, break on early-zero `card_emi`, fix `prepay(reduce="tenure")` on a coincident
+    rate reset, reject out-of-horizon `rate_changes` and note coarse-unit balloons, reject daily
+    rest in `infer_rate` with exact plateau semantics, reject negative IRR in `_compute_apr`, and
+    fail fast on negative amortization in `card_payoff`. Guard these with an exact-enumeration
+    common-random-numbers affordability oracle (`runs=512`), a top-8 cadence prune test via
+    `_detect_with`, an RBI KFS Annex B test vector, and boundary day-count tests.
+49. Backtest honesty and engine invariants: fix `scoring.hac_estimate` to center each group on its
+    own mean (adding between-group variance once at lag 0) and return `nan` for `n < 2` in
+    `diebold_mariano`; fix persona schedule-exclusion leakage (`created <= as_of`), group persona
+    detections by normalized payee text, add a probabilistic `empirical_flat` baseline beside point
+    `schedule_mean`, and guard short personas under 105 days; add synchronous `check_engine()` to
+    `tests/invariants.py` and replace its tautological `payment_status` check; republish the
+    holdout synthetic backtest once after milestones 47 to 49 settle.
+
+**L10 status, November 21, 2026.** Milestones 47 to 49 are implemented. Ruff and Pyrefly pass.
+On PostgreSQL 18, 1,907 tests passed and five were skipped. The seeded demo passed 804
+invariant checks. The README's synthetic holdout scored 978 origins and includes the
+`empirical_flat` baseline.
+
 **Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
 unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
 something has crept in—check it against [`parked.md`](parked.md).
@@ -887,6 +948,53 @@ Answer each when its layer arrives, not before.
     refuses and the agent asks. A minimum due of 5% of the statement balance with a ₹200 floor is
     assumed, and labeled, when the card's own rule is not known. The walk assumes no new spending.
     The projection still pays every card bill in full.
+- **L10:** decided November 21, 2026, after the engine audit and benchmark survey
+  ([review](../research/engine-research/review.md),
+  [benchmarks](../research/engine-research/benchmarks.md)). Arno is a single-user, India-first
+  finance engine (10 to 50 chat turns a day, 100 to 500 movements a month), so financial
+  correctness, leak prevention, and freeze guards land now while institutional benchmark rigs and
+  unmeasured modeling switches stay out.
+  - **Verification kept.** Zero new dependencies and zero external corpora: RBI KFS Annex B APR
+    vector (nominal `12 * monthly IRR`, matching India; no effective-annual toggle), 10 boundary
+    day-count unit tests, an exact-enumeration common-random-numbers affordability oracle
+    (`runs=512`), a top-8 cadence prune test via `_detect_with` (no production `prune` flag), a
+    concurrent `/api/health` off-loop responsiveness check, cap tests for 15 goals and 800-row
+    payees, and synchronous `check_engine()` in `tests/invariants.py`.
+  - **Benchmarks and optimizations cut.** Rejected as low ROI for a solo Indian retail build:
+    OpenGamma Strata 400-pair Java fixtures, ACTUS institutional contracts, CFPB Reg Z and EU CCD
+    vectors, PKDD'99 Berka (1993–98 Czech data without UPI, card cycles, or Indian holidays),
+    TCPD/TCPDBench, Tatbul/BBVA multi-plan metrics, Dominick's retail prices, ReBIT AA and
+    `camt.053` loaders (no bank APIs, §2), academic multivariate and tail-risk econometrics
+    (`VS_1`, 2-D Energy, Kupiec/Christoffersen, `Z2`/`FZ0`, WIS, M5 0.01/0.99 tails, Czado PIT,
+    90% MCS, Giacomini-White, multi-seed CI gates), FCA audit-row schemas, FinRegLab perturbation
+    sweeps, k6 1–10 RPS load rigs and custom event-loop metrics, ASV/`pytest-memray`/5% PR
+    wall-time gates, PractRand/BigCrush PRNG batteries (SplitMix64 is already literature-proven and
+    oracle-checked), and micro-optimizations (`card{k}_series` skip for unshipped `limit_spend`,
+    `_verify` spec caching, `price_step` inner bound, invariant query batching).
+  - **Attribution over auto-linking.** Unlinked schedules are guarded by category-level attribution
+    in `load_snapshot` rather than auto-linking historical rows in `create_schedule`, preserving
+    milestone 9's rule that payment matching is always explicit.
+  - **Tracked deferrals (`shortcut:` debt ledger).** Each deferred modeling hypothesis or scale
+    ceiling lands verbatim as a `shortcut:` code comment at its seam during milestones 47 to 49,
+    without speculative code, and stays deferred until its trigger fires (especially milestone 29's
+    real-ledger backtest):
+
+    ```text
+    engine/affordability.py (0.99 gate): shortcut: point estimate at S=16384 has +-0.15pp 95% CI on 0.99 gate, revisit with one-sided Wilson LCB or higher S only after real-ledger coverage error drops below 2pp
+    engine/projection.py (MODEL): shortcut: iid daily draws (block_length=1) ignore multi-day spend bursts, revisit when milestone 29 real-ledger backtest shows clustered breaches or CRPS gain at L=2/3
+    engine/series.py (_MAX_CANDIDATES=8): shortcut: pre-DP heuristic prunes to top 8 rules per payee, revisit if recall@8 test or real ledger misses a recurring bill ranked below 8th
+    engine/series.py (_MAX_SAMPLES=12): shortcut: variable bills sample uniformly from last 12 payments only, revisit if milestone 29 shows seasonal or tail misses on real utility bills
+    engine/projection.py (MAD==0) & engine/kernel.py (Poisson): shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on k=1, revisit if real-ledger rare spikes breach P10 in milestone 29
+    engine/affordability.py (card EMI): shortcut: hypothetical card EMI charges installments to limit instead of blocking full principal on day 1, revisit when modeling card EMI near a tight credit limit
+    engine/projection.py & engine/kernel.py (card float): shortcut: unknown unbilled split front-loads 100% balance to first due date and projection assumes cards pay in full, revisit if user revolves a card balance or imports balances without recent spend
+    engine/patterns.py & tools/patterns.py (matching): shortcut: one detected series per payee and raw token overlap in same_merchant, revisit when a real payee holds two plans or false-matches generic words
+    engine/affordability.py (goal relief): shortcut: goal deferral checks top 8 goals in [when, when+31] only, revisit if a real ledger has >8 active goals or needs pre-purchase goal deferral
+    engine/series.py (dense payee cap): shortcut: series.detect caps payee history at last 200 payments, revisit if a high-frequency merchant needs >200 rows to detect cadence
+    tools/projection.py (off-loop compute): shortcut: max 2 concurrent off-loop projections and 90d fast-path cap on home/risk, revisit if multiuser hosting is unparked or home needs multi-year goal horizons
+    engine/money.py (conventions): shortcut: India nominal 12*monthly IRR and 30e/360 + actual/365f only, revisit if a non-India locale pack or US 30/360 / EU effective APR is requested
+    engine/kernel.py & engine/affordability.py (memory/verify): shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
+    engine/backtest.py (backtest cadence): shortcut: single seed (S=16384) run manually without CI gate or multi-metric econometrics, revisit once milestone 29 has >=90d of linked real-ledger origins
+    ```
 
 ---
 

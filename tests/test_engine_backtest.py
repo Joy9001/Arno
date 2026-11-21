@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from arno.engine import backtest, hackerrank, personas
+from arno.engine import series as series_mod
 from arno.engine.inputs import Occurrence, build_inputs
 
 
@@ -110,15 +111,18 @@ def test_persona_snapshot_on_messy_recurring_projects_series_and_excludes_confir
 
     assert snapshot.attributed is True
     assert snapshot.series
-    confirmed_series_ids = {s.id for s in persona.series if s.schedule_id is not None}
-    confirmed_payees = {
-        s.payee_key for s in persona.series if s.schedule_id is not None and s.kind == "spend"
+    known_schedule_ids = {s.id for s in persona.schedules if s.created <= as_of}
+    confirmed_series_ids = {s.id for s in persona.series if s.schedule_id in known_schedule_ids}
+    confirmed_texts = {
+        series_mod.normalize(m.payee)
+        for m in persona.movements
+        if m.series_id in confirmed_series_ids and m.kind == "spend" and m.date < as_of
     }
-    assert confirmed_payees
+    assert confirmed_texts
     assert not any(
-        forecast.id == f"det_{payee}" for forecast in snapshot.series for payee in confirmed_payees
+        forecast.id == f"det_{text}" for forecast in snapshot.series for text in confirmed_texts
     )
-    assert any(forecast.id == "det_netflix" for forecast in snapshot.series)
+    assert any(forecast.id == "det_netflix entertainment" for forecast in snapshot.series)
 
     confirmed_movements = [
         m
@@ -144,6 +148,176 @@ def test_persona_snapshot_on_messy_recurring_projects_series_and_excludes_confir
             and other.series_id not in confirmed_series_ids
         )
         assert spend_by_key.get((mov.date, mov.category_id, card_id), 0) <= other_spend
+
+
+_ENTERTAINMENT = personas.Category("entertainment", "Entertainment", True, None)
+
+
+def _synthetic_persona(
+    movements: tuple[personas.Movement, ...],
+    *,
+    schedules: tuple[personas.Schedule, ...] = (),
+    series: tuple[personas.Series, ...] = (),
+) -> personas.Persona:
+    return personas.Persona(
+        key="test",
+        seed=0,
+        description="",
+        history_start=date(2024, 1, 1),
+        end=date(2026, 6, 30),
+        opening_bank_paise=100_000_000,
+        floor_paise=1_000_000,
+        cards=(personas.Card("visa", "Visa", 15, 5, 20_000_000),),
+        categories=(_ENTERTAINMENT,),
+        schedules=schedules,
+        goals=(),
+        movements=movements,
+        series=series,
+    )
+
+
+def _netflix(
+    movement_id: str,
+    day: date,
+    amount_paise: int,
+    *,
+    key: str = "netflix",
+    account: str = "bank",
+    series_id: str | None = None,
+) -> personas.Movement:
+    return personas.Movement(
+        id=movement_id,
+        date=day,
+        amount_paise=amount_paise,
+        kind="spend",
+        account=account,
+        category_id="entertainment",
+        payee="NETFLIX ENTERTAINMENT",
+        payee_key=key,
+        series_id=series_id,
+    )
+
+
+_MONTHLY_NETFLIX = tuple(
+    _netflix(
+        f"m{index:02d}",
+        date(2024 + index // 12, index % 12 + 1, 18),
+        64_900,
+        key="netflix_card" if index % 4 else "netflix_bank",
+        account="visa" if index % 4 else "bank",
+    )
+    for index in range(24)
+)
+
+
+def test_persona_detections_group_one_bill_across_payee_keys():
+    ledger = backtest._ledger(_synthetic_persona(_MONTHLY_NETFLIX))
+
+    detections = backtest._persona_detections(ledger, date(2025, 12, 29))
+
+    assert len(detections) == 1
+    detected = detections[0]
+    assert detected.payee_text == "netflix entertainment"
+    # Attribution still comes from the matched movements, not the group's name.
+    assert detected.card_id == "visa"
+    assert detected.category_id == "entertainment"
+    matched = set(detected.detection.matched)
+    assert matched <= {movement.id for movement in _MONTHLY_NETFLIX}
+    assert {m.payee_key for m in _MONTHLY_NETFLIX if m.id in matched} == {
+        "netflix_card",
+        "netflix_bank",
+    }
+
+
+def test_a_schedule_seen_only_after_the_origin_cannot_hide_an_earlier_payee():
+    as_of = date(2026, 1, 1)
+    schedule = personas.Schedule(
+        id="sched_new",
+        name="Streaming plan",
+        kind="obligation",
+        rule="FREQ=MONTHLY;BYMONTHDAY=18",
+        starts=date(2026, 2, 1),
+        ends=None,
+        amount_paise=79_900,
+        holiday_adjust="none",
+        card_id=None,
+        category_id=None,
+        goal_id=None,
+        confirmed=True,
+        created=date(2025, 12, 1),
+    )
+    persona = _synthetic_persona(
+        _MONTHLY_NETFLIX + (_netflix("future", date(2026, 2, 18), 79_900, series_id="ser_new"),),
+        schedules=(schedule,),
+        series=(
+            personas.Series(
+                "ser_new", "netflix", "spend", "monthly", "sched_new", date(2026, 2, 1), None
+            ),
+        ),
+    )
+
+    snapshot = backtest.persona_snapshot(backtest._ledger(persona), as_of)
+
+    # The future statement text must not stand in for a payee the origin had not met yet.
+    assert any(forecast.id == "det_netflix entertainment" for forecast in snapshot.series)
+
+
+def test_a_schedule_created_after_the_origin_does_not_hide_its_spend():
+    as_of = date(2026, 2, 20)
+    movements = (
+        _netflix("m1", date(2026, 1, 15), 64_900, series_id="ser_late"),
+        _netflix("m2", date(2026, 2, 15), 79_900, series_id="ser_late"),
+    )
+    schedule = personas.Schedule(
+        id="sched_late",
+        name="Netflix",
+        kind="obligation",
+        rule="FREQ=MONTHLY;BYMONTHDAY=18",
+        starts=date(2026, 3, 1),
+        ends=None,
+        amount_paise=79_900,
+        holiday_adjust="none",
+        card_id=None,
+        category_id="entertainment",
+        goal_id=None,
+        confirmed=True,
+        created=date(2026, 3, 1),
+    )
+    persona = _synthetic_persona(
+        movements,
+        schedules=(schedule,),
+        series=(
+            personas.Series(
+                "ser_late", "netflix", "spend", "monthly", "sched_late", date(2026, 3, 1), None
+            ),
+        ),
+    )
+    ledger = backtest._ledger(persona)
+
+    before = backtest.persona_snapshot(ledger, as_of)
+
+    assert not before.occurrences
+    # The schedule was unknown then, so its spend stays in the forecast's history.
+    assert sum(row.amount_paise for row in before.spend) == 64_900 + 79_900
+
+    after = backtest.persona_snapshot(ledger, date(2026, 3, 10))
+
+    assert after.occurrences
+    assert all(row.amount_paise not in (64_900, 79_900) for row in after.spend)
+
+
+def test_empirical_flat_is_the_probabilistic_pair_of_schedule_mean():
+    persona = personas.generate("salaried_steady", personas.TUNING_SEEDS[0])
+    ledger = backtest._ledger(persona)
+    snapshot = backtest.persona_snapshot(ledger, persona.end - timedelta(days=120))
+    projection = build_inputs(snapshot)
+
+    assert "empirical_flat" in backtest.BASELINES
+    probabilistic = backtest.empirical_flat(projection, 7)
+    assert probabilistic.shape == (backtest.DEFAULT_RUNS, backtest.LAST_HORIZON + 1)
+    assert len(set(probabilistic[:, 30].tolist())) > 1
+    point = backtest.schedule_mean(projection, 7)
+    assert point.shape == (1, backtest.LAST_HORIZON + 1)
 
 
 def test_the_persona_backtest_scores_each_forecaster_against_the_baselines():

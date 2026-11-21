@@ -70,7 +70,9 @@ def hac_estimate(groups: Sequence[Sequence[float]], lag: int) -> Estimate:
     """Mean over every value, with a Newey-West standard error within each group.
 
     Groups are independent (one persona and seed each); inside a group the values are ordered by
-    origin and correlated up to ``lag`` steps, because their horizons overlap.
+    origin and correlated up to ``lag`` steps, because their horizons overlap. Each group is
+    centered on its own mean, and the between-group spread enters once at lag 0, so a difference
+    in level between households is not read as serial correlation.
     """
     values = [value for group in groups for value in group]
     n = len(values)
@@ -79,7 +81,11 @@ def hac_estimate(groups: Sequence[Sequence[float]], lag: int) -> Estimate:
     mean = sum(values) / n
     long_run = 0.0
     for group in groups:
-        centered = [value - mean for value in group]
+        if not group:
+            continue
+        group_mean = sum(group) / len(group)
+        long_run += len(group) * (group_mean - mean) ** 2
+        centered = [value - group_mean for value in group]
         long_run += sum(value * value for value in centered)
         for k in range(1, min(lag, len(centered) - 1) + 1):
             weight = 1 - k / (lag + 1)
@@ -95,14 +101,15 @@ def diebold_mariano(
     """Test whether forecaster A's mean loss differs from B's: (statistic, two-sided p-value).
 
     A negative statistic favors A. The variance is the same Newey-West estimate as
-    `hac_estimate`, so overlapping horizons do not overstate the evidence.
+    `hac_estimate`, so overlapping horizons do not overstate the evidence. Fewer than two paired
+    forecasts leaves no variance to test against, so both values are ``nan``.
     """
     differences = [
         [a - b for a, b in zip(group_a, group_b, strict=True)]
         for group_a, group_b in zip(losses_a, losses_b, strict=True)
     ]
     estimate = hac_estimate(differences, lag)
-    if estimate.n == 0:
+    if estimate.n < 2:
         return math.nan, math.nan
     error = (estimate.high - estimate.mean) / Z95
     if error == 0:

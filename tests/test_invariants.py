@@ -20,7 +20,7 @@ from arno.ledger.movements import record_expense
 from arno.ledger.payees import create_payee
 from arno.ledger.schedules import create_schedule
 from arno.tools import write as write_tools
-from tests.invariants import Violation, check_ledger
+from tests.invariants import Violation, check_engine, check_ledger
 
 CATEGORIES = ("Food & Dining", "Groceries", "Transport", "Shopping")
 
@@ -33,6 +33,39 @@ def _clean(violations: list[Violation]) -> None:
 
 async def test_demo_persona_has_no_violations(demo_ledger):
     _clean(await check_ledger(demo_ledger))
+
+
+def test_engine_has_no_violations():
+    _clean(check_engine())
+
+
+async def test_the_invariant_compares_payment_status_to_effective_evidence(ledger, monkeypatch):
+    from arno.ledger.schedule_payments import link_payment
+
+    bank = await create_account(
+        ledger, kind="bank", name="Payment bank", opening_balance_paise=100_000
+    )
+    day = ledger_today()
+    schedule = await create_schedule(
+        ledger,
+        kind="obligation",
+        name="Rent",
+        amount_paise=50_000,
+        account_id=bank["id"],
+        starts=day,
+        rule="FREQ=DAILY;COUNT=1",
+    )
+    paid = await record_expense(
+        ledger, account_id=bank["id"], amount_paise=20_000, description="Part of rent"
+    )
+    await link_payment(ledger, schedule_id=schedule["id"], due_date=day, movement_id=paid["id"])
+    monkeypatch.setattr("tests.invariants.payment_status", lambda *_args: "scheduled")
+    violations = await check_ledger(ledger)
+    assert any(
+        violation.code == "schedule_payment_status"
+        and violation.detail.endswith("expected partial")
+        for violation in violations
+    )
 
 
 async def test_undo_keeps_the_reversed_pair_categorised(ledger):

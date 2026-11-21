@@ -1,4 +1,4 @@
-"""Whole-ledger invariants: one checker every test and end-to-end run can call.
+"""Whole-ledger and deterministic engine invariants.
 
 The rules are the "Financial invariants" list in `docs/arno/e2e-user-journeys.md`, derived
 from the write paths in `ledger/movements.py` and `tests`' own view definitions. The two balance
@@ -19,12 +19,15 @@ import asyncio
 import os
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import date
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from typing import Any
 
 from arno.backup_restore import verify_database
 from arno.db.conn import Connection, connect, conninfo_to_dict
+from arno.engine.affordability import Hypothetical, afford
+from arno.engine.money import allocate, amortize
+from arno.engine.projection import CardAccount, CashEvent, LiquidAccount, ProjectionInput, project
 from arno.ledger.common import today
 from arno.ledger.errors import InvalidLedgerError
 from arno.ledger.schedule_payments import _capacity, payment_evidence, payment_status
@@ -86,7 +89,7 @@ _violations: list[Violation] = []
 
 
 def checks_run() -> int:
-    """How many individual assertions the last `check_ledger` call made."""
+    """How many individual assertions the last invariant check made."""
     return _checks_run
 
 
@@ -101,12 +104,15 @@ def _ids(rows: list[dict[str, Any]], key: str) -> tuple[str, ...]:
     return tuple(str(row[key]) for row in rows)
 
 
-async def check_ledger(conn: Connection) -> list[Violation]:
-    """Every financial invariant that can be checked from the database alone."""
+def _reset_checks() -> None:
     global _checks_run, _violations
     _checks_run = 0
     _violations = []
 
+
+async def check_ledger(conn: Connection) -> list[Violation]:
+    """Every financial invariant that can be checked from the database alone."""
+    _reset_checks()
     movements, postings, legs = await _load_ledger(conn)
     await _check_balances(conn)
     _check_transfer_shapes(movements, postings, legs)
@@ -119,6 +125,73 @@ async def check_ledger(conn: Connection) -> list[Violation]:
     await _check_owed_view(conn)
     await _check_schedules(conn)
     await _check_imports(conn)
+    return list(_violations)
+
+
+def check_engine() -> list[Violation]:
+    """Check conservation and agreement between the pure money and projection paths."""
+    _reset_checks()
+    principal = 600_000
+    loan = amortize(principal, 12, 12)
+    rows = loan["schedule"]
+    _expect(
+        sum(row["principal_paise"] for row in rows) == principal and rows[-1]["balance_paise"] == 0,
+        "engine_loan_principal",
+        "amortization must account for every paisa of principal and close at zero",
+    )
+    _expect(
+        loan["total_paid"]["paise"] == principal + loan["total_interest"]["paise"],
+        "engine_loan_total",
+        "total loan payments must reconcile with principal and interest",
+    )
+    _expect(
+        sum(allocate(101, (1, 1, 1))) == 101,
+        "engine_allocation",
+        "largest-remainder allocation must conserve paise",
+    )
+
+    day = date(2026, 1, 10)
+    liquid = LiquidAccount(id="cash", name="Cash", balance_paise=100_000)
+    inputs = ProjectionInput(
+        as_of=day,
+        floor_paise=10_000,
+        liquid=(liquid,),
+        cards=(CardAccount("card", "Card", 5, 10, 30_000, 100_000),),
+        events=(CashEvent(day + timedelta(days=1), -20_000, "Rent", "obligation"),),
+    )
+    result = project(inputs, runs=1)
+    _expect(
+        [point["median_paise"] for point in result["curve"][:2]] == [70_000, 50_000],
+        "engine_cash_conservation",
+        "the opening card bill and the next day's rent must leave cash on their due days",
+    )
+    _expect(
+        all(
+            point["p10_paise"] <= point["median_paise"] <= point["p90_paise"]
+            for point in result["curve"]
+        ),
+        "engine_band_order",
+        "each projection band must be ordered P10, median, P90",
+    )
+    short = project(replace(inputs, liquid=(replace(liquid, balance_paise=29_999),)), runs=1)
+    _expect(
+        not short["obligations_met"],
+        "engine_day_zero_obligation",
+        "a cash shortfall on a card bill due today must fail the obligation gate",
+    )
+    safe = result["safe_to_spend"]
+    _expect(
+        safe is not None and safe["amount_paise"] == 40_000,
+        "engine_safe_amount",
+        "safe cash spending must leave room for both obligations and the floor",
+    )
+    at_limit = afford(inputs, Hypothetical(40_000, day), runs=1)
+    over_limit = afford(inputs, Hypothetical(40_001, day), runs=1)
+    _expect(
+        at_limit.get("verdict") == "yes" and over_limit.get("verdict") != "yes",
+        "engine_affordability_limit",
+        "the verdict as asked must agree with the safe cash spending boundary",
+    )
     return list(_violations)
 
 
@@ -929,16 +1002,20 @@ async def _check_owed_view(conn: Connection) -> None:
 
 
 async def _check_schedules(conn: Connection) -> None:
+    as_of = today()
     payments = await conn.fetch(
         """
         SELECT p.id, p.occurrence_id, p.movement_id, p.amount_paise,
                o.schedule_id, o.due_date, o.amount_paise AS expected_paise,
-               o.account_id, m.kind AS movement_kind, m.date AS movement_date
+               o.account_id, m.kind AS movement_kind, m.date AS movement_date,
+               coalesce(state.is_reversed, false) AS reversed
         FROM schedule_payments p
         JOIN schedule_occurrences o ON o.id = p.occurrence_id
         JOIN movements m ON m.id = p.movement_id
+        LEFT JOIN movement_reversal_state($1) state ON state.movement_id = m.id
         ORDER BY o.due_date, p.id
-        """
+        """,
+        as_of,
     )
     for payment in payments:
         ids = (str(payment["id"]), str(payment["movement_id"]))
@@ -1032,34 +1109,41 @@ async def _check_schedules(conn: Connection) -> None:
     for schedule_id, rows in by_schedule.items():
         start = min(row["due_date"] for row in rows)
         end = max(row["due_date"] for row in rows)
-        evidence = await payment_evidence(conn, schedule_id, start, end)
-        payments_by_day: dict[date, list[dict[str, Any]]] = defaultdict(list)
+        evidence = await payment_evidence(conn, schedule_id, start, end, as_of=as_of)
+        effective_totals: dict[date, int] = defaultdict(int)
         for payment in payments:
-            if str(payment["schedule_id"]) == schedule_id:
-                payments_by_day[payment["due_date"]].append(payment)
+            if (
+                str(payment["schedule_id"]) == schedule_id
+                and payment["movement_date"] <= as_of
+                and payment["movement_kind"] != "reversal"
+                and not payment["reversed"]
+            ):
+                effective_totals[payment["due_date"]] += int(payment["amount_paise"])
         for occurrence in rows:
             day = occurrence["due_date"]
-            paid = evidence.get(day, {}).get("paid_paise", 0)
             expected = occurrence["amount_paise"]
-            status = payment_status(
-                int(expected) if expected is not None else None, int(paid), day, today()
+            paid = int(evidence.get(day, {}).get("paid_paise", 0))
+            effective = effective_totals[day]
+            status = payment_status(expected, paid, day, as_of)
+            if effective == 0:
+                expected_status = "unmatched" if day < as_of else "scheduled"
+            elif expected is None:
+                expected_status = "recorded"
+            else:
+                expected_status = "partial" if effective < expected else "paid"
+            ids = (str(occurrence["id"]),)
+            _expect(
+                paid == effective,
+                "schedule_payment_evidence",
+                f"occurrence {occurrence['id']} reports {paid} paid, expected {effective}",
+                ids,
             )
-            active = payments_by_day[day]
-            if status == "paid":
-                _expect(
-                    bool(active) and int(paid) >= int(expected),
-                    "schedule_paid_without_payment",
-                    f"occurrence {occurrence['id']} is paid but has no covering payment",
-                    (str(occurrence["id"]),),
-                )
-            if active and expected is not None and int(paid) >= int(expected):
-                _expect(
-                    status == "paid",
-                    "schedule_payment_not_paid",
-                    f"occurrence {occurrence['id']} covers its {int(expected)} paise but is "
-                    f"{status}",
-                    (str(occurrence["id"]),),
-                )
+            _expect(
+                status == expected_status,
+                "schedule_payment_status",
+                f"occurrence {occurrence['id']} is {status}, expected {expected_status}",
+                ids,
+            )
 
 
 # --- g. imports -------------------------------------------------------------------------------
@@ -1129,13 +1213,16 @@ def _dsn() -> str:
 async def _run() -> int:
     async with connect(_dsn()) as conn:
         violations = await check_ledger(conn)
+    ledger_checks = checks_run()
+    violations.extend(check_engine())
+    total_checks = ledger_checks + checks_run()
     for violation in violations:
         where = f" ids={','.join(violation.ids)}" if violation.ids else ""
         print(f"{violation.code}: {violation.detail}{where}")
     if violations:
-        print(f"FAILED: {len(violations)} violation(s) in {checks_run()} checks")
+        print(f"FAILED: {len(violations)} violation(s) in {total_checks} checks")
         return 1
-    print(f"OK: {checks_run()} checks")
+    print(f"OK: {total_checks} checks")
     return 0
 
 

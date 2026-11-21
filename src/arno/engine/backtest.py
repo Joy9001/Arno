@@ -84,6 +84,8 @@ REFERENCE = "schedule_mean"
 REAL_LEDGER = "real ledger"
 # Each worker holds a household and its scenario matrices; more would crowd out the app stack.
 MAX_WORKERS = 6
+# shortcut: single seed (S=16384) run manually without CI gate or multi-metric econometrics,
+# revisit once milestone 29 has >=90d of linked real-ledger origins
 SEED_SETS = {"tuning": personas_mod.TUNING_SEEDS, "holdout": personas_mod.HOLDOUT_SEEDS}
 
 Paths = npt.NDArray[np.int64]
@@ -131,13 +133,24 @@ def schedule_mean(inputs: ProjectionInput, seed: int) -> Paths:
     return _walk(replace(inputs, categories=flat_categories), runs=1, seed=seed)
 
 
+def empirical_flat(inputs: ProjectionInput, seed: int) -> Paths:
+    """Baseline: dated schedules plus each category's observed days, drawn one day at a time.
+
+    The probabilistic pair of `schedule_mean`: the walk before the kernel added whole days, rare
+    days, and a short-history prior, so its CRPS isolates what those switches add over an ensemble
+    built only from the history the origin actually saw.
+    """
+    return _walk(inputs, runs=DEFAULT_RUNS, seed=seed, model=LEGACY_MODEL)
+
+
 FORECASTERS: dict[str, Forecaster] = {
     "flat": flat,
     "schedule": schedule_only,
     "schedule_mean": schedule_mean,
+    "empirical_flat": empirical_flat,
     "engine": engine,
 }
-BASELINES = ("flat", "schedule", "schedule_mean")
+BASELINES = ("flat", "schedule", "schedule_mean", "empirical_flat")
 DEFAULT_PRIOR = (0, 2, 4, 6, 8)
 
 
@@ -283,7 +296,7 @@ def score_case(case: Case, names: Sequence[str], seed: int = DEFAULT_SEED) -> li
 
 @dataclass(frozen=True, slots=True)
 class _DetectedPersonaSeries:
-    payee_key: str
+    payee_text: str
     name: str
     detection: series_mod.Detection
     card_id: str | None
@@ -364,15 +377,19 @@ def _persona_detections(ledger: _Ledger, boundary: date) -> tuple[_DetectedPerso
     window_start = boundary - timedelta(days=PATTERN_HISTORY_DAYS)
     grouped: dict[str, list[personas_mod.Movement]] = {}
     for movement in ledger.persona.movements:
-        if movement.kind != "spend" or not window_start <= movement.date <= boundary:
+        # Train on the same censoring as production: a payment on the detection day is not seen yet.
+        if movement.kind != "spend" or not window_start <= movement.date < boundary:
             continue
-        if not movement.payee_key:
+        # One payee is its statement text, not the persona's internal key: a merchant can arrive
+        # under different keys on different accounts and still be the same bill.
+        text = series_mod.normalize(movement.payee)
+        if not text:
             continue
-        grouped.setdefault(movement.payee_key, []).append(movement)
+        grouped.setdefault(text, []).append(movement)
 
     detected: list[_DetectedPersonaSeries] = []
-    for payee_key in sorted(grouped):
-        group = sorted(grouped[payee_key], key=lambda item: (item.date, item.id))
+    for payee_text in sorted(grouped):
+        group = sorted(grouped[payee_text], key=lambda item: (item.date, item.id))
         if len(group) < 3:
             continue
         detection = series_mod.detect(
@@ -411,8 +428,8 @@ def _persona_detections(ledger: _Ledger, boundary: date) -> tuple[_DetectedPerso
             category_id = None
         detected.append(
             _DetectedPersonaSeries(
-                payee_key=payee_key,
-                name=matched_movements[-1].payee or payee_key,
+                payee_text=payee_text,
+                name=matched_movements[-1].payee or payee_text,
                 detection=detection,
                 card_id=card_id,
                 category_id=category_id,
@@ -483,13 +500,21 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
                 )
             )
 
+    # A schedule created after the origin was unknown then, so the series that pays it must not
+    # take its spend out of the forecast: the leak would hand the engine the later setup. Only
+    # spend before the origin names it, or a future statement text would hide an earlier payee.
+    known_schedule_ids = {schedule.id for schedule in schedules}
     confirmed_series_ids = {
-        series_item.id for series_item in persona.series if series_item.schedule_id is not None
-    }
-    confirmed_series_payees = {
-        series_item.payee_key
+        series_item.id
         for series_item in persona.series
-        if series_item.schedule_id is not None and series_item.kind == "spend"
+        if series_item.schedule_id in known_schedule_ids
+    }
+    confirmed_series_texts = {
+        series_mod.normalize(movement.payee)
+        for movement in persona.movements
+        if movement.series_id in confirmed_series_ids
+        and movement.kind == "spend"
+        and movement.date < as_of
     }
     known_schedules = [
         KnownSchedule(
@@ -510,9 +535,9 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
     matched_by_projected: set[str] = set()
     # Payments after the detection day are not in its alignment yet; production detects nightly,
     # so a projected series' later payments to the same payee are its own too.
-    projected_payees: set[str] = set()
+    projected_texts: set[str] = set()
     for detected in _persona_detections(ledger, boundary):
-        if detected.payee_key in confirmed_series_payees:
+        if detected.payee_text in confirmed_series_texts:
             continue
         categories = {detected.category_id} if detected.category_id is not None else set()
         if is_covered(
@@ -535,7 +560,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
         )
         series_forecasts.append(
             SeriesForecast(
-                id=f"det_{detected.payee_key}",
+                id=f"det_{detected.payee_text}",
                 name=detected.name,
                 expected=expected,
                 jitter=detected.detection.jitter,
@@ -552,7 +577,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
             )
         )
         matched_by_projected.update(detected.detection.matched)
-        projected_payees.add(detected.payee_key)
+        projected_texts.add(detected.payee_text)
 
     window = as_of - timedelta(days=RARE_WINDOW_DAYS)
     spend: dict[tuple[date, str | None, str | None], int] = {}
@@ -563,7 +588,7 @@ def persona_snapshot(ledger: _Ledger, as_of: date) -> LedgerSnapshot:
             continue
         if movement.id in matched_by_projected:
             continue
-        if movement.payee_key in projected_payees and movement.date > boundary:
+        if movement.date >= boundary and series_mod.normalize(movement.payee) in projected_texts:
             continue
         card_id = None if movement.account == "bank" else movement.account
         key = (movement.date, movement.category_id, card_id)
