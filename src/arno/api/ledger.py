@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from arno.api import import_history, provenance, runtime_info
 from arno.api.deps import Database, FreshSession, current_session
+from arno.engine.money import MAX_PAISE
 from arno.engine.projection import Projection, ProjectionInput
 from arno.ledger import (
     accounts,
@@ -598,13 +599,13 @@ async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
 async def _projection_request(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
-    amount_paise: int | None = Query(default=None, gt=0),
+    amount_paise: int | None = Query(default=None, gt=0, le=MAX_PAISE),
     date: Date | None = None,
     method: Literal["account", "card", "emi"] | None = None,
     emi_months: int | None = Query(default=None, ge=2, le=48),
     account: str | None = None,
     emi_rate_percent: float | None = Query(default=None, ge=0, le=100),
-    emi_fee_paise: int | None = Query(default=None, ge=0),
+    emi_fee_paise: int | None = Query(default=None, ge=0, le=MAX_PAISE),
     no_cost: bool = False,
     changes: str | None = Query(default=None),
 ) -> tuple[ProjectionInput, Projection, dict[str, Any]]:
@@ -662,7 +663,7 @@ async def get_projection_workbook(
 ) -> Response:
     inputs, result, request = computed
     return Response(
-        workbook.projection_workbook(inputs, result, request),
+        await projection_tools.run_compute(workbook.projection_workbook, inputs, result, request),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="arno-projection-{result["as_of"]}.xlsx"'

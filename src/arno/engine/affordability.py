@@ -30,7 +30,7 @@ import numpy as np
 
 from arno.engine import kernel
 from arno.engine import projection as projection_mod
-from arno.engine.money import DEFAULT_GST_BPS, add_months, card_emi, money
+from arno.engine.money import DEFAULT_GST_BPS, add_months, card_emi, check_paise, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
     DEFAULT_SEED,
@@ -70,6 +70,9 @@ DEFAULT_EMI_MONTHS = 3
 GOAL_WINDOW_DAYS = 31
 MAX_CUT_BPS = round(MAX_CUT_RATIO * 10_000)
 MAX_PLANS = 4
+# shortcut: goal deferral checks top 8 goals in [when, when+31] only, revisit if a real ledger
+# has >8 active goals or needs pre-purchase goal deferral
+MAX_DEFERRABLE_GOALS = 8
 # How many later dates the wait tradeoff tests before giving up: a dated payment leaves the floor
 # alone, but an obligation it misses can hold the verdict back for a while.
 MAX_WAIT_ATTEMPTS = 12
@@ -118,6 +121,8 @@ class _Applied:
 
 def _emi_terms(hypothetical: Hypothetical, card: CardAccount) -> tuple[int, int, list[str]]:
     """The EMI's rate and fee: the offer's, else the card's, else a labeled default."""
+    # shortcut: hypothetical card EMI charges installments to limit instead of blocking full
+    # principal on day 1, revisit when modeling card EMI near a tight credit limit
     gaps: list[str] = []
     if hypothetical.no_cost:
         rate = 0
@@ -258,6 +263,8 @@ def _extend_horizon(inputs: ProjectionInput, meta: HypotheticalMeta) -> Projecti
 
 
 def _passes(result: Projection, *, threshold: float) -> bool:
+    # shortcut: point estimate at S=16384 has +-0.15pp 95% CI on 0.99 gate, revisit with
+    # one-sided Wilson LCB or higher S only after real-ledger coverage error drops below 2pp
     return float(result["floor_probability"]) >= threshold and bool(result["obligations_met"])
 
 
@@ -379,6 +386,7 @@ def _plans(
     `goals` comes most important first; between equally cheap plans, the one that delays the
     less important goals comes first, so a priority change revises which goal is offered.
     """
+    goals = goals[:MAX_DEFERRABLE_GOALS]
     found: list[_Plan] = []
     for matrix in matrices:
         clearing: dict[tuple[str, ...], int] = {}
@@ -467,6 +475,8 @@ def _verify(
     time. Where a card limit binds, a cut frees cash sooner than its bill date, so the critical
     value is an upper bound; the least passing cut below it is then found by bisection.
     """
+    # shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per
+    # bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
     applied = matrix.applied
 
     def attempt(cut: int) -> _Verified | None:
@@ -691,16 +701,19 @@ def _tradeoffs(
     return trades
 
 
-def _validate_hypothetical(inputs: ProjectionInput, hypothetical: Hypothetical) -> None:
+def validate_hypothetical(as_of: date, hypothetical: Hypothetical) -> None:
     if hypothetical.amount_paise <= 0:
         raise ValueError("the amount must be positive")
+    check_paise(hypothetical.amount_paise)
+    if hypothetical.emi_fee_paise is not None:
+        check_paise(hypothetical.emi_fee_paise)
     if hypothetical.method not in METHODS:
         raise ValueError("method is account, card, or emi")
     if hypothetical.method == "emi":
         tenure = hypothetical.emi_months if hypothetical.emi_months is not None else 3
         if not 2 <= tenure <= 48:
             raise ValueError("an EMI tenure is 2 to 48 months")
-    if (hypothetical.date - inputs.as_of).days > MAX_HORIZON_DAYS - 30:
+    if (hypothetical.date - as_of).days > MAX_HORIZON_DAYS - 30:
         raise ValueError("the purchase date is beyond the projection horizon")
 
 
@@ -734,7 +747,7 @@ def afford(
     threshold: float = FLOOR_THRESHOLD,
 ) -> Projection:
     """Return the projection with the purchase applied, a tested verdict, and minimal plans."""
-    _validate_hypothetical(inputs, hypothetical)
+    validate_hypothetical(inputs.as_of, hypothetical)
     known_start = any(account.known for account in inputs.liquid)
     applied = _apply(inputs, hypothetical)
     meta = applied.meta
@@ -823,7 +836,7 @@ def project_scenario(
         inputs.as_of, changes, ask_horizon_days=projection_mod.horizon_days(inputs)
     )
     if hypothetical is not None:
-        _validate_hypothetical(inputs, hypothetical)
+        validate_hypothetical(inputs.as_of, hypothetical)
         probe = _apply(inputs, hypothetical)
         last_cash = max(
             probe.meta.get("last_cash_date") or hypothetical.date.isoformat(),
@@ -895,4 +908,4 @@ def project_scenario(
     return result
 
 
-__all__ = ["METHODS", "Hypothetical", "afford", "project_scenario"]
+__all__ = ["METHODS", "Hypothetical", "afford", "project_scenario", "validate_hypothetical"]

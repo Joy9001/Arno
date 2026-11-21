@@ -9,6 +9,7 @@ from datetime import date
 import pytest
 
 from arno.engine.affordability import project_scenario
+from arno.engine.money import MAX_PAISE
 from arno.engine.projection import (
     MAX_HORIZON_DAYS,
     CashEvent,
@@ -593,3 +594,19 @@ def test_scenario_horizon_extends_at_least_90_days_past_latest_change():
         )
         == (date(2026, 10, 1) - as_of).days
     )
+
+
+def test_a_change_amount_beyond_the_balance_limit_is_rejected():
+    oversized = MAX_PAISE + 1
+    for change in (
+        OneTime(name="Tax", amount_paise=oversized, direction="out", date=date(2026, 2, 1)),
+        ChangeAmount(source_id="sch_rent", amount_paise=oversized, start=date(2026, 2, 1)),
+        AddRecurring(
+            name="Top-up",
+            amount_paise=oversized,
+            direction="out",
+            start=date(2026, 2, 1),
+        ),
+    ):
+        with pytest.raises(ValueError, match="supported maximum"):
+            apply_changes(_inputs(), [change])

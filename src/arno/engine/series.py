@@ -21,9 +21,16 @@ _MAX_JITTER_HALF_WIDTH = 3
 _SKIP_GRID: tuple[float, ...] = (0.05, 0.25)
 _JITTER_GRID: tuple[int, ...] = (0, 1, 3)
 _END_GRID: tuple[float, ...] = (0.02, 0.10)
+# shortcut: pre-DP heuristic prunes to top 8 rules per payee, revisit if recall@8 test or real
+# ledger misses a recurring bill ranked below 8th
 _MAX_CANDIDATES = 8
 _NEXT_DATE_HORIZON_DAYS = 400
+# shortcut: variable bills sample uniformly from last 12 payments only, revisit if milestone 29
+# shows seasonal or tail misses on real utility bills
 _MAX_SAMPLES = 12
+# shortcut: series.detect caps payee history at last 200 payments, revisit if a high-frequency
+# merchant needs >200 rows to detect cadence
+_MAX_PAYMENTS = 200
 _MIN_PAYMENTS = 3
 # A price step needs at least this many payments at the old level immediately before it.
 _MIN_FIXED_RUN = 3
@@ -1149,6 +1156,8 @@ def detect(
     if len(in_window) < _MIN_PAYMENTS:
         return None
     in_window.sort(key=lambda p: (p.date, p.movement_id))
+    # A dense payee's older rows cannot change a calendar rule; the last 200 bound the DP passes.
+    in_window = in_window[-_MAX_PAYMENTS:]
 
     cal = (
         calendar

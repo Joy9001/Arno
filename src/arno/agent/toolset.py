@@ -28,7 +28,7 @@ from arno.agent.presentation import (
 )
 from arno.agent.write_models import Movement, MovementChanges, SetupData
 from arno.db.conn import Connection, connect, quote_ident
-from arno.engine.money import Offer, money
+from arno.engine.money import MAX_PAISE, Offer, money
 from arno.engine.money import Prepay as PrepayPayload
 from arno.engine.money import amortize as amortize_fn
 from arno.engine.money import compound as compound_fn
@@ -76,7 +76,7 @@ class MovementFilters(SpendFilters):
 class Prepay(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    amount_paise: int = Field(gt=0, description="The lump sum, in paise.")
+    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="The lump sum, in paise.")
     at_emi: int = Field(
         default=1,
         ge=1,
@@ -109,7 +109,7 @@ class LoanConventions(BaseModel):
 class ProjectHypothetical(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    amount_paise: int = Field(gt=0, description="The purchase amount, in paise.")
+    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="The purchase amount, in paise.")
     date: str = Field(description="The purchase date, YYYY-MM-DD.")
     method: Literal["account", "card", "emi"] = Field(
         default="account",
@@ -129,7 +129,10 @@ class ProjectHypothetical(BaseModel):
         description="The EMI's annual interest rate in percent, when the offer states it",
     )
     emi_fee_paise: int | None = Field(
-        default=None, ge=0, description="The EMI's processing fee in paise, when stated"
+        default=None,
+        ge=0,
+        le=MAX_PAISE,
+        description="The EMI's processing fee in paise, when stated",
     )
     no_cost: bool = Field(
         default=False, description="True for a no-cost EMI: the merchant pays the interest"
@@ -169,7 +172,9 @@ class ChangeAmountChange(BaseModel):
 
     kind: Literal["change_amount"]
     schedule: str = Field(description="Active schedule name whose amount changes.")
-    amount_paise: int = Field(gt=0, description="Replacement amount per occurrence, in paise.")
+    amount_paise: int = Field(
+        gt=0, le=MAX_PAISE, description="Replacement amount per occurrence, in paise."
+    )
     start: str = Field(description="First date the new amount applies, YYYY-MM-DD.")
     until: str | None = Field(
         default=None,
@@ -182,7 +187,7 @@ class AddRecurringChange(BaseModel):
 
     kind: Literal["add_recurring"]
     name: str = Field(description="Label for the added recurring flow.")
-    amount_paise: int = Field(gt=0, description="Amount per occurrence, in paise.")
+    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="Amount per occurrence, in paise.")
     direction: Literal["out", "in"] = Field(
         description="out: a new obligation or goal contribution. in: assumed new income."
     )
@@ -206,7 +211,7 @@ class OneTimeChange(BaseModel):
 
     kind: Literal["one_time"]
     name: str = Field(description="Label for the one-off flow.")
-    amount_paise: int = Field(gt=0, description="One-off amount, in paise.")
+    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="One-off amount, in paise.")
     direction: Literal["out", "in"] = Field(
         description="out: a one-off bill. in: an assumed one-off inflow such as a bonus."
     )

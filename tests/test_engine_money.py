@@ -9,6 +9,7 @@ from fractions import Fraction
 import pytest
 
 from arno.engine.money import (
+    MAX_PAISE,
     CardPayoff,
     _add_months,
     _compute_apr,
@@ -885,14 +886,9 @@ def test_card_payoff_zero_rate_edges_and_errors():
     assert tiny["months"] == 1
     assert tiny["total_paid"]["paise"] == 1
 
-    # Very large balance (10^25 paise) keeps integers exact beyond 28 Decimal digits
-    huge_balance = 10**25
-    huge_rate = 3600  # 3%/month -> fc = 3 * 10^23, gst = 5.4 * 10^22
-    huge_payment = 5 * 10**24
-    huge = card_payoff(huge_balance, annual_rate_bps=huge_rate, payment=huge_payment)
-    _assert_card_payoff_invariants(huge_balance, huge)
-    assert huge["schedule"][0]["finance_charge_paise"] == 3 * 10**23
-    assert huge["schedule"][0]["gst_paise"] == 54 * 10**21
+    # The signed 64-bit balance the kernel holds is the largest amount money accepts.
+    with pytest.raises(ValueError, match="supported maximum"):
+        card_payoff(MAX_PAISE + 1, annual_rate_bps=3600, payment=MAX_PAISE // 2)
 
     # Errors
     with pytest.raises(ValueError, match="balance must be positive"):
@@ -912,8 +908,8 @@ def test_card_payoff_zero_rate_edges_and_errors():
         card_payoff(100_000, annual_rate_bps=3600, payment=3_540)
     with pytest.raises(ValueError, match="never clears"):
         card_payoff(100_000, annual_rate_bps=3600, payment=0)
-    # Hard loop cap (1,200 months) when balance grows or shrinks slower than 1,200 months
-    with pytest.raises(ValueError, match="1200"):
+    # A slowly shrinking balance hits the same 600-month limit as a stated loan tenure.
+    with pytest.raises(ValueError, match="600"):
         card_payoff(
             1_000_000,
             annual_rate_bps=7200,
@@ -939,3 +935,31 @@ def test_card_payoff_property_conservation_and_termination():
             res = card_payoff(balance, annual_rate_bps=rate_bps, payment=fixed_pay, gst_bps=gst_bps)
         _assert_card_payoff_invariants(balance, res)
         assert res["months"] <= 1_200
+
+
+def test_money_refuses_amounts_and_tenures_beyond_the_engine_limits():
+    with pytest.raises(ValueError, match="supported maximum"):
+        amortize(MAX_PAISE + 1, 10, 12)
+    with pytest.raises(ValueError, match="supported maximum"):
+        amortize(100_000, 10, 12, processing_fee_paise=MAX_PAISE + 1)
+    with pytest.raises(ValueError, match="supported maximum"):
+        infer_rate(MAX_PAISE + 1, 12, 1_000)
+    with pytest.raises(ValueError, match="supported maximum"):
+        card_emi(MAX_PAISE + 1, annual_rate_bps=0, months=2)
+    with pytest.raises(ValueError, match="supported maximum"):
+        compound(MAX_PAISE + 1, 10, 12)
+    with pytest.raises(ValueError, match="supported maximum"):
+        compare_offers(
+            [
+                {"label": "Cash", "cash_price_paise": 10_000},
+                {"label": "Pricier", "cash_price_paise": MAX_PAISE + 1},
+            ]
+        )
+    with pytest.raises(ValueError, match="between 1 and 600"):
+        amortize(100_000, 10, 601)
+    with pytest.raises(ValueError, match="between 1 and 600"):
+        infer_rate(100_000, 601, 10_000)
+    with pytest.raises(ValueError, match="between 0 and 600"):
+        compound(100_000, 10, 601)
+    # 600 months is allowed; rounding may clear the loan one month early.
+    assert 0 < amortize(100_000, 10, 600)["months"] <= 600

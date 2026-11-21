@@ -7,7 +7,9 @@ from datetime import date, timedelta
 
 import pytest
 
+from arno.engine import affordability
 from arno.engine.affordability import (
+    MAX_DEFERRABLE_GOALS,
     Hypothetical,
     afford,
     project_scenario,
@@ -672,3 +674,43 @@ def test_tiny_purchase_does_not_raise_when_tradeoffs_consider_card_emi():
     )
     assert asked_emi["hypothetical"]["feasible"] is False
     assert "repay" in asked_emi["verdict_reason"].lower()
+
+
+def test_plans_defer_only_the_top_eight_goals(monkeypatch):
+    goals = tuple(
+        GoalPlan(
+            id=f"goal_{index:02d}",
+            name=f"Goal {index:02d}",
+            target_paise=100_000,
+            saved_paise=0,
+            priority=index,
+        )
+        for index in range(1, 16)
+    )
+    events = tuple(
+        CashEvent(
+            date=date(2026, 1, 10),
+            amount_paise=-50_000,
+            name=f"Goal {index:02d} contribution",
+            kind="goal_contribution",
+            goal_id=f"goal_{index:02d}",
+        )
+        for index in range(1, 16)
+    )
+    inputs = _inputs(start=600_000, floor=0, goals=goals, events=events)
+    seen: list[tuple[str, ...]] = []
+    original = affordability._goal_relief
+
+    def spy(current, goal_ids, when):
+        seen.append(goal_ids)
+        return original(current, goal_ids, when)
+
+    monkeypatch.setattr(affordability, "_goal_relief", spy)
+    result = afford(inputs, Hypothetical(amount_paise=50_000, date=date(2026, 1, 1)), runs=20)
+    top_eight = {f"goal_{index:02d}" for index in range(1, 9)}
+    assert seen
+    assert all(set(goal_ids) <= top_eight for goal_ids in seen)
+    assert max(len(goal_ids) for goal_ids in seen) <= MAX_DEFERRABLE_GOALS
+    assert result["verdict"] == "yes-but"
+    delayed = {trade["goal_id"] for trade in result["tradeoffs"] if "goal_id" in trade}
+    assert delayed and delayed <= top_eight

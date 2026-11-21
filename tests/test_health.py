@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import threading
+
+import httpx
+
 from arno.api.middleware import CONTENT_SECURITY_POLICY
+from arno.auth.sessions import COOKIE_NAME
 from arno.db.migrate import discover
+from arno.tools import projection as projection_tools
 
 
 def test_health_reports_database_and_schema_version(client):
@@ -14,6 +21,36 @@ def test_health_reports_database_and_schema_version(client):
         "schema_version": len(discover()),
     }
     assert response.headers["cache-control"] == "no-store"
+
+
+async def test_health_responds_while_projection_is_computing(authed_client, monkeypatch):
+    loop = asyncio.get_running_loop()
+    started = asyncio.Event()
+    release = threading.Event()
+    project = projection_tools.run_projection
+
+    def blocked_project(inputs, **kwargs):
+        loop.call_soon_threadsafe(started.set)
+        if not release.wait(timeout=5):
+            raise AssertionError("health did not complete while projection was running")
+        return project(inputs, **kwargs)
+
+    monkeypatch.setattr(projection_tools, "run_projection", blocked_project)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=authed_client.app),
+        base_url="http://testserver",
+        cookies={COOKIE_NAME: authed_client.cookies[COOKIE_NAME]},
+    ) as client:
+        pending = asyncio.create_task(client.get("/api/projection"))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=5)
+            response = await asyncio.wait_for(client.get("/api/health"), timeout=3)
+            assert response.status_code == 200
+            assert not pending.done()
+        finally:
+            release.set()
+            projection = await pending
+        assert projection.status_code == 200
 
 
 def test_every_response_carries_the_strict_policy(client):

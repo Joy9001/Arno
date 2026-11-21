@@ -6,7 +6,7 @@ import pytest
 
 from arno.india.formatting import format_paise
 from arno.india.recurrence import expand_rule
-from arno.india.workdays import adjust_to_working_day, last_working_day
+from arno.india.workdays import adjust_to_working_day, calendar_for, last_working_day
 from arno.ledger.accounts import create_account
 from arno.ledger.errors import InvalidLedgerError
 from arno.ledger.movements import record_expense
@@ -20,6 +20,13 @@ async def _category(conn, name: str) -> str:
 def test_last_working_day_skips_the_weekend():
     assert last_working_day(2026, 1) == date(2026, 1, 30)
     assert last_working_day(2026, 11) == date(2026, 11, 30)
+
+
+def test_calendar_reuses_year_spans_without_mutating_for_other_years():
+    calendar = calendar_for(date(2026, 1, 1), date(2026, 12, 31))
+    assert calendar_for(date(2026, 3, 1), date(2026, 4, 1)) is calendar
+    assert calendar.is_holiday(date(2026, 1, 26))
+    assert not calendar.is_holiday(date(2020, 1, 26))
 
 
 def test_holiday_adjustment_moves_off_republic_day():

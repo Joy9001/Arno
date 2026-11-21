@@ -10,6 +10,7 @@ from __future__ import annotations
 import calendar as _calendar
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import Literal
 
 import holidays as holidays_pkg
@@ -29,8 +30,13 @@ class IndiaCalendar:
     def for_span(cls, start: date, end: date) -> IndiaCalendar:
         first = min(start.year, end.year) - 1
         last = max(start.year, end.year) + 1
+        return cls._for_years(first, last)
+
+    @classmethod
+    @lru_cache(maxsize=32)
+    def _for_years(cls, first: int, last: int) -> IndiaCalendar:
         years = tuple(range(first, last + 1))
-        return cls(years=years, _holidays=holidays_pkg.India(years=list(years)))
+        return cls(years=years, _holidays=holidays_pkg.India(years=years, expand=False))
 
     def is_weekend(self, day: date) -> bool:
         return day.weekday() >= 5

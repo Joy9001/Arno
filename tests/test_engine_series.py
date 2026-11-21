@@ -8,6 +8,7 @@ import time
 from datetime import date, timedelta
 from fractions import Fraction
 
+from arno.engine import series as series_mod
 from arno.engine.series import (
     _E,
     _END_GRID,
@@ -708,3 +709,21 @@ def test_determinism() -> None:
     )
     assert d1 is not None and d2 is not None
     assert d1 == d2
+
+
+def test_a_dense_payee_is_capped_to_the_last_200_payments(monkeypatch) -> None:
+    start = date(2024, 1, 1)
+    payments = _make_payments([start + timedelta(days=offset) for offset in range(800)])
+    seen: list[list[Payment]] = []
+    original = series_mod._detect_with
+
+    def spy(candidates, rows, **kwargs):
+        seen.append(list(rows))
+        return original(candidates, rows, **kwargs)
+
+    monkeypatch.setattr(series_mod, "_detect_with", spy)
+    detect(payments, as_of=start + timedelta(days=799), window_start=start)
+    assert len(seen) == 1
+    assert [payment.movement_id for payment in seen[0]] == [
+        f"m_{index:03d}" for index in range(600, 800)
+    ]

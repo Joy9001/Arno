@@ -13,7 +13,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import date, timedelta
 from typing import Literal
 
-from arno.engine.money import add_months, money
+from arno.engine.money import add_months, check_paise, money
 from arno.engine.projection import (
     BASE_HORIZON_DAYS,
     MAX_HORIZON_DAYS,
@@ -209,6 +209,7 @@ def _validate_changes(
         if isinstance(change, OneTime):
             if change.amount_paise <= 0:
                 raise ValueError("one_time amount_paise must be positive")
+            check_paise(change.amount_paise)
             _check_horizon_date(as_of, change.date, label="date")
             continue
         _check_horizon_date(as_of, change.start, label="start")
@@ -223,6 +224,8 @@ def _validate_changes(
             raise ValueError("pause_schedule needs exactly one of source_id or series_id")
         if isinstance(change, (ChangeAmount, AddRecurring)) and change.amount_paise <= 0:
             raise ValueError("change amount_paise must be positive")
+        if isinstance(change, (ChangeAmount, AddRecurring)):
+            check_paise(change.amount_paise)
         if (
             isinstance(change, AddRecurring)
             and change.goal_id is not None

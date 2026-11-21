@@ -636,3 +636,11 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
     else:
         # Spend stays on the card and fills it by day 3, so the late purchase is all cash.
         assert drops == [0, 0, 5_000, 0, 0, 0]
+
+
+def test_below_requires_a_bound_under_two_to_the_32():
+    draws = np.array([0, 1, 2**63, 2**64 - 1], dtype=np.uint64)
+    assert kernel.below(draws, 2**32 - 1).max() < 2**32 - 1
+    for bound in (0, -1, 2**32):
+        with pytest.raises(AssertionError, match="2\\*\\*32"):
+            kernel.below(draws, bound)

@@ -20,9 +20,24 @@ DEFAULT_GST_BPS = 1800
 DEFAULT_MINIMUM_BPS = 500
 DEFAULT_MINIMUM_FLOOR_PAISE = 20_000
 _RATE_UNIT_SCALE = Decimal(10_000)
+# shortcut: India nominal 12*monthly IRR and 30e/360 + actual/365f only, revisit if a non-India
+# locale pack or US 30/360 / EU effective APR is requested
 _APR_MONTHLY_SCALE = Decimal(12_000_000)  # 0.0001% a year / 12 months
 _MAX_RATE_UNIT = 1_000_000  # 100.0000% a year in 0.0001% (bps_x100) units
-_MAX_CARD_PAYOFF_MONTHS = 1_200
+# The kernel keeps balances in signed 64-bit integers; a larger amount would wrap silently.
+MAX_PAISE = 9_223_372_036_854_775_807
+_MAX_MONTHS = 600
+
+
+def check_paise(value: int) -> None:
+    """Reject an amount the kernel's signed 64-bit balances cannot hold."""
+    if abs(value) > MAX_PAISE:
+        raise ValueError(f"amount is beyond the supported maximum of {MAX_PAISE} paise")
+
+
+def _check_months(months: int, *, minimum: int = 1) -> None:
+    if not minimum <= months <= _MAX_MONTHS:
+        raise ValueError(f"months must be between {minimum} and {_MAX_MONTHS}")
 
 
 def _paise(value: Decimal | float | int) -> int:
@@ -368,7 +383,7 @@ def _walk(
     current_rate = initial_annual_rate
     current_emi = initial_emi
     end_index = reset_end_index if reset_end_index is not None else start_index + target_months - 1
-    max_steps = max(target_months * 20, 12_000) if unbounded else target_months
+    max_steps = _MAX_MONTHS if unbounded else target_months
 
     for offset in range(max_steps):
         if balance <= 0:
@@ -401,7 +416,7 @@ def _walk(
         balance -= month_principal
     else:
         if unbounded and balance > 0:
-            raise ValueError("this EMI never repays the loan")
+            raise ValueError(f"this EMI never repays the loan within {_MAX_MONTHS} months")
 
     if not unbounded and balance > 0 and len(principal_paid) > 0:
         # A rounded EMI can leave a few paise after the last month; the final installment pays
@@ -504,12 +519,15 @@ def amortize(
     """
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
-    if months <= 0:
-        raise ValueError("months must be positive")
+    _check_months(months)
+    check_paise(principal_paise)
+    if emi_paise is not None:
+        check_paise(emi_paise)
     if annual_rate < 0:
         raise ValueError("rate cannot be negative")
     if processing_fee_paise < 0:
         raise ValueError("processing_fee_paise cannot be negative")
+    check_paise(processing_fee_paise)
     if gst_bps < 0:
         raise ValueError("gst_bps cannot be negative")
     fee_gst_paise = 0
@@ -658,6 +676,7 @@ def amortize(
         amount = int(raw_amount) if raw_amount is not None and raw_amount != 0 else 0
         if amount <= 0:
             raise ValueError("a prepayment must be positive")
+        check_paise(amount)
         raw_at_emi = prepay.get("at_emi")
         at_emi = int(raw_at_emi) if raw_at_emi is not None else 1
         if not 1 <= at_emi <= len(walk.principal):
@@ -729,10 +748,11 @@ def infer_rate(
     """Infer the annual rate interval in 0.0001% (bps x 100) units for an observed EMI."""
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
-    if months <= 0:
-        raise ValueError("months must be positive")
+    _check_months(months)
+    check_paise(principal_paise)
     if emi_paise < 0:
         raise ValueError("emi cannot be negative")
+    check_paise(emi_paise)
     _validate_amortize_conventions(
         rest=rest,
         day_count=day_count,
@@ -903,12 +923,14 @@ def card_emi(
     """
     if principal_paise <= 0:
         raise ValueError("principal must be positive")
+    check_paise(principal_paise)
     if annual_rate_bps < 0:
         raise ValueError("rate cannot be negative")
     if not 2 <= months <= 48:
         raise ValueError("months must be between 2 and 48")
     if processing_fee_paise < 0:
         raise ValueError("processing_fee_paise cannot be negative")
+    check_paise(processing_fee_paise)
     if gst_bps < 0:
         raise ValueError("gst_bps cannot be negative")
 
@@ -1001,6 +1023,7 @@ def card_payoff(
     """
     if balance_paise <= 0:
         raise ValueError("balance must be positive")
+    check_paise(balance_paise)
     if annual_rate_bps < 0:
         raise ValueError("rate cannot be negative")
     if gst_bps < 0:
@@ -1014,6 +1037,7 @@ def card_payoff(
         raise ValueError("minimum_bps must be positive")
     if effective_minimum_floor <= 0:
         raise ValueError("minimum_floor_paise must be positive")
+    check_paise(effective_minimum_floor)
 
     is_minimum = payment == "minimum"
     fixed_payment = 0
@@ -1021,6 +1045,7 @@ def card_payoff(
         if not isinstance(payment, int) or isinstance(payment, bool):
             raise ValueError("payment must be 'minimum' or a positive integer amount in paise")
         fixed_payment = payment
+        check_paise(fixed_payment)
         first_charge = _round_half_up_div(balance_paise * annual_rate_bps, 120_000)
         first_gst = _round_half_up_div(first_charge * gst_bps, 10_000)
         if fixed_payment <= first_charge + first_gst:
@@ -1032,7 +1057,7 @@ def card_payoff(
     total_gst = 0
     total_paid = 0
 
-    for month in range(1, _MAX_CARD_PAYOFF_MONTHS + 1):
+    for month in range(1, _MAX_MONTHS + 1):
         if balance <= 0:
             break
         finance_charge = _round_half_up_div(balance * annual_rate_bps, 120_000)
@@ -1064,9 +1089,7 @@ def card_payoff(
         balance = closing
     else:
         if balance > 0:
-            raise ValueError(
-                f"card payoff exceeds maximum horizon of {_MAX_CARD_PAYOFF_MONTHS} months"
-            )
+            raise ValueError(f"card payoff exceeds maximum horizon of {_MAX_MONTHS} months")
 
     notes: list[str] = [
         f"{annual_rate_bps / 100:g}% a year ({annual_rate_bps} bps) finance charge, with "
@@ -1122,6 +1145,9 @@ def compare_offers(offers: Sequence[Offer]) -> list[OfferComparison]:
         cashback = offer.get("cashback_paise", 0)
         if offer["label"].strip() == "" or price <= 0 or min(discount, cashback) < 0:
             raise ValueError("offer needs a label, positive price and non-negative discounts")
+        check_paise(price)
+        check_paise(discount)
+        check_paise(cashback)
         principal = price - discount
         if principal <= 0 or cashback > principal:
             raise ValueError("discounts cannot exceed the cash price")
@@ -1138,6 +1164,7 @@ def compare_offers(offers: Sequence[Offer]) -> list[OfferComparison]:
                 raise ValueError("financing requires an annual rate")
             months = financing["months"]
             fee = financing.get("processing_fee_paise", 0)
+            check_paise(fee)
             if financing["kind"] == "card_emi":
                 emi = card_emi(
                     principal, annual_rate_bps=rate, months=months, processing_fee_paise=fee
@@ -1213,8 +1240,9 @@ def compound(
     """
     if monthly_paise < 0 or start_paise < 0:
         raise ValueError("amounts cannot be negative")
-    if months < 0:
-        raise ValueError("months cannot be negative")
+    _check_months(months, minimum=0)
+    check_paise(monthly_paise)
+    check_paise(start_paise)
     if annual_rate < 0:
         raise ValueError("rate cannot be negative")
 
@@ -1242,6 +1270,7 @@ def compound(
 
 
 __all__ = [
+    "MAX_PAISE",
     "Amortization",
     "CardEmi",
     "CardEmiRow",
@@ -1262,6 +1291,7 @@ __all__ = [
     "amortize",
     "card_emi",
     "card_payoff",
+    "check_paise",
     "compound",
     "compare_offers",
     "infer_rate",

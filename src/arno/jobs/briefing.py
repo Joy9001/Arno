@@ -158,7 +158,7 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
             "probability": projection["floor_probability"] if floor_set else None,
             "threshold": projection["floor_threshold"] if floor_set else None,
             "first_crossing": projection["first_floor_crossing"] if floor_set else None,
-            "median_low": projection["median_low"],
+            "median_low": projection_tools._money_low(projection["median_low"]),
             "data_quality": quality_gaps[:5],
         },
         "goals": [

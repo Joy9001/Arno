@@ -9,6 +9,7 @@ import pytest
 from arno.engine import backtest, personas
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.inputs import build_inputs
+from arno.engine.money import MAX_PAISE
 from arno.engine.projection import (
     LEGACY_MODEL,
     CardAccount,
@@ -606,3 +607,35 @@ def test_existing_projection_outputs_are_unchanged_by_safe_to_spend():
         "binding": "floor",
         "binding_date": "2026-01-10",
     }
+
+
+def test_amounts_beyond_the_signed_64_bit_balance_are_rejected():
+    oversized = MAX_PAISE + 1
+    cases = (
+        _inputs(start=oversized),
+        _inputs(floor=oversized),
+        _inputs(
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 10),
+                    amount_paise=MAX_PAISE // 2 + 1,
+                    name="Large inflow",
+                    kind="income_oneoff",
+                ),
+            )
+            * 2
+        ),
+        _inputs(
+            events=(
+                CashEvent(
+                    date=date(2026, 1, 10),
+                    amount_paise=oversized,
+                    name="Huge inflow",
+                    kind="income_oneoff",
+                ),
+            )
+        ),
+    )
+    for inputs in cases:
+        with pytest.raises(ValueError, match="supported maximum"):
+            project(inputs, runs=5)

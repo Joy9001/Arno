@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today
+from arno.ledger.goals import create_goal
 from arno.ledger.schedules import create_schedule
 from arno.notifications import create_notification, mark_read
 from arno.tools import projection as projection_tools
@@ -222,6 +225,17 @@ async def test_home_rejects_an_out_of_range_horizon(authed_client):
     response = authed_client.get("/api/home?horizon_days=0")
 
     assert response.status_code == 422
+
+
+async def test_home_caps_the_default_horizon_even_with_a_distant_goal(authed_client, ledger):
+    goal = await create_goal(
+        ledger, name="Distant goal", target_paise=50_000, deadline=today() + timedelta(days=365)
+    )
+    default = authed_client.get("/api/home").json()["projection"]
+    requested = authed_client.get("/api/home?horizon_days=180").json()["projection"]
+    assert default["horizon_days"] == 90
+    assert default["goals"][0]["id"] == goal["id"]
+    assert requested["horizon_days"] == 180
 
 
 async def test_home_returns_the_same_safe_to_spend_as_the_projection_tool(authed_client, db):

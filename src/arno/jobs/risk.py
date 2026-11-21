@@ -16,6 +16,7 @@ from typing import Any
 
 from arno.db.conn import Connection, connect
 from arno.engine.money import money
+from arno.engine.projection import BASE_HORIZON_DAYS, Projection
 from arno.ledger.audit import new_id
 from arno.notifications import create_notification, send_push_for_kind
 from arno.tools import projection as projection_tools
@@ -23,16 +24,27 @@ from arno.tools import projection as projection_tools
 logger = logging.getLogger("arno.jobs.risk")
 
 
-async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str, Any] | None:
+async def risk_warning(
+    conn: Connection, *, horizon_days: int = BASE_HORIZON_DAYS
+) -> dict[str, Any] | None:
     """Check the projection and create at most one warning for the current episode."""
-    projection = await projection_tools.project(conn, horizon_days=horizon_days)
+    projection = await projection_tools.project(
+        conn,
+        horizon_days=horizon_days,
+        horizon_limit_days=max(BASE_HORIZON_DAYS, horizon_days),
+    )
+    async with conn.transaction():
+        return await _record_risk(conn, projection)
+
+
+async def _record_risk(conn: Connection, projection: Projection) -> dict[str, Any] | None:
     ages = projection["data_quality"].get("balance_ages")
     if ages is not None and not any(
         row.get("known") and row.get("kind") in {"bank", "cash", "wallet"} for row in ages
     ):
         # No verified liquid balance: the curve is a provisional net change, not a low balance.
         return None
-    state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1")
+    state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1 FOR UPDATE")
     last_crossing = state["first_floor_crossing"] if state else None
     armed = bool(state["armed"]) if state else True
 
@@ -119,8 +131,7 @@ async def risk_warning(conn: Connection, *, horizon_days: int = 90) -> dict[str,
 
 async def handle_risk_check(payload: dict[str, Any]) -> dict[str, Any]:
     async with connect() as conn:
-        async with conn.transaction():
-            row = await risk_warning(conn)
+        row = await risk_warning(conn)
         if row is not None:
             await send_push_for_kind(conn, "risk_warning")
         return {

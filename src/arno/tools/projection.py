@@ -7,13 +7,16 @@ shares, and hands back source IDs for every underlying account, schedule, goal, 
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from typing import Any, Literal, cast
 
 from arno.db.conn import Connection
 from arno.engine import series
-from arno.engine.affordability import Hypothetical, afford, project_scenario
+from arno.engine.affordability import Hypothetical, afford, project_scenario, validate_hypothetical
 from arno.engine.inputs import (
     CategoryRow,
     ConfiguredSchedule,
@@ -21,7 +24,7 @@ from arno.engine.inputs import (
     Occurrence,
     build_inputs,
 )
-from arno.engine.money import _add_months, money
+from arno.engine.money import MAX_PAISE, _add_months, money
 from arno.engine.patterns import (
     KnownSchedule,
     family_interval_days,
@@ -29,6 +32,7 @@ from arno.engine.patterns import (
     rule_interval_days,
 )
 from arno.engine.projection import (
+    BASE_HORIZON_DAYS,
     DEFAULT_RUNS,
     DEFAULT_SEED,
     MAX_HORIZON_DAYS,
@@ -69,6 +73,28 @@ from arno.ledger.settings import read_settings
 from arno.tools.mark import mark
 
 
+# shortcut: max 2 concurrent off-loop projections and 90d fast-path cap on home/risk, revisit if
+# multiuser hosting is unparked or home needs multi-year goal horizons
+@lru_cache(maxsize=8)
+def _compute_slots(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    return asyncio.Semaphore(2)
+
+
+async def run_compute[**P, R](fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+    """Keep the worker's slot until it finishes, even if the request is cancelled."""
+    slots = _compute_slots(asyncio.get_running_loop())
+    await slots.acquire()
+    worker = asyncio.create_task(asyncio.to_thread(fn, *args, **kwargs))
+
+    def release(done: asyncio.Task[R]) -> None:
+        slots.release()
+        if not done.cancelled():
+            done.exception()
+
+    worker.add_done_callback(release)
+    return await asyncio.shield(worker)
+
+
 async def _balances_at(
     conn: Connection, ledger_account_ids: list[str], as_of: date
 ) -> dict[str, int]:
@@ -98,8 +124,16 @@ async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> 
 
 
 async def _horizon_for_loading(
-    conn: Connection, as_of: date, ask_horizon_days: int | None, *, known_then: bool
+    conn: Connection,
+    as_of: date,
+    ask_horizon_days: int | None,
+    *,
+    horizon_limit_days: int,
+    known_then: bool,
 ) -> int:
+    requested = max(BASE_HORIZON_DAYS, ask_horizon_days or 0)
+    if requested >= horizon_limit_days:
+        return horizon_limit_days
     rows = await conn.fetch(
         """
         SELECT deadline FROM goals
@@ -110,7 +144,7 @@ async def _horizon_for_loading(
         known_then,
     )
     furthest = max(((row["deadline"] - as_of).days for row in rows), default=0)
-    return min(3_650, max(90, ask_horizon_days or 0, furthest))
+    return min(horizon_limit_days, max(requested, furthest))
 
 
 async def _last_movements(
@@ -564,6 +598,7 @@ async def load_snapshot(
     as_of: date | None = None,
     horizon_days: int | None = None,
     known_then: bool = False,
+    horizon_limit_days: int = MAX_HORIZON_DAYS,
 ) -> LedgerSnapshot:
     """Read everything the projection needs from the ledger as of ``as_of``.
 
@@ -571,10 +606,29 @@ async def load_snapshot(
     created later is left out. The backtest uses it; a projection requested "as of" an earlier
     date from today's data does not.
     """
-    as_of = as_of or ledger_today()
+    async with conn.transaction(isolation="repeatable_read", readonly=True):
+        return await _load_snapshot(
+            conn,
+            as_of=as_of or ledger_today(),
+            horizon_days=horizon_days,
+            horizon_limit_days=horizon_limit_days,
+            known_then=known_then,
+        )
+
+
+async def _load_snapshot(
+    conn: Connection,
+    *,
+    as_of: date,
+    horizon_days: int | None,
+    horizon_limit_days: int,
+    known_then: bool,
+) -> LedgerSnapshot:
     settings = await read_settings(conn)
     end = as_of + timedelta(
-        days=await _horizon_for_loading(conn, as_of, horizon_days, known_then=known_then)
+        days=await _horizon_for_loading(
+            conn, as_of, horizon_days, horizon_limit_days=horizon_limit_days, known_then=known_then
+        )
     )
 
     liquid_rows, gaps = await _liquid_rows(conn, as_of, known_then=known_then)
@@ -773,11 +827,17 @@ async def load_inputs(
     as_of: date | None = None,
     horizon_days: int | None = None,
     known_then: bool = False,
+    horizon_limit_days: int = MAX_HORIZON_DAYS,
 ) -> ProjectionInput:
     """Build the pure engine's inputs from the ledger as of ``as_of``."""
-    return build_inputs(
-        await load_snapshot(conn, as_of=as_of, horizon_days=horizon_days, known_then=known_then)
+    snapshot = await load_snapshot(
+        conn,
+        as_of=as_of,
+        horizon_days=horizon_days,
+        known_then=known_then,
+        horizon_limit_days=horizon_limit_days,
     )
+    return replace(build_inputs(snapshot), horizon_limit_days=horizon_limit_days)
 
 
 def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical | None:
@@ -841,6 +901,8 @@ def _parse_change_date(value: Any, *, field: str, today: date) -> date:
 def _positive_int(value: Any, *, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{field} must be a positive integer")
+    if value > MAX_PAISE:
+        raise ValueError(f"{field} must be at most {MAX_PAISE} paise")
     return value
 
 
@@ -1236,6 +1298,7 @@ async def project(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     known_then: bool = False,
+    horizon_limit_days: int = MAX_HORIZON_DAYS,
 ) -> Projection:
     """Return the projection computed from the loaded ledger inputs."""
     _, result = await project_with_inputs(
@@ -1247,6 +1310,7 @@ async def project(
         runs=runs,
         seed=seed,
         known_then=known_then,
+        horizon_limit_days=horizon_limit_days,
     )
     return result
 
@@ -1261,6 +1325,7 @@ async def project_with_inputs(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     known_then: bool = False,
+    horizon_limit_days: int = MAX_HORIZON_DAYS,
 ) -> tuple[ProjectionInput, Projection]:
     """The full projection or affordability result, including the daily curve and sources."""
     base = as_of or ledger_today()
@@ -1268,6 +1333,7 @@ async def project_with_inputs(
     parsed_changes = _parse_raw_changes(changes, as_of=base) if changes is not None else None
     load_horizon = horizon_days
     if purchase is not None:
+        validate_hypothetical(base, purchase)
         last = purchase.date
         if purchase.method == "emi":
             last = _add_months(purchase.date, (purchase.emi_months or 3) - 1)
@@ -1281,12 +1347,19 @@ async def project_with_inputs(
             load_horizon or 0,
             _raw_horizon_days(base, parsed_changes, ask_horizon_days=horizon_days),
         )
-    inputs = await load_inputs(conn, as_of=base, horizon_days=load_horizon, known_then=known_then)
+    inputs = await load_inputs(
+        conn,
+        as_of=base,
+        horizon_days=load_horizon,
+        known_then=known_then,
+        horizon_limit_days=horizon_limit_days,
+    )
     if parsed_changes is not None:
         specs, income_source_ids = await _resolve_changes(
             conn, inputs, parsed_changes, as_of=base, known_then=known_then
         )
-        result = project_scenario(
+        result = await run_compute(
+            project_scenario,
             inputs,
             specs,
             hypothetical=purchase,
@@ -1295,9 +1368,9 @@ async def project_with_inputs(
             seed=seed,
         )
     elif purchase is not None:
-        result = afford(inputs, purchase, runs=runs, seed=seed)
+        result = await run_compute(afford, inputs, purchase, runs=runs, seed=seed)
     else:
-        result = run_projection(inputs, runs=runs, seed=seed)
+        result = await run_compute(run_projection, inputs, runs=runs, seed=seed)
     return inputs, result
 
 
@@ -1388,7 +1461,12 @@ def summary(result: Projection) -> dict[str, Any]:
         payload["tradeoffs"] = result["tradeoffs"]
         payload["goal_slips"] = result.get("goal_slips", [])
         payload["hypothetical"] = result["hypothetical"]
-        payload["baseline"] = result.get("baseline")
+        baseline = result.get("baseline")
+        payload["baseline"] = (
+            {**baseline, "median_low": _money_low(baseline["median_low"])}
+            if baseline is not None
+            else None
+        )
     scenario = result.get("scenario")
     if scenario is not None:
         payload["scenario"] = _scenario(scenario)

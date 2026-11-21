@@ -29,6 +29,8 @@ MASK64 = (1 << 64) - 1
 GOLDEN = 0x9E3779B97F4A7C15
 MIX1 = 0xBF58476D1CE4E5B9
 MIX2 = 0x94D049BB133111EB
+# shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per
+# bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
 CHUNK_DAYS = 127
 WEEKDAY, WEEKEND = 0, 1
 
@@ -65,6 +67,7 @@ def _draws(seed: int, stream: int, scenarios: int, days: npt.NDArray[np.int64]) 
 
 def below(values: U64, bound: int) -> U64:
     """Map draws onto 0..bound-1 by the top 32 bits (bound must be under 2**32)."""
+    assert 0 < bound < 1 << 32, "bound must be under 2**32"
     return ((values >> np.uint64(32)) * np.uint64(bound)) >> np.uint64(32)
 
 
@@ -316,6 +319,8 @@ class _PoolState:
 
 
 def _poisson_table(mean: float, top: int) -> npt.NDArray[np.float64]:
+    # shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on k=1,
+    # revisit if real-ledger rare spikes breach P10 in milestone 29
     terms = [math.exp(-mean)]
     for k in range(1, top + 1):
         terms.append(terms[-1] * mean / k)
@@ -762,6 +767,9 @@ def _charge(
     ``loose`` charges are never held to the limit but use up headroom: each day they go on the card
     first, and ``charges`` get what is left. ``used`` and ``bills`` are updated in place.
     """
+    # shortcut: unknown unbilled split front-loads 100% balance to first due date and projection
+    # assumes cards pay in full, revisit if user revolves a card balance or imports balances
+    # without recent spend
     scenarios, width = charges.shape
     overflow = np.zeros_like(charges)
     due_days = sorted(day for day in due_set if begin <= day < begin + width)

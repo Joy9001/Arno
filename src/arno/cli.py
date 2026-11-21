@@ -554,6 +554,8 @@ def backtest_command(
                 raise ValueError("only the holdout seeds are published")
             result = backtest_personas(seeds=SEED_SETS[seeds])
         elif source == "db":
+            if publish:
+                raise ValueError("publishing is only available for synthetic holdout personas")
             result = asyncio.run(_run_backtest(_settings(), source=source))
         else:
             raise ValueError("source is personas or db")
@@ -617,7 +619,7 @@ def hackerrank_command(
         None, "--dataset", help="The local dataset folder. It is never committed."
     ),
     publish: bool = typer.Option(
-        True, "--publish/--no-publish", help="Replace the README HackerRank section."
+        False, "--publish/--no-publish", help="Replace the README HackerRank section."
     ),
     runs: int | None = typer.Option(
         None,
@@ -629,13 +631,17 @@ def hackerrank_command(
     """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""
     from arno.engine.hackerrank import format_report, publish_report, score
 
-    result = score(dataset) if runs is None else score(dataset, runs=runs)
+    try:
+        result = score(dataset) if runs is None else score(dataset, runs=runs)
+    except FileNotFoundError as exc:
+        typer.echo(f"error: HackerRank dataset file missing: {exc.filename}", err=True)
+        raise typer.Exit(code=3) from exc
     typer.echo(format_report(result))
+    if not result.get("available"):
+        raise typer.Exit(code=3)
     if publish:
         publish_report(result, REPO_ROOT / "README.md")
         typer.echo("README.md updated.")
-    if not result.get("available"):
-        raise typer.Exit(code=3)
 
 
 async def _export(settings: Settings, *, format: str) -> Any:

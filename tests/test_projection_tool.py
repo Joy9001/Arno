@@ -20,6 +20,19 @@ from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
 
 
+async def test_snapshot_reads_in_one_read_only_repeatable_read_transaction(ledger, monkeypatch):
+    read_settings = projection_tools.read_settings
+
+    async def check_isolation(conn):
+        assert await conn.fetchval("SHOW transaction_isolation") == "repeatable read"
+        assert await conn.fetchval("SHOW transaction_read_only") == "on"
+        return await read_settings(conn)
+
+    monkeypatch.setattr(projection_tools, "read_settings", check_isolation)
+    await projection_tools.load_snapshot(ledger)
+    assert not ledger.is_in_transaction()
+
+
 async def test_yearly_commitment_occurs_on_its_actual_date_with_a_goal_funding_plan(ledger):
     from arno.ledger.accounts import create_account
     from arno.ledger.goals import create_goal

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from arno.api.deps import Database, current_session
 from arno.api.notification_query import count_unread, unread_first
+from arno.engine.projection import BASE_HORIZON_DAYS
 from arno.ledger import accounts, movements
 from arno.tools import projection as projection_tools
 
@@ -24,7 +25,11 @@ async def get_home(
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
 ) -> dict[str, Any]:
     try:
-        projection = await projection_tools.project(conn, horizon_days=horizon_days)
+        projection = await projection_tools.project(
+            conn,
+            horizon_days=horizon_days,
+            horizon_limit_days=max(BASE_HORIZON_DAYS, horizon_days or 0),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     summary = await accounts.account_summary(conn)

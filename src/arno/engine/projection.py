@@ -26,6 +26,7 @@ import numpy as np
 import numpy.typing as npt
 
 from arno.engine import kernel
+from arno.engine.money import check_paise
 
 # Increment when the projection or affordability calculation changes materially.
 CALCULATION_VERSION = "1"
@@ -473,6 +474,7 @@ class ProjectionInput:
     # True when the spend rows already leave out every payment a schedule or a projected
     # series accounts for, so no category has to be dropped to avoid counting it twice.
     attributed: bool = False
+    horizon_limit_days: int = MAX_HORIZON_DAYS
 
     @property
     def starting_balance_paise(self) -> int:
@@ -546,7 +548,9 @@ def horizon_days(inputs: ProjectionInput) -> int:
         ((goal.deadline - inputs.as_of).days for goal in inputs.goals if goal.deadline is not None),
         default=0,
     )
-    return max(1, min(MAX_HORIZON_DAYS, max(BASE_HORIZON_DAYS, asked, furthest)))
+    return max(
+        1, min(MAX_HORIZON_DAYS, inputs.horizon_limit_days, max(BASE_HORIZON_DAYS, asked, furthest))
+    )
 
 
 def _dense_history(category: SpendCategory) -> list[tuple[date, int]]:
@@ -638,6 +642,8 @@ LEGACY_MODEL = Model()
 # least 1% with no cell significantly worse: whole days (3.6%), the short-history prior
 # (3.4%), rare days (1.0%), and spend that keeps its card (1.2%). Blocks, recency weights,
 # and pool resampling did not pass.
+# shortcut: iid daily draws (block_length=1) ignore multi-day spend bursts, revisit when
+# milestone 29 real-ledger backtest shows clustered breaches or CRPS gain at L=2/3
 MODEL = Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8), limit_spend=False)
 OBLIGATION_THRESHOLD = 0.99
 CROSSING_SHARE = 0.10
@@ -675,6 +681,9 @@ def _card_spec(
     if outstanding > 0:
         if card.unbilled_paise is None:
             # With no split known, the whole balance is due on the first due date.
+            # shortcut: unknown unbilled split front-loads 100% balance to first due date and
+            # projection assumes cards pay in full, revisit if user revolves a card balance or
+            # imports balances without recent spend
             due = _day_index(as_of, _first_due_on_or_after(card, as_of), days)
             if due >= 0:
                 bills[due] = outstanding
@@ -999,6 +1008,8 @@ def _day_pool(
             median = float(np.median(spent))
             spread = float(np.median(np.abs(spent - median)))
             # A zero deviation means most spending days look alike; there is nothing to split.
+            # shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on
+            # k=1, revisit if real-ledger rare spikes breach P10 in milestone 29
             if spread > 0:
                 rare_mask = totals > median + model.rare_mad_multiple * spread
     everyday = (ages <= HISTORY_DAYS) & ~rare_mask
@@ -1042,7 +1053,45 @@ class Prepared:
     rare_days: list[tuple[date, int]] = field(default_factory=list)
 
 
+def _validate_amounts(inputs: ProjectionInput) -> None:
+    """Reject amounts the kernel's signed 64-bit balances cannot hold."""
+    check_paise(inputs.floor_paise)
+    for account in inputs.liquid:
+        check_paise(account.balance_paise)
+    # A day's totals and the cumulative walk must also fit when valid amounts combine.
+    inflows = sum(max(event.amount_paise, 0) for event in inputs.events)
+    outflows = sum(max(-event.amount_paise, 0) for event in inputs.events) + sum(
+        abs(card.outstanding_paise) for card in inputs.cards
+    )
+    check_paise(inflows)
+    check_paise(outflows)
+    check_paise(inputs.starting_balance_paise + inflows)
+    check_paise(inputs.starting_balance_paise - outflows)
+    for card in inputs.cards:
+        check_paise(card.outstanding_paise)
+        check_paise(card.credit_limit_paise)
+        check_paise(card.credit_paise)
+        check_paise(card.available_credit_paise)
+        if card.unbilled_paise is not None:
+            check_paise(card.unbilled_paise)
+        if card.emi_fee_paise is not None:
+            check_paise(card.emi_fee_paise)
+    for goal in inputs.goals:
+        check_paise(goal.target_paise)
+        check_paise(goal.saved_paise)
+    for category in inputs.categories:
+        check_paise(category.baseline_per_day_paise)
+        for _day, amount in category.history:
+            check_paise(amount)
+    for row in inputs.spend:
+        check_paise(row.amount_paise)
+    for series in inputs.series:
+        for amount in series.amounts:
+            check_paise(amount)
+
+
 def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
+    _validate_amounts(inputs)
     days = horizon_days(inputs)
     total = days + 1
     as_of = inputs.as_of
