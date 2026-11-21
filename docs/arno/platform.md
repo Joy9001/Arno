@@ -48,7 +48,8 @@ The API exposes the following surfaces:
 |---|---|
 | Chat | `POST /api/chat`—PydanticAI's `VercelAIAdapter` with `manage_message_history="server"`, `sdk_version=7`, and client file URLs off. The client sends the thread's ID and its new message, and the server holds the history ([step 6](system-design.md#two-records-both-on-the-server)). The run is a task of its own, so `GET /api/chat/{thread}/stream` can reattach and `POST /api/chat/{thread}/stop` stops it ([step 8](system-design.md#a-turn-outlives-its-connection)). Streams text, tool calls, and custom data parts (cards) in the Vercel AI UI protocol |
 | Ledger REST | Accounts, movements, schedules, goals, payees, categories, rules, preferences. Same functions the agent's tools call. Panels read it; chat and settings write through it |
-| Projection | `GET /api/projection`—the read-only Projection panel and the inline projection/verdict card. `horizon_days` and an optional hypothetical (`amount_paise`, `date`, `method`, `emi_months`, `account`) select the run. The same payload carries the curve, data quality, and source IDs |
+| Projection | `GET /api/projection` returns the curve, data quality, and source IDs. `GET /api/projection/workbook` takes the same inputs and exports the run as `.xlsx`. Both take `horizon_days` (1–3,650), optional what-if changes, and optional purchase terms. Purchase and fee amounts are capped at `MAX_PAISE`, and `emi_months` ranges from 2 to 48 |
+| Home | `GET /api/home` composes the balance summary, projection, inbox, and recent ledger activity. Its projection is capped at 90 days by default. Pass a larger `horizon_days` to raise the cap |
 | Uploads | `POST /api/attachments` (statement, photo, audio), up to 25 MB. Statement imports then go through `password`, `review`, and `commit` endpoints; a photo becomes one transaction at once, with undo; a voice note sends at once and shows its transcript. `GET /api/attachments/{id}` serves a photo or voice note back to the same origin under `img-src 'self'` |
 | Capture | `POST /api/transcribe` saves the audio and returns a transcript or a retry card; `POST /api/chat/{thread}/photo` saves the image, runs the isolated `VISION_*` call, logs one movement at once, and returns the image-plus-fields undo card. Retries use the saved attachment ID |
 | Conversations | List, read, rename, and full-text search of threads, and flag a reply. A chat request with no thread ID creates one. Reading a thread also returns a running turn's message and merges saved cards back in ([step 10](system-design.md#the-chat-contract)) |
@@ -57,6 +58,11 @@ The API exposes the following surfaces:
 | Auth | See [Auth](#auth) |
 
 The endpoint map and conventions are in [system design, step 10](system-design.md#api).
+
+Projection, affordability, and workbook generation run off the API event loop with
+`asyncio.to_thread`. A shared two-slot semaphore bounds compute in the process, and a canceled
+request releases its slot once the worker finishes. Projection inputs are read first in one
+read-only `REPEATABLE READ` transaction. L10's workbook records calculation version `2`.
 
 Chat and settings converge on the same ledger functions and the same audit log, so an edit made
 in settings is undoable from chat, and an edit made in chat is undoable from settings.
@@ -180,7 +186,7 @@ A `jobs` table and one loop in the API process run the following jobs, plus stat
 |---|---|
 | Weekly briefing | Sunday, configurable time |
 | Reminders | N days before an obligation, EMI, or card due date |
-| Risk check | Nightly, plus after every write |
+| Risk check | Nightly, plus after every write. The default projection horizon is capped at 90 days |
 | Pattern detection | Nightly and after each import |
 | Baseline recompute | Nightly |
 | Your scheduled questions | On the schedule you set. The agent runs read-only, with no write tools and its own spend limit, and answers into the inbox |
@@ -522,6 +528,6 @@ The following table lists the India-specific pieces:
 |---|---|
 | Default categories | Indian spending categories, such as UPI, rent, groceries, and family transfer |
 | Statement parsers | Registered for each bank. See [`import.md`](import.md) |
-| Calendar | Holidays for "last working day" schedules (`holidays` package) |
+| Calendar | Holidays for "last working day" schedules (`holidays` package). Calendar instances are cached by covered year span with automatic expansion disabled |
 | Formatting | ₹, lakh and crore grouping |
 | Prompt notes | Hinglish examples for the system prompt |

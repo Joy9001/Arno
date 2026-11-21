@@ -26,6 +26,9 @@ engine now beats every baseline in every cell), and a calibration map raised it 
 CRPS. Revised the same day after two external reviews; each accepted finding was first checked
 against the code or by brute force, and sections 4.2, 4.3, 4.5, 5.1, and 6.2 changed as a result.
 
+The November 21, 2026 hardening in `plan.md` §5 and §6, L10, updates the as-built behavior
+below. See [design.md](design.md#the-projection-engine) for the current input and verdict rules.
+
 The code facts below come from a line-by-line read-out of every engine module, its callers, its
 tests, and the docs. Timings marked _measured_ were run on this machine; everything marked
 _estimate_ is an operation count, not a benchmark.
@@ -247,15 +250,16 @@ engine without it, because dropping covered categories had been hiding the doubl
 with, even past the limit. The history already shows spend moving to cash while a card was full,
 so holding a resampled day to the limit again moved that cash out a cycle early. Only charges the
 history does not contain are held to the limit: a what-if purchase, a card EMI, and a detected
-series. Each day the resampled spend goes on the card first, so a charge later in a cycle sees the
-headroom that spend has already used.
+series, as well as scheduled obligations. Those charges take headroom before the same day's
+resampled spend. Later days see the credit used by both.
 
 ### 4.3 Kernel
 
 - **Randomness.** A counter-based integer hash (the SplitMix64 finalizer over `seed`, stream,
   scenario, and day) gives the draw for any cell directly. Scenario `r` does not depend on the
   scenario count, on any other stream, or on a library's sampling methods. A pure-Python
-  reference of the same five lines is the test oracle for the vectorized kernel.
+  reference of the same five lines is the test oracle for the vectorized kernel. Bounded draws
+  require `0 < bound < 2**32`.
 - **Arithmetic.** Gather day vectors, cumulative-sum along time, add the dated events.
 - **Card float.** Used credit falls only when a bill is paid, so it is segmented by due dates,
   not statements: a closed, unpaid bill and the next statement's spend share one limit. Within a
@@ -264,10 +268,10 @@ headroom that spend has already used.
   charged total at two statement closes. Segments run in order, three or four per card in 90
   days, each vectorized across scenarios. The opening balance is split at the last statement
   close into a billed part, due first, and an unbilled part, due with the next bill (section
-  2.11); the loader derives the split from card spend since that close. As built, resampled
-  spend keeps its card past the limit and goes on first each day; only a new charge is
-  capped, at the headroom left that day, so within a segment the closed form gives way to a
-  day-by-day walk (section 4.2).
+  2.11). The projection and calendar use the same split and due-date calculation. If the
+  unbilled share is unknown, the projection places the outstanding on the first due date.
+  New charges use the day's headroom before any resampled spend. The ordering requires a
+  day-by-day walk within the segment (section 4.2).
 - **Size.** 16,384 scenarios at every horizon. Days are processed in 127-day chunks that carry
   each scenario's state forward, which the counter-based draws allow, so memory stays near 16 MB
   and cost grows linearly with the horizon. Halving the count on long horizons was considered and
@@ -285,9 +289,10 @@ headroom that spend has already used.
 - **Floor probability.** The share of scenarios whose minimum stays at or above the floor, with
   a Wilson interval: ±0.46 points at 16,384. A `borderline` data-quality note when the interval
   contains the threshold.
-- **First floor crossing.** The first date by which more than 10% of scenarios have crossed. It
-  is absent exactly when the floor probability is at least 90%, so the date and the verdict can
-  no longer disagree.
+- **First floor crossing.** The first day with fewer passing scenarios than the floor requires.
+  Crossing dates, floor probability, safe-to-spend, and affordability share the same minimum
+  scenario count. The obligation test separately needs 99% coverage on each positive due day,
+  including card bills and day zero.
 - **Depth.** Mean shortfall below the floor among breaching scenarios, so a tradeoff can say how
   bad a breach is, not only how likely.
 - **Optimistic case.** Unconfirmed income is a dated step added to the same matrix; no second
@@ -386,7 +391,9 @@ statement replaces three separate mechanisms:
   day-by-day scan gives the same answer at many times the cost. A card payment under a binding
   credit cap is not guaranteed monotone and is scanned.
 - **Smallest cut.** `max over q of (floor − B_q) / R_q(r)`, compared as integer fractions and
-  rounded up to a basis point. This replaces the six-step scan with the exact answer.
+  rounded up to a basis point. As built, compute the floor's required cut and the cut for each
+  obligation day at its own threshold. The largest of those is the candidate. The obligation
+  margin uses the savings available by the time the payment is due.
 
 ### 5.3 Minimal plans
 
@@ -397,9 +404,10 @@ and keeping those whose cut is strictly smaller than every subset's yields exact
 plans. With up to four goals and a handful of methods that is about a hundred combinations at
 roughly 0.1 ms each (_estimate_).
 
-The engine returns up to four minimal plans, ordered by fewest levers, then rupee cost (EMI
-interest and fees; spending forgone for a cut), then name. It does not invent weights to compare
-rupees with days.
+As built, the search considers the eight highest-priority goals with contributions from the
+purchase date through 31 days later. A plan can prune another only if it is no worse on method
+change, goal subset, cut, and cost, and strictly better on at least one. The engine returns up
+to four minimal plans, ordered by fewest levers and then cost, with every delayed goal listed.
 
 Tuning levers on the same scenarios used to test them is optimistic by about `d/(N+1)` for `d`
 tuned quantities: 0.02 points at 16,384 scenarios, against 0.3 at 1,000.
@@ -407,8 +415,10 @@ tuned quantities: 0.02 points at 16,384 scenarios, against 0.3 at 1,000.
 ### 5.4 Verification
 
 Each reported plan is applied to the inputs and rerun through the full kernel on the same
-scenarios. If per-day rounding or a credit cap makes it fail, the cut rises by one basis point
-and it reruns. Every number shown comes from that rerun.
+scenarios. A near miss from per-day rounding gets a one-basis-point increase. If card headroom
+binds, verification can start at the maximum cut and bisect to the smallest passing cut.
+The plan's cost is recomputed for the verified cut. The 512-scenario common-random-numbers
+oracle compares the resulting plans with exact enumeration on the same scenarios.
 
 ### 5.5 Rule fixes
 
@@ -497,22 +507,28 @@ the recursion, so none of them discards the series.
 The `holidays` package has no bank category for India; second and fourth Saturdays and RBI bank
 holidays are a small table to add.
 
+As built, the detector considers payments before the calculation date, keeps up to 200 for each
+payee, and prunes to eight candidate rules before alignment. One series can win for a payee.
+Variable bills draw uniformly from up to 12 recent payments. Amount summaries and alerts use
+the same price-step rule, and proposals carry the winning RRULE.
+See [pattern detection](design.md#pattern-detection).
+
 _Estimate_: about a million integer operations per payee across rules and the grid; a nightly run
 over a few hundred payees takes under a minute in pure Python. Detection moves behind a pure
 function; the loader stays in `tools/`.
 
 ## 7. Money: conventions, inversion, and rounding
 
-`Decimal` stays. Its 28 digits are far beyond need, and exact fractions are rejected: banks round
-every period, so the convention decides the answer, not the precision.
+`Decimal` calculations use a local 28-digit, half-up context. Interest rounds each period
+according to the selected bank convention.
 
-- **Conventions.** `amortize` takes a rest frequency, day count, rounding unit, EMI rounding
-  rule, and a piecewise rate for floating loans. Today it assumes monthly rests and half-up
-  paise.
-- **Rate inversion.** EMI rises strictly with the rate, so the rate behind an observed EMI is
-  unique. Bisect over integer rate units using the exact forward schedule. It stops on an
-  integer interval with no tolerance to tune, and the interval's width says how precisely the
-  statement pins the rate. A change between statements is a floating-rate reset.
+- **Conventions.** `amortize` takes a rest frequency, rounding units, EMI rounding, and
+  rate resets. Daily rests use 30E/360 or Actual/365 Fixed. APR uses the nominal annual
+  convention of 12 times the monthly internal rate of return, checked against the RBI Key
+  Facts Statement Annex B vector. Negative APR roots are rejected.
+- **Rate inversion.** The rounded EMI can be flat over a range of rates. For monthly rests,
+  bisection finds the range of integer rate units that all reproduce the EMI. Only a singleton
+  range is exact. The loan tool can use a matching range's midpoint and report the range.
 - **XIRR.** Bracketed bisection, returned only when the cash flows have one sign change;
   otherwise the function says the rate is not unique. Not built: nothing uses it, and
   `plan.md` keeps investment returns out.
@@ -520,8 +536,10 @@ every period, so the convention decides the answer, not the precision.
   exact to half a paisa at every point of any horizon. Today's per-day rounding drifts by up to
   half a paisa per day. This is what makes a cut exactly linear in section 5.
 - **Allocation.** One largest-remainder split for every place an amount divides.
-- **Edge cases.** An EMI below the amortizing EMI, and a prepayment larger than the balance, are
-  reported, not silently absorbed. One `_add_months`.
+- **Edge cases.** The money engine rejects terms above 600 months and resets beyond the term.
+  Tenure-reducing prepayments use the EMI charged at the prepayment, including a coincident
+  reset. The schedule reports a balloon from coarse EMI rounding. Card EMI stops when the
+  principal clears, and a card payoff fails as soon as the debt stops decreasing.
 
 Tax, inflation indexing, and investment returns stay out, per plan.md.
 
@@ -535,22 +553,26 @@ Tax, inflation indexing, and investment returns stay out, per plan.md.
 - **Scores.** CRPS for the distribution, pinball loss at 10/50/90, coverage with mean band
   width, the Brier score of the floor-breach event with its reliability decomposition, and a
   histogram of where outcomes fell in their forecasts.
-- **Baselines.** Flat balance; schedule only; schedule plus mean daily spend; and the current
-  engine as a kernel configuration. Each score is reported as skill against a baseline, with a
-  Diebold–Mariano test that accounts for overlapping horizons.
+- **Baselines.** Flat balance, schedules only, and schedules plus mean daily spend
+  (`schedule_mean`) are point forecasts. The probabilistic `empirical_flat` adds draws from
+  each category's observed daily spend to scheduled flows. The report uses `schedule_mean`
+  as its skill reference and shows 7-, 30-, and 90-day results.
 - **Personas.** A family with heavy tails, runs of expensive days, a payday effect, drift, rare
-  large expenses, and shifted salary dates. The schedule is not handed over: patterns are
-  re-detected at each origin from past data only.
-- **Honesty.** Every published number carries an interval and its sample count. Dropped origins
-  are counted.
+  large expenses, and shifted salary dates. At each origin, the detector groups prior payments
+  by normalized payee text. Schedule exclusions use only schedules created by that origin.
+  Personas shorter than 105 days use a floor cushion when no calibration window fits.
+- **Honesty.** Newey–West intervals and Diebold–Mariano tests account for overlapping origins
+  within each household and seed. Each group's losses are centered on its own mean.
+  Between-group variance enters once at lag zero. Diebold–Mariano returns `nan` with fewer
+  than two paired observations. The report counts dropped origins.
 - **Outcome.** The base case counts only confirmed income, so the realized balance is scored
   without later credits that pay no income schedule confirmed by the origin. Scored against the
   whole balance, the freelancer household's outcome fell above every scenario at every origin,
   which measured the income policy rather than the forecast. On the real ledger such a payment has
   to be linked to its occurrence; an origin whose confirmed income is not all linked is dropped.
 
-The faster kernel makes this affordable: 50 origins across 10 personas is about 30 s
-(_estimate_), against 88 s measured for 12 origins today.
+The CLI publishes only synthetic holdout scores. Real-ledger reports are for local review.
+See [engine verification commands](development-operations.md#run-engine-scores).
 
 ### 8.2 HackerRank
 
@@ -566,13 +588,17 @@ detected series never joins the cut. The adapter searches those levers and check
 `project()`. The safe amount and the earliest date are `safe_amount_today` and
 `first_full_payment_date`. Score: 86.8% (status 22/25).
 
+The command prints its score by default. Publishing requires `--publish` and the local sample
+files. If the files are missing, the command exits before touching the README.
+
 ## 9. How the pieces compose
 
-1. The ledger loader hands the pattern engine every payment and receipt.
+1. The pattern engine scores recent payments and receipts grouped by payee.
 2. Patterns return series with a rule posterior, next-date and amount distributions, a survival
    probability, and a label on every historical payment.
-3. Confirmed schedules stay exact. Detected series enter as random events. Unlabeled spend forms
-   the everyday pool and the rare-spend stream.
+3. The projection loader reads a consistent snapshot of cash, schedules, payment evidence, and
+   spend. Detected expenses enter as random events. The remaining spend eligible under the
+   [attribution rules](design.md#inputs) forms the everyday pool and rare-spend stream.
 4. The kernel builds one scenario matrix and its statistics.
 5. Affordability applies lever transforms to the same matrix, finds minimal plans, and verifies
    them. The money kernel supplies EMI schedules and costs.
@@ -580,7 +606,8 @@ detected series never joins the cut. The adapter searches those levers and check
    only when it scores better. Calibration from its residuals was measured and not shipped
    (section 4.6).
 
-Each stage is a pure function of the previous stage's output.
+The scenario, affordability, and money functions are pure. Ledger reads and scheduling happen in
+their callers.
 
 ## 10. Build order
 
@@ -645,9 +672,10 @@ Decided on November 15, 2026: "shipped" (plan.md) waits for this redesign.
 - Latency is measured once: about 1 s per `project()` for the demo persona's 210-day horizon on this
   machine (November 16, 2026), against the 50 to 80 ms estimated in section 4.3. The ten-year target
   of section 2.10 is not yet measured.
-- Every model switch of section 4.2 has been scored (plan.md §6). The 80% target is not met: the
-  held-out P10-P90 band holds 66% to 74%, and most of the shortfall is spend that drifts upward,
-  which recency weights did not fix, and ledgers too young to show their spread (section 4.6).
+- Every model switch of section 4.2 has been scored (`plan.md` §6). The November 15 scores
+  pointed to upward spend drift and short histories as sources of undercoverage (section 4.6).
+  The [L10 holdout](../../README.md#projection-backtest) shows 69% to 76% coverage at the
+  reported horizons, below the 80% target.
 - The pattern priors are a design choice, not a measured quantity; only the confidence thresholds
   were tuned.
 - The NPCI presentation rule for mandates and the ISDA business-day text could not be opened at

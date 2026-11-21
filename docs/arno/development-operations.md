@@ -325,6 +325,9 @@ uv run arno demo seed
 uv run python -m tests.invariants
 ```
 
+The runner checks ledger and schedule payment evidence. Its deterministic engine checks cover
+paise conservation, projection bands, bills due today, and the safe-to-spend boundary.
+
 CI additionally runs Python and web vulnerability audits. To reproduce their commands, run:
 
 ```bash
@@ -352,6 +355,25 @@ uv run python -m tests.e2e.driver down
 The driver starts a real API, and a `chat` command sends a real model request that can incur cost.
 Use `up --keep` to restart without reseeding. See the driver guide for import, approval, and undo
 commands.
+
+### Run engine scores
+
+From the repository root, use the tuning seeds for changes to forecast behavior. Publish the
+synthetic holdout scores with the holdout command:
+
+```bash
+uv run arno backtest --source personas --seeds tuning
+uv run arno backtest --source personas --seeds holdout --publish
+```
+
+To score a real ledger locally, configure `DATABASE_URL` for that ledger and run
+`uv run arno backtest --source db`. The CLI rejects `--publish` for this source before opening
+the database. A scoreable origin needs a usable balance and confirmed income whose payments
+are linked to their scheduled occurrences.
+
+If you already have the local HackerRank sample files, run
+`uv run arno hackerrank --dataset <folder>` to print the scores. Add `--publish` to update the
+HackerRank block in the README. Missing sample files cause a nonzero exit with no write.
 
 ## Operate containers and images
 

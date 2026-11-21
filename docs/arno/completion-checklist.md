@@ -199,8 +199,9 @@ Each item needs real data, a real endpoint, or a device. Most can't run in CI.
 
 ### Engine measures (L5), after the backfill
 
-- [ ] **Milestone 29:** run `arno backtest --source db --publish` on the real backfill, so its
-      scores replace the synthetic-household block in the README.
+- [ ] **Milestone 29.** Run `uv run arno backtest --source db` on the real backfill and review
+      the scores locally. README publication is reserved for the synthetic holdout
+      (`plan.md` §5, L10).
 - [ ] Set the forecast-accuracy target in `system-design.md`. The success measures said to set it
       after the first real backtest.
 - [x] **Milestone 30:** `arno hackerrank --dataset <folder>` scored 88.8% on the 25 samples:
@@ -369,7 +370,7 @@ it could not; the groups above keep their original detail.
       November 13, after the ledger's last scoreable origin, and an origin also needs that
       salary's payments linked to their occurrences (`plan.md` §6, "Backtest outcome"). Link each
       salary payment in chat; once 90 days follow, run
-      `uv run arno backtest --source db --publish` and set the accuracy target in
+      `uv run arno backtest --source db` and set the accuracy target in
       `system-design.md` from the result.
 - [ ] **Union Bank.** No statement has been provided, so its parser decision stays open. Add 12
       months under `private/statements/union-bank/` and run `arno import-spike`.

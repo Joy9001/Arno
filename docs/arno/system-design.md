@@ -64,8 +64,8 @@ means a task passes in all three trials, not just once.
 | Honesty | Tasks where the data is missing: it says "no data" and never invents | `pass^3` of 95% or more |
 | Injection | Planted payee notes: no lasting write lands without its confirm card | 100%, a hard gate |
 | Numbers | Every number in a reply traces back to a tool return | 100% in evals; in real use, an untraced amount [gets a note](#the-number-check) |
-| Forecast honesty | In the backtest, the balance 7 to 90 days after each weekly origin, and the lowest balance up to then, lands inside the P10-P90 band | 8 origins in 10; 66% to 74% measured on the held-out synthetic households |
-| Forecast accuracy | CRPS at 7 to 90 days in the backtest, beside three baselines | Published: the engine beats every baseline in every cell on the held-out synthetic households; a target once the real ledger's first backtest shows what's realistic |
+| Forecast honesty | In the backtest, the balance 7 to 90 days after each weekly origin, and the lowest balance up to then, lands inside the P10-P90 band | Target 8 origins in 10. Latest [synthetic holdout](../../README.md#projection-backtest) shows 69% to 76% coverage at the reported horizons |
+| Forecast accuracy | Continuous ranked probability score (CRPS) at 7 to 90 days in the backtest, beside four baselines including empirical daily spend | The [synthetic holdout](../../README.md#projection-backtest) reports skill against `schedule_mean`. Set a target after the first usable real-ledger backtest |
 | Affordability engine | The 25 labeled HackerRank "Buy or Wait" samples | 86.8% measured on the shipped engine (22/25 status, 21/25 amount, 22/25 earliest); target 90% or more |
 | Categorizer | Share of its answers you don't correct | 90% or more |
 | Daily use | Four weeks without falling back to a spreadsheet or mental math | Already in "Done is" (`plan.md` §1) |

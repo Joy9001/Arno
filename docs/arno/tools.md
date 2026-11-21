@@ -21,7 +21,7 @@ presentation-only `show_table` and `present` tools described below ([note](diagr
 | Rule | Detail |
 |---|---|
 | Money out | `Money = {"paise": 300000, "text": "₹3,000"}`. Unknown is `null`, never `0` |
-| Money in | The field name carries the unit. Read tools take `*_paise`, because scripts compute in paise. Write tools take `*_rupees`, as you said it, and code converts, so the model never multiplies by 100 |
+| Money in | The field name carries the unit. Read tools take `*_paise`, because scripts compute in paise. Write tools take `*_rupees`, as you said it, and code converts, so the model never multiplies by 100. Projection and money calculators support amounts up to `MAX_PAISE` (9,223,372,036,854,775,807 paise) in magnitude |
 | Names | Accounts, payees, and categories go in by name, and `resolve()` finds them. Movements go in by ID. A name that matches an archived account is refused with that account's name and the spendable ones, never as "no such account" |
 | Errors teach | An unknown or ambiguous name raises `ModelRetry`, listing the candidates. Inside a script it arrives as a catchable `Exception` with the same message; uncaught, the model gets the message and retries |
 | Unexpected errors | A tool that throws anything else becomes a failed result the model can read, through `on_tool_execute_error`, and the real error goes to the trace. Read tools have a 60-second timeout, as a starting value; write tools have none ([step 8](system-design.md#when-a-tool-fails)) |
@@ -301,16 +301,17 @@ class Hypothetical:
     no_cost: bool = False                   # the merchant pays the interest
 ```
 
-An EMI costs the offer's rate and fee, else the card's recorded `emi_rate_bps` and
-`emi_fee_paise`, else a labeled 16% a year; `no_cost` leaves only the fee and its GST. The gap
-that names the assumption is in `data_quality`, and the answer must state it.
+Card EMI terms range from 2 to 48 months. An EMI costs the offer's rate and fee, else the card's
+recorded `emi_rate_bps` and `emi_fee_paise`, else a labeled 16% a year. With `no_cost`, only the
+fee and its GST apply. The gap that names the assumption is in `data_quality`.
 
 Each item in `changes` is discriminated by `kind` (`stop_income`, `pause_schedule`,
 `change_amount`, `add_recurring`, `one_time`), using `YYYY-MM-DD` dates, optional inclusive
 `until`, and positive integer `amount_paise`. `schedule` and `goal` match active records by exact
 case-insensitive name (`pause_schedule` also matches projected detected series); missing or
 ambiguous names raise `ValueError` listing the candidates. Changes cannot start before today,
-exceed the engine's horizon limit, or overlap on the same schedule or all income.
+exceed the engine's horizon limit, or overlap on the same schedule or all income. For
+`change_amount`, any existing payments still count against the revised amount.
 
 **Output**
 
@@ -333,8 +334,10 @@ The daily curve, the full source list, and the verdict card travel as UI metadat
 the compact payload above, and both the compact payload and the projection card carry
 `safe_to_spend` and `scenario` (omitted when `changes` is not passed). Without `hypothetical`,
 `scenario` carries `holds` and `reason`; with it, verdict fields report the changed world while
-`scenario.baseline` holds the unchanged metrics. `optimistic` is the unconfirmed-income case and
-never feeds a verdict. `data_quality.balance_ages[]` uses the account summary's one anchor rule
+`scenario.baseline` holds the unchanged metrics. The model receives `median_low` in both sets
+of metrics as a date and a `Money` amount. Goal-deferral tradeoffs carry every delayed goal in
+`goals`. `optimistic` is the unconfirmed-income case and never feeds a verdict.
+`data_quality.balance_ages[]` uses the account summary's one anchor rule
 (`ledger.common`'s `balance_anchor`): `as_of` is the later of the last movement and the stated
 balance, and `age_days` is the age `get_financial_context` reports for the same account. An unknown
 liquid account keeps `known: false` and no balance date; the gap says the projection starts from
@@ -348,15 +351,16 @@ UI: daily curve (median and P10-P90), source IDs, projection card.
 
 ```
 horizon = max(90 days, furthest goal deadline, asked horizon,
-              latest change start/date + 90 days, latest change until)  # capped at HORIZON_MAX
+              latest change start/date + 90 days, latest change until)  # capped at 3,650 days
 inputs  = liquid balances, expanded schedules, card cycles split at the last statement close,
           goal contributions, money owed with an expected date, baselines
 runs    = 16,384 seeded scenarios; each day apply income, card bills due, obligations,
           goal contributions, resampled variable spend
 curve   = median and P10-P90 for each day, as order statistics
 floor_probability = share of scenarios that never cross the floor
-first_floor_crossing = first date by which more than 10% of scenarios have crossed
-obligations_met = every obligation is paid in at least 99% of scenarios
+first_floor_crossing = first date with fewer passing scenarios than the floor requires
+obligations_met = positive obligations and card bills are covered on each due day
+                  in at least 99% of scenarios, including today
 safe_to_spend = null if no liquid balance is known; else max(0, min(floor headroom, min
                 obligation-day margin)) at the exact scenario ranks that pass the yes rule,
                 paired with the binding constraint and date
@@ -368,14 +372,15 @@ if hypothetical:
     rerun with it
     verdict = yes when floor_probability >= 0.90 and obligations_met   # no goal-slip clause
     else:
-        levers  = pay by card or EMI, skip a goal's next contributions, cut reducible spend
-                  until payday
+        levers  = pay by card or EMI, skip contributions for up to eight eligible goals,
+                  cut reducible spend until payday
         critical value = the least setting that passes one scenario; the ceil(p*N)-th
-                  smallest passes a share p
+                  smallest passes a share p, applied to the floor and each obligation day
         minimal plans = up to 4, fewest levers then cheapest; no other plan changes no more,
-                  skips a subset of the goals, cuts no more, and costs no more
-        rerun each plan on the same scenarios; a cut that rounding leaves short goes up a
-                  basis point, and every number reported comes from that rerun
+                  skips a subset of the goals, cuts no more, costs no more, and is
+                  strictly better on at least one of those dimensions
+        rerun each plan on the same scenarios; increase a rounded cut by one basis point
+                  or bisect a cut when card headroom binds; report the final cut's cost
         verdict = yes-but when a plan keeps the date, no when only a later date works
 ```
 
@@ -383,13 +388,6 @@ if hypothetical:
 not a verdict: a wait date alone leaves the verdict `no`, and a wait date equal to the asked date
 is not a tradeoff. The engine is detailed in
 [The projection engine](design.md#the-projection-engine).
-
-Every step of [`engine-blueprint.md`](engine-blueprint.md)'s build order is done: the scenario
-kernel, the projection model, the verdict and plan rules above, the money conventions, pattern
-detection with payment-level attribution, and the HackerRank adapter. Calibration was measured and
-not shipped. Variable spend now comes from the attributed rows, and a detected
-recurring spend the user has not confirmed is simulated as an outflow; the tool's surface does not
-change.
 
 ### `run_query`
 
@@ -440,7 +438,7 @@ search returns snippets, and the model can use `substr` to read further.
 ### `amortize`
 
 An EMI is the fixed monthly loan payment. Amortization is how each EMI splits into interest and
-principal.
+principal. Loan and payoff calculations support at most 600 months.
 
 **Description:** "Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a
 loan's name to use its outstanding balance, rate, and real EMI, or pass the terms. Without a rate,
@@ -465,7 +463,7 @@ class Prepay:
 
 class LoanConventions:
     rest: Literal["monthly", "daily"] = "monthly"
-    day_count: Literal["30/360", "actual/365"] = "30/360"
+    day_count: Literal["30e/360", "actual/365f", "30/360", "actual/365"] = "30e/360"
     interest_unit_paise: int = 1                      # round each month's interest to this unit
     emi_rounding: Literal["half_up", "up"] = "half_up"
     emi_unit_paise: int = 1                           # round the EMI to this unit
@@ -493,8 +491,9 @@ if loan: P = loan_terms(): the outstanding balance (the loan account's negated l
          the same terms. A rate stored as 0 beside an EMI counts as no rate
 prepay is a typed Prepay; an unknown key is an error, never ignored
 if no rate and an EMI:
-    fit = infer_rate(P, n, emi, conventions): the rate interval whose EMI rounds to this one
-    not exact: ModelRetry(fit.note)
+    require monthly rest
+    fit = infer_rate(P, n, emi, conventions): the range of rates whose EMI rounds to this one
+    if no rate matches the rounded EMI: ModelRetry(fit.note)
     rate = the interval's midpoint; an assumption states the interval and that the EMI gave it
     the stated EMI was evidence for the rate, so the rate computes the EMI; a named loan keeps
     its real EMI
@@ -507,20 +506,26 @@ schedule = each month: interest = round(balance·r)
 if fee_paise > 0:
     fee_gst = round(fee_paise * 18%), net_disbursed = P − processing_fee − fee_gst
     total_cost = total_interest + processing_fee + fee_gst
-    apr = effective annual rate solving net_disbursed against the scheduled EMIs (1e-4% units)
+    apr = 12 times the monthly IRR of net_disbursed and the scheduled EMIs (1e-4% units)
     apr_percent = round(midpoint(apr.low, apr.high), 2) if both bounds exist, else omitted
 if prepay:
     subtract amount before EMI at_emi
-    reduce = tenure: same EMI, walk to zero
+    reduce = tenure: use the EMI charged at at_emi, including any reset on that EMI
     reduce = emi:    recompute the EMI over the EMIs the loan actually has left, not the
                      caller's tenure cap
     compare totals
 ```
 
-Conventions change the interest and EMI rounding, never the formula. This runs on the host with
-`Decimal`. `record_movement` splits a loan payment with `ledger.movements.loan_payment_parts`, not
-with this schedule: one month's interest per loan, booked by the first payment in a calendar month
-(a later payment that month is all principal), at the loan's own rate.
+Daily rests use 30E/360 or Actual/365 Fixed. The input aliases `30/360` and `actual/365` map to
+those conventions. The calculation uses a fixed local `Decimal` context. Rate inversion sets
+`exact` only for one matching rate and uses the midpoint when several rates round to the same
+EMI. A reset after the loan term raises an error. The schedule notes when coarse EMI rounding
+leaves the final payment more than one rounding unit away from the regular EMI. APR rejects a
+negative internal rate of return (IRR).
+
+`record_movement` uses `ledger.movements.loan_payment_parts` to split a loan payment. It books
+one month's interest at the loan's rate on the first payment in each calendar month. Later
+payments that month are all principal.
 
 ### `card_payoff`
 
@@ -571,6 +576,7 @@ if no rate: ModelRetry telling the model to ask the user for the monthly finance
 payment  = payment_paise if given (fixed), else "minimum" with passed or stored minimum_percent and
            minimum_floor_paise
 delegate to engine.money.card_payoff(); ValueError -> ModelRetry
+refuse a payment that leaves the balance flat or growing
 ```
 
 `amortize` and `card_payoff` also return `complete_cost` and `not_included`: prepayment or
@@ -616,6 +622,8 @@ assumption, not a prediction or advice: state it in your answer. Show it with pr
 
 **Input:** `compound(monthly_paise: int, annual_rate: float, months: int, start_paise: int = 0)`
 
+The term is capped at 600 months.
+
 **Output**
 
 ```python
@@ -641,9 +649,8 @@ growth = final − contributed
 
 **Input:** `rupees(paise: int)` → `str`.
 
-A script's only other reach into money formatting would be its own `/ 100`, which is how a paise
-figure once got quoted as ₹5,511. It reads nothing, writes nothing, and shows no card;
-`india/formatting.format_paise` is the one formatter the CLI, tests, and this helper share.
+The CLI and this helper share `india/formatting.format_paise`. The formatter also accepts
+`Decimal` amounts elsewhere in the host and rounds fractional paise half-up before display.
 
 ### `show_chart`
 

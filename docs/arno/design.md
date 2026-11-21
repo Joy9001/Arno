@@ -171,7 +171,7 @@ table lists its fields:
 | `kind` | `income_fixed`, `income_variable`, `income_oneoff`, `obligation`, `instalment`, `goal_contribution` |
 | `subtype` | For obligations: `rent`, `emi`, `subscription`, `insurance`, `family_transfer`, `other` |
 | `name`, `amount`, `account_id`, `category_id` | |
-| `rule` | iCalendar RRULE, handled by `python-dateutil`—"monthly on the 5th", "last weekday", "yearly on Mar 14", `COUNT=3` for "slice in 3". Holiday adjustment from the India calendar. A monthly rule on the 29th, 30th, or 31st falls on the last day of a shorter month (rent "on the 31st" is due Feb 28), so no month is skipped |
+| `rule` | iCalendar RRULE, handled by `python-dateutil` with India calendar adjustments. A date-only `UNTIL` includes that day. Monthly rules clamp dates at month end, including rules with multiple days such as the 15th and last day |
 | `confirmed` | For variable income: confirmed amounts count toward verdicts, expected ones only show as an optimistic case |
 | `starts`, `ends`, `active` | |
 
@@ -206,11 +206,13 @@ contribution. Correcting an amount creates a replacement movement that must be m
 Matches and unmatches have audit groups and undo; restoring an old match cannot reuse money that
 was assigned elsewhere afterward. Undoing an early match preserves terms used by later matches.
 
-The projection reserves only the remaining expected amount of a future occurrence, using
-payments and reversal state as of its calculation date. Past unmatched amounts are not silently
-reintroduced as arrears. Generated `card_due` entries are `untracked` forecasts of today's card
-outstanding, not individual statement bills. They do not acquire a paid flag from these matches.
-Both tables are included in exports and backups, and readable by `agent_ro`.
+The projection reserves only the remaining expected amount, using payments and reversal state
+as of its calculation date. For obligations and installments due today or up to three days
+overdue, it reserves any remainder tomorrow and reports the original due date in a gap note.
+Older occurrences stay out of this carry-forward. An unknown amount produces a gap without a
+reserve. Generated `card_due` entries are `untracked` forecasts of the billed and unbilled shares
+of today's card outstanding. Their status is independent of schedule payment matches. Both
+payment evidence tables are included in exports and backups, and readable by `agent_ro`.
 
 ### People
 
@@ -426,16 +428,18 @@ not shipped.
 
 ### Inputs
 
+The loader reads a consistent ledger snapshot in one read-only `REPEATABLE READ` transaction.
+
 - Liquid balance: the ledger balance of `liquid` accounts, with their statement ages reported.
-- Horizon: max(90 days, furthest goal deadline, the asked horizon).
+- Horizon: at least 90 days, extended for later goals, an explicit request, or a what-if, up to
+  3,650 days. Home and the scheduled risk check cap their default run at 90 days.
 - Scheduled events expanded from the `schedules` table over the horizon. Unconfirmed variable
   income is shown as an optimistic case only, never counted toward a verdict.
-- Card cycles: each card's outstanding is split at its last statement close. The closed bill is
-  due on its due date (today, if that has passed); spend since the close joins the next bill.
-  A drawn past day's card spend stays on its card even past the limit, because the history
-  already shows spend moving to cash while a card was full. A what-if purchase, a card EMI, and a
-  detected series are held to the limit after that day's drawn spend, and what does not fit is
-  cash spend that day.
+- Card cycles: the calendar and projection share the split of current outstanding into billed
+  and unbilled parts and use the same due dates. The closed bill is due on its due date (today,
+  if that has passed). Spend since statement close joins the next bill. If the split is unknown,
+  the first due date takes the full outstanding. An unanchored card balance has no known bill
+  amount.
 - Variable spend, simulated: each scenario fills the horizon by drawing whole past days (cash and
   each card together, split into reducible and fixed) from the last 90 days, with weekdays and
   weekends kept apart. A day the household spent far above its usual (the median plus 3 median
@@ -445,10 +449,13 @@ not shipped.
   drawn from whole days, however few days it was spent on. Otherwise, below 14 real days, a
   category is topped up with five pseudo-days at 0, ½, 1, 1½, and 2 times the stated daily
   estimate, weighted so real days count r : 14 − r; the prior fades as real days arrive.
-  Attribution is by payment: a payment that settled a schedule, one matched by a projected
-  series, and one marked one-off leave the pool, so a category an obligation covers is simulated
-  from what is left rather than dropped. How days are drawn is one switch per change in
-  `projection.Model`, and a switch ships only when it beats the one before it on the backtest.
+  The sample starts on the first covered day in the history window and ends before the
+  calculation date. Recorded spend keeps its actual cash and card split, including across
+  multiple cards. The pool excludes recorded schedule payments, payments matched to a projected
+  series, and one-offs. If a projected obligation in a category has no linked payment history,
+  the projection leaves that category's variable spend out and reports the gap to avoid counting
+  the obligation twice. Once every projected obligation in the category has linked payment
+  evidence, the remaining everyday spend is eligible for sampling.
   The reported quantiles are the scenarios' own: a calibration map was measured and did not
   lower CRPS ([plan.md](plan.md) §6).
 - Goal contributions move money into a goal's account; those fenced savings are not spendable.
@@ -459,9 +466,10 @@ not shipped.
 16,384 seeded scenarios run at once, in whole paise. The draw for a scenario on a day is a hash of
 the seed, the pool, the scenario, and the date, so a scenario never depends on how many run. Each
 day applies events in a fixed order: income, card bills due, obligations and installments, one-off
-payments and goal contributions, then variable spend. A drawn day's card spend goes on its card
-first; a new charge gets only the headroom left, and the rest leaves cash that day. Used credit
-falls only when a bill is paid.
+payments and goal contributions, then variable spend. The card limit applies to scheduled
+obligations, detected series, and new purchases before that day's resampled spend uses any
+headroom. Any amount above the limit spills to cash. Resampled spend stays on its original card,
+even above the limit. Paying a bill releases its credit for charges due that day or later.
 
 ### Output
 
@@ -471,9 +479,11 @@ falls only when a bill is paid.
 - **Floor probability:** the share of scenarios that never cross the floor, with a 95% interval;
   `data_quality` flags a borderline result when that interval contains the threshold.
 - Minimum point and date on the median path.
-- **First floor crossing:** the first date by which more than 10% of scenarios have crossed the
-  floor. It is absent exactly when the floor probability passes the 90% threshold.
-- An obligation is met when at least 99% of scenarios can pay it on its date.
+- **First floor crossing.** The first date by which too few scenarios have stayed at or above
+  the floor to satisfy the threshold. This uses the same minimum passing scenario count as the
+  floor probability, safe-to-spend figure, and affordability verdict.
+- The obligation check needs at least 99% of scenarios to cover the positive amounts due on
+  each payment day. It includes card bills and amounts payable on the calculation date.
 - **Safe to spend today:** the largest one-off cash payment today (`method: account`) under which
   the projection still keeps the floor probability at or above 90% and every future obligation met
   under the 99% rule. Computed in one pass from the same scenario run (`amount_paise`, `binding`,
@@ -510,7 +520,7 @@ scenario matrix, so one run for each payment method covers every combination of 
 | Lever | What changes |
 |---|---|
 | Pay by card or EMI | The cash moves to the bill's due date, or to `n` installments, within the card's available credit |
-| Skip a goal's contributions | The contributions in the month after the purchase come back from their dates; the plan reports the slip |
+| Skip a goal's contributions | The search considers the eight highest-priority goals with contributions due from the purchase date through 31 days later. A plan returns those contributions to cash on their original dates and reports the delay for each affected goal |
 | Cut reducible spend | The cut is at most half of the baseline and runs until the next payday, when the normal baseline resumes. A cut on card spend frees cash only once that bill is paid |
 | Wait until date X | The earliest date that meets the threshold. Context only: it never makes a yes-but, and it is skipped when it is the asked date |
 
@@ -521,16 +531,17 @@ interest, but its fee and the fee's GST remain.
 
 For a lever where more is always at least as safe, each scenario has a critical value: the least
 setting at which that scenario passes. The least setting that passes a share `p` of scenarios is
-the `ceil(p·N)`-th smallest critical value, compared as integers. A plan is minimal when no other
-passing plan reaches the floor while switching method no more, skipping a subset of its goals,
-cutting no more, and costing no more. Up to four are reported, fewest levers first, then cheapest,
-and each carries its cost in paise (the EMI's interest, GST, and fee, or the spending a cut gives
-up) and the floor probability its rerun reached. Every plan is rerun on the same scenarios: a cut
-that rounding leaves short goes up a basis point, and where a card limit binds, the cut is found
-by bisection. Every number shown comes from that rerun.
+the `ceil(p·N)`-th smallest critical value, compared as integers. A cut must clear the floor and
+every obligation day's 99% test. A passing plan dominates another if it is no worse on method
+switching, goal deferrals, cut, and cost, and strictly better on at least one. Up to four plans
+are reported, fewest levers first, then cheapest. Each is rerun on the same scenarios, with a
+one-basis-point increase when rounding leaves a cut short. If card headroom binds, verification
+can try the maximum cut and then bisect to find the smallest passing cut. Reported costs and
+probabilities use that final cut.
 
-The tradeoff kinds are `wait`, `pay_by_card`, `delay_goal`, `cut_category`, and `combined`, which
-lists its `levers`. A `wait` is context only and carries no cost.
+The tradeoff kinds are `wait`, `pay_by_card`, `delay_goal`, `cut_category`, and `combined`. A
+`combined` tradeoff lists its `levers`, and goal-deferral tradeoffs list every delayed goal in
+`goals`. A `wait` is context only and carries no cost.
 
 The agent phrases the verdict and picks which tradeoffs to mention. The numbers come from the
 function.
@@ -542,7 +553,8 @@ function.
 writing to the ledger. Name resolution (active schedules, projected detected series for
 `pause_schedule`, and active goals) runs in `tools/projection.py`, keeping the engine pure.
 Overlapping windows on the same schedule or on all income raise `ValueError`, and changes sort
-into a canonical key order before transformation so list permutation never alters the run. Added
+into a canonical key order before transformation so list permutation never alters the run.
+`change_amount` applies existing payment allocations against the revised amount. Added
 flows map onto existing `CashEvent` kinds (`obligation`, `goal_contribution`, `income_fixed`,
 `income_oneoff`) with no holiday shifting, so the scenario kernel itself stays unchanged.
 `project_scenario` in `engine/affordability.py` runs both the unchanged baseline and the changed
@@ -551,12 +563,14 @@ reports `holds`/`reason`, `runway_days`, `baseline`, assumptions, and zero-occur
 
 ### Measuring it
 
-The following two measures run locally against real or license-restricted data, and their
-results are published in the README:
+The following measures run locally. Only the synthetic holdout backtest can update the README
+backtest block. HackerRank updates its own block when explicitly asked and the local sample
+files are available.
+See [engine verification commands](development-operations.md#run-engine-scores).
 
 | Measure | How |
 |---|---|
-| Backtest | From each of 52 weekly origins, forecast 90 days using only the rows that existed then—an account, schedule, or goal created later is excluded, though a later edit to one that already existed is read in its current form. Score each forecast as a distribution at 7, 14, 30, 60, and 90 days, on the balance then and the lowest balance up to then: CRPS, pinball loss at P10/P50/P90, how often the outcome fell inside P10-P90 (close to 80% means the band is honest) and how wide the band was, and the Brier score of a floor breach. The outcome leaves out later income that pays no income schedule confirmed by the origin, because the base case is told not to count it; on the real ledger that payment must be linked to its occurrence, or the origin is dropped. Every score is set beside three baselines (a flat balance, schedules only, and schedules plus mean daily spend), with intervals and Diebold-Mariano tests that allow for overlapping horizons. Origins with no usable starting point are dropped and counted. The source is the real ledger (`--source db`), or ten synthetic households (`engine/personas.py`) that share no code with the engine and break its assumptions on purpose: settings are chosen on their tuning seeds and published from the held-out seeds |
+| Backtest | Forecast from up to 52 weekly origins for each household and seed. For the real ledger, accounts, schedules, and goals created later are excluded, though later edits to existing records can still be read. Compare scores for end and minimum balance at 7, 14, 30, 60, and 90 days against four baselines: flat balance, schedules only, schedules plus mean daily spend, and schedules plus empirically sampled spend. Outcomes count later income only for schedules confirmed by the origin. Real-ledger origins with missing links for that income are dropped and counted. See the [backtest design](engine-blueprint.md#81-backtest) for the scores, intervals, and synthetic holdout |
 | HackerRank "Buy or Wait" | Score on the 25 labeled sample requests ([affordability section of the personal-agent platforms research](../research/personal-agent-platforms-2026-09-23.md#4-the-affordability-cluster--hackerrank-orchestrate-sept-2026)). Externally labeled, so it checks the affordability logic against someone else's answers. The adapter infers each sample's streams with the production series detector (`engine/series.py`), and the flows become `CashEvent`s on a `project()` input with no sampled spend categories, so the score is the engine's own `safe_amount_today`, `first_full_payment_date`, and floor probability, and one run is exact. Used locally, never committed—its source repository has no license. The shipped engine scores 86.8% (22/25 status, 21/25 amount, 22/25 earliest) |
 
 ### Why it's built, not bought
@@ -568,7 +582,8 @@ has the strongest case for tests in the codebase: pure, seeded, and money depend
 
 ## Pattern detection
 
-One pure function in `engine/series.py` over the last 800 days of payments. The pattern job in
+One pure function in `engine/series.py` reads up to 800 days before the calculation date, retaining
+at most the newest 200 payments for each payee. The pattern job in
 `tools/patterns.py`, driven by `jobs/patterns.py`, runs it nightly and after every import.
 Everything surfaces as a _proposal_ in the inbox or chat—"Looks like Netflix ₹649 monthly. Add
 it as an obligation?"—never a silent write.
@@ -579,7 +594,9 @@ date-in-month rules are tried unshifted, moved to the next working day, and move
 working day on the Indian bank calendar in `india/workdays.py`, so a second or fourth Saturday and
 a bank holiday both move a date. The weekly rules and the n-th weekday are tried unshifted, and the
 last working day is the previous-working-day form of the last day. At least 3 payments in the
-window are needed before anything is scored.
+window are needed before anything is scored. The heuristic keeps at most eight calendar rules
+for the exact alignment. Coverage by an existing charge schedule requires a matching cadence.
+A normalized month-end rule keeps its monthly cadence, and a daily rule uses its day interval.
 
 **Scoring.** A rule is scored by an exact alignment likelihood. Each expected date is paid with
 probability `1 − q`, on a day offset by a jitter distribution; it may be skipped; unrelated
@@ -607,12 +624,12 @@ The proposals that reach the inbox are the following:
 | New income | An income series at confidence 0.9 or more |
 | Missed recurring | An expected occurrence is 3 or more days late with no matching payment |
 | Price change | A spend charge moves to a new amount level and stays there |
-| Risk | After any write and nightly, rerun the projection. If the floor probability drops below the threshold (against the floor, or against zero when no floor is set), or a crossing moves earlier, warn once for each episode |
+| Risk | After any write and nightly, rerun the projection on the 90-day default. If the floor probability drops below the threshold (against the floor, or against zero when no floor is set), or a crossing moves earlier, warn once for each episode. Record `last_checked_at` even when no verified balance is available |
 
-**Price steps.** A step is reported at the first payment at the new level, once per step:
-`price_step` in `engine/series.py` needs a fixed run of at least 3 payments at the old level
-immediately before the step, and every payment from the step on at one new level in the same
-direction, reaching the latest payment. Ordinary variation, and one odd payment that returns to
+**Price steps.** Detected amount summaries and price-change proposals share `price_step` in
+`engine/series.py`. A step needs a fixed run of at least three payments at the old level
+immediately before it. Starting with the first changed payment, every payment through the latest
+one stays at the new level. Ordinary variation, and one odd payment that returns to
 the old level, are not steps. A charge a confirmed schedule states is compared the other way:
 its stated amount is the old level, and the most recent run of consecutive paid occurrences that
 agree with each other and differ from it in one direction is the new level. A payment below the
@@ -625,13 +642,12 @@ rerun does not repeat it and a later step alerts again.
 
 **Where it lands.** `series_detections` (migration `0041`) is rewritten whole by the pattern job,
 in one transaction. It holds each detection's rule, confidence, still-alive probability, skip rate,
-jitter, amount summary, and matched movement IDs. A `new_subscription` proposal carries its
-confidence, rule, and next date. Detected income never enters the projection.
+jitter, amount summary, and matched movement IDs. New subscription and new income proposals
+carry the detector's RRULE, preserving the detected cadence. Detected income never enters the
+projection.
 
-**Attribution.** The best alignment labels each payment as part of the series or not. Spend history
-leaves out the payments that settled a schedule, the ones a projected series matched, and the ones
-marked one-off. A category covered by an obligation is no longer dropped: it is simulated from what
-is left. A computed baseline comes from those attributed rows, over the days the ledger covers.
+**Attribution.** The best alignment identifies the payments a series covers. The projection uses
+those matches and explicit schedule payments to build its [variable spend inputs](#inputs).
 
 **One-off mark.** `movements.one_off` takes a payment out of spend history, because a payment that
 will not recur is neither everyday nor rare spend. The movement correction tool and the movement

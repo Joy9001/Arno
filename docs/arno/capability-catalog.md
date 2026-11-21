@@ -62,6 +62,7 @@ The following table records what landed since the November 12 baseline and which
 | Recurring charges are detected by calendar rules scored by likelihood; a detected series at confidence 0.999 or more enters the projection as an outflow; a payment can be marked one-off | C07, C08, C18 | `93d2133`, `29f5843`, `1413449` |
 | The projection runs 16,384 scenarios on an integer kernel; calibration was built, measured, and not shipped | C08, C09, C22 | `f645b69`, `cb90de8` |
 | The backtest scores each forecast as a distribution against three baselines; HackerRank scores the shipped engine through an adapter at 86.8% | C22 | `00598fd`, `679297a` |
+| L10 bounds projection work, reconciles scheduled obligations and card bills, and adds a probabilistic spend baseline to the backtest | C07–C09, C11, C22, C28–C30 | `ee8d2ed`, `3441840`, `fec77d7` |
 | Inference cost tracking with native budgets | C17, C21 | `50880d5` |
 | The `app` database role runs without superuser | C21 | `ad490ef` |
 | Local speech-to-text runs whisper.cpp's native server with Silero voice activity detection | C04 | `757251b` |
@@ -561,13 +562,13 @@ verdict, uncertainty, and tradeoffs without substituting a model-written financi
 
 - Internal, existing: `project(hypothetical=...)` invokes
   [affordability](../../src/arno/engine/affordability.py); there is no separate `can_i_afford`
-  tool. A `yes` needs the floor probability at 90% or more and every obligation payable in 99% of
-  scenarios. The engine returns up to four minimal plans that combine waiting, a card or EMI,
-  delaying a goal, and cutting reducible categories, each verified by a rerun on the same
-  scenarios. A card EMI carries its interest, processing fee, and GST.
-- Calibration was built, measured, and not shipped (`plan.md` §6, L5 redesign): the engine reports
-  its own quantiles, and the held-out P10–P90 band holds 66% to 74% of outcomes against an 80%
-  target. The P10–P90 band is the range between the 10th and 90th percentile outcomes.
+  tool. A `yes` needs at least 90% floor probability and 99% coverage on each obligation day,
+  including days with card bills. The engine returns up to four minimal same-date plans, each
+  verified on the same scenarios. It considers card or EMI payment, deferring contributions for
+  the eight highest-priority eligible goals, and cutting reducible spend. Waiting is a separate
+  tradeoff. A card EMI carries its interest, processing fee, and GST.
+- The engine reports its own quantiles. The P10–P90 band spans the 10th to the 90th percentile of
+  the simulated outcomes. See the [forecast coverage measure](system-design.md#success-measures).
 - Pydantic: Code Mode can compare engine returns; `present` renders the selected results.
 - External: C05 contract evidence only when needed; an external analyst or research service cannot
   issue Arno's verdict. A purchase alongside other changes is C29.
@@ -1456,11 +1457,10 @@ fails.
 
 - Internal, partial: [eval cases](../../evals/cases.py),
   [backtest](../../src/arno/engine/backtest.py), invariants, Phoenix traces, and [restore
-  tooling](../../src/arno/backup_restore.py) exist. The
-  backtest scores each forecast as a distribution against three baselines on ten synthetic
-  households, and the engine beats every baseline in every cell. HackerRank scores the shipped
-  engine at 86.8% through an adapter. A real ledger becomes a measurement once 90 days follow a
-  confirmed, linked salary (`plan.md` §5, L5 status).
+  tooling](../../src/arno/backup_restore.py) exist. The synthetic holdout compares the engine
+  against four baselines, including the probabilistic `empirical_flat`, on ten households.
+  The README records the latest published HackerRank score. A real ledger becomes a
+  measurement once 90 days follow a confirmed, linked salary (`plan.md` §5, L5 status).
 - Pydantic: instrumentation, scripted/test models, and spend controls support verification; a
   successful span or quantity-matching check is not proof of financial meaning.
 - External: restic storage and configured inference endpoints need separate operational validation.
@@ -1473,9 +1473,10 @@ fails.
       `test_conventions_emi_rounding_and_interest_unit`, `test_infer_rate_property_round_trips`,
       `test_a_covered_month_with_no_spend_is_zero_not_unknown`, and the invariant checker, November 16, 2026.
 - [x] Usable real-history evaluation distinguishes synthetic results and controls historical
-      look-ahead. `arno backtest --source db` labels its source and reads nothing after each
-      forecast's origin. Automated: `test_the_db_backtest_reads_no_spend_after_its_origin` and
-      `test_backtest_results_are_labeled_synthetic_or_real`, November 16, 2026. The measured run on the owner's
+      look-ahead. `arno backtest --source db` produces a local report and excludes later spend
+      from each forecast's inputs. Publication is limited to the synthetic holdout.
+      Automated: `test_the_db_backtest_reads_no_spend_after_its_origin` and
+      `test_backtest_results_are_labeled_synthetic_or_real`. The measured run on the owner's
       ledger is milestone 29 in group B of the completion checklist.
 
 The local-model scorecard, median cost, latency, fresh-machine restore, and human gates are tracked
