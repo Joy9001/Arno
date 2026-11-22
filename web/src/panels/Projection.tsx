@@ -1,10 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { Button } from "@radix-ui/themes";
 import { AlertTriangle, Calculator } from "lucide-react";
 import { Busy } from "../Loading";
 import { formatDate, formatPaise, isoDate, percent } from "../format";
-import { ProjectionBody, type ProjectionPayload } from "../projection";
+import { ProjectionBody } from "../projection";
+import { parseProjectionReceipt } from "../projectionReceipt";
 import {
   lowAmount,
   OBLIGATION_WARNING,
@@ -91,7 +92,12 @@ export function ProjectionPanel() {
   const [account, setAccount] = useState("");
   const [path, setPath] = useState(queryPath(MIN_HORIZON_DAYS, null));
   const [formError, setFormError] = useState<string | null>(null);
-  const { data, error, loading, reload } = useApi<ProjectionPayload>(path);
+  const response = useApi<unknown>(path);
+  const data = useMemo(() => parseProjectionReceipt(response.data), [response.data]);
+  const error =
+    response.error ??
+    (response.data != null && !data ? "The projection response could not be read." : null);
+  const { loading, reload } = response;
   const reducedMotion = useReducedMotion();
   const hypothetical = Boolean(amountRupees.trim());
   const today = isoDate(new Date());
@@ -174,9 +180,9 @@ export function ProjectionPanel() {
     />
   );
 
-  const floorPaise = data?.floor?.paise ?? data?.floor_paise ?? null;
+  const floorPaise = data?.floor?.paise ?? null;
   const floorSet = data ? (data.floor_set ?? (floorPaise ?? 0) > 0) : false;
-  const floorText = data?.floor?.text ?? (floorPaise !== null ? formatPaise(floorPaise) : null);
+  const floorText = data?.floor?.text ?? null;
   const medianLow = data ? lowAmount(data) : null;
   const lowPoint = data?.curve.find((point) => point.date === data.median_low.date);
   const purchase = data?.hypothetical as PurchaseMeta | undefined;

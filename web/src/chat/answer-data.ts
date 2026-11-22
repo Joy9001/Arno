@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { projectionSchema } from "./projection-schema";
+import { projectionSchema } from "../projectionReceipt";
 
 const ANSWER_TYPES = ["Stack", "Comparison", "Summary", "Table", "Chart", "Receipt"] as const;
 export const LEAF_TYPES = new Set(["Summary", "Table", "Chart", "Receipt"]);

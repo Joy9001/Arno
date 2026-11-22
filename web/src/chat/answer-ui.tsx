@@ -307,7 +307,7 @@ function ResultSection({
   const context = resultContext(result);
   return (
     <section className="answer-result" aria-label={displayText(result.title)}>
-      {hasReceipt ? <ProjectionCard data={result.receipt!} onEvidence={onEvidence} /> : null}
+      {hasReceipt ? <ProjectionCard payload={result.receipt!} onEvidence={onEvidence} /> : null}
       {!hasReceipt && showTitle ? (
         <h3 className="answer-result-title">{displayText(result.title)}</h3>
       ) : null}

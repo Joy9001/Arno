@@ -15,6 +15,7 @@ import { openEvidence, openPlanner, openRun } from "../evidence";
 import { formatPaise } from "../format";
 import { Orb } from "../Orb";
 import type { ProjectionPayload } from "../projection";
+import { parseVerdictReceipt } from "../projectionReceipt";
 import { runEnding, useRun } from "../run/runData";
 import { displayText } from "./display-text";
 import { stepSummary, type StepRow, type StepSummary } from "./flow-steps";
@@ -97,13 +98,6 @@ function messageId(message: Message): string {
   return typeof server === "string" && server ? server : message.id;
 }
 
-function asReceipt(value: unknown): ProjectionPayload | null {
-  if (!isRecord(value)) return null;
-  if (typeof value.verdict !== "string" || !VERDICT[value.verdict]) return null;
-  if (typeof value.floor_probability !== "number") return null;
-  return value as unknown as ProjectionPayload;
-}
-
 /** Finds the projection receipt a card or tool result carries, however deeply it is nested. */
 function findReceipt(value: unknown, depth = 0): ProjectionPayload | null {
   if (!value || typeof value !== "object" || depth > 4) return null;
@@ -114,7 +108,7 @@ function findReceipt(value: unknown, depth = 0): ProjectionPayload | null {
     }
     return null;
   }
-  const direct = asReceipt(value);
+  const direct = parseVerdictReceipt(value);
   if (direct) return direct;
   for (const item of Object.values(value)) {
     const found = findReceipt(item, depth + 1);
@@ -125,7 +119,7 @@ function findReceipt(value: unknown, depth = 0): ProjectionPayload | null {
 
 function receiptFromPart(part: Part): ProjectionPayload | null {
   if (isRecord(part.data) && part.data.card === "projection") {
-    const receipt = asReceipt(part.data);
+    const receipt = parseVerdictReceipt(part.data);
     if (receipt) return receipt;
   }
   const nested = part.data === undefined ? null : findReceipt(part.data);
@@ -214,7 +208,7 @@ function toTurns(messages: readonly Message[], running: boolean): Turn[] {
       }
       const strong =
         isRecord(part.data) && part.data.card === "projection"
-          ? asReceipt(part.data)
+          ? parseVerdictReceipt(part.data)
           : null;
       if (strong) current.receipt = strong;
       else if (!current.receipt) {
@@ -284,8 +278,7 @@ function percentText(value: unknown): string {
 function lowestText(receipt: ProjectionPayload | null): string {
   const low = receipt?.median_low;
   if (!low) return "—";
-  const paise = low.amount?.paise ?? low.paise;
-  return typeof paise === "number" ? formatPaise(paise) : "—";
+  return low.paise == null ? "—" : formatPaise(low.paise);
 }
 
 function saferText(receipt: ProjectionPayload | null): string {
@@ -668,7 +661,9 @@ function StepCard({ turn, index, step }: { turn: string; index: number; step: St
 const PRICE_STEP = 50_000;
 
 function TryCard({ turn, receipt }: { turn: string; receipt: ProjectionPayload }) {
-  const hypothetical = isRecord(receipt.hypothetical) ? receipt.hypothetical : {};
+  const hypothetical = (receipt.hypothetical ?? {}) as NonNullable<
+    ProjectionPayload["hypothetical"]
+  >;
   const original =
     typeof hypothetical.amount_paise === "number" && hypothetical.amount_paise > 0
       ? hypothetical.amount_paise

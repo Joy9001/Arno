@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Orb } from "../Orb";
-import type { ProjectionGoal, ProjectionPayload } from "../projection";
+import type { ProjectionGoal } from "../projection";
+import { parseProjectionReceipt } from "../projectionReceipt";
 import { projectionReadiness } from "../projectionData";
 import { formatDate, formatPaise, percent } from "../format";
 import type { Goal } from "../types";
@@ -89,7 +90,20 @@ function GoalRow({ goal, forecast }: { goal: Goal; forecast?: ProjectionGoal }) 
 
 export function GoalsPanel() {
   const { data, error, loading, reload } = useApi<Goals>("/api/goals");
-  const projection = useApi<ProjectionPayload>("/api/projection?horizon_days=365");
+  const projectionResponse = useApi<unknown>("/api/projection?horizon_days=365");
+  const projectionData = useMemo(
+    () => parseProjectionReceipt(projectionResponse.data),
+    [projectionResponse.data],
+  );
+  const projection = {
+    data: projectionData,
+    error:
+      projectionResponse.error ??
+      (projectionResponse.data != null && !projectionData
+        ? "The projection response could not be read."
+        : null),
+    reload: projectionResponse.reload,
+  };
   const [activePage, setActivePage] = useState(0);
   const [otherPage, setOtherPage] = useState(0);
 

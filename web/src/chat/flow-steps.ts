@@ -1,4 +1,4 @@
-import { formatPaise } from "../format";
+import { formatMoneyValue, formatPaise } from "../format";
 import { displayText } from "./display-text";
 import { TOOL_COPY, toolLabel } from "./tool-copy";
 
@@ -47,19 +47,6 @@ function number(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** A money value from the tools (`{ paise, text }`) or a bare paise count. */
-function money(value: unknown): string | null {
-  if (value !== null && typeof value === "object") {
-    const row = fields(value);
-    const paise = number(row.paise);
-    if (paise !== null) return formatPaise(paise);
-    const label = string(row.text);
-    return label || null;
-  }
-  const paise = number(value);
-  return paise === null ? null : formatPaise(paise);
-}
-
 /** Rupees as the tools accept them in setup writes. */
 function rupees(value: unknown): string | null {
   const amount = number(value);
@@ -101,7 +88,7 @@ function contextStep(result: Fields): StepSummary {
       const account = fields(raw);
       const label = string(account.name);
       if (!label) return [];
-      const balance = account.known === false ? null : money(account.balance);
+      const balance = account.known === false ? null : formatMoneyValue(account.balance);
       return [{ label, value: balance ?? "Not known" }];
     });
   return { title: "Read your money", id: "get_financial_context", rows, tone: "done" };
@@ -109,13 +96,13 @@ function contextStep(result: Fields): StepSummary {
 
 function spendingStep(result: Fields): StepSummary {
   const period = fields(result.period);
-  const total = money(result.total);
+  const total = formatMoneyValue(result.total);
   const top = fields(list(result.groups)[0]);
   const rows = rowsOf([
     span(period.from, period.to) ? { label: "Period", value: span(period.from, period.to) } : null,
     total ? { label: "Total", value: total } : null,
     string(top.key)
-      ? { label: "Top group", value: `${string(top.key)} · ${money(top.amount) ?? "—"}` }
+      ? { label: "Top group", value: `${string(top.key)} · ${formatMoneyValue(top.amount) ?? "—"}` }
       : null,
   ]);
   return { title: "Totalled spending", id: "summarize_spending", rows, tone: "done" };
@@ -139,7 +126,7 @@ function projectionStep(result: Fields): StepSummary {
   const floor = number(result.floor_probability);
   const threshold = number(result.floor_threshold);
   const was = number(baseline.floor_probability);
-  const lowest = [money(low.amount), shortDay(low.date)].filter(Boolean).join(" · ");
+  const lowest = [formatMoneyValue(low.amount), shortDay(low.date)].filter(Boolean).join(" · ");
   const runs = number(result.runs);
   const rows = rowsOf([
     floor === null
@@ -165,7 +152,7 @@ function recapStep(result: Fields): StepSummary {
   const story = list(result.stories)
     .map(fields)
     .find((item) => item.key === "total");
-  const spent = story ? money(story.figure) : null;
+  const spent = story ? formatMoneyValue(story.figure) : null;
   const rows = rowsOf([
     string(period.title) ? { label: "Period", value: string(period.title) } : null,
     spent ? { label: "Spent", value: spent } : null,

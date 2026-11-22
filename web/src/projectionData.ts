@@ -3,34 +3,28 @@ import type { ProjectionPayload, ProjectionRequest } from "./projection";
 export const OBLIGATION_WARNING =
   "An obligation cannot be met on its date in some simulated futures.";
 
+// Saved transcripts can reach a renderer without a parse, so these read either money shape.
+// Live receipts are already normalized once at the ingress; the fallback covers the old shape.
 export function lowAmount(payload: ProjectionPayload): number | null {
-  if (payload.median_low.amount?.paise !== undefined) return payload.median_low.amount.paise;
-  if (payload.median_low.paise !== undefined) return payload.median_low.paise;
-  return null;
+  return payload.median_low.paise ?? payload.median_low.amount?.paise ?? null;
 }
 
 export function safeToSpendAmount(payload: ProjectionPayload): number | null {
   const safe = payload.safe_to_spend;
   if (!safe?.binding_date) return null;
-  if (safe.amount?.paise !== undefined) return safe.amount.paise;
-  if (safe.amount_paise !== undefined) return safe.amount_paise;
-  return null;
+  return safe.amount_paise ?? safe.amount?.paise ?? null;
 }
 
 export function baselineLowAmount(payload: ProjectionPayload): number | null {
   const low = payload.scenario?.baseline.median_low;
   if (!low) return null;
-  if (low.amount?.paise !== undefined) return low.amount.paise;
-  if (low.paise !== undefined) return low.paise;
-  return null;
+  return low.paise ?? low.amount?.paise ?? null;
 }
 
 export function baselineSafeToSpendAmount(payload: ProjectionPayload): number | null {
   const safe = payload.scenario?.baseline.safe_to_spend;
   if (!safe?.binding_date) return null;
-  if (safe.amount?.paise !== undefined) return safe.amount.paise;
-  if (safe.amount_paise !== undefined) return safe.amount_paise;
-  return null;
+  return safe.amount_paise ?? safe.amount?.paise ?? null;
 }
 
 export function paymentMethodLabel(method: string | undefined): string {

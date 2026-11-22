@@ -1,3 +1,5 @@
+import { displayText } from "./chat/display-text";
+
 const money = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
@@ -14,6 +16,16 @@ const moneyWhole = new Intl.NumberFormat("en-IN", {
 export function formatPaise(paise: number | null | undefined): string {
   if (paise === null || paise === undefined || !Number.isSafeInteger(paise)) return "—";
   return paise % 100 === 0 ? moneyWhole.format(paise / 100) : money.format(paise / 100);
+}
+
+/** A money value from a tool (`{ paise, text }`) or a bare paise count, as display text. */
+export function formatMoneyValue(value: unknown): string | null {
+  if (value !== null && typeof value === "object") {
+    const row = value as { paise?: unknown; text?: unknown };
+    if (typeof row.paise === "number" && Number.isFinite(row.paise)) return formatPaise(row.paise);
+    return typeof row.text === "string" && row.text ? displayText(row.text) : null;
+  }
+  return typeof value === "number" && Number.isFinite(value) ? formatPaise(value) : null;
 }
 
 /** A local calendar day as yyyy-mm-dd. `toISOString()` would shift the date west of UTC. */

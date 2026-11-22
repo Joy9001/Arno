@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { X } from "lucide-react";
 import { formatDate, formatPaise, isoDate, percent } from "../format";
 import { Busy } from "../Loading";
 import { Orb } from "../Orb";
 import { ProjectionChart, type ProjectionPayload } from "../projection";
+import { parseProjectionReceipt } from "../projectionReceipt";
 import { lowAmount, projectionReadiness } from "../projectionData";
 import { useApi } from "../useApi";
 
@@ -65,8 +66,15 @@ export function PlannerPanel({ seed, onClose }: { seed: ProjectionPayload; onClo
     method: query.method,
   });
   if (query.method === "emi") params.set("emi_months", String(query.emi));
-  const result = useApi<ProjectionPayload>(`/api/projection?${params.toString()}`);
-  const data = result.data;
+  const response = useApi<unknown>(`/api/projection?${params.toString()}`);
+  const data = useMemo(() => parseProjectionReceipt(response.data), [response.data]);
+  const result = {
+    data,
+    error:
+      response.error ??
+      (response.data != null && !data ? "The projection response could not be read." : null),
+    loading: response.loading,
+  };
   const readiness = data ? projectionReadiness(data) : null;
   const floorSet = data ? (data.floor_set ?? (data.floor_paise ?? 0) > 0) : false;
   const low = data ? lowAmount(data) : null;

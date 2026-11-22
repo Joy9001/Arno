@@ -13,14 +13,15 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ImportRecord } from "../types";
 import { api, errorMessage } from "../api";
+import { formatMoneyValue } from "../format";
+import { ProjectionCard, type ProjectionPayload } from "../projection";
+import { parseProjectionReceipt } from "../projectionReceipt";
 import { displayText } from "./display-text";
 import { formatRupees } from "./format";
-import { ProjectionCard, type ProjectionPayload } from "../projection";
 import { AnswerCard, ResultCard, TableBody, Unavailable } from "./answer-ui";
 import { ChartCard } from "./chart";
 import { AnswerBoundary } from "./answer-boundary";
 import { chartSchema, type AnswerCell, type AnswerResult } from "./answer-data";
-import { projectionSchema } from "./projection-schema";
 
 function UndoButton({ undoId }: { undoId?: string | null }) {
   const [state, setState] = useState<"idle" | "busy" | "done" | "error">("idle");
@@ -199,14 +200,7 @@ function ImportCard({ data }: { data: Record<string, unknown> }) {
 const MAX_SCHEDULE_ROWS = 50;
 
 function moneyLabel(value: unknown): string {
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    if (typeof record.text === "string" && record.text) return displayText(record.text);
-    if (typeof record.paise === "number" && Number.isFinite(record.paise)) {
-      return formatRupees(record.paise);
-    }
-  }
-  return "—";
+  return formatMoneyValue(value) ?? "—";
 }
 
 function CardPayoffCard({ data }: { data: Record<string, unknown> }) {
@@ -314,10 +308,10 @@ export function Card({
     </AnswerBoundary>;
   }
   if (card === "projection") {
-    const parsed = projectionSchema.safeParse(data);
+    const receipt = parseProjectionReceipt(data);
     const fallback = <Unavailable what="This receipt" />;
     return <AnswerBoundary resetKey={data} fallback={fallback}>
-      {parsed.success ? <ProjectionCard data={parsed.data} onEvidence={onEvidence} /> : fallback}
+      {receipt ? <ProjectionCard payload={receipt} onEvidence={onEvidence} /> : fallback}
     </AnswerBoundary>;
   }
 

@@ -17,6 +17,7 @@ import { TOOLTIP_PROPS } from "./chartTheme";
 import { displayText } from "./chat/display-text";
 import { formatPaise } from "./format";
 import { Orb } from "./Orb";
+import type { ProjectionReceipt } from "./projectionReceipt";
 import {
   baselineLowAmount,
   baselineSafeToSpendAmount,
@@ -144,39 +145,8 @@ export type ProjectionRequest = {
   changes?: Record<string, unknown>[];
 };
 
-export type ProjectionPayload = {
-  card?: string;
-  as_of: string;
-  horizon_days: number;
-  request?: ProjectionRequest;
-  curve: ProjectionPoint[];
-  floor?: Money | null;
-  floor_paise?: number;
-  floor_set?: boolean;
-  floor_probability: number;
-  floor_threshold: number;
-  median_low: { date: string; amount?: Money; paise?: number };
-  first_floor_crossing: string | null;
-  goals?: ProjectionGoal[];
-  obligations_met?: boolean;
-  safe_to_spend?: SafeToSpend | null;
-  data_quality: ProjectionDataQuality;
-  runs?: number;
-  sources?: ProjectionSource[];
-  source_ids?: Record<string, string[]>;
-  optimistic?: {
-    floor_probability: number;
-    median_low?: { date: string; paise: number };
-    income?: { date: string; name: string; amount_paise: number }[];
-  } | null;
-  verdict?: "yes" | "yes-but" | "no";
-  verdict_reason?: string;
-  tradeoffs?: ProjectionTradeoff[];
-  goal_slips?: { name: string; slips_days: number | null }[];
-  hypothetical?: Record<string, unknown>;
-  baseline?: { floor_probability: number };
-  scenario?: ProjectionScenario;
-};
+/** The one normalized receipt shape, owned by the ingress and shared with every renderer. */
+export type ProjectionPayload = ProjectionReceipt;
 
 function percent(value: number): string {
   return `${Math.round(value * 100)}%`;
@@ -226,7 +196,7 @@ export function ProjectionChart({
     band: [point.p10_paise, point.p90_paise],
     median: point.median_paise,
   }));
-  const floor = payload.floor?.paise ?? payload.floor_paise ?? null;
+  const floor = payload.floor?.paise ?? null;
   const floorSet = payload.floor_set ?? (floor !== null && floor > 0);
   const showFloor = floorSet && floor !== null;
   const firstPoint = rows[0];
@@ -440,7 +410,7 @@ function scenarioRunwayText(payload: ProjectionPayload, scenario: ProjectionScen
 
 function scenarioBaselineText(payload: ProjectionPayload, scenario: ProjectionScenario): string {
   const parts: string[] = [];
-  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
+  const floorSet = payload.floor_set ?? (payload.floor?.paise ?? 0) > 0;
   const baseMedian = baselineLowAmount(payload);
   const baseSafe = baselineSafeToSpendAmount(payload);
   if (floorSet) {
@@ -464,10 +434,8 @@ export function ProjectionSummary({ payload }: { payload: ProjectionPayload }) {
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const medianLow = lowAmount(payload);
   const scenario = payload.scenario;
-  const floorText =
-    payload.floor?.text ??
-    (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
-  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
+  const floorText = payload.floor?.text ?? null;
+  const floorSet = payload.floor_set ?? (payload.floor?.paise ?? 0) > 0;
   const aboveThreshold = payload.floor_probability >= payload.floor_threshold;
   const baselineSummary = scenario ? scenarioBaselineText(payload, scenario) : "";
   return (
@@ -543,25 +511,22 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
 }
 
 export function ProjectionCard({
-  data,
+  payload,
   onEvidence,
 }: {
-  data: Record<string, unknown>;
+  payload: ProjectionReceipt;
   onEvidence?: (payload: ProjectionPayload) => void;
 }) {
-  const payload = data as unknown as ProjectionPayload;
   const readiness = projectionReadiness(payload);
   const gated = !readiness.ready;
-  const title = data.title ? String(data.title) : "Projection";
+  const title = payload.title ? String(payload.title) : "Projection";
   const median = lowAmount(payload);
   const safeAmount = safeToSpendAmount(payload);
   const scenario = payload.scenario;
   const baselineMedian = baselineLowAmount(payload);
   const baselineSafe = baselineSafeToSpendAmount(payload);
-  const floorSet = payload.floor_set ?? (payload.floor_paise ?? 0) > 0;
-  const floorText =
-    payload.floor?.text ??
-    (payload.floor_paise !== undefined ? formatPaise(payload.floor_paise) : null);
+  const floorSet = payload.floor_set ?? (payload.floor?.paise ?? 0) > 0;
+  const floorText = payload.floor?.text ?? null;
   const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
   const floorBadge = floorSet
     ? `${percent(payload.floor_probability)} above floor`
