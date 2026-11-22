@@ -29,7 +29,7 @@ from arno.agent.pricing import (
     observe_cost,
     price_response,
 )
-from arno.agent.provider_usage import BillingMetadataModel, capture_response
+from arno.agent.provider_usage import capture_response
 from arno.agent.spend import spend_limits
 
 WHEN = datetime(2026, 11, 12, tzinfo=UTC)
@@ -54,7 +54,7 @@ def _response(
     )
 
 
-def _opencode_model(handler) -> BillingMetadataModel:
+def _opencode_model(handler) -> MeteredModel:
     client = httpx2.AsyncClient(
         transport=httpx2.MockTransport(handler),
         event_hooks={"response": [capture_response]},
@@ -62,10 +62,12 @@ def _opencode_model(handler) -> BillingMetadataModel:
     provider = OpenAIProvider(
         base_url="https://opencode.ai/zen/v1", api_key="test", http_client=client
     )
-    return BillingMetadataModel(
+    return MeteredModel(
         OpenAIChatModel("gpt-5", provider=provider),
         provider="opencode",
         billing_mode="metered",
+        role="chat",
+        journal=_Journal(),
     )
 
 
@@ -486,7 +488,13 @@ async def test_opencode_responses_api_preserves_reported_cost():
             base_url="https://opencode.ai/inference/openai/v1", api_key="test", http_client=client
         ),
     )
-    model = BillingMetadataModel(native, provider="opencode", billing_mode="metered")
+    model = MeteredModel(
+        native,
+        provider="opencode",
+        billing_mode="metered",
+        role="chat",
+        journal=_Journal(),
+    )
     with override_allow_model_requests(True):
         response = await model.request([], None, ModelRequestParameters())
     observation = observe_cost(response, provider="opencode")
@@ -577,13 +585,7 @@ class _Journal:
 
 
 def _metered_opencode_model(handler) -> MeteredModel:
-    return MeteredModel(
-        _opencode_model(handler),
-        provider="opencode",
-        billing_mode="metered",
-        role="chat",
-        journal=_Journal(),
-    )
+    return _opencode_model(handler)
 
 
 async def test_opencode_stream_billing_metadata_outlives_the_stream_context():

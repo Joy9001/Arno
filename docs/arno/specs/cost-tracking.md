@@ -124,16 +124,17 @@ upgrades never silently reprice historical calls.
 ### Provider billing metadata capture
 
 Because generic OpenAI-compatible SDK mappings drop unknown `usage` fields (such as `usage.cost`
-and OpenCode's `opencode` block), `src/arno/agent/provider_usage.py` wraps concrete models before
-metering:
+and OpenCode's `opencode` block), `src/arno/agent/provider_usage.py` provides HTTP/SSE capture hooks
+that `MeteredModel` (`src/arno/agent/metering.py`) activates around every model call:
 
 - **`capture_response` and `CapturingSSEStream`:** Public `httpx2` response hooks inspect JSON
   responses (up to 1 MiB) and wrap `text/event-stream` byte streams to extract only allowlisted
   billing keys (`usage.cost` and OpenCode's `list_cost`, `allowance`, `billing_source`,
   `estimated`, and token splits) without retaining raw provider bodies.
-- **`BillingMetadataModel`:** Attaches the configured `arno_cost` (`provider`, `billing_mode`)
-  marker and any captured billing fields onto `response.provider_details` (for both non-streaming
-  and streamed responses) before pricing runs.
+- **`MeteredModel`:** Activates `capture_context()`, attaches captured billing fields via
+  `attach_captured_usage()`, and stamps the configured `arno_cost` (`provider`, `billing_mode`)
+  marker once onto `response.provider_details` (for both non-streaming and streamed responses)
+  before pricing runs.
 
 ## Native spend budgets
 

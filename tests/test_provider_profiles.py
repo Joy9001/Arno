@@ -30,13 +30,11 @@ from arno.agent.models import (
     chat_config,
     role_config,
 )
-from arno.agent.provider_usage import BillingMetadataModel
 
 
 def _concrete(model) -> object:
     assert isinstance(model, MeteredModel)
-    assert isinstance(model.wrapped, BillingMetadataModel)
-    return model.wrapped.wrapped
+    return model.wrapped
 
 
 def test_role_config_keeps_the_four_positional_fields_and_defaults_the_profile():

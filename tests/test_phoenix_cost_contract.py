@@ -50,7 +50,7 @@ from arno.agent import metering
 from arno.agent.capabilities import InferenceContext
 from arno.agent.cost_journal import cost_identity, replay_costs
 from arno.agent.metering import MeteredModel
-from arno.agent.provider_usage import BillingMetadataModel, capture_response
+from arno.agent.provider_usage import capture_response
 from arno.agent.spend import make_spend_store, shared_day_status, spend_limits
 
 try:
@@ -1139,7 +1139,7 @@ async def test_sdk_journal_native_budget_and_phoenix_agree_after_replay(db, monk
         ),
     )
     model = MeteredModel(
-        BillingMetadataModel(native, provider="opencode", billing_mode="metered"),
+        native,
         provider="opencode",
         billing_mode="metered",
         role="chat",

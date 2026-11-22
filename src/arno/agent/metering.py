@@ -17,20 +17,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any, override
+from typing import Any, cast, override
 
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelMessage, ModelResponse
+from pydantic_ai.messages import ModelMessage, ModelResponse, ModelResponseStreamEvent
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 
+from arno.agent import provider_usage
 from arno.agent.cost_journal import CostAttempt, Journal, JournalSink, current_cost_identity
 from arno.agent.pricing import (
     LOCAL_BILLING_MODES,
@@ -270,6 +271,12 @@ class MeteredModel(WrapperModel):
         self.role = role
         self.journal = journal or Journal()
 
+    def _finish(self, response: ModelResponse, metadata: dict[str, Any]) -> ModelResponse:
+        """Stamp identity once and attach wire-captured fields before the response is priced."""
+        self._stamp_response(response)
+        provider_usage.attach_captured_usage(response, metadata)
+        return response
+
     def _stamp_response(self, response: ModelResponse) -> None:
         """Carry the configured profile to the native `SpendLimits` price callback."""
         details = dict(response.provider_details or {})
@@ -330,26 +337,27 @@ class MeteredModel(WrapperModel):
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        attempt = self._start(mark_parent=True)
-        await attempt.record_intent()
-        try:
-            response = await self.wrapped.request(
-                messages, self._bounded_settings(model_settings), model_request_parameters
-            )
-        except BaseException as exc:
-            await attempt.fail(exc)
-            raise
-        self._stamp_response(response)
-        attempt.served_model(response.model_name or self.wrapped.model_name)
-        try:
-            observation = _observation(
-                response, provider=self.provider_name, billing_mode=self.billing_mode
-            )
-        except BaseException as exc:
-            await attempt.fail(exc)
-            raise
-        await attempt.finish_ok(observation)
-        return response
+        with provider_usage.capture_context() as metadata:
+            attempt = self._start(mark_parent=True)
+            await attempt.record_intent()
+            try:
+                response = await self.wrapped.request(
+                    messages, self._bounded_settings(model_settings), model_request_parameters
+                )
+            except BaseException as exc:
+                await attempt.fail(exc)
+                raise
+            self._finish(response, metadata)
+            attempt.served_model(response.model_name or self.wrapped.model_name)
+            try:
+                observation = _observation(
+                    response, provider=self.provider_name, billing_mode=self.billing_mode
+                )
+            except BaseException as exc:
+                await attempt.fail(exc)
+                raise
+            await attempt.finish_ok(observation)
+            return response
 
     @override
     @asynccontextmanager
@@ -360,30 +368,32 @@ class MeteredModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncGenerator[StreamedResponse]:
-        attempt = self._start(mark_parent=True)
-        await attempt.record_intent()
-        try:
-            async with self.wrapped.request_stream(
-                messages,
-                self._bounded_settings(model_settings),
-                model_request_parameters,
-                run_context,
-            ) as stream:
-                try:
-                    yield stream
-                except BaseException as exc:
-                    await attempt.fail(exc, self._safe_observation(stream))
-                    raise
-                else:
-                    attempt.served_model(stream.get().model_name or self.wrapped.model_name)
-                    await attempt.finish_ok(
-                        _stream_observation(
-                            stream, provider=self.provider_name, billing_mode=self.billing_mode
+        with provider_usage.capture_context() as metadata:
+            attempt = self._start(mark_parent=True)
+            await attempt.record_intent()
+            try:
+                async with self.wrapped.request_stream(
+                    messages,
+                    self._bounded_settings(model_settings),
+                    model_request_parameters,
+                    run_context,
+                ) as stream:
+                    metered = cast(StreamedResponse, _MeteredStream(stream, self._finish, metadata))
+                    try:
+                        yield metered
+                    except BaseException as exc:
+                        await attempt.fail(exc, self._safe_observation(metered))
+                        raise
+                    else:
+                        attempt.served_model(metered.get().model_name or self.wrapped.model_name)
+                        await attempt.finish_ok(
+                            _stream_observation(
+                                metered, provider=self.provider_name, billing_mode=self.billing_mode
+                            )
                         )
-                    )
-        except BaseException as exc:
-            await attempt.fail(exc)
-            raise
+            except BaseException as exc:
+                await attempt.fail(exc)
+                raise
 
     def _safe_observation(self, stream: StreamedResponse) -> CostObservation | None:
         try:
@@ -392,6 +402,33 @@ class MeteredModel(WrapperModel):
             )
         except Exception:
             return None
+
+
+class _MeteredStream:
+    """A streamed response whose every `get()` carries this request's identity and metadata.
+
+    Core reads the stream's response again after the model's context has exited and the capture
+    context variable has been reset, so the metadata belongs to the stream itself.
+    """
+
+    def __init__(
+        self,
+        wrapped: StreamedResponse,
+        finish: Callable[[ModelResponse, dict[str, Any]], ModelResponse],
+        metadata: dict[str, Any],
+    ) -> None:
+        self._wrapped = wrapped
+        self._finish = finish
+        self._metadata = metadata
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+    def __aiter__(self) -> AsyncIterator[ModelResponseStreamEvent]:
+        return self._wrapped.__aiter__()
+
+    def get(self) -> ModelResponse:
+        return self._finish(self._wrapped.get(), self._metadata)
 
 
 @asynccontextmanager

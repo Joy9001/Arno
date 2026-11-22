@@ -10,24 +10,31 @@ mapping. A response that omits the fields simply stays unknown.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Generator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from decimal import Decimal
 from typing import Any, cast, override
 
 import httpx2
-from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelMessage, ModelResponse, ModelResponseStreamEvent
-from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
-from pydantic_ai.models.wrapper import WrapperModel
-from pydantic_ai.settings import ModelSettings
+from pydantic_ai.messages import ModelResponse
 
 _MAX_EVENT_LINE = 256 * 1024
 _MAX_JSON_BODY = 1024 * 1024
 _MAX_BILLING_SOURCE = 64
 
 _captured: ContextVar[dict[str, Any] | None] = ContextVar("opencode_billing_metadata", default=None)
+
+
+@contextmanager
+def capture_context() -> Generator[dict[str, Any]]:
+    """Bind a fresh metadata dict to this request's capture context until the block exits."""
+    metadata: dict[str, Any] = {}
+    token = _captured.set(metadata)
+    try:
+        yield metadata
+    finally:
+        _captured.reset(token)
 
 
 class CapturingSSEStream(httpx2.AsyncByteStream):
@@ -139,7 +146,8 @@ def _capture_payload(payload: dict[str, Any]) -> None:
     current.update(metadata)
 
 
-def _attach(response: ModelResponse, metadata: dict[str, Any] | None) -> None:
+def attach_captured_usage(response: ModelResponse, metadata: dict[str, Any] | None) -> None:
+    """Apply wire-captured billing fields to a response before it is priced."""
     if not metadata:
         return
     details = dict(response.provider_details or {})
@@ -177,86 +185,4 @@ def _attach(response: ModelResponse, metadata: dict[str, Any] | None) -> None:
     response.provider_details = details
 
 
-class BillingMetadataModel(WrapperModel):
-    """Attach configured identity and captured billing fields before the model is priced."""
-
-    def __init__(self, wrapped: Model, *, provider: str, billing_mode: str) -> None:
-        super().__init__(wrapped)
-        self.provider_name = provider
-        self.billing_mode = billing_mode
-
-    def _marker(self) -> dict[str, str]:
-        return {"provider": self.provider_name, "billing_mode": self.billing_mode}
-
-    def _finish(self, response: ModelResponse, metadata: dict[str, Any]) -> ModelResponse:
-        details = dict(response.provider_details or {})
-        details["arno_cost"] = self._marker()
-        response.provider_details = details
-        _attach(response, metadata)
-        return response
-
-    @override
-    async def request(
-        self,
-        messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-    ) -> ModelResponse:
-        metadata: dict[str, Any] = {}
-        token = _captured.set(metadata)
-        try:
-            return self._finish(
-                await self.wrapped.request(messages, model_settings, model_request_parameters),
-                metadata,
-            )
-        finally:
-            _captured.reset(token)
-
-    @override
-    @asynccontextmanager
-    async def request_stream(
-        self,
-        messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
-        model_request_parameters: ModelRequestParameters,
-        run_context: RunContext[Any] | None = None,
-    ) -> AsyncGenerator[StreamedResponse]:
-        metadata: dict[str, Any] = {}
-        token = _captured.set(metadata)
-        try:
-            async with self.wrapped.request_stream(
-                messages, model_settings, model_request_parameters, run_context
-            ) as stream:
-                yield cast(StreamedResponse, _BillingStream(stream, self._finish, metadata))
-        finally:
-            _captured.reset(token)
-
-
-class _BillingStream:
-    """A streamed response whose every `get()` carries this request's billing metadata.
-
-    Core reads the stream's response again after this wrapper's context has exited and the
-    capture context variable has been reset, so the metadata belongs to the stream itself.
-    """
-
-    def __init__(
-        self,
-        wrapped: StreamedResponse,
-        finish: Callable[[ModelResponse, dict[str, Any]], ModelResponse],
-        metadata: dict[str, Any],
-    ) -> None:
-        self._wrapped = wrapped
-        self._finish = finish
-        self._metadata = metadata
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._wrapped, name)
-
-    def __aiter__(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        return self._wrapped.__aiter__()
-
-    def get(self) -> ModelResponse:
-        return self._finish(self._wrapped.get(), self._metadata)
-
-
-__all__ = ["BillingMetadataModel", "CapturingSSEStream", "capture_response"]
+__all__ = ["CapturingSSEStream", "attach_captured_usage", "capture_context", "capture_response"]

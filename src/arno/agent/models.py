@@ -276,15 +276,8 @@ def _metered(model: Model, config: RoleConfig) -> Model:
 
 
 def build_model(config: RoleConfig, *, session_id: str | None = None) -> Model:
-    """One code path for local and cloud, wrapped with billing identity before metering."""
-    from arno.agent.provider_usage import BillingMetadataModel
-
-    native = BillingMetadataModel(
-        _concrete_model(config, session_id),
-        provider=config.provider,
-        billing_mode=config.billing_mode,
-    )
-    return _metered(native, config)
+    """One code path for local and cloud, metered with the configured billing identity."""
+    return _metered(_concrete_model(config, session_id), config)
 
 
 class WindowLimited(WrapperModel):
