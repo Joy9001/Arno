@@ -8,19 +8,17 @@ from datetime import date, timedelta
 import numpy as np
 import pytest
 
-from arno.engine import affordability
+from arno.engine import affordability, criticals
 from arno.engine.affordability import (
     MAX_DEFERRABLE_GOALS,
     Hypothetical,
-    _Applied,
     _dominates,
     _least_cut,
-    _Matrix,
-    _min_held,
     _Plan,
     afford,
     project_scenario,
 )
+from arno.engine.criticals import CriticalMatrix, min_hold_count
 from arno.engine.projection import (
     CardAccount,
     CashEvent,
@@ -725,9 +723,9 @@ def test_plans_defer_only_the_top_eight_goals(monkeypatch):
 
 
 def test_min_held_reads_the_threshold_as_written():
-    assert _min_held(25, 0.28) == 7
-    assert _min_held(16_384, 0.90) == 14_746
-    assert _min_held(100, 0.99) == 99
+    assert min_hold_count(25, 0.28) == 7
+    assert min_hold_count(16_384, 0.90) == 14_746
+    assert min_hold_count(100, 0.99) == 99
 
 
 def test_a_card_bill_is_an_obligation_the_verdict_cannot_ignore():
@@ -904,15 +902,17 @@ def test_a_skipped_goal_contribution_before_an_obligation_counts():
 
 def test_obligation_days_are_gated_independently_across_a_percent():
     scenarios = 512
-    needed = _min_held(scenarios, 0.99)
+    needed = min_hold_count(scenarios, 0.99)
     payables = np.zeros((scenarios, 2), np.int64)
     payables[:5, 0] = -10
     payables[5:10, 1] = -10
     reducible = np.zeros((scenarios, 2), np.int64)
     reducible[:10, :] = 100
-    matrix = _Matrix(
+    matrix = CriticalMatrix(
         method="asked",
-        applied=_Applied(_inputs(), {}, None),
+        inputs=_inputs(),
+        cost_paise=0,
+        meta={},
         marks=(1, 2),
         balances=np.zeros((scenarios, 2), np.int64),
         reducible=None,
@@ -950,9 +950,11 @@ def test_a_provisional_capped_candidate_does_not_prune_a_goal_superset(monkeypat
             ),
         ),
     )
-    matrix = _Matrix(
+    matrix = CriticalMatrix(
         method="asked",
-        applied=_Applied(inputs, {}, None),
+        inputs=inputs,
+        cost_paise=0,
+        meta={},
         marks=(0,),
         balances=np.zeros((4, 1), np.int64),
         reducible=np.zeros((4, 1), np.int64),
@@ -987,9 +989,11 @@ def test_verify_recomputes_the_cost_at_the_bisected_cut(monkeypatch):
     )
     inputs = _inputs(start=1_000_000, categories=(category,))
     plan = _Plan("asked", (), 5_000, 999_999, provisional=True)
-    matrix = _Matrix(
+    matrix = CriticalMatrix(
         method="asked",
-        applied=_Applied(inputs, {}, None),
+        inputs=inputs,
+        cost_paise=0,
+        meta={},
         marks=(0,),
         balances=np.zeros((4, 1), np.int64),
         reducible=np.ones((4, 1), np.int64),
@@ -999,11 +1003,10 @@ def test_verify_recomputes_the_cost_at_the_bisected_cut(monkeypatch):
         obligation_reducible=None,
     )
 
-    def fake_project(current, *, runs, seed, threshold):
-        ratio = current.categories[0].reduce_ratio
-        return {"floor_probability": 1.0 if ratio >= 0.25 else 0.0, "obligations_met": True}
+    def fake_evaluate_cut(self, cut_bps):
+        return {"floor_probability": 1.0 if cut_bps >= 2_500 else 0.0, "obligations_met": True}
 
-    monkeypatch.setattr(affordability, "project", fake_project)
+    monkeypatch.setattr(criticals.PreparedPlan, "evaluate_cut", fake_evaluate_cut)
     verified = affordability._verify(
         plan,
         matrix,
@@ -1018,3 +1021,77 @@ def test_verify_recomputes_the_cost_at_the_bisected_cut(monkeypatch):
     assert verified.plan.cut_bps == 2_500
     assert verified.plan.cost_paise == 2_500
     assert verified.plan.provisional is False
+
+
+def test_criticals_reused_spec_matches_full_project_bit_for_bit():
+    """One prepared spec, varied only by cut, must reproduce a full project() rerun exactly.
+
+    The inputs put far more card spend on the card than its limit (so a cut also changes capped
+    cash) and defer a goal contribution, covering both levers at cut 0 and above.
+    """
+    today = date(2026, 1, 1)
+    payday = today + timedelta(days=5)
+    category = SpendCategory(
+        id="cat",
+        name="Food",
+        baseline_per_day_paise=10_000,
+        baseline_source="computed",
+        reducible=True,
+        history=tuple(
+            (today - timedelta(days=offset), 8_000 + offset * 100) for offset in range(60, 0, -1)
+        ),
+        card_id="card",
+        card_share=1,
+    )
+    card = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=2,
+        due_day=4,
+        outstanding_paise=0,
+        credit_limit_paise=50_000,
+        unbilled_paise=0,
+    )
+    goal = GoalPlan(id="goal", name="Goa", target_paise=100_000, saved_paise=0)
+    applied = _inputs(
+        start=200_000,
+        categories=(category,),
+        cards=(card,),
+        goals=(goal,),
+        events=(
+            CashEvent(
+                date=today + timedelta(days=2),
+                amount_paise=-100_000,
+                name="Card bill",
+                kind="obligation",
+                card_id="card",
+            ),
+            CashEvent(
+                date=today + timedelta(days=2),
+                amount_paise=-5_000,
+                name="Goa contribution",
+                kind="goal_contribution",
+                goal_id="goal",
+            ),
+            CashEvent(date=payday, amount_paise=500_000, name="Salary", kind="income_fixed"),
+        ),
+    )
+    assert criticals.build_critical_matrix(
+        "asked",
+        applied,
+        cost_paise=0,
+        meta={},
+        cut_until=(payday - today).days,
+        runs=256,
+        seed=7,
+    ).capped
+
+    base, removed = affordability._goal_relief(applied, ("goal",), today)
+    assert removed
+    prepared = criticals.prepare_plan(base, until=payday, runs=256, seed=7, threshold=0.9)
+
+    for cut in (0, 1, 2_500, 10_000):
+        reused = prepared.evaluate_cut(cut)
+        full_inputs = base if cut == 0 else reduce_categories(base, cut / 10_000, until=payday)[0]
+        full = project(full_inputs, runs=256, seed=7, threshold=0.9)
+        assert reused == full

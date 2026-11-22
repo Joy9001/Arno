@@ -27,9 +27,15 @@ from datetime import date, timedelta
 from itertools import combinations
 
 import numpy as np
+import numpy.typing as npt
 
-from arno.engine import kernel
-from arno.engine import projection as projection_mod
+from arno.engine.criticals import (
+    CriticalMatrix,
+    build_critical_matrix,
+    cut_rows,
+    min_hold_count,
+    prepare_plan,
+)
 from arno.engine.money import DEFAULT_GST_BPS, add_months, card_emi, check_paise, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
@@ -50,15 +56,12 @@ from arno.engine.projection import (
     ScenarioBaseline,
     ScenarioChange,
     Tradeoff,
-    _min_held,
     card_bills,
     card_due_date,
-    checkpoints_for,
     first_full_payment_date,
     goal_rows,
-    prepare,
+    horizon_days,
     project,
-    reduce_categories,
 )
 from arno.engine.scenario import (
     ScenarioChangeSpec,
@@ -279,57 +282,6 @@ def _passes(result: Projection, *, threshold: float) -> bool:
 # --- The levers on one scenario matrix --------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _Matrix:
-    """One method's scenario balances at the checkpoints, and what a cut frees by each."""
-
-    method: str
-    applied: _Applied
-    marks: tuple[int, ...]
-    balances: kernel.I64  # (scenarios, checkpoints)
-    reducible: kernel.I64 | None  # cash-realized reducible spend, same shape
-    capped: bool  # a card went past its limit in some scenario, so a cut frees cash sooner
-    # Obligation days, and each scenario's payable there before the day's spending, with the
-    # reducible cash a cut frees by then.
-    obligation_days: tuple[int, ...]
-    payables: kernel.I64 | None
-    obligation_reducible: kernel.I64 | None
-
-
-def _matrix(method: str, applied: _Applied, *, cut_until: int, runs: int, seed: int) -> _Matrix:
-    model = projection_mod.MODEL
-    prepared = prepare(applied.inputs, model)
-    obligation_days = kernel.obligation_days(prepared.spec)
-    marks = checkpoints_for(prepared.spec, tuple(int(day) for day in obligation_days))
-    settings = kernel.Settings(
-        scenarios=runs,
-        seed=seed,
-        block_length=model.block_length,
-        checkpoints=marks,
-        reducible_until=cut_until,
-        payable_days=tuple(int(day) for day in obligation_days),
-    )
-    run = kernel.run(prepared.spec, settings)
-    assert run.checkpoints is not None
-    columns = {day: index for index, day in enumerate(marks)}
-    obligation_reducible = (
-        run.reducible_before[:, [columns[int(day)] for day in obligation_days]]
-        if run.reducible_before is not None
-        else None
-    )
-    return _Matrix(
-        method=method,
-        applied=applied,
-        marks=marks,
-        balances=run.checkpoints,
-        reducible=run.reducible,
-        capped=run.capped is not None and bool(run.capped.any()),
-        obligation_days=tuple(int(day) for day in obligation_days),
-        payables=run.payables,
-        obligation_reducible=obligation_reducible,
-    )
-
-
 def _goal_relief(
     inputs: ProjectionInput, goal_ids: tuple[str, ...], when: date
 ) -> tuple[ProjectionInput, list[tuple[int, int]]]:
@@ -352,7 +304,7 @@ def _goal_relief(
     return replace(inputs, events=tuple(kept)), removed
 
 
-def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> kernel.I64:
+def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> npt.NDArray[np.int64]:
     """The cash a set of skipped contributions leaves in hand at each checkpoint."""
     days = np.array(marks, dtype=np.int64)
     shift = np.zeros(len(marks), dtype=np.int64)
@@ -362,7 +314,10 @@ def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> kernel.I64
 
 
 def _critical_cut(
-    balances: kernel.I64, reducible: kernel.I64 | None, floor: int, needed: int
+    balances: npt.NDArray[np.int64],
+    reducible: npt.NDArray[np.int64] | None,
+    floor: int,
+    needed: int,
 ) -> int | None:
     """The least cut in basis points that lets ``needed`` scenarios hold ``counts >= floor``."""
     if needed <= 0:
@@ -379,9 +334,9 @@ def _critical_cut(
 
 
 def _least_cut(
-    matrix: _Matrix,
-    balances: kernel.I64,
-    payables: kernel.I64 | None,
+    matrix: CriticalMatrix,
+    balances: npt.NDArray[np.int64],
+    payables: npt.NDArray[np.int64] | None,
     floor: int,
     needed: int,
     obligation_needed: int,
@@ -432,7 +387,7 @@ class _Plan:
 
 
 def _plans(
-    matrices: list[_Matrix],
+    matrices: list[CriticalMatrix],
     goals: tuple[str, ...],
     when: date,
     *,
@@ -454,7 +409,7 @@ def _plans(
         provisional_clearings: set[tuple[str, ...]] = set()
         for size in range(len(goals) + 1):
             for subset in combinations(goals, size):
-                _skipped, removed = _goal_relief(matrix.applied.inputs, subset, when)
+                _skipped, removed = _goal_relief(matrix.inputs, subset, when)
                 shifted = matrix.balances + _shift(matrix.marks, removed)[None, :]
                 # Obligations are paid before a same-day contribution, so a skipped goal's
                 # cash helps there only from the day after its contribution.
@@ -486,7 +441,7 @@ def _plans(
                 clearing[subset] = cut
                 if provisional:
                     provisional_clearings.add(subset)
-                cost = matrix.applied.cost_paise + cut * spend_paise // 10_000
+                cost = matrix.cost_paise + cut * spend_paise // 10_000
                 found.append(_Plan(matrix.method, subset, cut, cost, provisional))
     found = [plan for plan in found if plan.levers > 0]
     # Across methods too: a plan that changes no more, skips a subset of the goals, cuts no more,
@@ -555,18 +510,9 @@ class _Verified:
     meta: HypotheticalMeta
 
 
-def _with_plan(
-    applied: _Applied, plan: _Plan, cut: int, when: date, until: date
-) -> ProjectionInput:
-    inputs, _removed = _goal_relief(applied.inputs, plan.goals, when)
-    if cut > 0:
-        inputs, _rows = reduce_categories(inputs, cut / 10_000, until=until)
-    return inputs
-
-
 def _verify(
     plan: _Plan,
-    matrix: _Matrix,
+    matrix: CriticalMatrix,
     *,
     when: date,
     until: date,
@@ -579,23 +525,22 @@ def _verify(
 
     Uncapped cuts can rise a basis point at a time to cover rounding. When a card limit binds,
     the exact walk can clear with a different cut. Try the cap if the estimate fails, then
-    bisect the passing interval and price the cut the walk accepted.
+    bisect the passing interval and price the cut the walk accepted. The plan's spec is prepared
+    once; each attempt only changes its cut fields.
     """
-    # shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per
-    # bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
-    applied = matrix.applied
+    inputs, _removed = _goal_relief(matrix.inputs, plan.goals, when)
+    prepared = prepare_plan(inputs, until=until, runs=runs, seed=seed, threshold=threshold)
 
     def attempt(cut: int) -> _Verified | None:
-        inputs = _with_plan(applied, plan, cut, when, until)
-        result = project(inputs, runs=runs, seed=seed, threshold=threshold)
+        result = prepared.evaluate_cut(cut)
         if not _passes(result, threshold=threshold):
             return None
-        cost = applied.cost_paise + cut * spend_paise // 10_000
+        cost = matrix.cost_paise + cut * spend_paise // 10_000
         return _Verified(
             replace(plan, cut_bps=cut, cost_paise=cost, provisional=False),
             result,
             inputs,
-            applied.meta,
+            matrix.meta,
         )
 
     cut = plan.cut_bps
@@ -684,7 +629,7 @@ def _describe(
         parts.append("; ".join(skipped))
     if plan.cut_bps > 0:
         kinds.append("cut_category")
-        _reduced, rows_cut = reduce_categories(inputs, plan.cut_bps / 10_000, until=until)
+        rows_cut = cut_rows(inputs, plan.cut_bps, until)
         trade["until"] = until.isoformat()
         trade["ratio"] = round(plan.cut_bps / 10_000, 4)
         trade["categories"] = rows_cut
@@ -775,8 +720,8 @@ def _tradeoffs(
         category.reducible and category.baseline_per_day_paise > 0 for category in inputs.categories
     )
     cut_until = (payday - inputs.as_of).days if reducible else -1
-    needed = _min_held(runs, threshold)
-    obligation_needed = _min_held(runs, OBLIGATION_THRESHOLD)
+    needed = min_hold_count(runs, threshold)
+    obligation_needed = min_hold_count(runs, OBLIGATION_THRESHOLD)
 
     variants: list[tuple[str, _Applied]] = [("asked", applied)]
     for method in ("card", "emi"):
@@ -792,7 +737,15 @@ def _tradeoffs(
             extended = replace(other, inputs=_extend_horizon(other.inputs, other.meta))
             variants.append((method, extended))
     matrices = [
-        _matrix(name, variant, cut_until=cut_until, runs=runs, seed=seed)
+        build_critical_matrix(
+            name,
+            variant.inputs,
+            cost_paise=variant.cost_paise,
+            meta=variant.meta,
+            cut_until=cut_until,
+            runs=runs,
+            seed=seed,
+        )
         for name, variant in variants
     ]
     goals = tuple(
@@ -969,9 +922,7 @@ def project_scenario(
     threshold: float = FLOOR_THRESHOLD,
 ) -> Projection:
     """Run a multi-event what-if (and optional purchase) against an unchanged baseline."""
-    needed = scenario_horizon_days(
-        inputs.as_of, changes, ask_horizon_days=projection_mod.horizon_days(inputs)
-    )
+    needed = scenario_horizon_days(inputs.as_of, changes, ask_horizon_days=horizon_days(inputs))
     if hypothetical is not None:
         validate_hypothetical(inputs.as_of, hypothetical)
         probe = _apply(inputs, hypothetical)

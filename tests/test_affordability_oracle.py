@@ -3,7 +3,7 @@
 from dataclasses import replace
 from datetime import date, timedelta
 
-from arno.engine import affordability
+from arno.engine import affordability, criticals
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.projection import (
     CardAccount,
@@ -100,8 +100,14 @@ def test_a_capped_card_falls_back_to_the_max_cut_and_prices_the_bisected_cut(mon
             ),
         ),
     )
-    matrix = affordability._matrix(
-        "asked", affordability._Applied(inputs, {}, None), cut_until=3, runs=runs, seed=seed
+    matrix = criticals.build_critical_matrix(
+        "asked",
+        inputs,
+        cost_paise=0,
+        meta={},
+        cut_until=3,
+        runs=runs,
+        seed=seed,
     )
     assert matrix.capped
     verified = affordability._verify(

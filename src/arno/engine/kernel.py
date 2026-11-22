@@ -29,8 +29,7 @@ MASK64 = (1 << 64) - 1
 GOLDEN = 0x9E3779B97F4A7C15
 MIX1 = 0xBF58476D1CE4E5B9
 MIX2 = 0x94D049BB133111EB
-# shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per
-# bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
+# shortcut: chunk peak ~100-365 MiB (scales with cards), revisit if deployed on <1 GiB RAM
 CHUNK_DAYS = 127
 WEEKDAY, WEEKEND = 0, 1
 
