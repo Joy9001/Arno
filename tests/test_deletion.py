@@ -9,9 +9,9 @@ import pytest
 from pydantic_ai_harness.subagents import DelegationTask
 
 from arno.ledger import deletion
+from tests.fixtures.passkeys import complete_setup
 from tests.invariants import check_ledger
 from tests.software_authenticator import SoftwareAuthenticator
-from tests.test_auth import _complete_setup
 
 
 @pytest.fixture(autouse=True)
@@ -188,7 +188,7 @@ async def test_a_stale_passkey_session_is_refused_like_an_export_and_deletes_not
     client, setup_token, settings, demo_ledger
 ):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     before = _counts(await deletion.preview(demo_ledger, "everything"))
 
     refused = client.post("/api/deletion/everything", json={"confirm": "delete everything"})

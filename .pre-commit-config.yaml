@@ -46,11 +46,18 @@ repos:
         files: ^web/
         pass_filenames: false
         stages: [pre-push]
-      - id: license-audit
-        name: license audit
-        entry: uv run python scripts/license_audit.py
+      - id: python-license-audit
+        name: Python license audit
+        entry: uv run python scripts/license_audit.py --python-only
         language: system
-        files: ^(pyproject\.toml|uv\.lock|THIRD_PARTY_NOTICES\.md|web/package\.json|web/pnpm-lock\.yaml)$
+        files: ^(pyproject\.toml|uv\.lock|THIRD_PARTY_NOTICES\.md|scripts/license_audit\.py)$
+        pass_filenames: false
+        stages: [pre-push]
+      - id: web-license-audit
+        name: web license audit
+        entry: uv run python scripts/license_audit.py --web-only
+        language: system
+        files: ^(web/package\.json|web/pnpm-lock\.yaml)$
         pass_filenames: false
         stages: [pre-push]
       - id: web-build
@@ -60,12 +67,29 @@ repos:
         files: ^web/
         pass_filenames: false
         stages: [pre-push]
+      - id: web-answer-contract
+        name: web answer contract
+        entry: pnpm --dir web run --silent test:answers
+        language: system
+        files: ^(web/src/|web/scripts/|tests/fixtures/presentation_contract\.py)
+        pass_filenames: false
+        stages: [pre-push]
+      - id: web-interaction-tests
+        name: web interaction tests
+        entry: pnpm --dir web run --silent test:web
+        language: system
+        files: ^web/(src/|vitest\.config\.ts|package\.json|pnpm-lock\.yaml|tsconfig\.json)
+        pass_filenames: false
+        stages: [pre-push]
       - id: pytest
         name: pytest (needs a *_test DATABASE_URL)
         # ponytail: pytest needs a scratch Postgres, so it is skipped loudly without one.
+        # A Python one-liner keeps this readable on Windows, without Git Bash on PATH.
         entry: >-
-          sh -c 'case "$DATABASE_URL" in *_test) uv run pytest -q ;;
-          *) echo "skipped: set DATABASE_URL to a *_test database to run pytest" ;; esac'
+          uv run python -c "import os,sys,subprocess;
+          ok=os.environ.get('DATABASE_URL','').endswith('_test');
+          ok or print('skipped: set DATABASE_URL to a *_test database to run pytest');
+          sys.exit(0 if not ok else subprocess.call(['uv','run','pytest','-q']))"
         language: system
         types: [python]
         pass_filenames: false

@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.1.2",
   "scripts": {
     "test:answers": "node --test scripts/answer-contract.test.mjs",
+    "test:web": "vitest run",
     "dev": "vite",
     "build": "tsc --noEmit && node scripts/collect-licenses.mjs && vite build",
     "licenses": "node scripts/collect-licenses.mjs",
@@ -48,6 +49,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -56,10 +59,12 @@
     "eslint-plugin-react-hooks": "^7.0.0",
     "eslint-plugin-react-refresh": "^0.4.24",
     "globals": "^16.5.0",
+    "jsdom": "^31.0.1",
     "typescript": "~5.9.0",
     "typescript-eslint": "^8.48.0",
     "vite": "^8.0.0",
     "vite-plugin-pwa": "^2.0.0",
+    "vitest": "^5.1.1",
     "workbox-precaching": "^7.4.1"
   },
   "pnpm": {

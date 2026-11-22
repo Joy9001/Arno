@@ -82,13 +82,13 @@ async def _insert_job(
 # The activity poll ------------------------------------------------------------------------
 
 
-async def test_activity_without_since_lists_only_active_work(authed_client, db):
+async def test_activity_without_since_lists_only_active_work(session_client, db):
     await db.execute("DELETE FROM jobs")
     await _insert_job(db, key="p:1", kind="x", status="pending")
     await _insert_job(db, key="r:1", kind="x", status="running")
     await _insert_job(db, key="d:1", kind="x", status="done", finished=True)
 
-    body = authed_client.get("/api/jobs/activity").json()
+    body = session_client.get("/api/jobs/activity").json()
 
     assert [job["key"] for job in body["active"]] == ["r:1", "p:1"]
     assert body["finished"] == []
@@ -96,23 +96,23 @@ async def test_activity_without_since_lists_only_active_work(authed_client, db):
     assert set(body["active"][0]) == JOB_VIEW_KEYS
 
 
-async def test_activity_with_since_returns_only_later_finishes(authed_client, db):
+async def test_activity_with_since_returns_only_later_finishes(session_client, db):
     await db.execute("DELETE FROM jobs")
     await _insert_job(db, key="old:1", kind="x", status="done", finished=True)
     await db.execute("UPDATE jobs SET finished_at = now() - interval '1 hour' WHERE key = 'old:1'")
     await _insert_job(db, key="new:1", kind="x", status="failed", finished=True)
 
     since = await db.fetchval("SELECT now() - interval '30 minutes'")
-    body = authed_client.get("/api/jobs/activity", params={"since": since.isoformat()}).json()
+    body = session_client.get("/api/jobs/activity", params={"since": since.isoformat()}).json()
 
     assert [job["key"] for job in body["finished"]] == ["new:1"]
 
 
-async def test_activity_is_a_pure_read(authed_client, db):
+async def test_activity_is_a_pure_read(session_client, db):
     before = await db.fetchval("SELECT count(*) FROM job_schedules")
-    assert authed_client.get("/api/jobs/activity").status_code == 200
+    assert session_client.get("/api/jobs/activity").status_code == 200
     assert await db.fetchval("SELECT count(*) FROM job_schedules") == before
-    bad = authed_client.get("/api/jobs/activity", params={"since": "not-a-date"})
+    bad = session_client.get("/api/jobs/activity", params={"since": "not-a-date"})
     assert bad.status_code == 422
 
 
@@ -123,7 +123,7 @@ def test_activity_needs_a_session(client):
 # Retry ------------------------------------------------------------------------------------
 
 
-async def test_retry_resets_a_failed_job_and_clears_its_alert(authed_client, db):
+async def test_retry_resets_a_failed_job_and_clears_its_alert(session_client, db):
     job = await _insert_job(
         db,
         key="bad:1",
@@ -144,7 +144,7 @@ async def test_retry_resets_a_failed_job_and_clears_its_alert(authed_client, db)
     )
     assert notice is not None
 
-    retried = authed_client.post(f"/api/jobs/{job['id']}/retry")
+    retried = session_client.post(f"/api/jobs/{job['id']}/retry")
 
     assert retried.status_code == 200, retried.text
     body = retried.json()
@@ -157,14 +157,14 @@ async def test_retry_resets_a_failed_job_and_clears_its_alert(authed_client, db)
     assert await db.fetchval("SELECT read_at FROM notifications WHERE id = $1", notice["id"])
 
 
-async def test_retry_refuses_a_done_job_and_an_unknown_one(authed_client, db):
+async def test_retry_refuses_a_done_job_and_an_unknown_one(session_client, db):
     done = await _insert_job(db, key="done:1", kind="x", status="done", finished=True)
 
-    assert authed_client.post(f"/api/jobs/{done['id']}/retry").status_code == 409
-    assert authed_client.post("/api/jobs/job_missing/retry").status_code == 404
+    assert session_client.post(f"/api/jobs/{done['id']}/retry").status_code == 409
+    assert session_client.post("/api/jobs/job_missing/retry").status_code == 404
 
 
-async def test_job_status_recent_rows_carry_the_job_view_and_a_subject(authed_client, db):
+async def test_job_status_recent_rows_carry_the_job_view_and_a_subject(session_client, db):
     import_id = await _committed_import(db)
     await _insert_job(
         db,
@@ -174,7 +174,7 @@ async def test_job_status_recent_rows_carry_the_job_view_and_a_subject(authed_cl
         import_id=import_id,
     )
 
-    body = authed_client.get("/api/jobs").json()
+    body = session_client.get("/api/jobs").json()
 
     recent = body["recent"][0]
     assert set(recent) == JOB_VIEW_KEYS
@@ -330,7 +330,7 @@ async def test_categorize_state_waits_on_a_batch(db):
     assert state["error"] == "dead"
 
 
-async def test_a_retried_job_that_fails_again_raises_a_fresh_alert(authed_client, db):
+async def test_a_retried_job_that_fails_again_raises_a_fresh_alert(session_client, db):
     from arno.jobs.runner import JobGaveUp, JobRunner
 
     def handler(payload):
@@ -343,7 +343,7 @@ async def test_a_retried_job_that_fails_again_raises_a_fresh_alert(authed_client
     )
 
     await runner.run_once()
-    assert authed_client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
+    assert session_client.post(f"/api/jobs/{job['id']}/retry").status_code == 200
     await runner.run_once()
 
     alerts = await db.fetch(

@@ -297,18 +297,18 @@ async def test_an_elapsed_card_due_date_alone_never_resolves_the_bill(ledger):
 
 
 async def test_the_notifications_api_hides_resolved_items_and_reports_their_evidence(
-    authed_client, ledger
+    session_client, ledger
 ):
     due = ledger_today() + timedelta(days=2)
     bank, schedule = await _schedule(ledger, due=due)
     reminder = await _reminder(ledger, schedule, due=due)
 
-    page = authed_client.get("/api/notifications")
+    page = session_client.get("/api/notifications")
     assert page.status_code == 200
     open_item = next(row for row in page.json()["notifications"] if row["id"] == reminder["id"])
     assert open_item["resolved_at"] is None
     assert open_item["resolved_by"] is None
-    assert authed_client.get("/api/home").json()["needs_you"][0]["id"] == reminder["id"]
+    assert session_client.get("/api/home").json()["needs_you"][0]["id"] == reminder["id"]
 
     paid = await record_expense(
         ledger,
@@ -321,21 +321,21 @@ async def test_the_notifications_api_hides_resolved_items_and_reports_their_evid
         ledger, schedule_id=schedule["id"], due_date=due, movement_id=paid["id"]
     )
 
-    open_page = authed_client.get("/api/notifications").json()
+    open_page = session_client.get("/api/notifications").json()
     assert all(row["id"] != reminder["id"] for row in open_page["notifications"])
     assert open_page["unread_count"] == 0
-    assert authed_client.get("/api/home").json()["needs_you"] == []
+    assert session_client.get("/api/home").json()["needs_you"] == []
 
-    history = authed_client.get("/api/notifications?include_resolved=true").json()
+    history = session_client.get("/api/notifications?include_resolved=true").json()
     resolved_item = next(row for row in history["notifications"] if row["id"] == reminder["id"])
     assert resolved_item["resolved_at"] is not None
     assert resolved_item["resolved_by"] == paid["id"]
 
-    undone = authed_client.post(f"/api/undo/{linked['undo_id']}")
+    undone = session_client.post(f"/api/undo/{linked['undo_id']}")
     assert undone.status_code == 200, undone.text
     reopened = next(
         row
-        for row in authed_client.get("/api/notifications").json()["notifications"]
+        for row in session_client.get("/api/notifications").json()["notifications"]
         if row["id"] == reminder["id"]
     )
     assert reopened["resolved_at"] is None

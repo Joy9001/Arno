@@ -598,10 +598,6 @@ def test_purchase_plus_rent_rise_verifies_tradeoffs_against_changed_inputs():
             ),
         ),
     )
-    # Without rent rise, ₹1,50,000 balance after ₹2,000 rent + ₹1,000 floor: ₹150,000 purchase?
-    # Let's pick numbers where purchase leaves cash short on Jan 10 once rent rises to ₹3,000:
-    # start=400k, floor=100k, rent=200k -> spare 100k before Jan 10. Purchase=150k fails account,
-    # card due Jan 25 still fails before Jan 30 salary, EMI or later wait passes!
     result = project_scenario(
         inputs,
         [
@@ -619,6 +615,10 @@ def test_purchase_plus_rent_rise_verifies_tradeoffs_against_changed_inputs():
     assert result["verdict"] in {"yes-but", "no"}
     assert "holds" not in result["scenario"]
     assert result["scenario"]["baseline"]["floor_probability"] == 1.0
+    assert result["tradeoffs"], "a failed account purchase must offer a later or card path"
+    kinds = {trade["kind"] for trade in result["tradeoffs"]}
+    assert kinds <= {"wait", "pay_by_card"}
+    assert "wait" in kinds or "pay_by_card" in kinds
     for trade in result["tradeoffs"]:
         if trade["kind"] == "wait":
             assert trade["date"] >= "2026-01-30"

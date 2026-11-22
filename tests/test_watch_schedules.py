@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from arno.jobs.schedules import (
     BUILTIN_KINDS,
@@ -191,3 +191,17 @@ async def test_deleting_scheduled_question_cascades_and_missing_question_id_is_r
         )
         == 0
     )
+
+
+async def test_scheduled_question_schedule_is_ist_and_keyed_by_question(db):
+    question = await create_question(
+        db, prompt="What did I spend?", rule="FREQ=DAILY;BYHOUR=9;BYMINUTE=15"
+    )
+    await db.execute("DELETE FROM job_schedules WHERE kind = 'scheduled_question'")
+
+    after = datetime(2026, 11, 3, 0, 0, tzinfo=UTC)
+    await sync_scheduled_questions(db, now=after)
+    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
+    assert schedule["scheduled_question_id"] == question["id"]
+    assert "scheduled_question_id" not in (schedule["payload"] or {})
+    assert schedule["next_run_at"] == datetime(2026, 11, 3, 3, 45, tzinfo=UTC)

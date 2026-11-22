@@ -9,10 +9,11 @@ import pytest
 
 from arno.engine import backtest, personas
 from arno.engine.affordability import Hypothetical, afford
-from arno.engine.inputs import build_inputs
+from arno.engine.inputs import CategoryRow, LedgerSnapshot, build_inputs
 from arno.engine.money import MAX_PAISE
 from arno.engine.projection import (
     LEGACY_MODEL,
+    MAX_CUT_RATIO,
     MODEL,
     CardAccount,
     CashEvent,
@@ -26,9 +27,12 @@ from arno.engine.projection import (
     SpendRow,
     card_bills,
     first_full_payment_date,
+    horizon_days,
     prepare,
     project,
+    reduce_categories,
     safe_amount_today,
+    simulate_paths,
 )
 
 
@@ -781,3 +785,71 @@ def test_a_whole_day_pool_keeps_the_card_each_payment_actually_used():
     assert int(columns["card0"].sum()) == 20 * 200_000
     assert int(columns["card1"].sum()) == 20 * 100_000
     assert not columns["cash"].any()
+
+
+def test_an_overpaid_card_adds_its_credit_balance_to_headroom():
+    card = CardAccount(
+        id="card",
+        name="Card",
+        statement_day=5,
+        due_day=25,
+        outstanding_paise=1_500_000,
+        credit_limit_paise=2_000_000,
+        credit_paise=300_000,
+    )
+    assert card.available_credit_paise == 800_000
+
+
+def test_horizon_limit_days_caps_the_walk():
+    inputs = replace(_inputs(), ask_horizon_days=1_000, horizon_limit_days=120)
+    assert horizon_days(inputs) == 120
+    assert len(project(inputs, runs=20)["curve"]) == 121
+
+
+@pytest.mark.parametrize("entry_point", ("project", "simulate_paths"))
+def test_a_zero_run_budget_is_refused(entry_point):
+    with pytest.raises(ValueError, match="runs must be positive"):
+        if entry_point == "project":
+            project(_inputs(), runs=0)
+        else:
+            simulate_paths(_inputs(), runs=0)
+
+
+def test_reduce_categories_clamps_the_ratio_to_the_engine_range():
+    category = SpendCategory(id="cat", name="Food", baseline_per_day_paise=10_000, reducible=True)
+    inputs = _inputs(categories=(category,))
+    for requested, expected in ((-2.0, 0.0), (5.0, MAX_CUT_RATIO)):
+        reduced, rows = reduce_categories(inputs, requested)
+        assert reduced.categories[0].reduce_ratio == expected
+        assert rows[0]["percent"] == round(expected * 100, 1)
+
+
+def test_a_derived_baseline_needs_three_rows_on_two_days():
+    def snapshot(spend: tuple[SpendRow, ...]) -> LedgerSnapshot:
+        return LedgerSnapshot(
+            as_of=date(2026, 1, 10),
+            floor_paise=0,
+            history_start=date(2026, 1, 1),
+            categories=(
+                CategoryRow(
+                    "cat", "Food", True, baseline_per_day_paise=1_000, baseline_source="estimated"
+                ),
+            ),
+            spend=spend,
+        )
+
+    two = snapshot(
+        (
+            SpendRow(date(2026, 1, 2), "cat", None, 300),
+            SpendRow(date(2026, 1, 3), "cat", None, 300),
+        )
+    )
+    three = snapshot(
+        (
+            SpendRow(date(2026, 1, 2), "cat", None, 300),
+            SpendRow(date(2026, 1, 2), "cat", None, 200),
+            SpendRow(date(2026, 1, 3), "cat", None, 400),
+        )
+    )
+    assert build_inputs(two).categories[0].baseline_source == "estimated"
+    assert build_inputs(three).categories[0].baseline_source == "computed"

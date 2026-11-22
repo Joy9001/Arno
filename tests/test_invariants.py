@@ -396,12 +396,16 @@ async def _run_sequence(
             # Some writes are legitimately refused after an undo or correction; the invariant
             # under test is that nothing half-applied.
             continue
-        violations = await check_ledger(conn)
-        assert violations == [], "\n".join(
-            [f"after operation {index} ({operation.__name__})"]
-            + [f"{violation.code}: {violation.detail}" for violation in violations]
-        )
+        # One full check every ten operations keeps the seeded replay deterministic without
+        # paying ~25 ledger queries for every write. A final check follows the loop.
+        if (index + 1) % 10 == 0:
+            violations = await check_ledger(conn)
+            assert violations == [], "\n".join(
+                [f"after operation {index} ({operation.__name__})"]
+                + [f"{violation.code}: {violation.detail}" for violation in violations]
+            )
 
+    _clean(await check_ledger(conn))
     assert applied > min_applied
     assert set(books.kinds) == {
         "expense",

@@ -1038,7 +1038,11 @@ function ChatShell({
   const switchDetail = switchError ? errorMessage(switchError.error) : "";
 
   return (
-    <section className={listInline ? "assistant aui-chat dark with-list" : "assistant aui-chat dark"}>
+    <section
+      className={listInline ? "assistant aui-chat dark with-list" : "assistant aui-chat dark"}
+      data-testid="thread-surface"
+      data-running={running ? "true" : "false"}
+    >
       {listInline && (
         <div className="chat-list">
           <ChatHistory query={query} onQuery={setQuery} error={listError} />

@@ -642,7 +642,10 @@ async def _group_phrase(conn: Connection, group_id: str, entries: list[dict[str,
     imported = await _import_phrase(conn, group_id)
     if imported:
         return imported
-    for entry in entries:
+    # A capture writes its payee before the expense; the money names the group, not the payee.
+    ordered = [entry for entry in entries if entry["table_name"] == "movements"]
+    ordered += [entry for entry in entries if entry["table_name"] != "movements"]
+    for entry in ordered:
         phrase = await _entry_phrase(conn, entry)
         if phrase:
             return phrase

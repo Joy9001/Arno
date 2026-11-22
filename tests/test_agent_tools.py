@@ -398,6 +398,26 @@ async def test_flagged_thread_asks_before_a_preference(demo_ledger):
         assert await demo_ledger.fetchval("SELECT count(*) FROM preferences") == 0
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"action": "forget", "text": "Never warn about rent"},
+        {"action": "classify", "id": "pref-1", "kind": "rule"},
+    ],
+)
+async def test_flagged_thread_asks_before_forget_or_classify(demo_ledger, args):
+    # The gate runs before the write, so a stale id still proves forget/classify ask first.
+    thread_id, message_id = await _thread(demo_ledger, "cnv_flagged_fc", "msg_flagged_fc")
+    agent = build_agent()
+    model = _model(ModelResponse(parts=[ToolCallPart("preference", args)]))
+    deps = AgentDeps(conversation_id=thread_id, message_id=message_id, flagged=True)
+    with agent.override(model=model):
+        result = await run_agent(agent, "a note from a stranger", deps)
+    assert isinstance(result.output, DeferredToolRequests)
+    async with demo_ledger.transaction():
+        assert await demo_ledger.fetchval("SELECT count(*) FROM preferences") == 0
+
+
 async def test_an_unexpected_tool_error_becomes_a_model_readable_result(monkeypatch, demo_ledger):
     thread_id, message_id = await _thread(demo_ledger, "cnv_error", "msg_error")
 
@@ -738,7 +758,23 @@ async def test_amortize_with_fee_returns_apr_percent_and_works_on_named_loan(dem
         for part in getattr(message, "parts", [])
         if getattr(part, "part_kind", "") == "tool-return"
     ]
-    assert returns
+
+    def numbers(value):
+        if isinstance(value, bool):
+            return []
+        if isinstance(value, (int, float)):
+            return [float(value)]
+        if isinstance(value, dict):
+            return [number for item in value.values() for number in numbers(item)]
+        if isinstance(value, (list, tuple)):
+            return [number for item in value for number in numbers(item)]
+        return []
+
+    # A bare `assert returns` also passes on a "Runtime error:" string, hiding a script that
+    # never produced the APR. The named loan has its own ledger rate, so require a real APR
+    # figure from the script, not the rate of the direct call above.
+    assert not any("Runtime error" in str(value) for value in returns), returns
+    assert any(0.0 < number < 100.0 for value in returns for number in numbers(value)), returns
 
 
 async def test_compare_offers_adapter_separates_components_and_refuses_a_missing_rate():

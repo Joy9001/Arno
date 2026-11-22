@@ -14,6 +14,7 @@ from arno.ledger.goals import list_goals
 from arno.ledger.movements import list_movements
 from arno.ledger.schedules import list_schedules, upcoming
 from arno.tools import read as read_tools
+from tests.conftest import scratch_name
 
 DEMO_DAY = date(2026, 11, 1)
 
@@ -182,9 +183,9 @@ async def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
 
 
 @pytest.mark.xdist_group("cluster")
-async def test_demo_template_can_be_cloned():
+async def test_demo_template_can_be_cloned(clean_database):
     settings = get_settings(refresh=True)
-    target = "arno_demo_template_test"
+    target = scratch_name("arno_demo_template")
     source = conninfo_to_dict(settings.database_url)["dbname"]
     async with connect(settings.database_url) as conn:
         await seed_demo(conn, today=DEMO_DAY, reset=True)

@@ -3,14 +3,17 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
 
-from arno.db.conn import connect, conninfo_to_dict, make_conninfo
+from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
 from arno.db.migrate import applied, current_version, discover, run_migrations
+from tests.conftest import fresh_database
+from tests.invariants import check_ledger
 
 EXPECTED_TABLES = {
     "settings",
@@ -155,7 +158,7 @@ async def test_pgledger_ids_are_prefixed_ulids(db):
     assert len(row["id"].split("_", 1)[1]) == 26
 
 
-async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
+async def test_agent_ro_can_read_the_ledger_but_not_auth_tables(clean_database):
     async with connect(_agent_ro_dsn()) as conn:
         assert (await conn.fetchrow_required("SELECT current_user AS who"))["who"] == "agent_ro"
         for readable in (
@@ -184,7 +187,7 @@ async def test_agent_ro_can_read_the_ledger_but_not_auth_tables():
                 await conn.execute(f"SELECT count(*) FROM {forbidden}")
 
 
-async def test_agent_ro_cannot_write_or_create_temp_tables():
+async def test_agent_ro_cannot_write_or_create_temp_tables(clean_database):
     async with connect(_agent_ro_dsn()) as conn:
         with pytest.raises(asyncpg.ReadOnlySQLTransactionError):
             await conn.execute("INSERT INTO categories (name) VALUES ('x')")
@@ -199,7 +202,7 @@ async def test_agent_ro_cannot_write_or_create_temp_tables():
             await conn.execute("CREATE TEMP TABLE scratch (id int)")
 
 
-async def test_agent_ro_has_read_only_and_two_second_defaults():
+async def test_agent_ro_has_read_only_and_two_second_defaults(clean_database):
     async with connect(_agent_ro_dsn()) as conn:
         row = await conn.fetchrow_required(
             "SELECT current_setting('default_transaction_read_only') AS ro, "
@@ -252,7 +255,7 @@ async def test_schema_integrity_rejects_self_reversal_and_function_handles_cycle
                 "INSERT INTO movements (id, date, description, kind, reverses_id) "
                 "VALUES ('mov_self', '2026-01-01', 'Self', 'reversal', 'mov_self')"
             )
-    assert getattr(exc.value, "constraint_name", None) is not None
+    assert getattr(exc.value, "constraint_name", None) == "movements_check1"
 
     tx = db.transaction()
     await tx.start()
@@ -981,3 +984,322 @@ async def test_v_owed_and_v_balances_use_ist_today_regardless_of_session_timezon
                 )
             ]
             assert bal_dates == [yesterday, ist_today], f"v_balances drifted under {tz}"
+
+
+def _migrations_through(directory: Path, last: int) -> Path:
+    """A migration directory with the expanded copies up to `last`, checksums unchanged."""
+    directory.mkdir()
+    for migration in discover():
+        if migration.version > last:
+            continue
+        path = directory / f"{migration.version:04d}_{migration.name}.sql"
+        path.write_text(migration.sql, encoding="utf-8")
+    return directory
+
+
+async def _ledger_account(conn: Connection, name: str) -> str:
+    return str(
+        await conn.fetchval(
+            "SELECT id FROM pgledger_create_account($1, 'INR', true, true, NULL)", name
+        )
+    )
+
+
+async def _legacy_ledger(conn: Connection) -> None:
+    """Rows a pre-0032 install could hold: legal under 0003, awkward under 0032."""
+    spending = await _ledger_account(conn, "Spending")
+    income = await _ledger_account(conn, "Income")
+    equity = await _ledger_account(conn, "Equity")
+    bank = await _ledger_account(conn, "Legacy Bank")
+    card = await _ledger_account(conn, "Legacy Card")
+    for account_id, kind, ledger_id, name, liquid in (
+        ("acc_legacy_spending", "spending", spending, "Spending", False),
+        ("acc_legacy_income", "income", income, "Income", False),
+        ("acc_legacy_equity", "equity", equity, "Equity", False),
+        ("acc_legacy_bank", "bank", bank, "Legacy Bank", True),
+        ("acc_legacy_card", "card", card, "Legacy Card", False),
+    ):
+        await conn.execute(
+            "INSERT INTO accounts (id, kind, ledger_account_id, name, liquid) "
+            "VALUES ($1, $2, $3, $4, $5)",
+            account_id,
+            kind,
+            ledger_id,
+            name,
+            liquid,
+        )
+    # A card with no terms and a statement date with no balance: both legal before 0032.
+    await conn.execute(
+        "UPDATE accounts SET statement_balance_as_of = DATE '2026-01-31' "
+        "WHERE id = 'acc_legacy_bank'"
+    )
+
+    # Three "food" categories and two "travel" categories before the case-insensitive index
+    # exists. Active wins before the created_at/id tie-break: Food stays canonical even though the
+    # inactive FOOD is older, and the newer active TRAVEL displaces the older inactive Travel.
+    await conn.execute(
+        "INSERT INTO categories (id, name, active, created_at, updated_at) VALUES "
+        "('cat_legacy_food', 'Food', true, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), "
+        "('cat_legacy_food_lower', 'food', true, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'), "
+        "('cat_legacy_food_upper', 'FOOD', false, '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z'), "
+        "('cat_legacy_travel', 'Travel', false, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), "
+        "('cat_legacy_travel_active', 'TRAVEL', true, '2026-05-01T00:00:00Z', "
+        "'2026-05-01T00:00:00Z')"
+    )
+    # One baseline per case variant in the food group plus one on the losing travel category: the
+    # canonical food baseline must survive three competitors, and the travel one must follow the
+    # active category it was merged into.
+    await conn.execute(
+        "INSERT INTO baselines (id, category_id, amount_per_day_paise, source, "
+        "created_at, updated_at) VALUES "
+        "('bas_legacy_food', 'cat_legacy_food', 10000, 'computed', "
+        "'2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'), "
+        "('bas_legacy_food_lower', 'cat_legacy_food_lower', 20000, 'estimated', "
+        "'2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z'), "
+        "('bas_legacy_food_upper', 'cat_legacy_food_upper', 30000, 'estimated', "
+        "'2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'), "
+        "('bas_legacy_travel', 'cat_legacy_travel', 40000, 'computed', "
+        "'2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z')"
+    )
+    # References through every table the preflight repoints, all on losing case variants.
+    await conn.execute(
+        "INSERT INTO category_rules (id, pattern, category_id, source) VALUES "
+        "('rul_legacy_food', 'OLD CAFE', 'cat_legacy_food_lower', 'llm')"
+    )
+    await conn.execute(
+        "INSERT INTO schedules (id, kind, name, rule, starts, category_id) VALUES "
+        "('sch_legacy_food', 'obligation', 'Legacy food plan', 'FREQ=MONTHLY', "
+        "DATE '2026-01-01', 'cat_legacy_food_lower')"
+    )
+    await conn.execute(
+        "INSERT INTO schedule_occurrences (id, schedule_id, due_date, name, kind, category_id) "
+        "VALUES ('occ_legacy_food', 'sch_legacy_food', DATE '2026-02-01', "
+        "'Legacy food plan', 'obligation', 'cat_legacy_food_lower')"
+    )
+    # The same UPI entered on two payees with different capitalisation. The active payee keeps the
+    # identifier even though the inactive one wrote it first.
+    await conn.execute(
+        "INSERT INTO payees (id, display_name, kind, upi_id, default_category_id, active, "
+        "created_at, updated_at) VALUES "
+        "('pay_legacy_a', 'Ravi', 'person', 'ravi@okhdfcbank', NULL, true, "
+        "'2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'), "
+        "('pay_legacy_b', 'Ravi Kumar', 'merchant', 'RAVI@OKHDFCBANK', 'cat_legacy_food_lower', "
+        "false, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
+
+    async def transfer(from_ledger: str, to_ledger: str, amount: int, movement_id: str) -> str:
+        return str(
+            await conn.fetchval(
+                "SELECT id FROM pgledger_create_transfer($1, $2, $3, NULL, $4, $5)",
+                from_ledger,
+                to_ledger,
+                amount,
+                {"movement_id": movement_id},
+                f"legacy-transfer:{movement_id}",
+            )
+        )
+
+    # An expense, its reversal (recorded with kind='expense': legal before 0032), and a second
+    # expense labelled with the lower-case duplicate category.
+    for movement_id, day, description, kind, reverses in (
+        ("mov_legacy_expense", date(2026, 1, 5), "Legacy lunch", "expense", None),
+        (
+            "mov_legacy_reversal",
+            date(2026, 1, 6),
+            "Legacy reversal",
+            "expense",
+            "mov_legacy_expense",
+        ),
+        ("mov_legacy_travel", date(2026, 2, 10), "Legacy train", "expense", None),
+    ):
+        await conn.execute(
+            "INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key) "
+            "VALUES ($1, $2, $3, $4, $5, $6)",
+            movement_id,
+            day,
+            description,
+            kind,
+            reverses,
+            f"legacy:{movement_id}",
+        )
+    for movement_id, leg_category, amount in (
+        ("mov_legacy_expense", "cat_legacy_food", 50_000),
+        ("mov_legacy_reversal", "cat_legacy_food", 50_000),
+        ("mov_legacy_travel", "cat_legacy_food_lower", 20_000),
+    ):
+        is_reversal = movement_id == "mov_legacy_reversal"
+        transfer_id = await transfer(
+            spending if is_reversal else bank,
+            bank if is_reversal else spending,
+            amount,
+            movement_id,
+        )
+        await conn.execute(
+            "INSERT INTO transfer_labels (transfer_id, movement_id, category_id) "
+            "VALUES ($1, $2, $3)",
+            transfer_id,
+            movement_id,
+            leg_category,
+        )
+
+    # A case-variant statement layout the preflight cannot merge safely.
+    await conn.execute(
+        "INSERT INTO statement_layouts (id, institution, kind) VALUES "
+        "('lay_legacy_a', 'HDFC', 'credit_card'), "
+        "('lay_legacy_b', 'hdfc', 'credit_card')"
+    )
+
+
+@pytest.mark.xdist_group("cluster")
+async def test_a_populated_pre_0032_database_upgrades_and_keeps_its_ledger(tmp_path):
+    """The upgrade path for real data: repaired where there is one answer, refused otherwise."""
+    legacy = _migrations_through(tmp_path / "migrations", 31)
+
+    async with fresh_database("arno_upgrade") as dsn:
+        async with connect(dsn) as conn:
+            assert await run_migrations(conn, legacy) == list(range(1, 32))
+            await _legacy_ledger(conn)
+
+            # No truthful repair for a card with no terms: name it and leave the schema alone.
+            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*card account"):
+                await run_migrations(conn)
+            assert await current_version(conn) == 31
+
+            await conn.execute(
+                "UPDATE accounts SET credit_limit_paise = 100000, statement_day = 5, "
+                "due_day = 25 WHERE id = 'acc_legacy_card'"
+            )
+            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*statement layout"):
+                await run_migrations(conn)
+            assert await current_version(conn) == 31
+
+            await conn.execute("DELETE FROM statement_layouts WHERE id = 'lay_legacy_b'")
+
+            # An occurrence kind the closed set never allowed: refuse it too, then remove it.
+            await conn.execute(
+                "INSERT INTO schedules (id, kind, name, rule, starts) "
+                "VALUES ('sch_legacy', 'obligation', 'Legacy rent', 'FREQ=MONTHLY', "
+                "DATE '2026-01-01')"
+            )
+            await conn.execute(
+                "INSERT INTO schedule_occurrences (id, schedule_id, due_date, name, kind) "
+                "VALUES ('occ_legacy', 'sch_legacy', DATE '2026-02-01', 'Legacy rent', 'nonsense')"
+            )
+            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*schedule occurrence"):
+                await run_migrations(conn)
+            assert await current_version(conn) == 31
+            await conn.execute("DELETE FROM schedule_occurrences WHERE id = 'occ_legacy'")
+
+            await run_migrations(conn)
+            assert await current_version(conn) == len(discover())
+
+            # The repairs the preflight could make without guessing.
+            assert (
+                await conn.fetchval("SELECT kind FROM movements WHERE id = 'mov_legacy_reversal'")
+                == "reversal"
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT statement_balance_as_of FROM accounts WHERE id = 'acc_legacy_bank'"
+                )
+                is None
+            )
+            assert (
+                await conn.fetchval("SELECT count(*) FROM categories WHERE lower(name) = 'food'")
+                == 1
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT category_id FROM movement_legs WHERE movement_id = 'mov_legacy_travel'"
+                )
+                == "cat_legacy_food"
+            )
+            assert (
+                await conn.fetchval("SELECT upi_id FROM payees WHERE id = 'pay_legacy_a'")
+                == "ravi@okhdfcbank"
+            )
+            assert (
+                await conn.fetchval("SELECT upi_id FROM payees WHERE id = 'pay_legacy_b'") is None
+            )
+
+            # Active beats older/inactive for both identities: the active Food and the newer active
+            # TRAVEL survive, and every case variant of each is gone.
+            assert await conn.fetchval("SELECT count(*) FROM categories") == 2
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM categories WHERE id IN "
+                    "('cat_legacy_food', 'cat_legacy_travel_active')"
+                )
+                == 2
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM categories WHERE id IN "
+                    "('cat_legacy_food_lower', 'cat_legacy_food_upper', 'cat_legacy_travel')"
+                )
+                == 0
+            )
+
+            # With three case variants, the canonical baseline is retained, its competitors are
+            # deleted, and the lone baseline on a losing variant follows its merged category.
+            assert await conn.fetchval("SELECT count(*) FROM baselines") == 2
+            assert (
+                await conn.fetchval(
+                    "SELECT category_id FROM baselines WHERE id = 'bas_legacy_food'"
+                )
+                == "cat_legacy_food"
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM baselines WHERE id IN "
+                    "('bas_legacy_food_lower', 'bas_legacy_food_upper')"
+                )
+                == 0
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT category_id FROM baselines WHERE id = 'bas_legacy_travel'"
+                )
+                == "cat_legacy_travel_active"
+            )
+
+            # The same one map repointed every reference table, not just the movement leg.
+            for table, row_id, column in (
+                ("payees", "pay_legacy_b", "default_category_id"),
+                ("category_rules", "rul_legacy_food", "category_id"),
+                ("schedules", "sch_legacy_food", "category_id"),
+                ("schedule_occurrences", "occ_legacy_food", "category_id"),
+            ):
+                assert (
+                    await conn.fetchval(f"SELECT {column} FROM {table} WHERE id = $1", row_id)
+                    == "cat_legacy_food"
+                )
+
+            # 0032's own constraints and indexes are the ones on disk, byte for byte.
+            recorded = {row["version"]: row["checksum"] for row in await applied(conn)}
+            assert recorded == {m.version: m.checksum for m in discover()}
+            constraints = {
+                row["conname"]
+                for row in await conn.fetch(
+                    "SELECT conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace"
+                )
+            }
+            assert {
+                "pgledger_transfers_amount_integer_check",
+                "movements_reversal_pair_check",
+                "accounts_card_fields_check",
+                "accounts_statement_balance_pair_check",
+            } <= constraints
+            indexes = {
+                row["indexname"]
+                for row in await conn.fetch(
+                    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
+                )
+            }
+            assert {
+                "categories_lower_name_idx",
+                "payees_lower_upi_id_idx",
+                "statement_layouts_lower_inst_kind_idx",
+            } <= indexes
+
+            assert await check_ledger(conn) == []

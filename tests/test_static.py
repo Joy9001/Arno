@@ -23,7 +23,9 @@ def _client(tmp_path: Path, settings: Settings) -> TestClient:
     return TestClient(create_app(replace(settings, web_dir=tmp_path)))
 
 
-def test_web_shell_is_served_with_the_policy_and_no_inline_script(tmp_path, settings):
+def test_web_shell_is_served_with_the_policy_and_no_inline_script(
+    tmp_path, settings, clean_database
+):
     with _client(tmp_path, settings) as client:
         response = client.get("/")
 
@@ -35,7 +37,7 @@ def test_web_shell_is_served_with_the_policy_and_no_inline_script(tmp_path, sett
     assert 'src="/assets/app.js"' in response.text
 
 
-def test_hashed_assets_are_cached_immutably(tmp_path, settings):
+def test_hashed_assets_are_cached_immutably(tmp_path, settings, clean_database):
     with _client(tmp_path, settings) as client:
         response = client.get("/assets/app.js")
 
@@ -43,7 +45,7 @@ def test_hashed_assets_are_cached_immutably(tmp_path, settings):
     assert "immutable" in response.headers["cache-control"]
 
 
-def test_unknown_page_paths_fall_back_to_the_shell(tmp_path, settings):
+def test_unknown_page_paths_fall_back_to_the_shell(tmp_path, settings, clean_database):
     with _client(tmp_path, settings) as client:
         response = client.get("/threads/abc")
 
@@ -51,7 +53,7 @@ def test_unknown_page_paths_fall_back_to_the_shell(tmp_path, settings):
     assert "Arno" in response.text
 
 
-def test_api_paths_never_fall_back_to_the_shell(tmp_path, settings):
+def test_api_paths_never_fall_back_to_the_shell(tmp_path, settings, clean_database):
     with _client(tmp_path, settings) as client:
         response = client.get("/api/not-a-route")
 
@@ -59,10 +61,36 @@ def test_api_paths_never_fall_back_to_the_shell(tmp_path, settings):
     assert response.headers["content-type"].startswith("application/problem+json")
 
 
-def test_missing_build_is_a_plain_503(tmp_path, settings):
+def test_missing_build_is_a_plain_503(tmp_path, settings, clean_database):
     missing = tmp_path / "missing"
     with TestClient(create_app(replace(settings, web_dir=missing))) as client:
         response = client.get("/")
 
     assert response.status_code == 503
     assert "Web build missing" in response.json()["title"]
+
+
+def test_static_route_serves_the_shell_when_an_asset_resolves_outside_the_build(
+    tmp_path, settings, clean_database, monkeypatch
+):
+    build = tmp_path / "dist"
+    sibling = tmp_path / "dist-extras"
+    build.mkdir()
+    sibling.mkdir()
+    external = sibling / "app.js"
+    external.write_text("External fixture", encoding="utf-8")
+    real_resolve = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == build / "assets" / "app.js":
+            return real_resolve(external)
+        return real_resolve(path, *args, **kwargs)
+
+    # Model an asset resolved through a filesystem link on platforms without symlink privileges.
+    monkeypatch.setattr(Path, "resolve", resolve)
+    with _client(build, settings) as client:
+        response = client.get("/assets/app.js")
+
+    assert response.status_code == 200
+    assert response.content == (build / "index.html").read_bytes()
+    assert response.headers["cache-control"] == "no-store"

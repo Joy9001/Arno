@@ -23,7 +23,7 @@ def test_health_reports_database_and_schema_version(client):
     assert response.headers["cache-control"] == "no-store"
 
 
-async def test_health_responds_while_projection_is_computing(authed_client, monkeypatch):
+async def test_health_responds_while_projection_is_computing(session_client, monkeypatch):
     loop = asyncio.get_running_loop()
     started = asyncio.Event()
     release = threading.Event()
@@ -37,9 +37,9 @@ async def test_health_responds_while_projection_is_computing(authed_client, monk
 
     monkeypatch.setattr(projection_tools, "run_projection", blocked_project)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=authed_client.app),
+        transport=httpx.ASGITransport(app=session_client.app),
         base_url="http://testserver",
-        cookies={COOKIE_NAME: authed_client.cookies[COOKIE_NAME]},
+        cookies={COOKIE_NAME: session_client.cookies[COOKIE_NAME]},
     ) as client:
         pending = asyncio.create_task(client.get("/api/projection"))
         try:

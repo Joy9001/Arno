@@ -234,15 +234,15 @@ def test_recap_routes_need_a_session(client):
         assert client.get(path).status_code == 401
 
 
-async def test_recap_routes_answer(authed_client, ledger):
+async def test_recap_routes_answer(session_client, ledger):
     await _seed(ledger)
-    listed = authed_client.get("/api/recaps")
+    listed = session_client.get("/api/recaps")
     assert listed.status_code == 200, listed.text
-    assert authed_client.get("/api/recaps/month-2026-10").json()["stories"][0]["key"] == "total"
-    assert authed_client.get("/api/recaps/month-2099-01").status_code == 404
-    bad = authed_client.get("/api/recaps/month-2026-10/rows", params={"story": "nope"})
+    assert session_client.get("/api/recaps/month-2026-10").json()["stories"][0]["key"] == "total"
+    assert session_client.get("/api/recaps/month-2099-01").status_code == 404
+    bad = session_client.get("/api/recaps/month-2026-10/rows", params={"story": "nope"})
     assert bad.status_code == 422
-    assert authed_client.post("/api/recaps/month-2026-10/seen").json()["seen"] is True
+    assert session_client.post("/api/recaps/month-2026-10/seen").json()["seen"] is True
 
 
 async def test_the_badge_counts_new_recaps_cheaply(ledger):

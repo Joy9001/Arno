@@ -278,9 +278,10 @@ the step it stopped at and exits non-zero.
 - `walkthrough` (completion checklist B): Home's "What I noticed" cards, one inbox item opened in
   chat, and every Settings section. It never confirms the erase.
 
-Selectors are roles, labels, text, and the components' own `data-slot` handles. The projection
-card is a semantic `figure` found by its text. One place has no accessible handle and uses a
-class: the inbox row (`article.inbox-item`, whose subject is its first `strong`).
+Selectors are roles, labels, text, and the components' own `data-slot` / `data-testid` handles.
+A streamed turn is done when `[data-testid="thread-surface"]` reports `data-running="false"` and a
+new assistant message has landed, not after a fixed delay. The safe-to-spend line, its notes, the
+projection card, the primary nav, and inbox rows each carry a `data-testid`.
 
 The app no longer has `pages/Home.tsx` or a notifications dialog: the home is the Ask welcome,
 its notifications are the "What I noticed" cards, and the inbox is Activity → Inbox. The

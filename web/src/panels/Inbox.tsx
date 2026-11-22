@@ -28,6 +28,7 @@ export function NeedRow({ item, busy, dismissing, onOpen, onDismiss }: { item: N
     <article
       className={item.read_at ? "inbox-item" : "inbox-item unread"}
       data-kind={item.kind}
+      data-testid="inbox-item"
       aria-busy={working}
     >
       <span className="inbox-icon" aria-hidden="true">

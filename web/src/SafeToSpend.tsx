@@ -19,12 +19,12 @@ export function SafeToSpend({
   const notes = showNotes ? dataQualityNotes(payload) : [];
   return (
     <>
-      <p className={className}>
+      <p className={className} data-testid="safe-to-spend">
         {formatPaise(amount)} safe to spend today · as of {formatDate(payload.as_of)} ·{" "}
         {safe.binding === "floor" ? "Floor" : "Obligation"} binds on {formatDate(safe.binding_date)}.
       </p>
       {notes.length > 0 && (
-        <ul className="projection-list">
+        <ul className="projection-list" data-testid="safe-to-spend-notes">
           {notes.map((note) => (
             <li key={note}>{displayText(note)}</li>
           ))}

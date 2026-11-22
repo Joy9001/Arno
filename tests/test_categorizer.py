@@ -871,8 +871,8 @@ def test_uncategorized_routes_refuse_a_request_without_a_session(client):
     )
 
 
-async def test_uncategorized_routes_answer_with_a_session(authed_client, ledger):
-    payload = authed_client.get("/api/uncategorized")
+async def test_uncategorized_routes_answer_with_a_session(session_client, ledger):
+    payload = session_client.get("/api/uncategorized")
     assert payload.status_code == 200
     assert payload.json()["groups"] == []
 

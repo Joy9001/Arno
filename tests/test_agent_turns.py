@@ -6,26 +6,18 @@ would hide exactly the behavior under test.
 
 from __future__ import annotations
 
-import asyncio
 import json
-import socket
-import threading
-from contextlib import asynccontextmanager
 
-import httpx
-import uvicorn
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai_harness.compaction import is_pinned
 
-from arno.agent.builder import build_agent
 from arno.agent.capabilities import MODEL_SETTINGS
 from arno.agent.history import recover_crashed_runs
-from arno.api import app as app_module
-from arno.api.deps import current_session
 from arno.ledger.accounts import create_account
 from tests.agent_helpers import streaming_model
+from tests.fixtures.chat_server import first_text_delta, live_server, wait_until
 
 
 def _body(thread: str, message: str, text: str = "hello") -> dict:
@@ -34,49 +26,6 @@ def _body(thread: str, message: str, text: str = "hello") -> dict:
         "trigger": "submit-message",
         "messages": [{"id": message, "role": "user", "parts": [{"type": "text", "text": text}]}],
     }
-
-
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
-@asynccontextmanager
-async def live_server(app, monkeypatch, model):
-    monkeypatch.setattr(
-        app_module, "build_agent", lambda **kwargs: build_agent(model=model, **kwargs)
-    )
-    app.dependency_overrides[current_session] = lambda: {"user_id": "test"}
-    port = _free_port()
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error", lifespan="on")
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    base = f"http://127.0.0.1:{port}"
-    async with httpx.AsyncClient(base_url=base, timeout=30) as client:
-        for _ in range(100):
-            try:
-                response = await client.get("/api/health")
-                if response.status_code == 200:
-                    break
-            except httpx.HTTPError:
-                pass
-            await asyncio.sleep(0.05)
-        else:  # pragma: no cover
-            raise RuntimeError("server did not start")
-        try:
-            yield client
-        finally:
-            server.should_exit = True
-            thread.join(timeout=10)
-
-
-async def _first_text_delta(response):
-    async for line in response.aiter_lines():
-        if '"type":"text-delta"' in line:
-            return
 
 
 async def _text_after(response, prefix: str = "") -> str:
@@ -96,16 +45,6 @@ async def _text_after(response, prefix: str = "") -> str:
     return text
 
 
-async def _until(predicate, timeout: float = 5.0):
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
-        value = predicate()
-        if value:
-            return value
-        await asyncio.sleep(0.02)
-    return predicate()
-
-
 async def test_reattach_replays_the_running_turn(app, db, monkeypatch):
     model = streaming_model(
         lambda messages, info: ModelResponse(parts=[TextPart("one two three four five")]),
@@ -114,7 +53,7 @@ async def test_reattach_replays_the_running_turn(app, db, monkeypatch):
     )
     async with live_server(app, monkeypatch, model) as client:
         async with client.stream("POST", "/api/chat", json=_body("thread-re", "msg-re")) as first:
-            await _first_text_delta(first)
+            await first_text_delta(first)
         # The reader left; the run continues and a second reader gets it from the start.
         async with client.stream("GET", "/api/chat/thread-re/stream") as second:
             assert second.status_code == 200
@@ -138,10 +77,10 @@ async def test_stop_saves_the_partial_reply(app, db, monkeypatch):
         async with client.stream(
             "POST", "/api/chat", json=_body("thread-stop", "msg-stop")
         ) as response:
-            await _first_text_delta(response)
+            await first_text_delta(response)
             stopped = await client.post("/api/chat/thread-stop/stop")
             assert stopped.json()["stopped"] is True
-        await _until(lambda: app.state.turns.get("thread-stop") is None)
+        await wait_until(lambda: app.state.turns.get("thread-stop") is None)
         thread = (await client.get("/api/threads/thread-stop/messages")).json()
         assistant = [m for m in thread["messages"] if m["role"] == "assistant"]
         assert assistant
@@ -241,9 +180,9 @@ async def test_deploy_drain_stops_and_saves(app, db, monkeypatch):
         async with client.stream(
             "POST", "/api/chat", json=_body("thread-drain", "msg-drain")
         ) as response:
-            await _first_text_delta(response)
+            await first_text_delta(response)
             await app.state.turns.drain()
-        await _until(lambda: app.state.turns.get("thread-drain") is None)
+        await wait_until(lambda: app.state.turns.get("thread-drain") is None)
     assert app.state.turns.get("thread-drain") is None
     row = await db.fetchrow("SELECT run_started_at FROM conversations WHERE id = 'thread-drain'")
     assert row["run_started_at"] is None

@@ -18,8 +18,8 @@ from arno.auth.setup import (
 )
 from arno.cli import app as cli_app
 from arno.db.conn import connect
+from tests.fixtures.passkeys import complete_setup
 from tests.software_authenticator import SoftwareAuthenticator
-from tests.test_auth import _complete_setup
 
 
 def _token_from_link(link: str) -> str:
@@ -74,7 +74,7 @@ async def test_fragment_token_completes_first_run_setup(client, setup_token, set
     link = enrollment_link(settings.rp_origin, setup_token)
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
 
-    response = _complete_setup(client, _token_from_link(link), authenticator)
+    response = complete_setup(client, _token_from_link(link), authenticator)
 
     assert response.status_code == 200, response.text
     assert response.json()["kind"] == "first_run"
@@ -104,7 +104,7 @@ def test_add_device_requires_a_session(app):
 
 async def test_add_device_registers_a_second_passkey(client, app, setup_token, settings, db):
     first = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, first).status_code == 200
+    assert complete_setup(client, setup_token, first).status_code == 200
 
     created = await _create_enrollment(client)
     assert created["link"].startswith(f"{settings.rp_origin}/setup#t=")
@@ -138,7 +138,7 @@ async def test_add_device_registers_a_second_passkey(client, app, setup_token, s
 
 async def test_add_device_token_expires(client, app, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     created = await _create_enrollment(client)
 
     await db.execute(
@@ -156,7 +156,7 @@ async def test_add_device_token_expires(client, app, setup_token, settings, db):
 
 async def test_add_device_token_dies_when_sessions_are_revoked(client, app, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     created = await _create_enrollment(client)
 
     assert client.post("/api/auth/logout-all").status_code == 204
@@ -171,7 +171,7 @@ async def test_add_device_token_dies_when_sessions_are_revoked(client, app, setu
 
 async def test_add_device_token_dies_on_passkey_reset(client, app, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     created = await _create_enrollment(client)
 
     result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["passkeys", "reset"])
@@ -187,7 +187,7 @@ async def test_add_device_token_dies_on_passkey_reset(client, app, setup_token, 
 
 async def test_first_run_token_cannot_add_a_device_after_setup(client, app, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
 
     async with connect(settings.database_url) as conn:
         late_token = (await issue_setup_token(conn, ttl_hours=1)).token
@@ -201,7 +201,7 @@ async def test_first_run_token_cannot_add_a_device_after_setup(client, app, setu
 
 async def test_add_device_token_cannot_do_first_run_setup(client, app, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
 
     user_id = (await db.fetchrow("SELECT id FROM users"))["id"]
     async with connect(settings.database_url) as conn:
@@ -217,7 +217,7 @@ async def test_add_device_token_cannot_do_first_run_setup(client, app, setup_tok
 
 async def test_deleting_the_last_passkey_is_refused(client, app, setup_token, settings):
     first = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, first).status_code == 200
+    assert complete_setup(client, setup_token, first).status_code == 200
     await _mark_fresh(client)
 
     passkeys = _passkeys(client)
@@ -243,7 +243,7 @@ async def test_deleting_the_last_passkey_is_refused(client, app, setup_token, se
 
 async def test_passkeys_can_be_listed_and_renamed(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     await _mark_fresh(client)
 
     passkey = _passkeys(client)[0]
@@ -271,7 +271,7 @@ async def test_enrollment_is_bound_to_the_user_and_lasts_ten_minutes(
     client, setup_token, settings, db
 ):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
     user_id = (await db.fetchrow("SELECT id FROM users"))["id"]
 
     created = await _create_enrollment(client)

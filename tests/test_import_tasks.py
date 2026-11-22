@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
 from types import SimpleNamespace
 from typing import cast
 
@@ -19,14 +20,19 @@ from arno.agent.parser import ImportReport, ParseReport
 from arno.api.tasks import (
     AnswerIn,
     RollbackIn,
+    TaskOwner,
     layout_rollback,
     layouts_list,
     task_answer,
     task_detail,
     task_payload,
 )
+from arno.importers.pipeline import _resolve_parsed_account, import_payload
+from arno.importers.task_status import NOT_A_STATEMENT_REASON, settle_imports
+from arno.importers.task_status import reconcile as reconcile_task_imports
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import new_id
+from tests.fixtures import import_helpers as helpers
 
 
 async def _attachment(conn, payload: bytes = b"x", name: str = "sbi.csv") -> str:
@@ -400,6 +406,7 @@ def test_import_and_task_routes_need_a_signed_in_session(client):
         ("get", "/api/imports"),
         ("get", "/api/imports/imp_x"),
         ("post", "/api/imports/imp_x/password"),
+        ("post", "/api/imports/imp_x/opening"),
         ("post", "/api/imports/imp_x/commit"),
         ("delete", "/api/attachments/att_x"),
         ("get", "/api/tasks/abc"),
@@ -408,3 +415,167 @@ def test_import_and_task_routes_need_a_signed_in_session(client):
         ("post", "/api/layouts/lay_x/rollback"),
     ):
         assert getattr(client, method)(path).status_code == 401, path
+
+
+def _save_record(task_id: str) -> DelegationTask:
+    return DelegationTask(
+        id=task_id, agent_name="parser", prompt="Import the statement.", conversation_id="conv_save"
+    )
+
+
+async def _save_many(owner: TaskOwner, record: DelegationTask) -> None:
+    for _ in range(60):
+        await owner.save(record)
+
+
+async def test_two_task_owners_on_one_directory_both_save_the_same_task(tmp_path):
+    record = _save_record("a" * 32)
+    await asyncio.gather(
+        _save_many(TaskOwner(directory=tmp_path), record),
+        _save_many(TaskOwner(directory=tmp_path), record),
+    )
+    saved = json.loads((tmp_path / f"{record.id}.json").read_text(encoding="utf-8"))
+    assert saved["id"] == record.id
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+async def test_a_task_save_survives_its_directory_being_removed(tmp_path):
+    record = _save_record("b" * 32)
+    owner = TaskOwner(directory=tmp_path / "tasks")
+    await owner.save(record)
+    shutil.rmtree(tmp_path / "tasks")
+
+    await owner.save(record)
+    assert json.loads((tmp_path / "tasks" / f"{record.id}.json").read_text())["id"] == record.id
+
+
+async def test_an_unsafe_task_id_is_refused_before_it_reaches_the_filesystem(tmp_path):
+    owner = TaskOwner(directory=tmp_path)
+    with pytest.raises(ValueError):
+        await owner.save(_save_record("../escape"))
+    assert not list(tmp_path.iterdir())
+
+
+def test_task_owners_on_one_directory_work_across_event_loops(tmp_path):
+    record = _save_record("c" * 32)
+    asyncio.run(TaskOwner(directory=tmp_path).save(record))
+    asyncio.run(TaskOwner(directory=tmp_path).save(record))
+    assert json.loads((tmp_path / f"{record.id}.json").read_text())["id"] == record.id
+
+
+# A parsing import is never left stuck, and the answered account wins ------------------------
+
+
+async def test_a_restart_fails_an_import_that_never_got_a_task(ledger):
+    account = await helpers.bank(ledger)
+    import_id = await new_id(ledger, "imp")
+    await ledger.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, commit_groups)
+        VALUES ($1, 'hash-orphan', 'parsing', $2, '[]'::jsonb)
+        """,
+        import_id,
+        account["id"],
+    )
+
+    changed = await reconcile_task_imports(ledger, {})
+
+    assert changed == 1
+    row = await ledger.fetchrow("SELECT status, reason FROM imports WHERE id = $1", import_id)
+    assert row["status"] == "failed"
+    assert row["reason"]
+
+
+async def test_answering_with_another_account_files_the_import_against_it(ledger):
+    from arno.agent.parser import submit_parser_code
+    from tests.import_fixtures import SBI_PARSER, sbi_csv
+
+    sbi = await create_account(
+        ledger, kind="bank", name="SBI Salary", institution="SBI", last4="6789"
+    )
+    hdfc = await create_account(
+        ledger, kind="bank", name="HDFC Savings", institution="HDFC", last4="4821"
+    )
+    import_id = await helpers.upload(ledger, sbi_csv())
+    assert await ledger.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id) is None
+
+    owner = DelegationTasks()
+    task_id = "9" * 32
+    async with owner.opened():
+        owner.records[task_id] = _record(task_id)
+        await ledger.execute("UPDATE imports SET task_id = $1 WHERE id = $2", task_id, import_id)
+        question = asyncio.create_task(
+            owner.ask(task_id, question_id="q1", question="Which account is this statement for?")
+        )
+        # A question ends the wait; the child keeps running, parked on the answer.
+        await asyncio.wait_for(owner.wait_children(None), timeout=10)
+        try:
+            await task_answer(
+                task_id,
+                AnswerIn(question_id="q1", account_id=hdfc["id"]),
+                _request(owner),
+                ledger,
+            )
+        finally:
+            if not question.done():
+                question.cancel()
+
+    assert (
+        await ledger.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id)
+        == hdfc["id"]
+    )
+    # The script still names SBI; the answer wins, so the rows land on HDFC.
+    result = await submit_parser_code(ledger, import_ids=[import_id], code=SBI_PARSER)
+    assert result["status"] == "parser_submitted", result
+    payload = await import_payload(ledger, import_id)
+    assert payload["status"] == "review"
+    assert payload["account"]["id"] == hdfc["id"]
+    assert payload["account"]["id"] != sbi["id"]
+
+
+async def test_a_parsed_name_cannot_overrule_the_chosen_account(ledger):
+    from arno.importers.readers import Doc
+
+    hdfc = await create_account(ledger, kind="bank", name="HDFC Savings", institution="HDFC")
+    resolved = await _resolve_parsed_account(
+        ledger,
+        parsed_account={"name": "SBI savings", "institution": "SBI"},
+        current=hdfc,
+        doc=cast(Doc, None),  # never read: `current` short-circuits the call
+    )
+    assert resolved is not None
+    assert resolved["id"] == hdfc["id"]
+
+
+def test_the_import_card_offers_the_cash_account():
+    from arno.api.tasks import ACCOUNT_KINDS
+
+    assert "cash" in ACCOUNT_KINDS
+
+
+async def test_a_parser_that_says_not_a_statement_settles_the_card_plainly(ledger):
+    account = await helpers.bank(ledger)
+    import_id = await new_id(ledger, "imp")
+    await ledger.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, account_id, task_id, commit_groups)
+        VALUES ($1, $2, 'parsing', $3, 'task_1', '[]'::jsonb)
+        """,
+        import_id,
+        f"hash-{import_id}",
+        account["id"],
+    )
+    report = ParseReport(
+        status="not_a_statement",
+        reason="The uploaded file is an employee payslip, not a bank statement.",
+    )
+
+    changed = await settle_imports(
+        ledger, task_id="task_1", outcome="ok", output=report.model_dump_json()
+    )
+
+    assert changed == 1
+    row = await ledger.fetchrow("SELECT status, reason FROM imports WHERE id = $1", import_id)
+    assert row["status"] == "not_a_statement"
+    assert row["reason"] == NOT_A_STATEMENT_REASON
+    assert "without reading this file" not in row["reason"]

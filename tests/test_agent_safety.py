@@ -35,7 +35,7 @@ def test_mark_caps_and_strips_invisibles():
     assert len(marked) <= 200 + len("<outside>") + len("</outside>")
 
 
-async def test_chat_stores_the_redacted_user_text(authed_client, demo_ledger):
+async def test_chat_stores_the_redacted_user_text(session_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="Noted.")
     body = {
         "id": "thread-redact-1",
@@ -53,15 +53,15 @@ async def test_chat_stores_the_redacted_user_text(authed_client, demo_ledger):
             }
         ],
     }
-    with authed_client.app.state.agent.override(model=model):
-        response = authed_client.post("/api/chat", json=body)
-    thread = authed_client.get(f"/api/threads/{response.headers['x-thread-id']}/messages").json()
+    with session_client.app.state.agent.override(model=model):
+        response = session_client.post("/api/chat", json=body)
+    thread = session_client.get(f"/api/threads/{response.headers['x-thread-id']}/messages").json()
     user_text = thread["messages"][0]["parts"][0]["text"]
     assert "4111" not in user_text
     assert "ramesh@okaxis" in user_text
 
 
-async def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
+async def test_a_run_query_flags_the_thread(session_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         if not any(
             getattr(part, "tool_name", None) == "run_code"
@@ -90,15 +90,15 @@ async def test_a_run_query_flags_the_thread(authed_client, demo_ledger):
             {"id": "client-flag-1", "role": "user", "parts": [{"type": "text", "text": "look"}]}
         ],
     }
-    with authed_client.app.state.agent.override(model=streaming_model(script)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        response = session_client.post("/api/chat", json=body)
     assert response.status_code == 200
     thread_id = response.headers["x-thread-id"]
-    thread = authed_client.get(f"/api/threads/{thread_id}/messages").json()
+    thread = session_client.get(f"/api/threads/{thread_id}/messages").json()
     assert thread["thread"]["flagged"] is True
 
 
-async def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger):
+async def test_an_untraced_number_is_saved_as_a_note(session_client, demo_ledger):
     model = TestModel(call_tools=[], custom_output_text="You spent ₹11,000 on food.")
     body = {
         "id": "thread-check-1",
@@ -111,9 +111,9 @@ async def test_an_untraced_number_is_saved_as_a_note(authed_client, demo_ledger)
             }
         ],
     }
-    with authed_client.app.state.agent.override(model=model):
-        response = authed_client.post("/api/chat", json=body)
-    thread = authed_client.get(f"/api/threads/{response.headers['x-thread-id']}/messages").json()
+    with session_client.app.state.agent.override(model=model):
+        response = session_client.post("/api/chat", json=body)
+    thread = session_client.get(f"/api/threads/{response.headers['x-thread-id']}/messages").json()
     parts = thread["messages"][-1]["parts"]
     flags = [part for part in parts if part.get("type") == "data-number-flags"]
     assert flags and "₹11,000" in flags[0]["data"]["amounts"]

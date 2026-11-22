@@ -1208,7 +1208,7 @@ new date, and the payments behind it, as a proposal.
 - [x] Dismissing the proposal writes nothing. Automated:
       `test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing`, 0.3.0.
 
-Automated evidence: `tests/test_engine_series.py`, `tests/test_audit_engine3.py`, and
+Automated evidence: `tests/test_engine_series.py`, `tests/test_engine_regressions.py`, and
 `tests/test_watch_workflows.py`. A price change needs no model: the job raises it and the inbox
 renders it.
 

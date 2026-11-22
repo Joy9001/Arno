@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.function import FunctionModel
@@ -28,9 +29,10 @@ from arno.agent.wake import (
     WakePolicy,
     may_retry,
     waiting_reports,
+    waiting_threads,
 )
 from arno.api.tasks import _follow_up
-from arno.api.wake import wake
+from arno.api.wake import start_server_turn, wake
 
 THREAD = "conv_wake"
 TASK = "9" * 32
@@ -194,3 +196,59 @@ async def test_the_woken_turn_is_told_what_to_say_and_whether_it_may_retry(ledge
     assert "A background task reported" not in await _instructions(
         SimpleNamespace(deps=AgentDeps(conversation_id=THREAD))
     )
+
+
+async def test_waiting_threads_recover_only_recent_undelivered_reports():
+    owner = DelegationTasks()
+    now = time.time()
+    owner.records[TASK] = _report()
+    owner.records["6" * 32] = _report(
+        "6" * 32, conversation_id="conv_old", finished_at=now - 90_000
+    )
+    owner.records["5" * 32] = _report("5" * 32, conversation_id="conv_delivered", delivered=True)
+    owner.records["4" * 32] = _report("4" * 32, conversation_id="conv_stopped", user_stopped=True)
+    owner.records["3" * 32] = _report("3" * 32, conversation_id="conv_child", parent_id="1" * 32)
+    owner.records["2" * 32] = _report("2" * 32, conversation_id="conv_running", status="running")
+    since = now - 86_400
+
+    assert waiting_threads(owner, since=since) == {THREAD}
+
+    turns = TurnManager(SimpleNamespace())
+    woken = asyncio.Event()
+    scheduled: list[str] = []
+
+    async def record_wake(thread_id: str) -> None:
+        scheduled.append(thread_id)
+        woken.set()
+
+    turns.waker = record_wake
+    for thread_id in waiting_threads(owner, since=since):
+        turns.schedule_wake(thread_id)
+    await asyncio.wait_for(woken.wait(), timeout=5)
+    assert scheduled == [THREAD]
+
+
+async def test_a_failed_wake_start_clears_the_run_marker(ledger, monkeypatch):
+    await history_mod.create_thread(ledger, title="Wake", thread_id=THREAD)
+    agent = Agent(
+        FunctionModel(lambda messages, info: ModelResponse(parts=[TextPart("ok")])),
+        deps_type=AgentDeps,
+    )
+    turns = TurnManager(agent)
+    app = SimpleNamespace(state=SimpleNamespace(tasks=None, turns=turns, agent=agent))
+
+    def fail_start(**kwargs):
+        del kwargs
+        raise RuntimeError("cannot start")
+
+    monkeypatch.setattr(turns, "start", fail_start)
+    thread = await history_mod.get_thread(ledger, THREAD)
+    assert thread is not None
+    with pytest.raises(RuntimeError, match="cannot start"):
+        await start_server_turn(app, ledger, thread=thread, deps=AgentDeps(conversation_id=THREAD))
+
+    row = await ledger.fetchrow(
+        "SELECT run_started_at, active_run_id FROM conversations WHERE id = $1", THREAD
+    )
+    assert row["run_started_at"] is None
+    assert row["active_run_id"] is None

@@ -190,29 +190,26 @@ SEED_RULES: tuple[tuple[str, str, str], ...] = (
 
 async def ensure_seed_rules(conn: Connection) -> int:
     """Insert the seed list, leaving a user or llm rule on the same match and pattern alone."""
-    categories = {
-        str(row["name"]): str(row["id"])
-        for row in await conn.fetch("SELECT id, name FROM categories WHERE active")
-    }
-    inserted = 0
-    for category_name, match, pattern in SEED_RULES:
-        category_id = categories.get(category_name)
-        if category_id is None:
-            continue
-        row = await conn.fetchrow(
-            """
+    categories, matches, patterns = zip(*SEED_RULES, strict=True)
+    row = await conn.fetchrow_required(
+        """
+        WITH inserted AS (
             INSERT INTO category_rules (match, pattern, category_id, source, priority)
-            VALUES ($1, $2, $3, 'seed', 0)
+            SELECT seed.match, seed.pattern, categories.id, 'seed', 0
+            FROM unnest($1::text[], $2::text[], $3::text[]) WITH ORDINALITY
+                AS seed(category, match, pattern, ordinal)
+            JOIN categories ON categories.name = seed.category AND categories.active
+            ORDER BY seed.ordinal
             ON CONFLICT (match, pattern) DO NOTHING
             RETURNING id
-            """,
-            match,
-            pattern,
-            category_id,
         )
-        if row is not None:
-            inserted += 1
-    return inserted
+        SELECT count(*) AS count FROM inserted
+        """,
+        categories,
+        matches,
+        patterns,
+    )
+    return int(row["count"])
 
 
 __all__ = ["PAYMENT_APPS", "SEED_RULES", "ensure_seed_rules"]

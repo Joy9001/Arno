@@ -73,10 +73,11 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-# Eight workers measured fastest on the 12-core dev box; Postgres, not the CPU, is the limit.
-# `-n 0` still runs serially. The `cluster` group (cluster-wide DDL, fixed database names)
-# always runs on one worker.
-addopts = "-n 8 --dist loadgroup"
+# Four workers, not one per logical core: Postgres is the limit and a 6-core laptop thermally
+# throttles past that. conftest.py also pins each numerical library to one thread. `-n 0` still
+# runs serially. The `cluster` group (cluster-wide DDL, fixed database names) always runs on one
+# worker.
+addopts = "-n 4 --dist loadgroup"
 
 [tool.pyrefly]
 # Type-checking policy: docs/arno/typing.md. CI fails on any error or warning.

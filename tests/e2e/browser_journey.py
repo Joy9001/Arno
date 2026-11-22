@@ -21,7 +21,6 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -49,10 +48,13 @@ from tests.e2e.driver import (
 JOURNEYS = ("enroll", "home-vs-chat", "walkthrough")
 DEFAULT_TIMEOUT = 300.0
 SAFE_PHRASE = "safe to spend today"
-STOP_BUTTONS = 'button[aria-label="Stop generating"], button[aria-label="Cancel sending"]'
 CONFIRM_BUTTON = '[data-slot="approval-card-allow-once"]'
 PROSE = '[data-slot="aui_assistant-message-root"] [data-slot="aui_assistant-message-text"]'
-RECEIPT = "figure"
+ASSISTANT_MESSAGE = '[data-slot="aui_assistant-message-root"]'
+PRIMARY_NAV = '[data-testid="primary-nav"]'
+PROJECTION_CARD = '[data-testid="projection-receipt"]'
+SAFE_LINE = '[data-testid="safe-to-spend"]'
+SAFE_NOTES = '[data-testid="safe-to-spend-notes"] > li'
 RUPEE = re.compile(r"₹[\d,]+(?:\.\d{2})?")
 
 ONBOARDING = (
@@ -271,13 +273,10 @@ async def _last_prose(page: pw.Page) -> str:
 
 async def _safe_block(scope: Any, report: Report) -> dict[str, Any]:
     """The SafeToSpend line and its notes, as strings a person reads."""
-    paragraph = scope.locator("p", has_text=SAFE_PHRASE).last
+    paragraph = scope.locator(SAFE_LINE).last
     await paragraph.wait_for(timeout=60_000)
     text = _one_space(await paragraph.inner_text())
-    notes = [
-        _one_space(note)
-        for note in await paragraph.locator("xpath=following-sibling::ul[1]/li").all_inner_texts()
-    ]
+    notes = [_one_space(note) for note in await scope.locator(SAFE_NOTES).all_inner_texts()]
     parts = [part.strip() for part in text.split("·")]
     if len(parts) != 3:
         raise JourneyFailure(
@@ -293,32 +292,39 @@ async def _safe_block(scope: Any, report: Report) -> dict[str, Any]:
     }
 
 
-async def _state_busy(page: pw.Page) -> bool:
-    buttons = page.locator(STOP_BUTTONS)
-    for index in range(await buttons.count()):
-        if await buttons.nth(index).is_visible():
-            return True
-    return False
+async def _assistant_messages(page: pw.Page) -> int:
+    return await page.locator(ASSISTANT_MESSAGE).count()
 
 
-async def _settle(page: pw.Page, report: Report, timeout: float = DEFAULT_TIMEOUT) -> None:
-    """Wait for a streamed turn to finish: no stop button visible, twice in a row."""
-    deadline = time.monotonic() + timeout
-    await page.wait_for_timeout(250)
-    while time.monotonic() < deadline:
-        if not await _state_busy(page):
-            await page.wait_for_timeout(400)
-            if not await _state_busy(page):
-                return
-        await page.wait_for_timeout(300)
-    raise JourneyFailure(report.current, f"the stream did not finish within {timeout:.0f}s")
+async def _settle(
+    page: pw.Page, report: Report, assistants_before: int, timeout: float = DEFAULT_TIMEOUT
+) -> None:
+    """Wait until the app says the turn is done and a new assistant message has landed."""
+    try:
+        await page.wait_for_function(
+            """([before]) => {
+              const surface = document.querySelector('[data-testid="thread-surface"]');
+              const messages = document.querySelectorAll(
+                '[data-slot="aui_assistant-message-root"]'
+              );
+              return !!surface && surface.dataset.running === "false" &&
+                messages.length > before;
+            }""",
+            arg=[assistants_before],
+            timeout=timeout * 1000,
+        )
+    except pw.TimeoutError:
+        raise JourneyFailure(
+            report.current, f"the stream did not finish within {timeout:.0f}s"
+        ) from None
 
 
 async def _send(page: pw.Page, report: Report, text: str) -> None:
+    before = await _assistant_messages(page)
     field = page.get_by_label("Message Arno")
     await field.fill(text)
     await page.get_by_label("Send message").click()
-    await _settle(page, report)
+    await _settle(page, report, before)
 
 
 async def _answer_confirm_cards(page: pw.Page, report: Report, limit: int = 4) -> int:
@@ -328,11 +334,12 @@ async def _answer_confirm_cards(page: pw.Page, report: Report, limit: int = 4) -
         confirm = page.locator(CONFIRM_BUTTON)
         if not await confirm.count():
             break
+        before = await _assistant_messages(page)
         await report.shot(page, "confirm-card")
         await confirm.first.click()
         await confirm.first.wait_for(state="detached", timeout=15_000)
         answered += 1
-        await _settle(page, report)
+        await _settle(page, report, before)
     if await page.locator(CONFIRM_BUTTON).count():
         raise JourneyFailure(report.current, "a confirm card was still waiting after four answers")
     return answered
@@ -358,9 +365,10 @@ async def _onboarding_ui(page: pw.Page, report: Report) -> None:
         await report.shot(page, "first-run-home")
 
         field = page.get_by_label("Message Arno")
+        before = await _assistant_messages(page)
         await field.fill(ONBOARDING)
         await page.get_by_label("Send message").click()
-        await _settle(page, report, timeout=45.0)
+        await _settle(page, report, before, timeout=45.0)
         sent = page.locator('[data-slot="aui_user-message-root"]').first
         await sent.wait_for(timeout=15_000)
         if "85,000" not in _one_space(await sent.inner_text()):
@@ -458,11 +466,7 @@ async def _home_safe(page: pw.Page, report: Report) -> dict[str, Any]:
 
 
 async def _open_home(page: pw.Page) -> None:
-    await (
-        page.locator('nav[aria-label="Primary"]')
-        .first.get_by_role("button", name="Ask", exact=True)
-        .click()
-    )
+    await page.locator(PRIMARY_NAV).get_by_role("button", name="Ask", exact=True).click()
     await page.get_by_text("Ask me anything about your money.").wait_for(timeout=30_000)
 
 
@@ -493,7 +497,7 @@ async def _first_answer(page: pw.Page, report: Report) -> None:
         await report.shot(page, "answer")
 
     async with Step(report, page, "compare the chat card with the home page"):
-        card = page.locator(RECEIPT, has_text=SAFE_PHRASE).last
+        card = page.locator(PROJECTION_CARD, has_text=SAFE_PHRASE).last
         chat = await _safe_block(card, report) if await card.count() else None
         if chat:
             report.figure("chat_safe_to_spend", chat["text"])
@@ -533,7 +537,7 @@ async def _home_vs_chat(page: pw.Page, report: Report, *, dry_run: bool) -> None
         report.figure("answer_rupees", figure.group(0))
 
     async with Step(report, page, "compare the chat card with the home page"):
-        card = page.locator(RECEIPT, has_text=SAFE_PHRASE).last
+        card = page.locator(PROJECTION_CARD, has_text=SAFE_PHRASE).last
         await card.wait_for(timeout=DEFAULT_TIMEOUT * 1000)
         chat = await _safe_block(card, report)
         report.figure("chat_safe_to_spend", chat["text"])
@@ -556,21 +560,17 @@ async def _walkthrough(page: pw.Page, report: Report) -> None:
         await _assert_no_alert(page, report)
 
     async with Step(report, page, "open the notifications surface"):
-        await (
-            page.locator('nav[aria-label="Primary"]')
-            .first.get_by_role("button", name=re.compile(r"^Activity"))
-            .click()
-        )
+        await page.locator(PRIMARY_NAV).get_by_role("button", name=re.compile(r"^Activity")).click()
         await page.get_by_role("tab", name=re.compile(r"^Inbox")).click()
         await page.get_by_role("heading", name="Activity", level=2).wait_for(timeout=30_000)
         await page.wait_for_timeout(750)
-        rows = page.locator("article.inbox-item")
+        rows = page.locator('[data-testid="inbox-item"]')
         count = await rows.count()
         report.figure("notifications", count)
         if count:
             report.figure(
                 "notification_title",
-                _one_space(await rows.first.locator("strong").first.inner_text()),
+                _one_space(await rows.first.locator("strong.inbox-subject").first.inner_text()),
             )
             await rows.first.get_by_role(
                 "button", name=re.compile(r"^(Open in chat|Decide in chat|Review)$")
@@ -580,11 +580,7 @@ async def _walkthrough(page: pw.Page, report: Report) -> None:
             if opened and not report.thread_id:
                 report.thread_id = opened.group(1)
             await report.shot(page, "notification-open")
-            await (
-                page.locator('nav[aria-label="Primary"]')
-                .first.get_by_role("button", name="Ask", exact=True)
-                .click()
-            )
+            await page.locator(PRIMARY_NAV).get_by_role("button", name="Ask", exact=True).click()
             await page.get_by_text("Ask me anything about your money.").wait_for(timeout=30_000)
         else:
             report.note(
@@ -593,11 +589,7 @@ async def _walkthrough(page: pw.Page, report: Report) -> None:
         await _assert_no_alert(page, report)
 
     async with Step(report, page, "walk every Settings section"):
-        await (
-            page.locator('nav[aria-label="Primary"]')
-            .first.get_by_role("button", name="Settings", exact=True)
-            .click()
-        )
+        await page.locator(PRIMARY_NAV).get_by_role("button", name="Settings", exact=True).click()
         nav = page.get_by_role("navigation", name="Settings sections")
         await nav.wait_for(timeout=30_000)
         labels = [_one_space(label) for label in await nav.get_by_role("link").all_inner_texts()]

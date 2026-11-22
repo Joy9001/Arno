@@ -197,6 +197,11 @@ def _admin_dsn(target_dsn: str) -> tuple[str, dict[str, Any]]:
 
 
 async def _database_has_tables(target_dsn: str) -> bool:
+    """Whether the target database holds any table.
+
+    An inspection that fails is not an empty database: the caller is about to drop whatever is
+    there, so an unreadable target refuses the restore instead of being treated as replaceable.
+    """
     try:
         async with connect(target_dsn) as conn:
             count = await conn.fetchval(
@@ -206,8 +211,10 @@ async def _database_has_tables(target_dsn: str) -> bool:
                 """
             )
             return bool(count)
-    except OSError, PostgresError:
-        return False
+    except (OSError, PostgresError) as exc:
+        raise RestoreError(
+            f"Could not inspect the target database before replacing it: {exc}"
+        ) from exc
 
 
 async def prepare_database(target_dsn: str, *, force: bool = False) -> str:

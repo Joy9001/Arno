@@ -7,8 +7,6 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -17,25 +15,19 @@ from arno.api.capture import MAX_CAPTURE_BYTES
 from arno.api.imports import MAX_UPLOAD_BYTES
 from arno.api.middleware import CONTENT_SECURITY_POLICY
 from arno.backup_restore import build_manifest, restore_from_restic
-from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
+from arno.db.conn import Connection, connect, conninfo_to_dict
 from arno.db.migrate import Migration
 from arno.db.pre_migration import dump_before_migrating
+from arno.demo.template import database_dsn, drop_database
+from tests.conftest import cluster_lock, scratch_name
+from tests.fixtures.passkeys import complete_setup
 from tests.software_authenticator import SoftwareAuthenticator
-from tests.test_auth import _complete_setup
 
 REQUIRED_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; "
     "frame-ancestors 'none'"
 )
-
-
-@asynccontextmanager
-async def _admin_conn() -> AsyncGenerator[Connection]:
-    info = conninfo_to_dict(os.environ["DATABASE_URL"])
-    info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info)) as conn:
-        yield conn
 
 
 def test_security_headers_are_the_exact_required_policy(client):
@@ -60,7 +52,7 @@ def test_both_upload_paths_share_the_25_mb_cap():
 
 async def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, settings, db):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
 
     blocked = client.get("/api/export/json")
     assert blocked.status_code == 403
@@ -227,16 +219,15 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
     )
     assert backup.returncode == 0, backup.stderr.decode("utf-8", "replace")
 
-    target_info = dict(info)
-    target_info["dbname"] = "arno_l8_restore_test"
-    target = make_conninfo(**target_info)
+    target = database_dsn(os.environ["DATABASE_URL"], scratch_name("arno_l8_restore"))
     try:
-        report = await restore_from_restic(
-            repository=str(repo),
-            password="local-drill-password",
-            target_dsn=target,
-            force=True,
-        )
+        async with cluster_lock():
+            report = await restore_from_restic(
+                repository=str(repo),
+                password="local-drill-password",
+                target_dsn=target,
+                force=True,
+            )
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
             assert (await restored.fetchrow_required("SELECT body FROM preferences"))["body"] == (
@@ -270,8 +261,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path)
                 "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
             )
     finally:
-        async with _admin_conn() as admin:
-            await admin.execute('DROP DATABASE IF EXISTS "arno_l8_restore_test" WITH (FORCE)')
+        await drop_database(os.environ["DATABASE_URL"], scratch_name("arno_l8_restore"))
 
 
 BACKUP_SCRIPT = Path(__file__).resolve().parents[1] / "backup" / "backup.sh"
@@ -314,9 +304,7 @@ BACKUP_SCRIPT_SKIP = _backup_script_skip_reason()
 
 @pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(BACKUP_SCRIPT_SKIP is not None, reason=BACKUP_SCRIPT_SKIP or "")
-async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
-    demo_ledger, tmp_path: Path
-):
+async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(ledger, tmp_path: Path):
     """A write that commits mid-backup must not land in the manifest but miss the dump."""
     source = os.environ["DATABASE_URL"]
     info = conninfo_to_dict(source)
@@ -358,16 +346,15 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
     )
     assert ran.returncode == 0, ran.stderr.decode("utf-8", "replace")[-3000:]
 
-    target_info = dict(info)
-    target_info["dbname"] = "arno_l8_snapshot_test"
-    target = make_conninfo(**target_info)
+    target = database_dsn(os.environ["DATABASE_URL"], scratch_name("arno_l8_snapshot"))
     try:
-        report = await restore_from_restic(
-            repository=str(repo),
-            password="race-drill-password",
-            target_dsn=target,
-            force=True,
-        )
+        async with cluster_lock():
+            report = await restore_from_restic(
+                repository=str(repo),
+                password="race-drill-password",
+                target_dsn=target,
+                force=True,
+            )
         assert report.checks.get("manifest_matches") is True, report.as_dict()
         assert report.ok, report.as_dict()
         async with connect(target) as restored:
@@ -388,8 +375,7 @@ async def test_backup_script_takes_the_dump_and_manifest_from_one_snapshot(
             )
         assert raced == 0
     finally:
-        async with _admin_conn() as admin:
-            await admin.execute('DROP DATABASE IF EXISTS "arno_l8_snapshot_test" WITH (FORCE)')
+        await drop_database(os.environ["DATABASE_URL"], scratch_name("arno_l8_snapshot"))
 
 
 @pytest.mark.skipif(

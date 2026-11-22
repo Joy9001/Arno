@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 from webauthn import (
     generate_authentication_options,
     generate_registration_options,
@@ -211,21 +212,24 @@ async def finish_registration(
             if user is None:
                 raise PasskeyError("The user for this passkey no longer exists.")
 
-        await conn.execute(
-            """
-            INSERT INTO webauthn_credentials (
-                user_id, credential_id, public_key, sign_count, transports, aaguid, name
+        try:
+            await conn.execute(
+                """
+                INSERT INTO webauthn_credentials (
+                    user_id, credential_id, public_key, sign_count, transports, aaguid, name
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                """,
+                user["id"],
+                verified.credential_id,
+                verified.credential_public_key,
+                verified.sign_count,
+                transports,
+                aaguid,
+                "Passkey",
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            """,
-            user["id"],
-            verified.credential_id,
-            verified.credential_public_key,
-            verified.sign_count,
-            transports,
-            aaguid,
-            "Passkey",
-        )
+        except asyncpg.UniqueViolationError as exc:
+            raise PasskeyError("That passkey is already registered on this instance.") from exc
     return user, token["kind"]
 
 

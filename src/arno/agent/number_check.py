@@ -154,12 +154,13 @@ def _value(text: str) -> float:
 
 
 def _unit(text: str, scale: float = 1.0) -> float:
-    """How far apart two values can be and still read the same at the shown precision."""
+    """How far apart two values can be and still read the same at the shown precision.
+
+    Tolerance comes only from digits actually shown: a decimal's place or a scale word's unit.
+    Trailing zeros in a plain integer are not rounding, so "₹1000" means ₹1000 and cannot
+    justify a ₹500 source by a ±500 slack.
+    """
     decimals = len(text.split(".")[1]) if "." in text else 0
-    if decimals == 0 and scale == 1.0 and "," not in text:
-        trailing = len(text) - len(text.rstrip("0"))
-        if trailing >= 2:
-            return 10.0**trailing
     return scale * 10.0 ** (-decimals)
 
 
@@ -264,38 +265,74 @@ def extract(
     return found
 
 
+# A key naming one of these carries a ratio or a percentage, not a count.
+_PERCENT_KEYS = ("percent", "pct", "probab", "ratio", "rate", "apr", "interval")
+
+
 def sources(
     returns: Any,
     user_texts: tuple[str, ...] = (),
     scripted: Any = (),
     *,
     dates: set[tuple[int, int]] | None = None,
-) -> set[float]:
-    """Every value the model was given: tool returns, tool arguments, and the user's messages.
+) -> dict[str, set[float]]:
+    """Every value the model was given, tagged `money`, `percent`, or `count`.
+
+    A `percent` claim may only be justified by a ratio or a percentage the model was given;
+    a bare count such as `{"rows": 42}` must never back "42%". Money and counts share the
+    other pool, so an amount the user typed as a bare number still traces a rupee claim.
 
     `scripted` holds `run_code` returns. Scripts compute in integer paise and the reply speaks
     rupees, so each number a script printed or returned also counts at a hundredth of itself.
     When `dates` is given, every `(month, day)` the model was given is added to it.
     """
-    values: set[float] = set()
+    values: dict[str, set[float]] = {"money": set(), "percent": set(), "count": set()}
+
+    def add_percent(value: float) -> None:
+        values["percent"].add(value)
+        # A probability is printed as a fraction but the reply speaks percent: keep both.
+        if 0.0 < value < 1.0:
+            values["percent"].add(value * 100)
+
+    def add_number(value: float, kind: str, paise: bool) -> None:
+        if paise:
+            values["money"].add(value)
+            values["money"].add(value / 100)
+        elif kind == "percent":
+            add_percent(value)
+        else:
+            values[kind].add(value)
+
+    def kind_for(key: str, value: float) -> str:
+        lowered = key.lower()
+        if any(token in lowered for token in _PERCENT_KEYS):
+            return "percent"
+        # Arno's counts and money are whole numbers; a fraction is a ratio the reply speaks
+        # as a percent. Paise-derived fractions are handled above and never reach here.
+        if 0.0 < abs(value) < 1.0:
+            return "percent"
+        return "count"
 
     def walk(obj: Any, key: str = "", paise: bool = False) -> None:
         here = paise or "paise" in key
         if isinstance(obj, bool):
             if "complete" in key.lower():
-                values.add(0.0 if not obj else 100.0)
+                add_percent(0.0 if not obj else 100.0)
             return
         if isinstance(obj, (int, float)):
-            values.add(float(obj))
-            if here:
-                values.add(obj / 100)
+            value = float(obj)
+            add_number(value, kind_for(key, value), here)
         elif isinstance(obj, str):
-            found = [value for _kind, value, _unit_value, _shown in extract(obj)]
-            found += [_value(match.group(1)) for match in SIGNED.finditer(obj)]
-            for value in found:
-                values.add(value)
-                if here:
-                    values.add(value / 100)
+            for claim_kind, value, _unit_value, _shown in extract(obj):
+                kind = (
+                    "money"
+                    if claim_kind == "money"
+                    else ("percent" if claim_kind == "percent" else "count")
+                )
+                add_number(value, kind, here)
+            for match in SIGNED.finditer(obj):
+                value = _value(match.group(1))
+                add_number(value, kind_for(key, value), here)
             if dates is not None:
                 dates.update(_dates_in(obj))
         elif isinstance(obj, dict):
@@ -322,11 +359,14 @@ def sources(
     return values
 
 
-def traced(kind: str, value: float, unit: float, known: set[float]) -> bool:
+def traced(kind: str, value: float, unit: float, known: dict[str, set[float]]) -> bool:
+    # Money and counts share a pool, so a bare amount the user typed still traces a rupee
+    # claim. A percent claim is stricter: only a ratio the model was given can justify it.
+    pool = known["percent"] if kind == "percent" else known["money"] | known["count"]
     # A whole-rupee amount may be rounded or truncated from a paise source, so allow one
-    # rupee there. Counts keep the tighter shown-precision tolerance.
+    # rupee there. Every other claim keeps its shown-precision tolerance.
     slack = 1.0 if kind == "money" and unit == 1.0 else unit / 2 + 1e-9
-    for candidate in known:
+    for candidate in pool:
         if abs(candidate - value) <= slack:
             return True
         if kind == "percent" and abs(candidate * 100 - value) <= slack:

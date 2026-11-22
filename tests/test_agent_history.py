@@ -48,13 +48,13 @@ async def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
 
 
 async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_read(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     def intro(messages, info: AgentInfo) -> ModelResponse:
         return ModelResponse(parts=[TextPart("Hello.")])
 
-    with authed_client.app.state.agent.override(model=streaming_model(intro)):
-        first = authed_client.post(
+    with session_client.app.state.agent.override(model=streaming_model(intro)):
+        first = session_client.post(
             "/api/chat",
             json={
                 "id": "thread-baseline",
@@ -111,8 +111,8 @@ async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_r
         assert amount == "₹2,34,567.89"
         return ModelResponse(parts=[TextPart(f"HDFC Savings has {amount}.")])
 
-    with authed_client.app.state.agent.override(model=streaming_model(answer)):
-        second = authed_client.post(
+    with session_client.app.state.agent.override(model=streaming_model(answer)):
+        second = session_client.post(
             "/api/chat",
             json={
                 "id": "thread-baseline",
@@ -135,7 +135,7 @@ async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_r
     assert saved["pin"] == initial_pin
     assert saved["snapshot_at"] == old_snapshot_at
     assert _count_pins(ModelMessagesTypeAdapter.validate_python(saved["model_history"])) == 1
-    thread = authed_client.get("/api/threads/thread-baseline/messages").json()
+    thread = session_client.get("/api/threads/thread-baseline/messages").json()
     reply = next(
         message for message in reversed(thread["messages"]) if message["role"] == "assistant"
     )
@@ -144,7 +144,7 @@ async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_r
     )
 
 
-async def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):
+async def test_a_chart_card_survives_a_reload(session_client, demo_ledger):
     code = (
         'await show_chart(type="line", title="Balance", '
         'series=[{"name": "SBI", "points": [{"x": "Oct", "y": 100000}]}])'
@@ -164,10 +164,10 @@ async def test_a_chart_card_survives_a_reload(authed_client, demo_ledger):
             {"id": "client-card", "role": "user", "parts": [{"type": "text", "text": "chart"}]}
         ],
     }
-    with authed_client.app.state.agent.override(model=streaming_model(script)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        response = session_client.post("/api/chat", json=body)
     assert response.status_code == 200
-    thread = authed_client.get("/api/threads/thread-card/messages").json()
+    thread = session_client.get("/api/threads/thread-card/messages").json()
     cards = [
         part
         for message in thread["messages"]
@@ -264,7 +264,7 @@ async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
     assert stored["metadata"]["custom"]["runStatus"] == "complete"
 
 
-async def test_a_reloaded_multi_step_turn_is_one_assistant_message(authed_client, demo_ledger):
+async def test_a_reloaded_multi_step_turn_is_one_assistant_message(session_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         done = any(
             getattr(part, "tool_name", None) == "run_code"
@@ -284,8 +284,8 @@ async def test_a_reloaded_multi_step_turn_is_one_assistant_message(authed_client
             {"id": "client-steps", "role": "user", "parts": [{"type": "text", "text": "balance"}]}
         ],
     }
-    with authed_client.app.state.agent.override(model=streaming_model(script)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        response = session_client.post("/api/chat", json=body)
     assert response.status_code == 200
     start = next(
         event
@@ -294,7 +294,7 @@ async def test_a_reloaded_multi_step_turn_is_one_assistant_message(authed_client
     )
     live_id = json.loads(start[len("data: ") :])["messageId"]
 
-    thread = authed_client.get("/api/threads/thread-steps/messages").json()
+    thread = session_client.get("/api/threads/thread-steps/messages").json()
     assert [message["role"] for message in thread["messages"]] == ["user", "assistant"]
     assistant = thread["messages"][1]
     assert assistant["id"] == live_id

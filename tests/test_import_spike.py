@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-from arno.importers.spike import check_real_command, run_synthetic
+from arno.importers.spike import check_real_command, run_real, run_synthetic
 from tests.import_fixtures import SBI_PARSER, sbi_csv
 
 
@@ -32,16 +30,6 @@ def test_check_real_agrees_with_the_synthetic_sbi_parser():
 
 
 def test_no_real_folder_means_no_model_call(tmp_path):
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from arno.importers.spike import run_real; from pathlib import Path; "
-            "print(run_real(Path('private/statements-does-not-exist')))",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0
-    assert "No folder" in result.stdout
+    runs, notes = run_real(tmp_path / "statements-does-not-exist")
+    assert runs == []
+    assert notes == [f"No folder at {tmp_path / 'statements-does-not-exist'}."]

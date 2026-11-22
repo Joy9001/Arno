@@ -12,7 +12,7 @@ import pytest
 from pydantic_ai import CancellationToken
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo
-from pydantic_ai_harness.subagents import DelegationTask, SubAgents
+from pydantic_ai_harness.subagents import DelegationTask
 
 from arno.agent.deps import AgentDeps
 from arno.agent.history import create_thread
@@ -28,9 +28,15 @@ from arno.jobs.runner import enqueue_job, recover_interrupted_jobs
 from arno.ledger.accounts import create_account, set_statement_balance
 from arno.ledger.audit import new_id
 from arno.ledger.errors import InvalidLedgerError
-from tests.agent_helpers import streaming_model
+from tests.agent_helpers import (
+    parser_agent,
+    run_context,
+    step_code,
+    step_output,
+    streaming_model,
+    streaming_steps,
+)
 from tests.import_fixtures import SBI_PARSER, minimal_pdf, sbi_csv
-from tests.test_agent_parser import _code, _ctx, _output, _streaming
 
 LOCKED_PDF = Path(__file__).parent / "fixtures" / "locked-1234.pdf"
 
@@ -87,11 +93,11 @@ async def _upload(client, payload: bytes, name: str = "sbi.csv") -> dict:
 
 
 async def test_replaying_the_same_statement_bytes_books_one_import_and_one_set_of_movements(
-    authed_client, ledger
+    session_client, ledger
 ):
     account = await _account(ledger)
-    first_upload = await _upload(authed_client, sbi_csv())
-    second_upload = await _upload(authed_client, sbi_csv())
+    first_upload = await _upload(session_client, sbi_csv())
+    second_upload = await _upload(session_client, sbi_csv())
     assert first_upload["sha256"] == second_upload["sha256"]
 
     first = await create_import(ledger, attachment_id=first_upload["id"], account_id=account["id"])
@@ -108,7 +114,7 @@ async def test_replaying_the_same_statement_bytes_books_one_import_and_one_set_o
 
     again = await create_import(
         ledger,
-        attachment_id=(await _upload(authed_client, sbi_csv()))["id"],
+        attachment_id=(await _upload(session_client, sbi_csv()))["id"],
         account_id=account["id"],
     )
     assert again["id"] == first["id"]
@@ -121,7 +127,7 @@ async def test_replaying_the_same_statement_bytes_books_one_import_and_one_set_o
 
 
 async def test_a_statement_that_needs_a_password_shows_why_and_survives_a_restart(
-    authed_client, ledger
+    session_client, ledger
 ):
     account = await _account(ledger)
     attachment_id = await _attachment(
@@ -131,11 +137,11 @@ async def test_a_statement_that_needs_a_password_shows_why_and_survives_a_restar
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
 
-    opened = await open_imports(_ctx(_deps(attachment_id)))
+    opened = await open_imports(run_context(_deps(attachment_id)))
     assert opened[0]["import_id"] == import_id
     assert opened[0]["locked"] is True
 
-    detail = authed_client.get(f"/api/imports/{import_id}").json()
+    detail = session_client.get(f"/api/imports/{import_id}").json()
     assert detail["status"] == "needs_password"
     assert "password" in (detail["reason"] or "").lower()
 
@@ -151,14 +157,13 @@ async def test_a_statement_that_needs_a_password_shows_why_and_survives_a_restar
     assert await reconcile_imports(ledger, {}) == 0
     assert await ledger.fetchval("SELECT status FROM jobs WHERE id = $1", job_id) == "pending"
 
-    after_restart = authed_client.get(f"/api/imports/{import_id}").json()
+    after_restart = session_client.get(f"/api/imports/{import_id}").json()
     assert after_restart["status"] == "needs_password"
     assert after_restart["reason"] == detail["reason"]
-    PASSWORDS.clear()
 
 
 async def test_a_wrong_password_leaves_an_explained_needs_password_state(
-    authed_client, ledger, monkeypatch
+    session_client, ledger, monkeypatch
 ):
     import arno.agent.parser as parser_module
 
@@ -169,20 +174,17 @@ async def test_a_wrong_password_leaves_an_explained_needs_password_state(
     import_id = (
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
-    await open_imports(_ctx(_deps(attachment_id)))
+    await open_imports(run_context(_deps(attachment_id)))
     monkeypatch.setattr(parser_module, "PASSWORD_WAIT_SECONDS", 0.05)
 
     PASSWORDS.put(import_id, "9999")
-    try:
-        result = await parser_module.wait_for_password(_ctx(_deps(attachment_id)), import_id)
-    finally:
-        PASSWORDS.clear()
+    result = await parser_module.wait_for_password(run_context(_deps(attachment_id)), import_id)
 
     assert result == {"status": "timed_out"}
     payload = await import_payload(ledger, import_id)
     assert payload["status"] == "needs_password"
     assert "didn't open" in payload["reason"]
-    shown = authed_client.get(f"/api/imports/{import_id}").json()
+    shown = session_client.get(f"/api/imports/{import_id}").json()
     assert shown["status"] == "needs_password"
     assert shown["reason"] == payload["reason"]
 
@@ -191,7 +193,7 @@ async def test_a_wrong_password_leaves_an_explained_needs_password_state(
 
 
 async def test_a_failed_refresh_keeps_the_old_statement_date_visible_and_reconciles_nothing(
-    authed_client, ledger
+    session_client, ledger
 ):
     account = await _account(ledger)
     await set_statement_balance(
@@ -224,7 +226,7 @@ async def test_a_failed_refresh_keeps_the_old_statement_date_visible_and_reconci
         == 0
     )
 
-    shown = authed_client.get("/api/accounts").json()["accounts"]
+    shown = session_client.get("/api/accounts").json()["accounts"]
     [account_payload] = [item for item in shown if item["id"] == account["id"]]
     assert account_payload["statement_balance_as_of"] == "2026-05-31"
     assert account_payload["statement_balance_paise"] == 30_000_000
@@ -234,7 +236,7 @@ async def test_a_failed_refresh_keeps_the_old_statement_date_visible_and_reconci
 # --- C04 box 1: a textless document has an explicit recovery state ------------------------
 
 
-async def test_a_textless_statement_ends_in_a_visible_vision_recovery_state(authed_client, ledger):
+async def test_a_textless_statement_ends_in_a_visible_vision_recovery_state(session_client, ledger):
     with pytest.raises(DocError) as caught:
         Doc(sbi_csv()).words(0)
     assert caught.value.code == "no_words"
@@ -251,11 +253,11 @@ async def test_a_textless_statement_ends_in_a_visible_vision_recovery_state(auth
     import_id = (
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
-    opened = await open_imports(_ctx(_deps(attachment_id)))
+    opened = await open_imports(run_context(_deps(attachment_id)))
     assert opened[0]["import_id"] == import_id
     assert opened[0]["vision_required"] is True
 
-    payload = authed_client.get(f"/api/imports/{import_id}").json()
+    payload = session_client.get(f"/api/imports/{import_id}").json()
     assert payload["status"] == "needs_input"
     assert "vision is not configured" in payload["reason"]
     assert payload["can_retry_parse"] is False
@@ -265,7 +267,7 @@ async def test_a_textless_statement_ends_in_a_visible_vision_recovery_state(auth
 
 
 async def test_the_statement_password_never_reaches_a_log_and_a_restart_asks_again(
-    authed_client, ledger, monkeypatch, caplog
+    session_client, ledger, monkeypatch, caplog
 ):
     import arno.agent.parser as parser_module
     import arno.importers.pipeline as pipeline_module
@@ -274,22 +276,18 @@ async def test_the_statement_password_never_reaches_a_log_and_a_restart_asks_aga
     caplog.clear()
     secret = "1234"  # the synthetic fixture's password; it must never reach a log
     account = await _account(ledger)
-    PASSWORDS.clear()
     attachment_id = await _attachment(
         ledger, LOCKED_PDF.read_bytes(), name="statement.pdf", content_type="application/pdf"
     )
     import_id = (
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
-    await open_imports(_ctx(_deps(attachment_id)))
+    await open_imports(run_context(_deps(attachment_id)))
 
-    try:
-        authed_client.post(f"/api/imports/{import_id}/password", json={"password": secret})
-        # The same in-memory vault: the route writes what the waiting parser reads.
-        assert PASSWORDS.get(import_id) == secret
-        unlocked = await parser_module.wait_for_password(_ctx(_deps(attachment_id)), import_id)
-    finally:
-        PASSWORDS.clear()
+    session_client.post(f"/api/imports/{import_id}/password", json={"password": secret})
+    # The same in-memory vault: the route writes what the waiting parser reads.
+    assert PASSWORDS.get(import_id) == secret
+    unlocked = await parser_module.wait_for_password(run_context(_deps(attachment_id)), import_id)
 
     assert unlocked["status"] == "failed"
     assert unlocked["vision_required"] is True
@@ -319,21 +317,14 @@ async def test_the_statement_password_never_reaches_a_log_and_a_restart_asks_aga
     monkeypatch.setattr(pipeline_module, "PASSWORDS", restarted)
     monkeypatch.setattr(parser_module, "PASSWORD_WAIT_SECONDS", 0.05)
     assert restarted.get(import_id) is None
-    again = await parser_module.wait_for_password(_ctx(_deps(attachment_id)), import_id)
+    again = await parser_module.wait_for_password(run_context(_deps(attachment_id)), import_id)
     assert again == {"status": "timed_out"}
-    payload = authed_client.get(f"/api/imports/{import_id}").json()
+    payload = session_client.get(f"/api/imports/{import_id}").json()
     assert payload["status"] == "needs_password"
     assert "password" in (payload["reason"] or "").lower()
 
 
 # --- C18 box 3, backend: a failed parse has a retry ---------------------------------------
-
-
-def _parser_agent(app):
-    capability = next(
-        cap for cap in app.state.agent.root_capability.capabilities if isinstance(cap, SubAgents)
-    )
-    return next(sub.agent for sub in capability.agents if sub.resolved_name == "parser")
 
 
 def _delegating_model():
@@ -360,7 +351,7 @@ def _delegating_model():
     return streaming_model(script)
 
 
-async def test_a_failed_parse_can_be_retried_as_a_new_parser_turn(authed_client, ledger):
+async def test_a_failed_parse_can_be_retried_as_a_new_parser_turn(session_client, ledger):
     account = await _account(ledger)
     attachment_id = await _attachment(ledger, sbi_csv())
     import_id = (
@@ -370,57 +361,67 @@ async def test_a_failed_parse_can_be_retried_as_a_new_parser_turn(authed_client,
         "UPDATE imports SET status = 'failed', reason = 'The parser stopped.' WHERE id = $1",
         import_id,
     )
-    detail = authed_client.get(f"/api/imports/{import_id}").json()
+    detail = session_client.get(f"/api/imports/{import_id}").json()
     assert detail["can_retry_parse"] is True
 
-    app = authed_client.app
+    app = session_client.app
     app.state.turns.waker = None
     tasks = app.state.tasks
     before = frozenset(tasks.records)
-    parser = _parser_agent(app)
-    sequence = _streaming(
-        _code("print(await open_imports())"),
-        _code(f"print(await submit_parser(import_ids=[{import_id!r}], code={SBI_PARSER!r}))"),
-        _output(
-            ParseReport(
-                status="ready",
-                imports=[ImportReport(import_id=import_id, status="review", rows=3)],
+    parser = parser_agent(app)
+    started = asyncio.Event()
+
+    def mark(step):
+        def script(info):
+            started.set()
+            return step(info) if callable(step) else step
+
+        return script
+
+    sequence = streaming_steps(
+        mark(step_code("print(await open_imports())")),
+        mark(
+            step_code(
+                f"print(await submit_parser(import_ids=[{import_id!r}], code={SBI_PARSER!r}))"
+            )
+        ),
+        mark(
+            step_output(
+                ParseReport(
+                    status="ready",
+                    imports=[ImportReport(import_id=import_id, status="review", rows=3)],
+                )
             )
         ),
     )
     with app.state.agent.override(model=_delegating_model()), parser.override(model=sequence):
-        response = authed_client.post(f"/api/imports/{import_id}/retry")
+        response = session_client.post(f"/api/imports/{import_id}/retry")
         assert response.status_code == 200, response.text
         assert response.json()["thread_id"]
-        for _ in range(400):
-            started = [key for key in tasks.records if key not in before]
-            if started and all(tasks.records[key].status == "finished" for key in started):
-                break
-            await asyncio.sleep(0.02)
-        for _ in range(200):
-            if authed_client.get(f"/api/imports/{import_id}").json()["status"] == "review":
-                break
-            await asyncio.sleep(0.02)
+        # The parser's own worker finishing is what settles the import.
+        await asyncio.wait_for(started.wait(), timeout=10)
+        [task_id] = [key for key in tasks.records if key not in before]
+        await asyncio.wait_for(tasks._workers[task_id], timeout=10)
 
-    final = authed_client.get(f"/api/imports/{import_id}").json()
+    final = session_client.get(f"/api/imports/{import_id}").json()
     assert final["status"] == "review", final
     assert len(final["lines"]) == 3
     assert final["can_retry_parse"] is False
 
 
-async def test_retrying_an_import_that_is_not_failed_is_refused(authed_client, ledger):
+async def test_retrying_an_import_that_is_not_failed_is_refused(session_client, ledger):
     account = await _account(ledger)
     attachment_id = await _attachment(ledger, sbi_csv())
     import_id = (
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
-    response = authed_client.post(f"/api/imports/{import_id}/retry")
+    response = session_client.post(f"/api/imports/{import_id}/retry")
     assert response.status_code == 409
-    assert authed_client.post("/api/imports/imp_missing/retry").status_code == 404
+    assert session_client.post("/api/imports/imp_missing/retry").status_code == 404
 
 
 async def test_a_retry_while_a_reply_is_running_refuses_and_leaves_the_run_marker(
-    authed_client, ledger
+    session_client, ledger
 ):
     account = await _account(ledger)
     attachment_id = await _attachment(ledger, sbi_csv())
@@ -431,7 +432,7 @@ async def test_a_retry_while_a_reply_is_running_refuses_and_leaves_the_run_marke
         "UPDATE imports SET status = 'failed', reason = 'The parser stopped.' WHERE id = $1",
         import_id,
     )
-    app = authed_client.app
+    app = session_client.app
     thread = await create_thread(ledger, title="Retry the import", thread_id="thread_retry_busy")
     task_id = "d" * 32
     app.state.tasks.records[task_id] = DelegationTask(
@@ -455,13 +456,18 @@ async def test_a_retry_while_a_reply_is_running_refuses_and_leaves_the_run_marke
         token=CancellationToken(),
     )
 
-    response = authed_client.post(f"/api/imports/{import_id}/retry")
+    try:
+        response = session_client.post(f"/api/imports/{import_id}/retry")
 
-    assert response.status_code == 409
-    assert "already running" in response.json()["detail"]
-    marker = await ledger.fetchrow(
-        "SELECT active_run_id, run_started_at FROM conversations WHERE id = $1",
-        thread["id"],
-    )
-    assert marker["active_run_id"] == "run_live"
-    assert marker["run_started_at"] is not None
+        assert response.status_code == 409
+        assert "already running" in response.json()["detail"]
+        marker = await ledger.fetchrow(
+            "SELECT active_run_id, run_started_at FROM conversations WHERE id = $1",
+            thread["id"],
+        )
+        assert marker["active_run_id"] == "run_live"
+        assert marker["run_started_at"] is not None
+    finally:
+        # Nothing will ever finish this fake turn; left in place, the app's shutdown drain waits
+        # its full timeout for it on teardown.
+        app.state.turns.turns.pop(str(thread["id"]), None)

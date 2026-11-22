@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -58,7 +59,10 @@ def _chunks(sse: str) -> list[dict]:
 
 def _assert_client_schema(sse: str) -> None:
     if shutil.which("node") is None or not (WEB / "node_modules" / "ai" / "package.json").exists():
-        pytest.skip("Node and web dependencies are needed to validate the client schema")
+        message = "Node and web dependencies are needed to validate the client schema"
+        if os.environ.get("CI"):
+            pytest.fail(message)
+        pytest.skip(message)
     result = subprocess.run(
         ["node", "--input-type=module", "-e", VALIDATE_JS],
         input=sse,
@@ -79,7 +83,7 @@ def _body(message_id: str) -> dict:
     }
 
 
-async def test_a_run_code_query_card_streams_a_valid_client_chunk(authed_client, demo_ledger):
+async def test_a_run_code_query_card_streams_a_valid_client_chunk(session_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         if not any(
             getattr(part, "tool_name", None) == "run_code"
@@ -101,8 +105,8 @@ async def test_a_run_code_query_card_streams_a_valid_client_chunk(authed_client,
             )
         return ModelResponse(parts=[TextPart("I read one account.")])
 
-    with authed_client.app.state.agent.override(model=streaming_model(script)):
-        response = authed_client.post("/api/chat", json=_body("client-schema-query"))
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        response = session_client.post("/api/chat", json=_body("client-schema-query"))
     assert response.status_code == 200, response.text
 
     _assert_client_schema(response.text)

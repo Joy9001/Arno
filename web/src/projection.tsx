@@ -255,7 +255,7 @@ export function ProjectionChart({
             stroke="#82867a"
             fontSize={12}
             width={78}
-            tickFormatter={(value: number) => formatPaise(value).replace(".00", "")}
+            tickFormatter={(value: number) => formatPaise(Math.round(value)).replace(".00", "")}
           />
           <Tooltip
             {...TOOLTIP_PROPS}
@@ -577,6 +577,7 @@ export function ProjectionCard({
   return (
     <motion.figure
       className="chat-card receipt"
+      data-testid="projection-receipt"
       initial={reducedMotion ? false : { opacity: 0, y: 8, scale: 0.995 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}

@@ -45,6 +45,12 @@ class SoftwareAuthenticator:
         self.key = ec.generate_private_key(ec.SECP256R1())
         self.credential_id = os.urandom(16)
         self.sign_count = 0
+        # Flip to false to model an authenticator that skipped user verification.
+        self.user_verified = True
+
+    def _flags(self, *, attested: bool) -> int:
+        flags = FLAG_USER_PRESENT | (FLAG_USER_VERIFIED if self.user_verified else 0)
+        return flags | (FLAG_ATTESTED_CREDENTIAL_DATA if attested else 0)
 
     def _cose_public_key(self) -> bytes:
         numbers = self.key.public_key().public_numbers()
@@ -71,7 +77,7 @@ class SoftwareAuthenticator:
     def registration_credential(self, options: dict[str, Any]) -> dict[str, Any]:
         client_data = _client_data("webauthn.create", options["challenge"], self.origin)
         auth_data = self._authenticator_data(
-            FLAG_USER_PRESENT | FLAG_USER_VERIFIED | FLAG_ATTESTED_CREDENTIAL_DATA,
+            self._flags(attested=True),
             attested=True,
         )
         attestation = cbor2.dumps({"fmt": "none", "attStmt": {}, "authData": auth_data})
@@ -93,7 +99,7 @@ class SoftwareAuthenticator:
     ) -> dict[str, Any]:
         client_data = _client_data("webauthn.get", options["challenge"], self.origin)
         self.sign_count += 1
-        auth_data = self._authenticator_data(FLAG_USER_PRESENT | FLAG_USER_VERIFIED, attested=False)
+        auth_data = self._authenticator_data(self._flags(attested=False), attested=False)
         signature = self.key.sign(
             auth_data + hashlib.sha256(client_data).digest(),
             ec.ECDSA(hashes.SHA256()),

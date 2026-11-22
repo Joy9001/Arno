@@ -7,12 +7,20 @@ the composer sends, and how a stream becomes tool calls, cards, and confirm card
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 from pydantic import TypeAdapter
 from pydantic_ai.ui.vercel_ai.request_types import RequestData
 
+from arno.ledger.movements import (
+    _effectively_reversed_ids,  # noqa: PLC2701 - the ledger's own rule
+    correct_movement,
+    record_expense,
+)
 from tests.e2e.driver import (
     Driver,
     _paise,
@@ -222,3 +230,129 @@ def test_a_zero_closing_adjustment_needs_no_confirmation():
     assert "closing adjustment: ₹0.00" in rendered
     assert "ready: driver commit imp_1" in rendered
     assert "--confirm-adjustment" not in rendered
+
+
+def test_the_driver_prints_a_stated_balance_conflict_and_needs_the_flag():
+    rendered = _render_import(
+        {
+            "import_id": "imp_1",
+            "status": "review",
+            "lines": [],
+            "closing_adjustment_paise": 0,
+            "stated_balance_paise": 500_000,
+            "stated_balance_as_of": "2026-11-10",
+            "stated_balance_reason": (
+                "You stated ₹5,000.00 on 2026-11-10; the statement shows ₹5,050.00 on that day."
+            ),
+        }
+    )
+    assert "stated balance: ₹5,000.00 as of 2026-11-10" in rendered
+    assert "the statement shows ₹5,050.00" in rendered
+    assert "ready: driver commit imp_1 --confirm-adjustment" in rendered
+
+
+def test_the_driver_prints_a_closing_taken_from_the_running_balance():
+    rendered = _render_import(
+        {
+            "import_id": "imp_1",
+            "status": "review",
+            "lines": [],
+            "closing_adjustment_paise": 0,
+            "closing_source_note": "No printed closing balance was read on this statement.",
+        }
+    )
+    assert "closing source: No printed closing balance was read" in rendered
+    assert "ready: driver commit imp_1" in rendered
+    assert "--confirm-adjustment" not in rendered
+
+
+# `up --keep` restarts the server without seeding, and the summary agrees with the ledger -------
+
+
+def test_up_keep_parses_and_refuses_to_seed():
+    from tests.e2e import driver
+
+    args = driver.build_parser().parse_args(["up", "--port", "8999", "--keep"])
+    assert args.keep is True
+    plain = driver.build_parser().parse_args(["up", "--port", "8999"])
+    assert plain.keep is False
+    with pytest.raises(SystemExit):
+        driver.cmd_up(
+            argparse.Namespace(port=8999, seed="demo", empty=False, keep=True, timeout=1.0)
+        )
+
+
+def test_up_keep_restarts_the_server_and_leaves_the_ledger_alone(monkeypatch, tmp_path):
+    from tests.e2e import driver
+
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(driver, "load_state", lambda: {"pid": 4321, "cookie": "c"})
+    monkeypatch.setattr(driver, "stop_server", lambda pid: calls.setdefault("stopped", pid) and 1)
+    monkeypatch.setattr(driver, "server_env", lambda port: {})
+    monkeypatch.setattr(driver, "state_dir", lambda: tmp_path)
+    monkeypatch.setattr(driver, "_require_free_port", lambda port: None)
+    monkeypatch.setattr(
+        driver,
+        "prepare_database",
+        lambda *, empty, seed: calls.setdefault("database", (empty, seed)) and "arno_x_test",
+    )
+    monkeypatch.setattr(driver, "start_server", lambda port, log_path: SimpleNamespace(pid=987))
+    monkeypatch.setattr(
+        driver, "wait_for_health", lambda base, timeout, process: {"schema_version": "26"}
+    )
+
+    class FakeDriver:
+        def __init__(self, base_url, cookie=None):
+            self.cookie = cookie
+
+        def logged_in(self):
+            return True
+
+        def session(self):
+            return {"user": {"display_name": "Demo"}}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(driver, "Driver", FakeDriver)
+    monkeypatch.setattr(driver, "save_state", lambda state: calls.setdefault("saved", state))
+
+    assert (
+        driver.cmd_up(argparse.Namespace(port=8999, seed=None, empty=False, keep=True, timeout=5.0))
+        == 0
+    )
+    assert calls["stopped"] == 4321
+    assert calls["database"] == (False, False)
+
+
+async def test_the_drivers_spending_agrees_with_the_ledger_after_undo_of_undo(ledger):
+    from arno.ledger.accounts import create_account
+    from arno.ledger.audit import undo_group
+    from arno.ledger.common import today
+    from tests.invariants import check_ledger
+
+    bank = await create_account(
+        ledger, kind="bank", name="Driver bank", opening_balance_paise=10_000_000
+    )
+    food = await ledger.fetchval(
+        "SELECT id FROM categories WHERE name = 'Food & Dining' AND active"
+    )
+    created = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=45_000,
+        description="Test Cafe",
+        category_id=food,
+        date=today(),
+    )
+    corrected = await correct_movement(ledger, created["id"], changes={"amount_paise": 40_500})
+    await undo_group(ledger, corrected["undo_id"])
+    await undo_group(ledger, created["undo_id"])
+
+    # The forest the parity rule misreads: one reversal child already restored, one still live.
+    assert created["id"] in await _effectively_reversed_ids(ledger)
+    summary = await asyncio.to_thread(ledger_summary)
+    assert summary["spending"] == []
+    violations = await check_ledger(ledger)
+    assert violations == [], [violation.code for violation in violations]

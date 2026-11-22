@@ -14,8 +14,9 @@ import pytest
 
 def _run_in_image(image_variable: str, script: str) -> None:
     image = os.environ.get(image_variable)
-    if not image or not shutil.which("docker"):
-        pytest.skip(f"Set {image_variable} and install Docker to test the image")
+    if not image:
+        pytest.skip(f"Set {image_variable} to a built image tag to test it")
+    assert shutil.which("docker"), f"docker is required to test {image_variable}={image}"
     result = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", script],
         capture_output=True,

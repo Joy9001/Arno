@@ -66,14 +66,20 @@ role at a closed port, so tests can never call a model. xdist gives each worker 
 Scale the check to the change; CI (`.github/workflows/ci.yml`) and `.pre-commit-config.yaml` run the
 full set.
 
+- Put regression tests in the feature's test module. Share reusable factories in `tests/fixtures/`.
 - Iterating: `uv run pytest tests/test_<area>.py -q -n 0`.
 - Any Python change: `uv run ruff check . && uv run ruff format --check .` (line length 100) and
   `uv run pyrefly check` (zero errors and zero warnings; how to fix one without hiding it is in
   [`typing.md`](docs/arno/typing.md)), then the affected test files. Run the whole
-  `uv run pytest -q` when you touch `ledger/`, `db/`, `tools/`, `agent/`, or `api/`, since they are
-  shared.
-- `web/` change: `pnpm --dir web lint && pnpm --dir web typecheck`; before finishing, `pnpm --dir web
-  build`. A change to answer or result cards in `web/src/chat/` also needs
+  `uv run pytest -q` once at the end when you touch `ledger/`, `db/`, `tools/`, `agent/`, or
+  `api/`, since they are shared.
+- Never run more than one full `uv run pytest` at a time: each invocation spawns 4 xdist workers
+  against the shared Postgres instance and saturates a 6-core laptop. Parallel subagents run only
+  their affected test files with `-n 0`; the coordinator runs the single full suite after all edits
+  land.
+- `web/` change: `pnpm --dir web lint`, `pnpm --dir web typecheck`, and `pnpm --dir web test:web`.
+  Before finishing, run `pnpm --dir web build`. A change to answer or result cards in
+  `web/src/chat/` also needs
   `pnpm --dir web test:answers` (it reads fixtures from `tests/fixtures/presentation_contract.py`).
 - `ledger/`, `tools/`, `importers/`, or `engine/` change: after `uv run arno demo seed`, run
   `uv run python -m tests.invariants` on a scratch `_test` database and keep the invariant tests

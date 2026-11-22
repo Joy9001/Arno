@@ -9,6 +9,115 @@ permissions:
   packages: write
 
 jobs:
+  contracts:
+    # Release images and the Phoenix cost patch are only proven after the images job has pushed
+    # them. These checks need Docker and a real service, so they never run on every push.
+    runs-on: ubuntu-latest
+    needs: images
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      UV_PYTHON: "3.14"
+      DATABASE_URL: postgresql://app:app@127.0.0.1:5432/arno_test
+      AGENT_RO_PASSWORD: agent_ro_test_password
+      BACKUP_PASSWORD: backup_test_password
+      PGHOST: 127.0.0.1
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      APP_PASSWORD: app
+      APP_DB: arno_test
+      ARNO_RP_ID: localhost
+      ARNO_RP_ORIGIN: http://localhost:8000
+      ARNO_COOKIE_SECURE: "0"
+      CHAT_BASE_URL: http://127.0.0.1:9/v1
+      CHAT_MODEL: blocked-in-ci
+      VISION_BASE_URL: http://127.0.0.1:9/v1
+      VISION_MODEL: blocked-in-ci
+      STT_BASE_URL: http://127.0.0.1:9/v1
+      STT_MODEL: blocked-in-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          CODENAME=$(. /etc/os-release && echo "${VERSION_CODENAME}")
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y postgresql-client-18 jq
+
+      - name: Provision the app role and databases
+        run: |
+          sh deploy/app-role.sh
+          psql -d postgres -c "CREATE DATABASE phoenix_cost_test"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: API and backup image smoke checks
+        env:
+          ARNO_API_TEST_IMAGE: ghcr.io/joy9001/arno:${{ github.ref_name }}
+          ARNO_BACKUP_TEST_IMAGE: ghcr.io/joy9001/arno-backup:${{ github.ref_name }}
+        run: uv run pytest tests/test_image_runtime.py -q -n 0
+
+      - name: Build the Phoenix cost image
+        run: docker build -t arno-phoenix-cost:ci deploy/phoenix-cost
+
+      - name: Start Phoenix on a scratch database
+        run: |
+          docker run -d --name arno-phoenix-cost-test --network host \
+            -e PHOENIX_SQL_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/phoenix_cost_test \
+            -e PHOENIX_ENABLE_AUTH=false \
+            -e PHOENIX_TELEMETRY_ENABLED=False \
+            arno-phoenix-cost:ci
+
+      - name: Wait for Phoenix
+        run: |
+          for _ in $(seq 1 90); do
+            if curl -fsS -X POST http://127.0.0.1:6006/graphql \
+              -H 'content-type: application/json' -d '{"query":"{ __typename }"}' >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs arno-phoenix-cost-test
+          exit 1
+
+      - name: Phoenix cost contract
+        env:
+          PHOENIX_COST_URL: http://127.0.0.1:6006
+          PHOENIX_COST_REQUIRED: "1"
+        run: uv run pytest tests/test_phoenix_cost_contract.py -q -n 0
+
+      - name: Phoenix logs on failure
+        if: failure()
+        run: docker logs arno-phoenix-cost-test || true
+
   images:
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +158,12 @@ jobs:
           tags: |
             ghcr.io/joy9001/arno-backup:${{ env.VERSION }}
             ghcr.io/joy9001/arno-backup:${{ github.ref_name }}
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [images, contracts]
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Publish the GitHub Release
         env:

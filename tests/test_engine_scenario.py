@@ -423,6 +423,33 @@ def test_validation_errors_for_past_dates_empty_or_too_many():
         )
 
 
+def test_nonpositive_amounts_and_goal_inflows_are_refused():
+    base = _inputs(as_of=date(2026, 1, 10))
+    with pytest.raises(ValueError, match="positive"):
+        apply_changes(
+            base,
+            [OneTime(name="Zero", amount_paise=0, direction="out", date=date(2026, 1, 20))],
+        )
+    with pytest.raises(ValueError, match="positive"):
+        apply_changes(
+            base,
+            [AddRecurring(name="Pay", amount_paise=0, direction="out", start=date(2026, 2, 1))],
+        )
+    with pytest.raises(ValueError, match="goal contributions"):
+        apply_changes(
+            base,
+            [
+                AddRecurring(
+                    name="Save",
+                    amount_paise=1_000,
+                    direction="in",
+                    start=date(2026, 2, 1),
+                    goal_id="goal",
+                )
+            ],
+        )
+
+
 def test_one_time_outflow_is_obligation_that_fails_obligations_met():
     base = _inputs(as_of=date(2026, 1, 1), start=100_000, floor=0, horizon=90)
     result = project_scenario(

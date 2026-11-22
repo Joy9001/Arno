@@ -103,6 +103,10 @@ def _preflight(config: Any) -> None:
             model=config.model,
             provider_url=config.base_url,
             billing_mode=config.billing_mode,
+            usage_probes=(
+                RequestUsage(input_tokens=1, output_tokens=1),
+                RequestUsage(audio_seconds=1),
+            ),
         )
     except ValueError as exc:
         raise TranscriptionError(

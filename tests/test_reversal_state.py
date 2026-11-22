@@ -141,21 +141,33 @@ async def test_reverse_movement_locks_target_row_against_concurrent_reversals(le
         description="Concurrent Target",
         date=today(),
     )
-    entered_second = asyncio.Event()
+    second_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
 
     async with connect() as conn1, connect() as conn2:
+        first = await conn1.fetchval("SELECT pg_backend_pid()")
+        assert first is not None
+        first_pid = int(first)
 
         async def _second_reversal() -> None:
             async with write_group(conn2, actor="user") as g2:
-                entered_second.set()
+                second = await conn2.fetchval("SELECT pg_backend_pid()")
+                assert second is not None
+                second_pid.set_result(int(second))
                 await reverse_movement(g2, created["id"], note="second")
 
         async with write_group(conn1, actor="user") as g1:
             await reverse_movement(g1, created["id"], note="first")
             task = asyncio.create_task(_second_reversal())
-            await entered_second.wait()
-            await asyncio.sleep(0.05)
-            # conn2 must block on SELECT ... FOR UPDATE until conn1 commits.
+            pid = await asyncio.wait_for(second_pid, timeout=5)
+
+            async def _blocked_on_first() -> None:
+                while first_pid not in (
+                    await ledger.fetchval("SELECT pg_blocking_pids($1)", pid) or []
+                ):
+                    await asyncio.sleep(0.001)
+
+            # Wait for the backend to report the row-lock wait, not a fixed nap.
+            await asyncio.wait_for(_blocked_on_first(), timeout=5)
             assert not task.done()
 
         with pytest.raises(ConflictLedgerError, match="already corrected or removed"):

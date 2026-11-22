@@ -228,8 +228,8 @@ async def test_archiving_keeps_matched_history_without_expanding_new_dates(ledge
     assert events[0]["payment_status"] == "paid"
 
 
-async def test_api_payment_match_round_trip_and_undo(authed_client):
-    client = authed_client
+async def test_api_payment_match_round_trip_and_undo(session_client):
+    client = session_client
     bank = client.post(
         "/api/accounts",
         json={

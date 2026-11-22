@@ -322,13 +322,146 @@ else:
 result
 """
 
+# A six-column wallet-style statement with a printed opening and closing and running balances.
+WALLET_PARSER = r"""
+rows = await doc_cells(0)
+header_index = -1
+for i, row in enumerate(rows):
+    joined = ' '.join(str(c) for c in row).lower()
+    if 'date' in joined and 'narration' in joined and 'debit' in joined and 'balance' in joined:
+        header_index = i
+        break
+result = {'not_a_statement': 'unknown'}
+if header_index >= 0:
+    out = []
+    for row in rows[header_index + 1:]:
+        if len(row) < 6 or not to_iso(row[0]):
+            continue
+        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
+                    'debit': money(row[3]) or 0, 'credit': money(row[4]) or 0,
+                    'balance': money(row[5]), 'counterparty': None})
+    result = {'accounts': [{'name': 'PhonePe', 'institution': 'PhonePe',
+                            'opening': None, 'closing': None,
+                            'headers': rows[header_index], 'rows': out}]}
+result
+"""
+
+CASH_PARSER = WALLET_PARSER.replace(
+    "'name': 'PhonePe', 'institution': 'PhonePe'", "'name': 'Cash Account', 'institution': 'Cash'"
+)
+
+
+CARD_PARSER = r"""
+rows = await doc_cells(0)
+header = None
+header_index = -1
+for i, row in enumerate(rows):
+    joined = ' '.join(str(c) for c in row).lower()
+    if 'transaction details' in joined and 'amount' in joined:
+        header = row
+        header_index = i
+        break
+if header is None:
+    result = {'not_a_statement': 'unknown'}
+else:
+    opening = None
+    closing = None
+    for row in rows:
+        text = ' '.join(str(c) for c in row)
+        low = text.lower()
+        value = money(text.split(':')[-1])
+        if value is None:
+            continue
+        if 'opening balance' in low:
+            opening = -value
+        if 'closing balance' in low:
+            closing = -value
+    out = []
+    for row in rows[header_index + 1:]:
+        if not row or not to_iso(row[0]):
+            continue
+        amount = money(row[2]) or 0
+        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
+                    'debit': -amount if amount < 0 else 0,
+                    'credit': amount if amount > 0 else 0, 'balance': None,
+                    'counterparty': str(row[1])[:120]})
+    result = {'accounts': [{'name': 'Slice card', 'institution': 'Slice',
+               'opening': opening, 'closing': closing, 'headers': header, 'rows': out}]}
+result
+"""
+
+
+def card_statement(
+    rows: list[tuple[str, str, str]],
+    closing: str,
+    *,
+    start: str = "01/04/2026",
+    end: str = "30/04/2026",
+) -> bytes:
+    """A card statement that prints the amount owed, as a real one does."""
+    lines = [
+        "Slice",
+        "Credit Card Statement",
+        f"Statement Period: {start} to {end}",
+        "Date,Transaction Details,Amount",
+    ]
+    lines += [",".join(row) for row in rows]
+    lines += [f'"Closing Balance: {closing}"']
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def _figure(paise: int, *, grouping: bool = False) -> str:
+    value = abs(int(paise))
+    whole, part = f"{value // 100}", value % 100
+    if grouping:
+        whole = f"{int(whole):,}"
+    return f"{whole}.{part:02d}"
+
+
+def wallet_statement(
+    *,
+    period: tuple[str, str],
+    opening_paise: int,
+    rows: list[tuple[str, str, int, int]],
+    ref_header: str = "Chq/Ref No",
+    institution: str = "PhonePe",
+) -> bytes:
+    """A wallet-style CSV with a printed opening and closing and running balances."""
+    running = opening_paise
+    lines = [
+        institution,
+        "Savings Account Statement",
+        f"Statement Period: {period[0]} to {period[1]}",
+        f'"Opening Balance: {_figure(opening_paise, grouping=True)}"',
+        f"Date,Narration,{ref_header},Debit,Credit,Balance",
+    ]
+    for day, narration, debit, credit in rows:
+        running += credit - debit
+        cells = [
+            day,
+            narration,
+            "",
+            _figure(debit) if debit else "",
+            _figure(credit) if credit else "",
+            _figure(running),
+        ]
+        lines.append(",".join(cells))
+    lines.append(f'"Closing Balance: {_figure(running, grouping=True)}"')
+    lines.append("Page 1 of 1")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 __all__ = [
+    "CARD_PARSER",
+    "CASH_PARSER",
     "SBI_PARSER",
     "SLICE_PARSER",
     "UNION_PARSER",
+    "WALLET_PARSER",
     "minimal_pdf",
     "minimal_xlsx",
     "sbi_csv",
     "slice_csv",
     "union_tsv",
+    "wallet_statement",
 ]

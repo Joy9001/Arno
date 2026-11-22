@@ -17,6 +17,8 @@ from arno.agent.presentation import (
 )
 from arno.engine.money import amortize, card_payoff, compound, money
 from arno.engine.projection import SourceIds
+from arno.ledger.deletion import retention_facts
+from arno.ledger.export import SECRET_TABLES
 from arno.tools.money import apr_percent
 from arno.tools.projection import card as projection_card
 
@@ -300,6 +302,8 @@ def fixtures() -> dict:
         "results": [resource.snapshot for resource in resources],
         "answers": answers,
         "comparison": comparison.snapshot,
+        "scope": {"excluded_tables": sorted(SECRET_TABLES)},
+        "deletion": retention_facts(),
         "cards": {
             "amortize_legacy": {"card": "amortize", "title": "Loan schedule", **loan_payload},
             "amortize_with_fee": {

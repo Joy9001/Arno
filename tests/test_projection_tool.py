@@ -22,16 +22,37 @@ from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
 
 
+@pytest.fixture
+def small_projection_runs(monkeypatch):
+    """Shape and wiring tests use a fixed small ensemble, not the 16,384-run production default."""
+    real_project = projection_tools.project
+    real_with_inputs = projection_tools.project_with_inputs
+
+    async def project(*args, **kwargs):
+        kwargs["runs"] = 50
+        return await real_project(*args, **kwargs)
+
+    async def project_with_inputs(*args, **kwargs):
+        kwargs["runs"] = 50
+        return await real_with_inputs(*args, **kwargs)
+
+    monkeypatch.setattr(projection_tools, "project", project)
+    monkeypatch.setattr(projection_tools, "project_with_inputs", project_with_inputs)
+
+
 async def test_snapshot_reads_in_one_read_only_repeatable_read_transaction(ledger, monkeypatch):
     read_settings = projection_tools.read_settings
+    calls: list[int] = []
 
     async def check_isolation(conn):
+        calls.append(1)
         assert await conn.fetchval("SHOW transaction_isolation") == "repeatable read"
         assert await conn.fetchval("SHOW transaction_read_only") == "on"
         return await read_settings(conn)
 
     monkeypatch.setattr(projection_tools, "read_settings", check_isolation)
     await projection_tools.load_snapshot(ledger)
+    assert calls, "load_snapshot must fetch settings inside the read-only transaction"
     assert not ledger.is_in_transaction()
 
 
@@ -251,6 +272,7 @@ async def test_purchase_projection_labels_follow_corrected_goal_contribution(led
         )
 
 
+@pytest.mark.usefixtures("small_projection_runs")
 async def test_eval_grader_accepts_the_project_and_affordability_checks(demo_ledger):
     from evals.graders import grade_answers
     from evals.models import EvalOutput
@@ -465,8 +487,9 @@ async def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
     assert projection.data["curve"]
 
 
-async def test_get_api_projection_returns_the_panel_payload(authed_client, demo_ledger):
-    response = authed_client.get("/api/projection", params={"horizon_days": 90})
+@pytest.mark.usefixtures("small_projection_runs")
+async def test_get_api_projection_returns_the_panel_payload(session_client, demo_ledger):
+    response = session_client.get("/api/projection", params={"horizon_days": 90})
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["curve"]
@@ -474,8 +497,9 @@ async def test_get_api_projection_returns_the_panel_payload(authed_client, demo_
     assert payload["data_quality"]["balance_ages"]
 
 
-async def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger):
-    response = authed_client.get(
+@pytest.mark.usefixtures("small_projection_runs")
+async def test_get_api_projection_with_a_hypothetical(session_client, demo_ledger):
+    response = session_client.get(
         "/api/projection",
         params={
             "amount_paise": 120_000_000,
@@ -489,8 +513,9 @@ async def test_get_api_projection_with_a_hypothetical(authed_client, demo_ledger
     assert "tradeoffs" in payload
 
 
-async def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_client, demo_ledger):
-    response = authed_client.get(
+@pytest.mark.usefixtures("small_projection_runs")
+async def test_get_api_projection_defaults_and_returns_the_emi_tenure(session_client, demo_ledger):
+    response = session_client.get(
         "/api/projection",
         params={
             "amount_paise": 120_000_000,
@@ -501,7 +526,7 @@ async def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_cli
     assert response.status_code == 200, response.text
     assert response.json()["hypothetical"]["emi_months"] == 3
 
-    chosen = authed_client.get(
+    chosen = session_client.get(
         "/api/projection",
         params={
             "amount_paise": 120_000_000,
@@ -514,8 +539,8 @@ async def test_get_api_projection_defaults_and_returns_the_emi_tenure(authed_cli
     assert chosen.json()["hypothetical"]["emi_months"] == 6
 
 
-async def test_get_api_projection_rejects_an_amount_without_a_date(authed_client):
-    response = authed_client.get("/api/projection", params={"amount_paise": 1000})
+async def test_get_api_projection_rejects_an_amount_without_a_date(session_client):
+    response = session_client.get("/api/projection", params={"amount_paise": 1000})
     assert response.status_code == 422
 
 
@@ -951,9 +976,10 @@ async def test_project_changes_summary_card_horizon_and_writes_nothing(demo_ledg
     assert after_counts == before_counts
 
 
-async def test_get_api_projection_with_changes_and_validation(authed_client, demo_ledger):
+@pytest.mark.usefixtures("small_projection_runs")
+async def test_get_api_projection_with_changes_and_validation(session_client, demo_ledger):
     start = ledger_today().isoformat()
-    ok = authed_client.get(
+    ok = session_client.get(
         "/api/projection",
         params={"changes": json.dumps([{"kind": "stop_income", "start": start}])},
     )
@@ -962,16 +988,16 @@ async def test_get_api_projection_with_changes_and_validation(authed_client, dem
     assert payload["scenario"] is not None
     assert payload["scenario"]["changes"][0]["kind"] == "stop_income"
 
-    bad_json = authed_client.get("/api/projection", params={"changes": "{bad"})
+    bad_json = session_client.get("/api/projection", params={"changes": "{bad"})
     assert bad_json.status_code == 422
 
-    not_list = authed_client.get(
+    not_list = session_client.get(
         "/api/projection",
         params={"changes": json.dumps({"kind": "stop_income", "start": start})},
     )
     assert not_list.status_code == 422
 
-    unknown_sched = authed_client.get(
+    unknown_sched = session_client.get(
         "/api/projection",
         params={
             "changes": json.dumps([{"kind": "pause_schedule", "schedule": "Gym", "start": start}])
@@ -980,7 +1006,7 @@ async def test_get_api_projection_with_changes_and_validation(authed_client, dem
     assert unknown_sched.status_code == 422
     assert "unknown schedule" in unknown_sched.json()["detail"].lower()
 
-    empty_every = authed_client.get(
+    empty_every = session_client.get(
         "/api/projection",
         params={
             "changes": json.dumps(

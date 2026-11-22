@@ -1,99 +1,41 @@
-"""Compaction keeps the newest turns and falls back for the summary call."""
+"""Arno's compaction wiring, tested through the capability list it actually builds.
+
+The generic harness strategies are the library's job to test. What Arno decides is that a
+long thread falls back from a summary to a sliding window, and that the summary itself uses
+the backup model so it still works with the primary down.
+"""
 
 from __future__ import annotations
 
-from pydantic_ai.exceptions import ModelAPIError
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.test import TestModel
 from pydantic_ai_harness.compaction import (
-    ClearToolResults,
+    FallbackCompaction,
+    SlidingWindowCompaction,
     SummarizingCompaction,
     TieredCompaction,
-    compact_now,
 )
 
-
-def _history(turns: int = 12) -> list[ModelMessage]:
-    messages: list[ModelMessage] = []
-    for index in range(turns):
-        messages.append(ModelRequest(parts=[UserPromptPart(f"question {index} " + "x" * 200)]))
-        messages.append(ModelResponse(parts=[TextPart(f"answer {index} " + "y" * 200)]))
-    return messages
+from arno.agent.capabilities import build_capabilities
 
 
-async def test_keep_tokens_protects_the_newest_user_turn():
-    def summarizer(messages, info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[TextPart("SUMMARY")])
-
-    strategy = TieredCompaction(
-        tiers=[
-            ClearToolResults(max_tokens=1, keep_pairs=2),
-            SummarizingCompaction(
-                model=None,
-                max_messages=1,
-                keep_tokens=80,
-                keep_messages=2,
-                keep_user_messages=True,
-                receipts=True,
-            ),
-        ],
-        target_tokens=10,
+def _tiered(backup=None) -> TieredCompaction:
+    capabilities = build_capabilities(
+        primary=TestModel(), backup=backup, spend_store=None, context_window=1_000
     )
-    history = _history()
-    compacted = await compact_now(strategy, history, model=FunctionModel(summarizer))
-    text = " ".join(
-        str(part.content)
-        for message in compacted
-        for part in getattr(message, "parts", [])
-        if hasattr(part, "content")
-    )
-    assert "SUMMARY" in text
-    assert "question 11" in text
+    return next(item for item in capabilities if isinstance(item, TieredCompaction))
 
 
-async def test_the_summary_uses_the_backup_when_the_main_model_is_down():
-    def down(messages, info: AgentInfo) -> ModelResponse:
-        raise ModelAPIError("primary", "down")
-
-    def summarizer(messages, info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[TextPart("BACKUP SUMMARY")])
-
-    summary = SummarizingCompaction(
-        model=FallbackModel(FunctionModel(down), FunctionModel(summarizer)),
-        max_messages=1,
-        keep_tokens=80,
-        keep_messages=2,
-        keep_user_messages=True,
-        receipts=True,
-    )
-    compacted = await compact_now(summary, _history(), model=FunctionModel(summarizer))
-    text = " ".join(
-        str(part.content)
-        for message in compacted
-        for part in getattr(message, "parts", [])
-        if hasattr(part, "content")
-    )
-    assert "BACKUP SUMMARY" in text
+def test_the_summary_falls_back_to_a_sliding_window():
+    tiered = _tiered()
+    fallback = next(item for item in tiered.tiers if isinstance(item, FallbackCompaction))
+    assert isinstance(fallback.fallback_chain[0], SummarizingCompaction)
+    assert isinstance(fallback.fallback_chain[1], SlidingWindowCompaction)
 
 
-async def test_a_sliding_window_answers_when_the_summary_fails():
-    from pydantic_ai_harness.compaction import FallbackCompaction, SlidingWindowCompaction
-
-    def down(messages, info: AgentInfo) -> ModelResponse:
-        raise ModelAPIError("primary", "down")
-
-    strategy = FallbackCompaction(
-        fallback_chain=[
-            SummarizingCompaction(
-                model=FunctionModel(down),
-                max_messages=1,
-                keep_tokens=80,
-                keep_messages=2,
-                keep_user_messages=True,
-            ),
-            SlidingWindowCompaction(max_messages=1, keep_tokens=80, receipts=True),
-        ]
-    )
-    compacted = await compact_now(strategy, _history(), model=FunctionModel(down))
-    assert len(compacted) < len(_history())
+def test_the_summary_uses_the_backup_when_the_main_model_is_down():
+    tiered = _tiered(backup=TestModel())
+    fallback = next(item for item in tiered.tiers if isinstance(item, FallbackCompaction))
+    summarizer = fallback.fallback_chain[0]
+    assert isinstance(summarizer, SummarizingCompaction)
+    assert isinstance(summarizer.model, FallbackModel)

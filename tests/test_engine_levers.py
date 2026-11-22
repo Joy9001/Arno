@@ -30,7 +30,7 @@ from arno.engine.projection import (
     project,
     reduce_categories,
 )
-from tests.test_engine_kernel import _ref_picker, _ref_walk, _spec
+from tests.fixtures.engine_kernel import _ref_picker, _ref_walk, _spec
 
 RUNS = 200
 # Checkpoints on both sides of a chunk edge (CHUNK_DAYS is 17 here), including days 20 and 34.

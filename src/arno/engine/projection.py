@@ -1697,10 +1697,6 @@ def reduce_categories(
     return replace(inputs, categories=tuple(categories)), rows
 
 
-def _add_months_public(day: date, months: int) -> date:
-    return _add_months(day, months)
-
-
 __all__ = [
     "BASE_HORIZON_DAYS",
     "DEFAULT_RUNS",

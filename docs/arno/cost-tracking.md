@@ -178,6 +178,8 @@ Preserve the existing audio upload format and byte limits. Read documented provi
 usage and any trustworthy duration already available. If neither reported units nor a defensible
 estimate is available, show unknown and stop the run; do not fabricate duration. No mandatory
 browser WAV conversion, media decoder, or audio-format rewrite belongs in this cost feature.
+Metered transcription checks both token and audio-duration pricing before dispatch. It charges
+and journals the usage the verified provider actually returns.
 Explicit local STT still has zero provider fee, with unknown duration shown as unknown duration.
 
 ## Batch accounting

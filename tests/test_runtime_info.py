@@ -69,11 +69,11 @@ def test_runtime_info_requires_a_session(client):
     assert client.get("/api/runtime-info").status_code == 401
 
 
-def test_runtime_info_route_returns_host_and_model(authed_client, monkeypatch):
+def test_runtime_info_route_returns_host_and_model(session_client, monkeypatch):
     monkeypatch.setenv("CHAT_BASE_URL", "https://user:pw@models.example.com/v1?key=secret")
     monkeypatch.setenv("CHAT_MODEL", "deepseek-v4.1-flash")
 
-    response = authed_client.get("/api/runtime-info")
+    response = session_client.get("/api/runtime-info")
 
     assert response.status_code == 200
     chat = next(role for role in response.json()["roles"] if role["role"] == "CHAT")

@@ -12,7 +12,7 @@ const moneyWhole = new Intl.NumberFormat("en-IN", {
 
 /** Money crosses the API as integer paise. This is display only. */
 export function formatPaise(paise: number | null | undefined): string {
-  if (paise === null || paise === undefined) return "—";
+  if (paise === null || paise === undefined || !Number.isSafeInteger(paise)) return "—";
   return paise % 100 === 0 ? moneyWhole.format(paise / 100) : money.format(paise / 100);
 }
 

@@ -224,11 +224,13 @@ def _service_reachable() -> bool:
 
 
 if not _service_reachable():
-    pytest.skip(
+    _reason = (
         f"patched Phoenix is not reachable at {GRAPHQL_URL}; build and run "
-        "deploy/phoenix-cost on a scratch database to run this contract",
-        allow_module_level=True,
+        "deploy/phoenix-cost on a scratch database to run this contract"
     )
+    if os.environ.get("PHOENIX_COST_REQUIRED"):
+        raise RuntimeError(_reason)
+    pytest.skip(_reason, allow_module_level=True)
 
 
 def _project_name() -> str:

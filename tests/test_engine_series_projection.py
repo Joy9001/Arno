@@ -26,7 +26,7 @@ from arno.engine.projection import (
     simulate_paths,
 )
 
-RUNS = 16_384
+RUNS = 2_048  # fixed sample size: enough for the binomial bounds below, ~8x cheaper than production
 AS_OF = date(2026, 1, 1)
 
 

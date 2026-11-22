@@ -99,7 +99,7 @@ async def _stored_user(db, client_id: str) -> dict[str, Any]:
     return row["content"]
 
 
-async def test_a_quote_reaches_the_model_and_survives_reload(authed_client, demo_ledger):
+async def test_a_quote_reaches_the_model_and_survives_reload(session_client, demo_ledger):
     await _thread(demo_ledger, "thread_quote")
     source_id = await _seed_message(
         demo_ledger,
@@ -116,15 +116,15 @@ async def test_a_quote_reaches_the_model_and_survives_reload(authed_client, demo
         quote={"text": quote_text, "messageId": source_id},
     )
 
-    with authed_client.app.state.agent.override(model=_capture(seen)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture(seen)):
+        response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
     assert f"> {quote_text}" in _user_text(seen[0])
     assert "Why was that charged?" in _user_text(seen[0])
     assert quote_text not in _system_text(seen[0])
 
-    thread = authed_client.get("/api/threads/thread_quote/messages").json()
+    thread = session_client.get("/api/threads/thread_quote/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert user["parts"] == [{"type": "text", "text": "Why was that charged?"}]
     assert user["metadata"]["custom"]["quote"] == {
@@ -133,7 +133,7 @@ async def test_a_quote_reaches_the_model_and_survives_reload(authed_client, demo
     }
 
 
-async def test_a_quote_can_name_the_live_assistant_client_id(authed_client, demo_ledger):
+async def test_a_quote_can_name_the_live_assistant_client_id(session_client, demo_ledger):
     await _thread(demo_ledger, "thread_quote")
     row_id = await _seed_message(
         demo_ledger,
@@ -149,8 +149,8 @@ async def test_a_quote_can_name_the_live_assistant_client_id(authed_client, demo
         quote={"text": "A live reply.", "messageId": "live-assistant-id"},
     )
 
-    with authed_client.app.state.agent.override(model=_capture(seen)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture(seen)):
+        response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
     assert row_id != "live-assistant-id"
@@ -159,14 +159,14 @@ async def test_a_quote_can_name_the_live_assistant_client_id(authed_client, demo
     assert stored["metadata"]["custom"]["quote"]["messageId"] == "live-assistant-id"
 
 
-async def test_a_just_streamed_reply_can_be_quoted_by_its_streamed_id(authed_client, demo_ledger):
+async def test_a_just_streamed_reply_can_be_quoted_by_its_streamed_id(session_client, demo_ledger):
     """The browser only knows the id from the stream's start chunk until it reloads."""
     import json
 
     await _thread(demo_ledger, "thread_quote")
     seen: list[list[Any]] = []
-    with authed_client.app.state.agent.override(model=_capture(seen, "Your floor is unset.")):
-        first = authed_client.post("/api/chat", json=_body("client_first", text="Floor?"))
+    with session_client.app.state.agent.override(model=_capture(seen, "Your floor is unset.")):
+        first = session_client.post("/api/chat", json=_body("client_first", text="Floor?"))
     assert first.status_code == 200, first.text
     start = next(
         json.loads(line[len("data: ") :])
@@ -180,14 +180,16 @@ async def test_a_just_streamed_reply_can_be_quoted_by_its_streamed_id(authed_cli
         text="Why?",
         quote={"text": "Your floor is unset.", "messageId": streamed_id},
     )
-    with authed_client.app.state.agent.override(model=_capture(seen)):
-        second = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture(seen)):
+        second = session_client.post("/api/chat", json=body)
 
     assert second.status_code == 200, second.text
     assert "> Your floor is unset." in _user_text(seen[-1])
 
 
-async def test_a_quote_source_must_be_a_text_message_in_the_same_thread(authed_client, demo_ledger):
+async def test_a_quote_source_must_be_a_text_message_in_the_same_thread(
+    session_client, demo_ledger
+):
     await _thread(demo_ledger, "thread_quote_a")
     await _thread(demo_ledger, "thread_quote_b")
     source_id = await _seed_message(
@@ -198,7 +200,7 @@ async def test_a_quote_source_must_be_a_text_message_in_the_same_thread(authed_c
         client_id="source-other-thread",
     )
 
-    cross = authed_client.post(
+    cross = session_client.post(
         "/api/chat",
         json=_body(
             "client_cross",
@@ -210,7 +212,7 @@ async def test_a_quote_source_must_be_a_text_message_in_the_same_thread(authed_c
     assert cross.status_code == 422
     assert "no longer available" in cross.json()["detail"]
 
-    missing = authed_client.post(
+    missing = session_client.post(
         "/api/chat",
         json=_body(
             "client_missing",
@@ -228,9 +230,9 @@ async def test_a_quote_source_must_be_a_text_message_in_the_same_thread(authed_c
     )
 
 
-async def test_oversized_and_malformed_quotes_are_refused(authed_client, demo_ledger):
+async def test_oversized_and_malformed_quotes_are_refused(session_client, demo_ledger):
     await _thread(demo_ledger, "thread_quote")
-    oversized = authed_client.post(
+    oversized = session_client.post(
         "/api/chat",
         json=_body(
             "client_oversized",
@@ -241,7 +243,7 @@ async def test_oversized_and_malformed_quotes_are_refused(authed_client, demo_le
     assert oversized.status_code == 422
     assert "longer than" in oversized.json()["detail"]
 
-    malformed = authed_client.post(
+    malformed = session_client.post(
         "/api/chat",
         json=_body(
             "client_malformed",
@@ -255,7 +257,7 @@ async def test_oversized_and_malformed_quotes_are_refused(authed_client, demo_le
 
 
 async def test_a_quote_is_redacted_before_it_is_stored_and_shown_to_the_model(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     await _thread(demo_ledger, "thread_quote")
     source_id = await _seed_message(
@@ -272,8 +274,8 @@ async def test_a_quote_is_redacted_before_it_is_stored_and_shown_to_the_model(
         quote={"text": "Card 4111 1111 1111 1111 was charged.", "messageId": source_id},
     )
 
-    with authed_client.app.state.agent.override(model=_capture(seen)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture(seen)):
+        response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
     assert "4111" not in _user_text(seen[0])
@@ -290,7 +292,7 @@ async def test_a_quote_is_redacted_before_it_is_stored_and_shown_to_the_model(
 
 
 async def test_a_second_turn_keeps_the_quote_in_history_without_duplicating_it(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     await _thread(demo_ledger, "thread_quote")
     source_id = await _seed_message(
@@ -304,8 +306,8 @@ async def test_a_second_turn_keeps_the_quote_in_history_without_duplicating_it(
     seen: list[list[Any]] = []
     model = _capture(seen)
 
-    with authed_client.app.state.agent.override(model=model):
-        first = authed_client.post(
+    with session_client.app.state.agent.override(model=model):
+        first = session_client.post(
             "/api/chat",
             json=_body(
                 "client_quote_first",
@@ -314,7 +316,7 @@ async def test_a_second_turn_keeps_the_quote_in_history_without_duplicating_it(
             ),
         )
         assert first.status_code == 200, first.text
-        second = authed_client.post(
+        second = session_client.post(
             "/api/chat",
             json=_body("client_quote_second", text="And later?"),
         )
@@ -325,7 +327,7 @@ async def test_a_second_turn_keeps_the_quote_in_history_without_duplicating_it(
     assert "custom" not in (second_user.get("metadata") or {})
 
 
-async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_ledger):
+async def test_a_quote_and_a_statement_keep_both_references(session_client, demo_ledger):
     await _thread(demo_ledger, "thread_quote")
     source_id = await _seed_message(
         demo_ledger,
@@ -334,7 +336,7 @@ async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_
         text="The statement covers October.",
         client_id="source-statement",
     )
-    statement = authed_client.post(
+    statement = session_client.post(
         "/api/attachments",
         files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
         data={"purpose": "statement"},
@@ -357,12 +359,12 @@ async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_
         ],
     )
 
-    with authed_client.app.state.agent.override(model=_capture(seen)):
-        response = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture(seen)):
+        response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
     assert "The statement covers October." in _user_text(seen[0])
-    thread = authed_client.get("/api/threads/thread_quote/messages").json()
+    thread = session_client.get("/api/threads/thread_quote/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert [part["type"] for part in user["parts"]] == ["text", "data-statement"]
     assert user["metadata"]["custom"]["quote"]["text"] == "The statement covers October."
@@ -380,13 +382,13 @@ async def test_a_quote_and_a_statement_keep_both_references(authed_client, demo_
 
 
 async def test_a_legacy_turn_without_a_quote_is_unchanged_and_keeps_the_stream_headers(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     await _thread(demo_ledger, "thread_quote")
     body = _body("client_plain", text="Hello")
-    with authed_client.app.state.agent.override(model=_capture([])):
-        response = authed_client.post("/api/chat", json=body)
-        replay = authed_client.post("/api/chat", json=body)
+    with session_client.app.state.agent.override(model=_capture([])):
+        response = session_client.post("/api/chat", json=body)
+        replay = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
     assert response.headers["x-resumable-stream-id"] == "thread_quote"

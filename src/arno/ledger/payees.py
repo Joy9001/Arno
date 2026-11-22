@@ -112,6 +112,7 @@ async def create_payee(
     outside_text: bool = False,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     name = display_name.strip()
     if not name:
@@ -127,7 +128,7 @@ async def create_payee(
         if row is not None:
             raise InvalidLedgerError(f"UPI id {upi_id} is already on another payee")
 
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         row = await conn.fetchrow_required(
             """
             INSERT INTO payees

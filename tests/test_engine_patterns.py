@@ -5,6 +5,7 @@ from __future__ import annotations
 from arno.engine.patterns import (
     FAMILY_INTERVAL_DAYS,
     KnownSchedule,
+    is_covered,
     rule_interval_days,
     same_charge,
 )
@@ -45,3 +46,25 @@ def test_a_matching_cadence_and_amount_covers_the_charge() -> None:
     )
     assert same_charge(schedule, {"cat_rent"}, 2_800_000, FAMILY_INTERVAL_DAYS["monthly"]) is True
     assert same_charge(schedule, {"cat_rent"}, 2_800_000, FAMILY_INTERVAL_DAYS["weekly"]) is False
+
+
+def test_an_unconfirmed_schedule_does_not_cover_a_charge() -> None:
+    schedule = KnownSchedule(
+        id="sch_rent",
+        name="Rent",
+        normalized="rent",
+        amount_paise=2_800_000,
+        category_id="cat_rent",
+        interval_days=FAMILY_INTERVAL_DAYS["monthly"],
+        confirmed=False,
+    )
+    assert (
+        is_covered(
+            normalized="rent",
+            categories={"cat_rent"},
+            amount_paise=2_800_000,
+            interval_days=FAMILY_INTERVAL_DAYS["monthly"],
+            schedules=(schedule,),
+        )
+        is False
+    )

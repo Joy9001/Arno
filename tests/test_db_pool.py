@@ -39,8 +39,32 @@ from arno.ledger import audit as ledger_audit
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import write_group
 from arno.ledger.errors import CommitOutcomeUnknownError
-from tests.conftest import _dsn
+from tests.conftest import _dsn, _mutable_reset
 from tests.software_authenticator import SoftwareAuthenticator
+
+
+@pytest.mark.usefixtures("app")
+async def test_api_reset_repairs_edited_seed_rows_and_keeps_unchanged_ones():
+    async with connect(_dsn()) as conn:
+        category = await conn.fetchrow_required(
+            "SELECT id, name FROM categories ORDER BY id LIMIT 1"
+        )
+        vapid_version = await conn.fetchval("SELECT xmin::text FROM vapid_keys WHERE id = 1")
+        assert vapid_version is not None
+        await conn.execute(
+            "UPDATE categories SET name = 'Edited category' WHERE id = $1", category["id"]
+        )
+
+    await _mutable_reset(api=True)
+
+    async with connect(_dsn()) as conn:
+        assert (
+            await conn.fetchval("SELECT name FROM categories WHERE id = $1", category["id"])
+            == category["name"]
+        )
+        assert (
+            await conn.fetchval("SELECT xmin::text FROM vapid_keys WHERE id = 1") == vapid_version
+        )
 
 
 async def _enroll_async_client(client: httpx.AsyncClient, settings: Settings) -> None:
@@ -156,13 +180,20 @@ class _TcpProxy:
             self._writers.discard(up_writer)
 
 
+# Every pool test opens a real Postgres connection (even the ones that fake a slow model or a
+# closed port), so each needs the in-place reset when run on its own.
+@pytest.fixture(autouse=True)
+async def _pool_clean_database(clean_database: None) -> None:
+    del clean_database
+
+
 # 1. Idle backend termination --------------------------------------------------------------------
 
 
 async def test_idle_cached_backend_termination_recovers_on_next_request(
-    authed_client: TestClient, db: Connection
+    session_client: TestClient, db: Connection
 ) -> None:
-    warm = authed_client.get("/api/accounts")
+    warm = session_client.get("/api/accounts")
     assert warm.status_code == 200
 
     rows = await db.fetch(
@@ -178,7 +209,7 @@ async def test_idle_cached_backend_termination_recovers_on_next_request(
     for row in rows:
         await db.execute("SELECT pg_terminate_backend($1)", row["pid"])
 
-    after = authed_client.get("/api/accounts")
+    after = session_client.get("/api/accounts")
     assert after.status_code == 200
 
 
@@ -291,8 +322,13 @@ async def test_mid_write_closed_before_commit_block_raises_connection_does_not_e
                     )
                     pid = await conn.fetchval("SELECT pg_backend_pid()")
                     await db.execute("SELECT pg_terminate_backend($1)", pid)
-                    # Let the transport receive EOF so conn.is_closed() is True before COMMIT.
-                    await asyncio.sleep(0.05)
+
+                    async def _until_closed() -> None:
+                        while not conn.is_closed():
+                            await asyncio.sleep(0.001)
+
+                    # Wait for the transport to observe EOF, not a fixed nap.
+                    await asyncio.wait_for(_until_closed(), timeout=5)
 
         assert not isinstance(exc_info.value, CommitOutcomeUnknownError)
         assert await db.fetchval("SELECT count(*) FROM categories WHERE id = 'cat_closed'") == 0
@@ -322,14 +358,14 @@ async def test_commit_loss_raises_commit_outcome_unknown_error(
 
 
 async def test_commit_loss_api_returns_distinct_503_body(
-    authed_client: TestClient, monkeypatch: pytest.MonkeyPatch
+    session_client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def fail_commit(tx: Any) -> None:
         raise asyncpg.ConnectionDoesNotExistError("lost during COMMIT")
 
     monkeypatch.setattr(ledger_audit, "_commit_transaction", fail_commit)
 
-    response = authed_client.post(
+    response = session_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "Uncertain API Account"},
     )
@@ -794,7 +830,7 @@ async def test_cached_connection_resets_session_state_and_decodes_jsonb(
     ],
 )
 async def test_api_503_handler_maps_connection_and_shutdown_errors(
-    authed_client: TestClient,
+    session_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     error: Exception,
@@ -807,7 +843,7 @@ async def test_api_503_handler_maps_connection_and_shutdown_errors(
 
     monkeypatch.setattr(ledger_accounts, "list_accounts", boom)
     with caplog.at_level(logging.WARNING, logger="arno"):
-        response = authed_client.get("/api/accounts")
+        response = session_client.get("/api/accounts")
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["detail"] == "The database is unreachable."
@@ -818,8 +854,9 @@ async def test_api_503_handler_maps_connection_and_shutdown_errors(
 
 
 async def test_api_does_not_turn_bare_timeout_error_into_503(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, clean_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    del clean_database  # enrollment needs fresh setup state, not a user left by a prior app test
     from arno.ledger import accounts as ledger_accounts
 
     async def model_timeout(conn: Connection, **kwargs: Any) -> list[dict[str, Any]]:

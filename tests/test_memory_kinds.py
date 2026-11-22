@@ -106,14 +106,14 @@ async def test_an_unknown_kind_is_rejected(demo_ledger):
         await _remember(demo_ledger, "Use Hinglish when I do", kind="note")
 
 
-async def test_the_kind_endpoint_changes_kind_and_undo_restores_it(authed_client, db):
+async def test_the_kind_endpoint_changes_kind_and_undo_restores_it(session_client, db):
     preference = await db.fetchrow(
         "INSERT INTO preferences (body, created_by, kind) "
         "VALUES ('Family transfers are essential expenses', 'agent', 'preference') "
         "RETURNING id"
     )
 
-    response = authed_client.patch(
+    response = session_client.patch(
         f"/api/preferences/{preference['id']}/kind", json={"kind": "rule"}
     )
     assert response.status_code == 200, response.text
@@ -127,13 +127,13 @@ async def test_the_kind_endpoint_changes_kind_and_undo_restores_it(authed_client
     assert await _kind(db, preference["id"]) == "preference"
 
 
-async def test_the_kind_endpoint_rejects_unknown_ids_and_bad_kinds(authed_client, db):
+async def test_the_kind_endpoint_rejects_unknown_ids_and_bad_kinds(session_client, db):
     preference = await db.fetchrow(
         "INSERT INTO preferences (body, created_by) VALUES ('Use UPI first', 'user') RETURNING id"
     )
 
-    missing = authed_client.patch("/api/preferences/prf_missing/kind", json={"kind": "fact"})
-    invalid = authed_client.patch(
+    missing = session_client.patch("/api/preferences/prf_missing/kind", json={"kind": "fact"})
+    invalid = session_client.patch(
         f"/api/preferences/{preference['id']}/kind", json={"kind": "note"}
     )
 

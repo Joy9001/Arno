@@ -30,19 +30,6 @@ class _BrokenStore:
         raise RuntimeError("the ledger is down")
 
 
-async def _clear_spend(db) -> None:
-    if await db.fetchval("SELECT to_regclass('public.spend_counters') IS NOT NULL"):
-        await db.execute("TRUNCATE spend_counters, spend_dedup")
-
-
-@pytest.fixture(autouse=True)
-async def isolated_spend_day(db):
-    """The shared day now outlives a test session, so these tests must not leak a row."""
-    await _clear_spend(db)
-    yield
-    await _clear_spend(db)
-
-
 def _observation(usd: str) -> CostObservation:
     return CostObservation(
         usd=Decimal(usd),

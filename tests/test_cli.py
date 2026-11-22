@@ -8,8 +8,8 @@ from typer.testing import CliRunner
 from arno.auth.setup import setup_required
 from arno.cli import app as cli_app
 from arno.engine import hackerrank
+from tests.fixtures.passkeys import complete_setup
 from tests.software_authenticator import SoftwareAuthenticator
-from tests.test_auth import _complete_setup
 
 TOKEN_RE = re.compile(r"/setup#t=([A-Za-z0-9_\-]+)")
 
@@ -52,7 +52,7 @@ async def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
     client, setup_token, settings, db
 ):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
 
     result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["passkeys", "reset"])
 
@@ -70,7 +70,7 @@ async def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
     assert match is not None
     token = match.group(1)
     replacement = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, token, replacement).status_code == 200
+    assert complete_setup(client, token, replacement).status_code == 200
 
 
 def test_passkey_list_is_empty_before_setup(client):
@@ -98,7 +98,7 @@ def test_migrate_reports_already_up_to_date(client):
 
 async def test_setup_token_command_refuses_when_setup_is_complete(client, setup_token, settings):
     authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert _complete_setup(client, setup_token, authenticator).status_code == 200
+    assert complete_setup(client, setup_token, authenticator).status_code == 200
 
     result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["setup-token"])
 

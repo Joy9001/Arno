@@ -334,6 +334,65 @@ def test_a_whole_rupee_amount_may_be_rounded_from_paise():
     assert check("It ends 18 months early.", {"months": 8}) == ["18"]
 
 
+def test_a_percent_claim_only_matches_a_ratio_the_model_was_given():
+    # A count that happens to share the number must never justify a percentage.
+    assert check("42% went to food.", {"rows": 42}, kinds=("money", "percent")) == ["42%"]
+    # A fraction, an explicit percent field, and a percent the user typed all do justify it.
+    assert check("42% went to food.", {"share": 0.42}, kinds=("money", "percent")) == []
+    assert check("42% went to food.", {"percent": 42}, kinds=("money", "percent")) == []
+    assert check("42% went to food.", {}, ("about 42%",), kinds=("money", "percent")) == []
+
+
+def test_trailing_zeros_are_not_rounding_slack_for_money():
+    # ₹1,000 is not traceable to a ₹500 source: the old ±500 trailing-zero slack hid this.
+    assert check("Rent was ₹1000.", {"rent": {"paise": 50_000}}) == ["₹1000"]
+    # The same displayed precision and legitimate scale rounding still trace.
+    assert check("Rent was ₹1000.", {"rent": {"paise": 100_000}}) == []
+    assert check("You have about ₹1.25 lakh.", BAL) == []
+
+
+# Regressions folded from the wave-numbered agent audit into this feature module.
+
+
+def test_a_short_scale_amount_without_a_rupee_sign_is_checked():
+    # "12k" is how a model writes an amount; it used to be invisible to the check.
+    assert check("Roughly 12k this month.", {"total": {"paise": 1_000_000}}) == ["12k"]
+    assert check("Roughly 12k this month.", {"total": {"paise": 1_234_500}}) == []
+
+
+def test_a_thousand_word_is_one_amount_not_a_bare_count():
+    savings = {"monthly": {"paise": 3_000_000}}
+    assert check("Rent is 30 thousand a month.", savings) == []
+    assert check("Rent is 30 thousand a month.", {"monthly": {"paise": 1_000_000}}) == [
+        "30 thousand"
+    ]
+
+
+def test_a_grouped_amount_without_a_rupee_sign_is_an_amount():
+    # Indian grouping is how this product writes money; a bare integer stays a count.
+    assert check("The EMI is 31,500 a month.", {"emi": {"paise": 3_150_000}}) == []
+    assert check("The EMI is 31,500 a month.", {}) == ["31,500"]
+    assert check("The EMI is 31,500 a month.", {}, kinds=("money", "percent")) == ["31,500"]
+    assert check("I found 3 transactions.", {}, kinds=("money", "percent")) == []
+
+
+def test_a_negative_amount_without_a_rupee_sign_is_checked():
+    assert check("Net worth is -18,04,797.", [], scripted=[{"output": "-1804797.0"}]) == []
+    assert check("Net worth is -18,04,797.", {}) == ["-18,04,797"]
+
+
+def test_a_percentage_after_top_is_still_checked():
+    assert check("Top 10% of your spending was food.", {}) == ["10%"]
+    assert check("Your top 3 categories are rent, food, and transport.", {}) == []
+
+
+def test_scales_dates_ranges_and_cards_do_not_become_new_false_positives():
+    assert check("2 l of water a day", {}) == ["2"]
+    assert check("The dates are 2026-10-01 to 2026-10-31.", {}) == []
+    assert check("The 10-20 band is where you land.", {"band": "10-20"}) == []
+    assert check("Ledger stores last 4 digits, 16-digit numbers are not kept.", {}) == []
+
+
 def test_card_payoff_and_amortize_apr_values_trace():
     from arno.engine.money import amortize, card_payoff
     from arno.tools.money import apr_percent

@@ -26,7 +26,7 @@ from arno.ledger import schedules as schedules_mod
 from arno.ledger import settings as settings_mod
 from arno.ledger.audit import undo_group, undo_latest, write_group
 from arno.ledger.common import today as ledger_today
-from arno.ledger.errors import InvalidLedgerError
+from arno.ledger.errors import InvalidLedgerError, LedgerError
 from arno.tools.mark import mark
 from arno.tools.money import (
     ToolInputError,
@@ -159,25 +159,15 @@ async def resolve_payee(
     upi_id: str | None = None,
     match_hash: str | None = None,
     outside_text: bool = False,
+    actor: str = "agent",
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if not name or not name.strip():
         raise ToolInputError("a payee is required")
     name = name.strip()
-    if upi_id:
-        row = await conn.fetchrow(
-            "SELECT * FROM payees WHERE active AND lower(upi_id) = lower($1) "
-            "ORDER BY display_name LIMIT 1",
-            upi_id,
-        )
-    else:
-        row = await conn.fetchrow(
-            """
-            SELECT * FROM payees
-            WHERE active AND lower(display_name) = lower($1)
-            ORDER BY display_name LIMIT 1
-            """,
-            name,
-        )
+    # One read-only lookup, shared with the duplicate check: a name that already has a payee
+    # never creates a second one, and the check that decides this writes nothing.
+    row = await _find_payee(conn, name, upi_id=upi_id)
     if row is not None:
         return row
     return await payees_mod.create_payee(
@@ -187,7 +177,27 @@ async def resolve_payee(
         upi_id=upi_id,
         match_hash=match_hash,
         outside_text=outside_text,
-        actor="agent",
+        actor=actor,
+        group_id=group_id,
+    )
+
+
+async def _find_payee(
+    conn: Connection, name: str | None, *, upi_id: str | None = None
+) -> dict[str, Any] | None:
+    """Look up an existing payee without creating one, for checks that must write nothing."""
+    if not name or not name.strip():
+        return None
+    if upi_id:
+        return await conn.fetchrow(
+            "SELECT * FROM payees WHERE active AND lower(upi_id) = lower($1) "
+            "ORDER BY display_name LIMIT 1",
+            upi_id,
+        )
+    return await conn.fetchrow(
+        "SELECT * FROM payees WHERE active AND lower(display_name) = lower($1) "
+        "ORDER BY display_name LIMIT 1",
+        name.strip(),
     )
 
 
@@ -277,7 +287,8 @@ async def _possible_duplicate(
         JOIN movement_legs ml ON ml.movement_id = m.id
         JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN captures c ON c.movement_id = m.id AND c.kind = 'chat'
+        -- Match the movement itself, not one capture kind. Chat, photo, voice and woken
+        -- writes (which have no capture row at all) all count as a possible duplicate.
         WHERE m.kind = 'expense'
           AND ($1::text IS NULL OR m.idempotency_key IS NULL OR m.idempotency_key <> $1)
           AND fa.id = $2
@@ -398,12 +409,13 @@ async def record_movement(
             return False
         return flagged and not any(name.lower() in text.lower() for text in user_texts)
 
-    payee = None
-    # A generic name names no merchant and no person: no payee is created from it, so unnamed
-    # spending never piles up under one invented shop. A settlement then names nobody, and the
-    # tool asks who, which is the honest answer.
-    if payee_name and not await _is_placeholder_payee(conn, str(payee_name)):
-        payee = await resolve_payee(
+    async def create_payee_once() -> dict[str, Any] | None:
+        # A generic name names no merchant and no person: no payee is created from it, so unnamed
+        # spending never piles up under one invented shop. A settlement then names nobody, and the
+        # tool asks who, which is the honest answer.
+        if not payee_name or await _is_placeholder_payee(conn, str(payee_name)):
+            return None
+        return await resolve_payee(
             conn,
             str(payee_name),
             # A settlement names the person on the other side; a split's payee is the vendor.
@@ -411,339 +423,359 @@ async def record_movement(
             upi_id=movement.get("upi_id"),
             outside_text=named_outside(str(payee_name)),
         )
-    payee_id: str | None = payee["id"] if payee is not None else None
 
-    if kind == "expense":
-        amount = _rupees(movement.get("amount_rupees"))
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
+    # One audited transaction for the whole write. The ledger groups below are savepoints here,
+    # so a refused or failing request rolls back every payee it created, not just the movement.
+    async with write_group(conn, actor="agent", message_id=message_id):
+        payee = None
+        placeholder = bool(payee_name) and await _is_placeholder_payee(conn, str(payee_name))
+        existing = (
+            await _find_payee(conn, payee_name, upi_id=movement.get("upi_id"))
+            if payee_name and not placeholder
+            else None
         )
-        if not not_duplicate:
-            duplicate = await _possible_duplicate(
+        existing_id = str(existing["id"]) if existing is not None else None
+        # A name that has no payee row yet cannot have a prior movement to duplicate.
+        payee_is_new = bool(payee_name) and not placeholder and existing is None
+        if kind != "expense":
+            payee = await create_payee_once()
+        payee_id: str | None = payee["id"] if payee is not None else None
+
+        if kind == "expense":
+            amount = _rupees(movement.get("amount_rupees"))
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, existing_id)
+            )
+            # Check the duplicate before any payee exists: a refusal then writes nothing at all.
+            if not not_duplicate and not payee_is_new:
+                duplicate = await _possible_duplicate(
+                    conn,
+                    account_id=account_id,
+                    amount_paise=amount,
+                    payee_id=existing_id,
+                    exclude_key=idempotency_key,
+                )
+                if duplicate:
+                    return duplicate
+            payee = await create_payee_once()
+            payee_id = payee["id"] if payee is not None else None
+            result = await movements_mod.record_expense(
                 conn,
                 account_id=account_id,
                 amount_paise=amount,
+                description=description,
                 payee_id=payee_id,
-                exclude_key=idempotency_key,
+                category_id=await _resolve_category_id(conn, movement.get("category")),
+                category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                capture=evidence,
+                actor="agent",
+                message_id=message_id,
             )
-            if duplicate:
-                return duplicate
-        result = await movements_mod.record_expense(
-            conn,
-            account_id=account_id,
-            amount_paise=amount,
-            description=description,
-            payee_id=payee_id,
-            category_id=await _resolve_category_id(conn, movement.get("category")),
-            category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            capture=evidence,
-            actor="agent",
-            message_id=message_id,
-        )
-        summary = _movement_summary(result, amount)
-        account_row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
-        bill = (
-            _card_bill(dict(account_row), date.fromisoformat(result["date"]))
-            if account_row is not None and account_row["kind"] == "card"
-            else None
-        )
-        if bill is not None:
-            # The agent must quote the engine's cycle, not its own idea of the bill date.
-            summary = f"{summary} · bill due {bill['due_date']}"
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": summary,
-            "transfers": result["transfers"],
-            "account_source": "stated" if movement.get("account") else "usual",
-            "category_source": result.get("category_source", "none"),
-            "card_bill": bill,
-            "card": _card(
-                "movement",
-                title="Logged",
-                summary=summary,
-                amount=money(amount),
-                undo_id=result["undo_id"],
-                card_bill=bill,
-                movement=result,
-            ),
-        }
+            summary = _movement_summary(result, amount)
+            account_row = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
+            bill = (
+                _card_bill(dict(account_row), date.fromisoformat(result["date"]))
+                if account_row is not None and account_row["kind"] == "card"
+                else None
+            )
+            if bill is not None:
+                # The agent must quote the engine's cycle, not its own idea of the bill date.
+                summary = f"{summary} · bill due {bill['due_date']}"
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": summary,
+                "transfers": result["transfers"],
+                "account_source": "stated" if movement.get("account") else "usual",
+                "category_source": result.get("category_source", "none"),
+                "card_bill": bill,
+                "card": _card(
+                    "movement",
+                    title="Logged",
+                    summary=summary,
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                    card_bill=bill,
+                    movement=result,
+                ),
+            }
 
-    if kind == "income":
-        amount = _rupees(movement.get("amount_rupees"))
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
-        )
-        result = await movements_mod.record_income(
-            conn,
-            account_id=account_id,
-            amount_paise=amount,
-            description=description,
-            payee_id=payee_id,
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            capture=evidence,
-            actor="agent",
-            message_id=message_id,
-        )
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": result["description"],
-            "transfers": result["transfers"],
-            "card": _card(
-                "movement",
-                title="Logged income",
-                summary=result["description"],
-                amount=money(amount),
-                undo_id=result["undo_id"],
-            ),
-        }
-
-    if kind == "transfer":
-        amount = _rupees(movement.get("amount_rupees"))
-        result = await movements_mod.record_transfer(
-            conn,
-            from_account_id=await resolve_account_id(conn, movement.get("from_account")),
-            to_account_id=await resolve_account_id(conn, movement.get("to_account")),
-            amount_paise=amount,
-            description=description,
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            actor="agent",
-            message_id=message_id,
-        )
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": result["description"],
-            "transfers": result["transfers"],
-            "card": _card(
-                "movement",
-                title="Transferred",
-                summary=result["description"],
-                amount=money(amount),
-                undo_id=result["undo_id"],
-            ),
-        }
-
-    if kind == "split":
-        total = _rupees(movement.get("total_rupees"), "total_rupees")
-        my_share = _balance_rupees(movement.get("my_share_rupees"), "my_share_rupees")
-        if my_share < 0:
-            raise ToolInputError("my_share_rupees cannot be negative")
-        people = []
-        for person in movement.get("people") or []:
-            if isinstance(person, dict):
-                name = person.get("name")
-                amount = _rupees(person.get("amount_rupees"), "a person's share")
-                expected = _date(person.get("expected_date"))
-            else:
-                name, amount, expected = str(person), 0, None
-            if not name or not amount:
-                raise ToolInputError("a split names each person and their share")
-            # Money owed by "someone" can never be collected or settled: ask who it is.
-            if await _is_placeholder_payee(conn, str(name)):
-                raise ToolInputError(f"{name!r} isn't a person; ask who owes this share")
-            other = await resolve_payee(
+        if kind == "income":
+            amount = _rupees(movement.get("amount_rupees"))
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, payee_id)
+            )
+            result = await movements_mod.record_income(
                 conn,
-                str(name),
-                kind="person",
-                outside_text=named_outside(str(name)),
+                account_id=account_id,
+                amount_paise=amount,
+                description=description,
+                payee_id=payee_id,
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                capture=evidence,
+                actor="agent",
+                message_id=message_id,
             )
-            people.append(
-                {"payee_id": other["id"], "amount_paise": amount, "expected_date": expected}
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": result["description"],
+                "transfers": result["transfers"],
+                "card": _card(
+                    "movement",
+                    title="Logged income",
+                    summary=result["description"],
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                ),
+            }
+
+        if kind == "transfer":
+            amount = _rupees(movement.get("amount_rupees"))
+            result = await movements_mod.record_transfer(
+                conn,
+                from_account_id=await resolve_account_id(conn, movement.get("from_account")),
+                to_account_id=await resolve_account_id(conn, movement.get("to_account")),
+                amount_paise=amount,
+                description=description,
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                actor="agent",
+                message_id=message_id,
             )
-        if not people:
-            raise ToolInputError("a split needs at least one person")
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
-        )
-        result = await movements_mod.record_split(
-            conn,
-            account_id=account_id,
-            my_share_paise=my_share,
-            people=people,
-            total_paise=total,
-            description=description,
-            payee_id=payee_id,
-            category_id=await _resolve_category_id(conn, movement.get("category")),
-            category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            capture=evidence,
-            actor="agent",
-            message_id=message_id,
-        )
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": result["description"],
-            "transfers": result["transfers"],
-            "card": _card(
-                "movement",
-                title="Split logged",
-                summary=result["description"],
-                amount=money(total),
-                undo_id=result["undo_id"],
-            ),
-        }
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": result["description"],
+                "transfers": result["transfers"],
+                "card": _card(
+                    "movement",
+                    title="Transferred",
+                    summary=result["description"],
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                ),
+            }
 
-    if kind == "loan":
-        amount = _rupees(movement.get("amount_rupees"))
-        loan_id = await resolve_account_id(conn, movement.get("loan"))
-        loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
-        if loan is None or loan["kind"] != "loan":
-            raise ToolInputError("a loan payment names a loan account")
-        principal, interest = await movements_mod.loan_payment_parts(
-            conn, loan, amount, on=when or ledger_today()
-        )
-        # A loan with no rate has unknown interest: record it as principal, but say so instead of
-        # implying the payment was all principal by fact.
-        warning = None
-        if not loan["rate_bps"]:
-            warning = (
-                f"Interest is unknown: {loan['name']} has no rate on file, so all "
-                f"{money(amount)['text']} was recorded as principal and the outstanding balance "
-                f"may be overstated. Ask for the loan's rate or this payment's interest part."
+        if kind == "split":
+            total = _rupees(movement.get("total_rupees"), "total_rupees")
+            my_share = _balance_rupees(movement.get("my_share_rupees"), "my_share_rupees")
+            if my_share < 0:
+                raise ToolInputError("my_share_rupees cannot be negative")
+            people = []
+            for person in movement.get("people") or []:
+                if isinstance(person, dict):
+                    name = person.get("name")
+                    amount = _rupees(person.get("amount_rupees"), "a person's share")
+                    expected = _date(person.get("expected_date"))
+                else:
+                    name, amount, expected = str(person), 0, None
+                if not name or not amount:
+                    raise ToolInputError("a split names each person and their share")
+                # Money owed by "someone" can never be collected or settled: ask who it is.
+                if await _is_placeholder_payee(conn, str(name)):
+                    raise ToolInputError(f"{name!r} isn't a person; ask who owes this share")
+                other = await resolve_payee(
+                    conn,
+                    str(name),
+                    kind="person",
+                    outside_text=named_outside(str(name)),
+                )
+                people.append(
+                    {"payee_id": other["id"], "amount_paise": amount, "expected_date": expected}
+                )
+            if not people:
+                raise ToolInputError("a split needs at least one person")
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, payee_id)
             )
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
-        )
-        result = await movements_mod.record_loan_payment(
-            conn,
-            account_id=account_id,
-            loan_account_id=loan_id,
-            amount_paise=amount,
-            principal_paise=principal,
-            interest_paise=interest,
-            description=description,
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            actor="agent",
-            message_id=message_id,
-        )
-        summary = result["description"]
-        payload = {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": summary,
-            "transfers": result["transfers"],
-            "principal_paise": principal,
-            "interest_paise": interest,
-            "card": _card(
-                "movement",
-                title="Loan payment logged",
-                summary=f"{summary} · {warning}" if warning else summary,
-                amount=money(amount),
-                undo_id=result["undo_id"],
-            ),
-        }
-        if warning:
-            payload["note"] = warning
-        return payload
+            result = await movements_mod.record_split(
+                conn,
+                account_id=account_id,
+                my_share_paise=my_share,
+                people=people,
+                total_paise=total,
+                description=description,
+                payee_id=payee_id,
+                category_id=await _resolve_category_id(conn, movement.get("category")),
+                category_guess_id=await _resolve_category_id(conn, movement.get("category_guess")),
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                capture=evidence,
+                actor="agent",
+                message_id=message_id,
+            )
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": result["description"],
+                "transfers": result["transfers"],
+                "card": _card(
+                    "movement",
+                    title="Split logged",
+                    summary=result["description"],
+                    amount=money(total),
+                    undo_id=result["undo_id"],
+                ),
+            }
 
-    if kind == "refund":
-        amount = _rupees(movement.get("amount_rupees"))
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
-        )
-        result = await movements_mod.record_refund(
-            conn,
-            account_id=account_id,
-            amount_paise=amount,
-            description=description,
-            payee_id=payee_id,
-            category_id=await _resolve_category_id(conn, movement.get("category")),
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            actor="agent",
-            message_id=message_id,
-        )
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": result["description"],
-            "transfers": result["transfers"],
-            "card": _card(
-                "movement",
-                title="Refund logged",
-                summary=result["description"],
-                amount=money(amount),
-                undo_id=result["undo_id"],
-            ),
-        }
+        if kind == "loan":
+            amount = _rupees(movement.get("amount_rupees"))
+            loan_id = await resolve_account_id(conn, movement.get("loan"))
+            loan = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", loan_id)
+            if loan is None or loan["kind"] != "loan":
+                raise ToolInputError("a loan payment names a loan account")
+            principal, interest = await movements_mod.loan_payment_parts(
+                conn, loan, amount, on=when or ledger_today()
+            )
+            # A loan with no rate has unknown interest: record it as principal, but say so instead
+            # of implying the payment was all principal by fact.
+            warning = None
+            if not loan["rate_bps"]:
+                warning = (
+                    f"Interest is unknown: {loan['name']} has no rate on file, so all "
+                    f"{money(amount)['text']} was recorded as principal and the outstanding "
+                    f"balance may be overstated. Ask for the loan's rate or this payment's "
+                    f"interest part."
+                )
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, payee_id)
+            )
+            result = await movements_mod.record_loan_payment(
+                conn,
+                account_id=account_id,
+                loan_account_id=loan_id,
+                amount_paise=amount,
+                principal_paise=principal,
+                interest_paise=interest,
+                description=description,
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                actor="agent",
+                message_id=message_id,
+            )
+            summary = result["description"]
+            payload = {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": summary,
+                "transfers": result["transfers"],
+                "principal_paise": principal,
+                "interest_paise": interest,
+                "card": _card(
+                    "movement",
+                    title="Loan payment logged",
+                    summary=f"{summary} · {warning}" if warning else summary,
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                ),
+            }
+            if warning:
+                payload["note"] = warning
+            return payload
 
-    if kind == "settlement":
-        amount = _rupees(movement.get("amount_rupees"))
-        if payee_id is None:
-            raise ToolInputError("a settlement names a person")
-        account_id = (
-            await resolve_account_id(conn, movement.get("account"))
-            if movement.get("account")
-            else await _default_account(conn, payee_id)
-        )
-        result = await movements_mod.record_settlement(
-            conn,
-            account_id=account_id,
-            payee_id=payee_id,
-            amount_paise=amount,
-            direction=movement.get("direction") or "they_paid",
-            expected_date=_date(movement.get("expected_date")),
-            description=description,
-            date=when,
-            note=note,
-            idempotency_key=idempotency_key,
-            actor="agent",
-            message_id=message_id,
-        )
-        return {
-            "status": "recorded",
-            "movement_id": result["id"],
-            "undo_id": result["undo_id"],
-            "date": result["date"],
-            "summary": result["description"],
-            "transfers": result["transfers"],
-            "card": _card(
-                "movement",
-                title="Settlement logged",
-                summary=result["description"],
-                amount=money(amount),
-                undo_id=result["undo_id"],
-            ),
-        }
+        if kind == "refund":
+            amount = _rupees(movement.get("amount_rupees"))
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, payee_id)
+            )
+            result = await movements_mod.record_refund(
+                conn,
+                account_id=account_id,
+                amount_paise=amount,
+                description=description,
+                payee_id=payee_id,
+                category_id=await _resolve_category_id(conn, movement.get("category")),
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                actor="agent",
+                message_id=message_id,
+            )
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": result["description"],
+                "transfers": result["transfers"],
+                "card": _card(
+                    "movement",
+                    title="Refund logged",
+                    summary=result["description"],
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                ),
+            }
 
-    raise ToolInputError(f"unknown movement kind {kind!r}")
+        if kind == "settlement":
+            amount = _rupees(movement.get("amount_rupees"))
+            if payee_id is None:
+                raise ToolInputError("a settlement names a person")
+            account_id = (
+                await resolve_account_id(conn, movement.get("account"))
+                if movement.get("account")
+                else await _default_account(conn, payee_id)
+            )
+            result = await movements_mod.record_settlement(
+                conn,
+                account_id=account_id,
+                payee_id=payee_id,
+                amount_paise=amount,
+                direction=movement.get("direction") or "they_paid",
+                expected_date=_date(movement.get("expected_date")),
+                description=description,
+                date=when,
+                note=note,
+                idempotency_key=idempotency_key,
+                actor="agent",
+                message_id=message_id,
+            )
+            return {
+                "status": "recorded",
+                "movement_id": result["id"],
+                "undo_id": result["undo_id"],
+                "date": result["date"],
+                "summary": result["description"],
+                "transfers": result["transfers"],
+                "card": _card(
+                    "movement",
+                    title="Settlement logged",
+                    summary=result["description"],
+                    amount=money(amount),
+                    undo_id=result["undo_id"],
+                ),
+            }
+
+        raise ToolInputError(f"unknown movement kind {kind!r}")
 
 
 async def correct_movement(
@@ -754,79 +786,82 @@ async def correct_movement(
     scope: str = "this",
     message_id: str | None = None,
 ) -> dict[str, Any]:
-    mapped: dict[str, Any] = {}
-    for key, value in changes.items():
-        if value is None:
-            continue
-        if key == "category":
-            mapped["category_id"] = await _resolve_category_id(conn, value)
-        elif key == "account":
-            mapped["account_id"] = await resolve_account_id(conn, value)
-        elif key == "amount_rupees":
-            mapped["amount_paise"] = _rupees(value)
-        elif key == "my_share_rupees":
-            mapped["my_share_paise"] = _balance_rupees(value, "my_share_rupees")
-        elif key == "shares":
-            mapped["shares"] = [
-                {
-                    # A person already on the split; never a new payee from a correction.
-                    "payee_id": (
-                        await _find_one(
-                            conn,
-                            "payees",
-                            str(_required(share, "name", "a person's name")),
-                            None,
-                        )
-                    )["id"],
-                    "amount_paise": _rupees(share.get("amount_rupees"), "a person's share"),
-                }
-                for share in value
-            ]
-        elif key == "expected_date":
-            mapped["expected_date"] = _date(value)
-        elif key == "date":
-            mapped["date"] = _date(value)
-        elif key == "payee":
-            name = str(value)
-            if await _is_placeholder_payee(conn, name):
-                raise ToolInputError(
-                    f"{name!r} is not a payee name; a generic word names nobody. Use the real "
-                    "merchant or person, or change something else."
-                )
-            mapped["payee_id"] = (await resolve_payee(conn, name))["id"]
-        else:
-            mapped[key] = value
-    result = await movements_mod.correct_movement(
-        conn,
-        movement_id,
-        changes=mapped,
-        scope=scope,
-        actor="agent",
-        message_id=message_id,
-    )
-    summary = result["movement"]["description"]
-    rule_text = (
-        str(result["movement"].get("payee_name"))
-        + " → "
-        + str(result["movement"].get("category_name"))
-    )
-    undo_id = await _audited_undo_id(conn, result["undo_id"])
-    return {
-        "status": result["status"],
-        "undo_id": undo_id,
-        "summary": summary,
-        "rule": rule_text if result.get("rule") else None,
-        "rows_changed": result["rows_changed"],
-        "movement": result["movement"],
-        "card": _card(
-            "correction",
-            title="Corrected" if result["status"] == "corrected" else "Deleted",
-            summary=summary,
-            rows_changed=result["rows_changed"],
-            rule=result.get("rule"),
-            undo_id=undo_id,
-        ),
-    }
+    # A payee named in the changes is created inside this group. If the correction itself
+    # refuses, the payee and its audit row roll back with it.
+    async with write_group(conn, actor="agent", message_id=message_id):
+        mapped: dict[str, Any] = {}
+        for key, value in changes.items():
+            if value is None:
+                continue
+            if key == "category":
+                mapped["category_id"] = await _resolve_category_id(conn, value)
+            elif key == "account":
+                mapped["account_id"] = await resolve_account_id(conn, value)
+            elif key == "amount_rupees":
+                mapped["amount_paise"] = _rupees(value)
+            elif key == "my_share_rupees":
+                mapped["my_share_paise"] = _balance_rupees(value, "my_share_rupees")
+            elif key == "shares":
+                mapped["shares"] = [
+                    {
+                        # A person already on the split; never a new payee from a correction.
+                        "payee_id": (
+                            await _find_one(
+                                conn,
+                                "payees",
+                                str(_required(share, "name", "a person's name")),
+                                None,
+                            )
+                        )["id"],
+                        "amount_paise": _rupees(share.get("amount_rupees"), "a person's share"),
+                    }
+                    for share in value
+                ]
+            elif key == "expected_date":
+                mapped["expected_date"] = _date(value)
+            elif key == "date":
+                mapped["date"] = _date(value)
+            elif key == "payee":
+                name = str(value)
+                if await _is_placeholder_payee(conn, name):
+                    raise ToolInputError(
+                        f"{name!r} is not a payee name; a generic word names nobody. Use the real "
+                        "merchant or person, or change something else."
+                    )
+                mapped["payee_id"] = (await resolve_payee(conn, name))["id"]
+            else:
+                mapped[key] = value
+        result = await movements_mod.correct_movement(
+            conn,
+            movement_id,
+            changes=mapped,
+            scope=scope,
+            actor="agent",
+            message_id=message_id,
+        )
+        summary = result["movement"]["description"]
+        rule_text = (
+            str(result["movement"].get("payee_name"))
+            + " → "
+            + str(result["movement"].get("category_name"))
+        )
+        undo_id = await _audited_undo_id(conn, result["undo_id"])
+        return {
+            "status": result["status"],
+            "undo_id": undo_id,
+            "summary": summary,
+            "rule": rule_text if result.get("rule") else None,
+            "rows_changed": result["rows_changed"],
+            "movement": result["movement"],
+            "card": _card(
+                "correction",
+                title="Corrected" if result["status"] == "corrected" else "Deleted",
+                summary=summary,
+                rows_changed=result["rows_changed"],
+                rule=result.get("rule"),
+                undo_id=undo_id,
+            ),
+        }
 
 
 _NAME_COLUMNS = {"payees": "display_name"}
@@ -1621,29 +1656,31 @@ async def undo(
     if undo_id:
         try:
             result = await undo_group(conn, undo_id, actor="agent", message_id=message_id)
-        except Exception as exc:  # noqa: BLE001 - wrapper turns this into ModelRetry
+        except LedgerError as exc:
+            # Only a broken caller rule is a retryable input error. A CommitOutcomeUnknownError
+            # or a dropped connection must reach the caller unchanged: retrying an ambiguous
+            # undo (with no id) would undo the *next* write.
             raise ToolInputError(str(exc)) from exc
-    else:
-        row = None
-        if conversation_id:
-            row = await conn.fetchrow(
-                """
-                SELECT a.group_id
-                FROM audit_log a
-                JOIN messages m ON m.id = a.message_id
-                WHERE m.conversation_id = $1 AND a.undone_at IS NULL
-                GROUP BY a.group_id
-                ORDER BY max(a.created_at) DESC
-                LIMIT 1
-                """,
-                conversation_id,
-            )
+    elif conversation_id:
+        row = await conn.fetchrow(
+            """
+            SELECT a.group_id
+            FROM audit_log a
+            JOIN messages m ON m.id = a.message_id
+            WHERE m.conversation_id = $1 AND a.undone_at IS NULL
+            GROUP BY a.group_id
+            ORDER BY max(a.created_at) DESC
+            LIMIT 1
+            """,
+            conversation_id,
+        )
         if row is None:
-            result = await undo_latest(conn, actor="agent", message_id=message_id)
-        else:
-            result = await undo_group(
-                conn, str(row["group_id"]), actor="agent", message_id=message_id
-            )
+            # The tool promises "the last write in this conversation". Never fall back to
+            # undo_latest across every conversation: that would undo a stranger's write.
+            raise ToolInputError("Nothing to undo in this conversation")
+        result = await undo_group(conn, str(row["group_id"]), actor="agent", message_id=message_id)
+    else:
+        result = await undo_latest(conn, actor="agent", message_id=message_id)
     return {
         **result,
         "card": _card(

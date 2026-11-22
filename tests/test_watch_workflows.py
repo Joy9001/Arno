@@ -5,16 +5,21 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from arno.agent.builder import build_agent
 from arno.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
 from arno.jobs.questions import run_scheduled_question, spend_budget
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
+from arno.ledger.accounts import create_account
 from arno.ledger.common import today as ledger_today
+from arno.ledger.movements import record_expense, record_refund
 from arno.scheduled_questions import create_question
 from arno.tools.patterns import detect, detect_missed
+from arno.tools.read import summarize_spending
 from tests.agent_helpers import streaming_model
 
 
@@ -693,7 +698,14 @@ async def test_missed_detection_finds_a_late_schedule_and_preserves_the_flag(db)
     assert proposals[0]["days_late"] >= 3
 
 
-async def test_a_scheduled_question_runs_read_only_and_writes_the_inbox(db):
+async def test_handle_scheduled_question_builds_a_read_only_agent_with_a_scoped_ceiling(
+    db, monkeypatch
+):
+    """The real job handler builds the agent; only the model is substituted, never the store."""
+    from arno.agent import builder as builder_mod
+    from arno.agent.capabilities import WRITE_TOOLS
+    from arno.jobs.questions import handle_scheduled_question
+
     question = await create_question(
         db,
         prompt="What did I spend on food this week?",
@@ -703,31 +715,233 @@ async def test_a_scheduled_question_runs_read_only_and_writes_the_inbox(db):
     assert spend_budget({"spend_limit_cents": 250}) == 2.5
     assert str(spend_budget({"spend_limit_cents": None})) == "1.00"
 
-    from arno.agent.builder import build_agent
+    seen_tools: set[str] = set()
 
-    agent = build_agent(
-        model=_prose_model("You spent a small amount on food; the ledger has the detail."),
-        read_only=True,
+    def script(messages, info):
+        del messages
+        seen_tools.update(tool.name for tool in info.function_tools)
+        return ModelResponse(parts=[TextPart("You spent a small amount on food.")])
+
+    model = streaming_model(script)
+    # The only substitution is the model factory: build_agent, the real spend store and the
+    # whole handle_scheduled_question path stay untouched.
+    monkeypatch.setattr(builder_mod, "primary_model", lambda: model)
+    monkeypatch.setattr(builder_mod, "backup_model", lambda: None)
+
+    result = await handle_scheduled_question(
+        {"scheduled_question_id": question["id"], "period": "impl-2026-11-22"}
     )
-    result = await run_scheduled_question(
-        db,
-        question_id=question["id"],
-        period="2099-01-01T08:00",
-        agent=agent,
-    )
+
     assert result["notification_id"]
     assert result["spend_limit_usd"] == "2.50"
+    assert seen_tools, "the model must see the read toolset"
+    assert seen_tools & WRITE_TOOLS == set()
     row = await db.fetchrow("SELECT * FROM notifications WHERE id = $1", result["notification_id"])
     assert row["kind"] == "scheduled_question"
     assert row["title"] == question["prompt"]
     assert "small amount" in row["body"]
+    assert row["data"]["spend_limit_usd"] == "2.50"
     answer = await db.fetchrow(
         "SELECT last_run_at FROM scheduled_questions WHERE id = $1", question["id"]
     )
     assert answer["last_run_at"] is not None
+    # The real spend store carries a run-scoped "scheduled question" ceiling for this run.
+    keys = [
+        item["key"].decode("utf-8") if isinstance(item["key"], bytes) else item["key"]
+        for item in await db.fetch("SELECT key FROM spend_counters")
+    ]
+    assert any(key.startswith("scheduled question|run|") for key in keys)
 
 
 def test_question_budget_defaults_and_ceiling_constants():
     from arno.jobs.questions import REQUEST_LIMIT
 
     assert REQUEST_LIMIT == 20
+
+
+async def test_briefing_does_not_invent_a_floor_or_hide_setup_gaps(ledger):
+    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
+    numbers = payload["numbers"]
+    assert numbers["floor"]["set"] is False
+    assert numbers["floor"]["paise"] is None
+    assert numbers["floor"]["probability"] is None
+    assert "No floor is set" in payload["template"]
+    assert "100%" not in payload["template"]
+    assert any("no floor set" in gap for gap in numbers["floor"]["data_quality"])
+    assert "No data-quality gaps" not in payload["template"]
+
+
+async def test_briefing_numbers_match_the_ledger_and_the_template(ledger):
+    account = await create_account(ledger, kind="bank", name="Briefing Bank")
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=120_050,
+        description="Groceries",
+        date=date(2026, 10, 28),
+    )
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=60_000,
+        description="Groceries",
+        date=date(2026, 10, 20),
+    )
+    await ledger.execute(
+        """
+        INSERT INTO schedules (kind, subtype, name, amount_paise, rule, starts)
+        VALUES ('obligation', 'rent', 'Rent', 2500000, 'FREQ=MONTHLY;BYMONTHDAY=3', $1)
+        """,
+        date(2026, 9, 3),
+    )
+
+    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
+    numbers = payload["numbers"]
+    assert numbers["spent"]["paise"] == 120_050
+    assert numbers["spent"]["entries"] == 1
+    assert numbers["spent"]["previous_paise"] == 60_000
+    assert numbers["spent"]["change_percent"] == 100.1
+    assert numbers["top_categories"][0]["amount_paise"] == 120_050
+    assert numbers["bills"]["count"] == 1
+    assert numbers["bills"]["total_paise"] == 2_500_000
+
+    direct = await summarize_spending(ledger, group_by="none", period="2026-10-26..2026-11-01")
+    assert direct["total"]["paise"] == numbers["spent"]["paise"]
+    assert "₹1,200.50" in payload["template"]
+    assert "₹25,000" in payload["template"]
+
+
+async def test_briefing_does_not_compare_against_a_net_refund_week(ledger):
+    account = await create_account(ledger, kind="bank", name="Briefing Bank")
+    await record_refund(
+        ledger,
+        account_id=account["id"],
+        amount_paise=5_000,
+        description="Refund",
+        date=date(2026, 10, 20),
+    )
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=1_000,
+        description="Chai",
+        date=date(2026, 10, 28),
+    )
+    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
+    numbers = payload["numbers"]
+    assert numbers["spent"]["previous_paise"] == -5_000
+    assert numbers["spent"]["change_percent"] is None
+    assert "That is down" not in payload["template"]
+    assert "That is up" not in payload["template"]
+
+
+async def test_briefing_rejects_a_prose_number_the_data_never_contained(db):
+    def invents(messages, info):
+        del messages, info
+        return ModelResponse(parts=[TextPart("You spent ₹9,999 this week.")])
+
+    sent = await send_weekly_briefing(
+        db,
+        as_of=date(2026, 11, 1),
+        period="bad-number",
+        model=streaming_model(invents),
+    )
+    assert sent is not None
+    assert sent["data"]["prose"] == "template"
+    assert sent["data"]["prose_error"] == "untraced number"
+    assert sent["body"] == sent["data"]["template"]
+    assert "₹9,999" not in sent["body"]
+
+
+async def test_briefing_says_the_spend_total_is_incomplete_without_a_statement(ledger):
+    account = await create_account(ledger, kind="bank", name="Coverage Bank")
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=120_050,
+        description="Groceries",
+        date=date(2026, 10, 28),
+    )
+    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
+    spent = payload["numbers"]["spent"]
+    assert spent["coverage"]["complete"] is False
+    assert spent["coverage"]["note"]
+    assert spent["coverage"]["note"] in payload["template"]
+    assert "₹1,200.50" in payload["template"]
+
+
+async def test_briefing_carries_complete_statement_coverage(ledger):
+    account = await create_account(ledger, kind="bank", name="Coverage Bank")
+    await ledger.execute(
+        """
+        INSERT INTO imports (file_hash, status, account_id, period_start, period_end)
+        VALUES ('coverage-hash', 'committed', $1, $2, $3)
+        """,
+        account["id"],
+        date(2026, 10, 1),
+        date(2026, 10, 31),
+    )
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=120_050,
+        description="Groceries",
+        date=date(2026, 10, 16),
+    )
+    payload = await compose_briefing(ledger, as_of=date(2026, 10, 20))
+    spent = payload["numbers"]["spent"]
+    assert spent["coverage"]["complete"] is True
+    assert spent["coverage"]["note"] is None
+    assert "Statement coverage is incomplete" not in payload["template"]
+
+
+async def test_a_scheduled_question_ceiling_is_plain_and_marked(ledger):
+    question = await create_question(
+        ledger, prompt="What did I spend?", rule="FREQ=WEEKLY;BYDAY=SU", spend_limit_usd="2"
+    )
+
+    class CeilingAgent:
+        async def run(self, *args, **kwargs):
+            del args, kwargs
+            raise UsageLimitExceeded("request limit")
+
+    period = "ceiling-2026-11-22"
+    result = await run_scheduled_question(
+        ledger, question_id=question["id"], period=period, agent=CeilingAgent()
+    )
+    row = await ledger.fetchrow(
+        "SELECT body, data FROM notifications WHERE dedupe_key = $1",
+        f"scheduled_question:{question['id']}:{period}",
+    )
+    assert result["ceiling"] is True
+    assert row["data"]["ceiling"] is True
+    assert "per-run ceiling" in row["body"]
+    assert "2.00" in row["body"]
+
+
+async def test_scheduled_question_runs_once_per_period(db):
+    question = await create_question(db, prompt="What did I spend?", rule="FREQ=WEEKLY;BYDAY=SU")
+    calls = {"n": 0}
+
+    def answer(messages, info):
+        del messages, info
+        calls["n"] += 1
+        return ModelResponse(parts=[TextPart("An answer.")])
+
+    agent = build_agent(model=streaming_model(answer), read_only=True)
+    first = await run_scheduled_question(
+        db, question_id=question["id"], period="once-2026-11-22", agent=agent
+    )
+    second = await run_scheduled_question(
+        db, question_id=question["id"], period="once-2026-11-22", agent=agent
+    )
+    assert first["notification_id"]
+    assert first["ceiling"] is False
+    assert second["notification_id"] is None
+    assert second["skipped"] == "already answered"
+    assert calls["n"] == 1
+    assert await db.fetchval("SELECT count(*) FROM notifications") == 1
+    row = await db.fetchrow(
+        "SELECT data FROM notifications WHERE id = $1", first["notification_id"]
+    )
+    assert row["data"]["ceiling"] is False

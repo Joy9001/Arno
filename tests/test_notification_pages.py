@@ -22,24 +22,24 @@ async def _insert_notification(db, *, title: str, minutes_ago: int, read: bool =
     return row["id"]
 
 
-async def test_notifications_page_by_cursor_without_duplicates(authed_client, db):
+async def test_notifications_page_by_cursor_without_duplicates(session_client, db):
     created = [
         await _insert_notification(db, title=f"Item {index}", minutes_ago=index)
         for index in range(5)
     ]
 
-    first = authed_client.get("/api/notifications", params={"limit": 2}).json()
+    first = session_client.get("/api/notifications", params={"limit": 2}).json()
     assert first["unread_count"] == 5
     assert [item["id"] for item in first["notifications"]] == [created[0], created[1]]
     assert first["next_cursor"]
 
-    second = authed_client.get(
+    second = session_client.get(
         "/api/notifications", params={"limit": 2, "cursor": first["next_cursor"]}
     ).json()
     assert [item["id"] for item in second["notifications"]] == [created[2], created[3]]
     assert second["next_cursor"]
 
-    third = authed_client.get(
+    third = session_client.get(
         "/api/notifications", params={"limit": 2, "cursor": second["next_cursor"]}
     ).json()
     assert [item["id"] for item in third["notifications"]] == [created[4]]
@@ -49,7 +49,7 @@ async def test_notifications_page_by_cursor_without_duplicates(authed_client, db
     assert len(seen) == len(set(seen)) == 5
 
 
-async def test_notifications_cursor_is_stable_when_timestamps_match(authed_client, db):
+async def test_notifications_cursor_is_stable_when_timestamps_match(session_client, db):
     await db.execute(
         """
         INSERT INTO notifications (kind, title, created_at)
@@ -65,7 +65,7 @@ async def test_notifications_cursor_is_stable_when_timestamps_match(authed_clien
         params = {"limit": 1}
         if cursor:
             params["cursor"] = cursor
-        page = authed_client.get("/api/notifications", params=params).json()
+        page = session_client.get("/api/notifications", params=params).json()
         seen.extend(item["id"] for item in page["notifications"])
         cursor = page["next_cursor"]
         if cursor is None:
@@ -75,7 +75,7 @@ async def test_notifications_cursor_is_stable_when_timestamps_match(authed_clien
     assert set(seen) == expected
 
 
-async def test_home_surfaces_an_unread_older_than_the_previous_two_hundred(authed_client, db):
+async def test_home_surfaces_an_unread_older_than_the_previous_two_hundred(session_client, db):
     await db.execute(
         """
         INSERT INTO notifications (kind, title, created_at, read_at)
@@ -87,21 +87,21 @@ async def test_home_surfaces_an_unread_older_than_the_previous_two_hundred(authe
         db, title="Old unread reminder", minutes_ago=400, read=False
     )
 
-    body = authed_client.get("/api/home?horizon_days=90").json()
+    body = session_client.get("/api/home?horizon_days=90").json()
     assert body["unread_count"] == 1
     assert body["needs_you"][0]["id"] == unread
 
     # The full list still reaches it with a cursor; nothing is stranded past a fixed window.
-    first = authed_client.get("/api/notifications", params={"limit": 200}).json()
+    first = session_client.get("/api/notifications", params={"limit": 200}).json()
     assert len(first["notifications"]) == 200
     assert first["next_cursor"]
-    rest = authed_client.get(
+    rest = session_client.get(
         "/api/notifications", params={"limit": 200, "cursor": first["next_cursor"]}
     ).json()
     assert unread in {item["id"] for item in rest["notifications"]}
 
 
-async def test_an_invalid_notification_cursor_is_rejected(authed_client):
-    response = authed_client.get("/api/notifications", params={"cursor": "not-a-cursor"})
+async def test_an_invalid_notification_cursor_is_rejected(session_client):
+    response = session_client.get("/api/notifications", params={"cursor": "not-a-cursor"})
     assert response.status_code == 422
     assert "cursor" in response.json()["detail"].lower()

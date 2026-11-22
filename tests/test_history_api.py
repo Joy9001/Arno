@@ -63,7 +63,7 @@ async def test_history_requires_a_signed_in_session(client):
 
 
 async def test_history_lists_write_groups_newest_first_and_walks_them_with_a_cursor(
-    authed_client, db
+    session_client, db
 ):
     await _clear_history(db)
     first, pref = await _remember(db, "First")
@@ -73,11 +73,11 @@ async def test_history_lists_write_groups_newest_first_and_walks_them_with_a_cur
     await _stamp(db, second, 2)
     await _stamp(db, third, 3)
 
-    page = authed_client.get("/api/history?limit=2").json()
+    page = session_client.get("/api/history?limit=2").json()
     assert [item["undo_id"] for item in page["items"]] == [third, second]
     assert page["next_cursor"]
 
-    rest = authed_client.get("/api/history?limit=2", params={"cursor": page["next_cursor"]})
+    rest = session_client.get("/api/history?limit=2", params={"cursor": page["next_cursor"]})
     assert rest.status_code == 200, rest.text
     assert [item["undo_id"] for item in rest.json()["items"]] == [first]
     assert rest.json()["next_cursor"] is None
@@ -94,7 +94,7 @@ async def test_history_lists_write_groups_newest_first_and_walks_them_with_a_cur
 
 
 async def test_a_later_edit_blocks_a_history_undo_with_the_same_reason_the_undo_returns(
-    authed_client, db
+    session_client, db
 ):
     await _clear_history(db)
     remembered, pref = await _remember(db, "Before")
@@ -102,35 +102,35 @@ async def test_a_later_edit_blocks_a_history_undo_with_the_same_reason_the_undo_
     await _stamp(db, remembered, 1)
     await _stamp(db, edited, 2)
 
-    page = authed_client.get("/api/history").json()
+    page = session_client.get("/api/history").json()
     blocked = _entry(page, remembered)
     assert blocked["undoable"] is False
     assert "later write" in blocked["reason"]
     assert "Undo that change first" in blocked["reason"]
     assert _entry(page, edited)["undoable"] is True
 
-    undo = authed_client.post(f"/api/undo/{remembered}")
+    undo = session_client.post(f"/api/undo/{remembered}")
     assert undo.status_code == 409
     assert blocked["reason"] == undo.json()["detail"]
     assert await db.fetchval("SELECT body FROM preferences WHERE id = $1", pref) == "After"
 
 
-async def test_history_shows_a_group_as_already_undone_after_the_api_undo(authed_client, db):
+async def test_history_shows_a_group_as_already_undone_after_the_api_undo(session_client, db):
     await _clear_history(db)
     remembered, pref = await _remember(db, "Before")
     edited = await _edit(db, pref, "After")
 
-    undo = authed_client.post(f"/api/undo/{edited}")
+    undo = session_client.post(f"/api/undo/{edited}")
     assert undo.status_code == 200, undo.text
     assert undo.json()["status"] == "undone"
     assert await db.fetchval("SELECT body FROM preferences WHERE id = $1", pref) == "Before"
 
-    page = authed_client.get("/api/history").json()
+    page = session_client.get("/api/history").json()
     assert page["items"][0]["undo_id"] == undo.json()["undo_undo_id"]
     entry = _entry(page, edited)
     assert entry["undoable"] is False
     assert entry["reason"] == "That write was already undone."
-    again = authed_client.post(f"/api/undo/{edited}")
+    again = session_client.post(f"/api/undo/{edited}")
     assert again.json()["summary"] == entry["reason"]
     # The undo itself is now the later write on that row, and history says so.
     restored = _entry(page, remembered)
@@ -139,7 +139,7 @@ async def test_history_shows_a_group_as_already_undone_after_the_api_undo(authed
 
 
 async def test_history_names_the_agent_and_the_conversation_that_recorded_a_write(
-    authed_client, db
+    session_client, db
 ):
     await _clear_history(db)
     await db.execute("INSERT INTO conversations (id) VALUES ('cnv_history')")
@@ -151,7 +151,7 @@ async def test_history_names_the_agent_and_the_conversation_that_recorded_a_writ
     )
     group_id, _ = await _remember(db, "Agent note", actor="agent", message_id="msg_history")
 
-    entry = _entry(authed_client.get("/api/history").json(), group_id)
+    entry = _entry(session_client.get("/api/history").json(), group_id)
     assert entry["actor"] == "agent"
     assert entry["message_id"] == "msg_history"
     assert entry["conversation_id"] == "cnv_history"
@@ -169,60 +169,60 @@ async def _expense(db: Connection) -> dict:
     )
 
 
-async def test_history_says_which_account_a_group_added(authed_client, db):
+async def test_history_says_which_account_a_group_added(session_client, db):
     await _clear_history(db)
     account = await create_account(db, kind="bank", name="HDFC Savings")
 
-    entry = _entry(authed_client.get("/api/history").json(), account["undo_id"])
+    entry = _entry(session_client.get("/api/history").json(), account["undo_id"])
     assert entry["summary"] == "Added account HDFC Savings"
     assert entry["records"] == [{"table": "accounts", "id": account["id"]}]
     assert entry["undoable"] is True
 
 
-async def test_history_reads_an_expense_with_its_amount_and_payee(authed_client, db):
+async def test_history_reads_an_expense_with_its_amount_and_payee(session_client, db):
     await _clear_history(db)
     expense = await _expense(db)
 
-    entry = _entry(authed_client.get("/api/history").json(), expense["undo_id"])
+    entry = _entry(session_client.get("/api/history").json(), expense["undo_id"])
     assert entry["summary"] == "Logged expense ₹450.00 · Swiggy"
     assert entry["undoable"] is True
     assert {"table": "movements", "id": expense["id"]} in entry["records"]
 
 
-async def test_history_reads_an_undo_as_the_change_it_reversed(authed_client, db):
+async def test_history_reads_an_undo_as_the_change_it_reversed(session_client, db):
     await _clear_history(db)
     expense = await _expense(db)
 
     undone = await undo_group(db, expense["undo_id"])
 
-    entry = _entry(authed_client.get("/api/history").json(), undone["undo_undo_id"])
+    entry = _entry(session_client.get("/api/history").json(), undone["undo_undo_id"])
     assert entry["summary"] == "Undid: Logged expense ₹450.00 · Swiggy"
     assert entry["undoable"] is True
 
 
-async def test_history_reads_a_memory_and_never_repeats_a_deleted_one(authed_client, db):
+async def test_history_reads_a_memory_and_never_repeats_a_deleted_one(session_client, db):
     await _clear_history(db)
     group_id, preference_id = await _remember(db, "prefers tea")
-    assert _entry(authed_client.get("/api/history").json(), group_id)["summary"] == (
+    assert _entry(session_client.get("/api/history").json(), group_id)["summary"] == (
         "Remembered: prefers tea"
     )
 
     await delete_preference_for_good(db, preference_id)
-    page = authed_client.get("/api/history").json()
+    page = session_client.get("/api/history").json()
     assert any(item["summary"] == "Deleted a memory" for item in page["items"])
     assert all("prefers tea" not in item["summary"] for item in page["items"])
 
 
-async def test_history_reads_a_floor_change_with_both_amounts(authed_client, db):
+async def test_history_reads_a_floor_change_with_both_amounts(session_client, db):
     await _clear_history(db)
     await update_settings(db, floor_paise=1_000_000)
     changed = await update_settings(db, floor_paise=2_000_000)
 
-    entry = _entry(authed_client.get("/api/history").json(), changed["undo_id"])
+    entry = _entry(session_client.get("/api/history").json(), changed["undo_id"])
     assert entry["summary"] == "Changed floor ₹10,000.00 → ₹20,000.00"
 
 
-async def test_history_names_a_committed_import_with_its_file_and_row_count(authed_client, db):
+async def test_history_names_a_committed_import_with_its_file_and_row_count(session_client, db):
     await _clear_history(db)
     group_id, _ = await _remember(db, "import note")
     await db.execute(
@@ -250,11 +250,11 @@ async def test_history_names_a_committed_import_with_its_file_and_row_count(auth
             f"hash{index}",
         )
 
-    entry = _entry(authed_client.get("/api/history").json(), group_id)
+    entry = _entry(session_client.get("/api/history").json(), group_id)
     assert entry["summary"] == "Committed import of statement.csv (2 rows)"
 
 
-async def test_history_falls_back_to_the_row_count_when_a_table_has_no_phrase(authed_client, db):
+async def test_history_falls_back_to_the_row_count_when_a_table_has_no_phrase(session_client, db):
     await _clear_history(db)
     async with write_group(db, actor="agent") as group:
         row = await db.fetchrow_required(
@@ -265,5 +265,5 @@ async def test_history_falls_back_to_the_row_count_when_a_table_has_no_phrase(au
         )
         group.record_created("scheduled_questions", dict(row))
 
-    entry = _entry(authed_client.get("/api/history").json(), group.group_id)
+    entry = _entry(session_client.get("/api/history").json(), group.group_id)
     assert entry["summary"] == "Changed 1 row in scheduled_questions"

@@ -19,10 +19,10 @@ async def _insert_preference(
     )
 
 
-async def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(authed_client, db):
+async def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(session_client, db):
     preference = await _insert_preference(db, "Prefers UPI for groceries", active=False)
 
-    response = authed_client.patch(
+    response = session_client.patch(
         f"/api/preferences/{preference['id']}/content",
         json={"body": "  Prefers cards for groceries  "},
     )
@@ -51,18 +51,18 @@ async def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(authed_c
     assert audit["after"]["body"] == "Prefers cards for groceries"
 
 
-async def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(authed_client, db):
+async def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(session_client, db):
     preference = await _insert_preference(db, "Prefers UPI")
 
-    blank = authed_client.patch(f"/api/preferences/{preference['id']}/content", json={"body": ""})
-    whitespace = authed_client.patch(
+    blank = session_client.patch(f"/api/preferences/{preference['id']}/content", json={"body": ""})
+    whitespace = session_client.patch(
         f"/api/preferences/{preference['id']}/content", json={"body": "   \n  "}
     )
-    extra = authed_client.patch(
+    extra = session_client.patch(
         f"/api/preferences/{preference['id']}/content",
         json={"body": "Prefers cards", "active": False},
     )
-    missing = authed_client.patch(
+    missing = session_client.patch(
         "/api/preferences/prf_missing/content", json={"body": "Prefers cards"}
     )
 
@@ -72,17 +72,28 @@ async def test_edit_rejects_blank_whitespace_extra_fields_and_unknown_ids(authed
     assert missing.status_code == 404, missing.text
 
 
-async def test_delete_for_good_scrubs_the_edit_history_too(authed_client, db):
+async def test_edit_rejects_a_body_over_two_thousand_characters(session_client, db):
+    preference = await _insert_preference(db, "Short preference")
+
+    overlong = session_client.patch(
+        f"/api/preferences/{preference['id']}/content", json={"body": "x" * 2001}
+    )
+    assert overlong.status_code == 422, overlong.text
+    stored = await db.fetchrow("SELECT body FROM preferences WHERE id = $1", preference["id"])
+    assert stored["body"] == "Short preference"
+
+
+async def test_delete_for_good_scrubs_the_edit_history_too(session_client, db):
     marker = "sushi budget is personal"
     preference = await _insert_preference(db, marker)
 
-    edited = authed_client.patch(
+    edited = session_client.patch(
         f"/api/preferences/{preference['id']}/content",
         json={"body": f"{marker}, keep it quiet"},
     )
     assert edited.status_code == 200, edited.text
 
-    deleted = authed_client.delete(f"/api/preferences/{preference['id']}")
+    deleted = session_client.delete(f"/api/preferences/{preference['id']}")
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["status"] == "deleted"
 

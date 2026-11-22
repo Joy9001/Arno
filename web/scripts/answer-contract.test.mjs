@@ -8,11 +8,25 @@ import { Streamdown } from "streamdown";
 import { createServer } from "vite";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
+// One process builds every Python-side fixture. It imports the ledger and presentation modules
+// directly, never arno.api, so the test does not pay for the FastAPI app or a model client.
 const fixtures = JSON.parse(execFileSync("uv", ["run", "python", "tests/fixtures/presentation_contract.py"], {
-  cwd: root, encoding: "utf8",
+  cwd: root,
+  encoding: "utf8",
+  env: {
+    ...process.env,
+    CHAT_BASE_URL: "https://api.example.com/v1",
+    CHAT_MODEL: "example-chat",
+    CHAT_PROVIDER: "example",
+    CHAT_API_KEY: "sk-live-must-never-be-echoed",
+    VISION_BASE_URL: "http://127.0.0.1:9/v1",
+    VISION_MODEL: "local-vision",
+    STT_BASE_URL: "",
+    STT_MODEL: "",
+  },
 }));
 const server = await createServer({
-  configFile: "scripts/assistant-ui-fixture/vite.config.ts",
+  configFile: "scripts/answer-contract/vite.config.ts",
   server: { middlewareMode: true }, appType: "custom",
 });
 after(() => server.close());
@@ -58,9 +72,7 @@ test("history leads with the readable change, keeps ids secondary, and offers un
 });
 
 test("export scope renders the server exclusion list and destination", () => {
-  const scope = JSON.parse(execFileSync("uv", ["run", "python", "-c",
-    "import json; from arno.api.ledger import get_export_scope; print(json.dumps(get_export_scope()))"],
-  { cwd: root, encoding: "utf8" }));
+  const scope = fixtures.scope;
   const html = renderToStaticMarkup(React.createElement(ExportScope, {
     excludedTables: scope.excluded_tables,
   }));
@@ -73,22 +85,7 @@ test("export scope renders the server exclusion list and destination", () => {
 });
 
 test("a deletion request shows its counts, retained data, backups, and provider limits", () => {
-  const facts = JSON.parse(execFileSync("uv", ["run", "python", "-c",
-    "import json; from arno.ledger.deletion import retention_facts; print(json.dumps(retention_facts()))"],
-  {
-    cwd: root, encoding: "utf8",
-    env: {
-      ...process.env,
-      CHAT_BASE_URL: "https://api.example.com/v1",
-      CHAT_MODEL: "example-chat",
-      CHAT_PROVIDER: "example",
-      CHAT_API_KEY: "sk-live-must-never-be-echoed",
-      VISION_BASE_URL: "http://127.0.0.1:9/v1",
-      VISION_MODEL: "local-vision",
-      STT_BASE_URL: "",
-      STT_MODEL: "",
-    },
-  }));
+  const facts = fixtures.deletion;
   const html = renderToStaticMarkup(React.createElement(DeletionScope, {
     preview: {
       scope: "everything",
@@ -575,11 +572,11 @@ test("safe_to_spend renders on home and projection cards and hides when null or 
   const notes = dataQualityNotes(receipt);
   assert.ok(notes.length, "the fixture carries a data-quality note");
   const cardHtml = render(Card, { ...receipt, card: "projection" });
-  assert.match(cardHtml, /<p class="receipt-note">₹2,000 safe to spend today/);
+  assert.match(cardHtml, /<p class="receipt-note" data-testid="safe-to-spend">₹2,000 safe to spend today/);
   assert.match(cardHtml, /10 Nov 2026/);
 
   const summaryHtml = renderToStaticMarkup(React.createElement(ProjectionSummary, { payload: receipt }));
-  assert.match(summaryHtml, /<p class="projection-facts">₹2,000 safe to spend today/);
+  assert.match(summaryHtml, /<p class="projection-facts" data-testid="safe-to-spend">₹2,000 safe to spend today/);
   const panelHtml = renderToStaticMarkup(React.createElement(ProjectionBody, { payload: receipt }));
 
   const home = {

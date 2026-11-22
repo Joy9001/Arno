@@ -170,13 +170,13 @@ def python_packages() -> dict[str, dict[str, str]]:
     return packages
 
 
-def web_packages() -> dict[str, dict[str, str]] | None:
+def web_packages() -> dict[str, dict[str, str]]:
     web = ROOT / "web"
     if not (web / "node_modules").is_dir():
-        return None
+        raise RuntimeError("web/node_modules is absent. Run pnpm --dir web install first.")
     pnpm = shutil.which("pnpm.cmd") or shutil.which("pnpm")
     if pnpm is None:
-        return None
+        raise RuntimeError("pnpm is required to audit web licenses.")
     result = subprocess.run(
         [pnpm, "licenses", "list", "--json"],
         cwd=web,
@@ -187,8 +187,9 @@ def web_packages() -> dict[str, dict[str, str]] | None:
         check=False,
     )
     if result.returncode != 0:
-        print(result.stderr[-1000:], file=sys.stderr)
-        return None
+        raise RuntimeError(
+            f"pnpm licenses list exited with {result.returncode}. {result.stderr[-1000:]}"
+        )
     payload = json.loads(result.stdout)
     packages: dict[str, dict[str, str]] = {}
     for expression, entries in payload.items():
@@ -198,6 +199,8 @@ def web_packages() -> dict[str, dict[str, str]] | None:
                 "version": ", ".join(entry.get("versions") or []),
                 "license": normalized,
             }
+    if not packages:
+        raise RuntimeError("pnpm licenses list reported no web packages.")
     return packages
 
 
@@ -210,18 +213,23 @@ def failures(packages: dict[str, dict[str, str]]) -> list[str]:
     return bad
 
 
-def direct_dependencies() -> tuple[set[str], set[str]]:
-    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    python = {
-        re.split(r"[<>=!~\[\s]", item, maxsplit=1)[0].lower()
-        for item in pyproject["project"]["dependencies"]
-    }
-    package_json = json.loads((ROOT / "web" / "package.json").read_text(encoding="utf-8"))
-    web = {
-        re.split(r"[<>=!~\[\s]", item, maxsplit=1)[0].lower()
-        for item in (package_json.get("dependencies") or {})
-    }
-    return python, web
+def direct_dependencies(*, python: bool = True, web: bool = True) -> tuple[set[str], set[str]]:
+    """Read only the manifests for the requested ecosystems."""
+    python_direct: set[str] = set()
+    web_direct: set[str] = set()
+    if python:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        python_direct = {
+            re.split(r"[<>=!~\[\s]", item, maxsplit=1)[0].lower()
+            for item in pyproject["project"]["dependencies"]
+        }
+    if web:
+        package_json = json.loads((ROOT / "web" / "package.json").read_text(encoding="utf-8"))
+        web_direct = {
+            re.split(r"[<>=!~\[\s]", item, maxsplit=1)[0].lower()
+            for item in (package_json.get("dependencies") or {})
+        }
+    return python_direct, web_direct
 
 
 def notices_failures(python: set[str], web: set[str]) -> list[str]:
@@ -236,20 +244,23 @@ def notices_failures(python: set[str], web: set[str]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--python-only", action="store_true")
-    parser.add_argument("--web-only", action="store_true")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--python-only", action="store_true")
+    scope.add_argument("--web-only", action="store_true")
     args = parser.parse_args()
 
-    python: dict[str, dict[str, str]] = python_packages()
-    web = None if args.python_only else web_packages()
-    if args.web_only:
-        python = {}
+    audits = {}
+    if not args.web_only:
+        audits["python"] = python_packages()
+    if not args.python_only:
+        try:
+            audits["web"] = web_packages()
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"web license audit failed. {exc}", file=sys.stderr)
+            return 1
 
     failed = False
-    for label, packages in (("python", python), ("web", web)):
-        if packages is None:
-            print(f"{label}: skipped (web/node_modules is absent; run pnpm install first)")
-            continue
+    for label, packages in audits.items():
         bad = failures(packages)
         weak = sorted(
             name
@@ -263,14 +274,13 @@ def main() -> int:
             print(f"  FAIL {line}")
         failed = failed or bool(bad)
 
-    if not args.web_only:
-        py_direct, web_direct = direct_dependencies()
-        missing = notices_failures(py_direct, web_direct)
-        if missing:
-            print("THIRD_PARTY_NOTICES.md does not name: " + ", ".join(missing))
-            failed = True
-        else:
-            print("notices: every direct dependency is named")
+    py_direct, web_direct = direct_dependencies(python=not args.web_only, web=not args.python_only)
+    missing = notices_failures(py_direct, web_direct)
+    if missing:
+        print("THIRD_PARTY_NOTICES.md does not name: " + ", ".join(missing))
+        failed = True
+    else:
+        print("notices: every direct dependency is named")
     return 1 if failed else 0
 
 

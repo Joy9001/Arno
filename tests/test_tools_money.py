@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -366,6 +367,16 @@ async def test_card_payoff_rate_precision_and_validation(ledger):
             )
 
 
+async def test_a_negative_minimum_percent_is_refused():
+    with pytest.raises(ValueError, match="minimum_bps must be positive"):
+        await money_tools.card_payoff(
+            None,
+            balance_paise=100_000,
+            monthly_rate_percent=3.5,
+            minimum_percent=-1,
+        )
+
+
 def test_shared_monthly_rate_conversion_and_apr_percent():
     from arno.engine.money import amortize as amortize_fn
 
@@ -400,3 +411,26 @@ def test_shared_monthly_rate_conversion_and_apr_percent():
         is None
     )
     assert money_tools.apr_percent(None) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (Decimal("1200.50"), 120_050),
+        (Decimal("0.01"), 1),
+        (Decimal("33.33"), 3_333),
+        (Decimal("1500"), 150_000),
+        (Decimal("200000"), 20_000_000),
+        (Decimal("150"), 15_000),
+        (Decimal("500"), 50_000),
+        (50, 5_000),
+        (0.1 + 0.2, 30),
+    ],
+)
+def test_rupee_to_paise_is_exact(value, expected):
+    assert write_tools._rupees(value) == expected
+
+
+def test_a_missing_amount_is_refused_not_guessed():
+    with pytest.raises(write_tools.ToolInputError):
+        write_tools._rupees(None)

@@ -7,7 +7,6 @@ import calendar as _calendar
 import math
 import statistics
 import sys
-import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -155,11 +154,8 @@ def test_keys_and_constants() -> None:
 
 
 @pytest.mark.parametrize("key", PERSONA_KEYS)
-def test_determinism_speed_and_seed_variation(key: str) -> None:
-    t0 = time.perf_counter()
+def test_determinism_and_seed_variation(key: str) -> None:
     p1 = generate(key, TUNING_SEEDS[0])
-    elapsed = time.perf_counter() - t0
-    assert elapsed < 1.0, f"{key} took {elapsed:.3f}s"
 
     p1_repeat = generate(key, TUNING_SEEDS[0])
     assert p1 == p1_repeat

@@ -7,6 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import cast
 
+from arno.agent.spend import SpendStoreError
 from arno.jobs.runner import (
     Handler,
     JobGaveUp,
@@ -14,6 +15,7 @@ from arno.jobs.runner import (
     enqueue_job,
     recover_interrupted_jobs,
 )
+from arno.ledger.errors import CommitOutcomeUnknownError
 
 
 async def _job(conn, key: str) -> dict:
@@ -198,3 +200,35 @@ async def test_the_loop_claims_at_most_two_jobs_at_once(db):
     assert await runner.tick() == 1
     await asyncio.gather(*list(runner._running))
     assert sorted(started) == [0, 1, 2]
+
+
+async def test_a_cost_stop_fails_the_job_at_once_without_retrying(db):
+    def handler(payload):
+        del payload
+        raise SpendStoreError("the spend ledger is down")
+
+    runner = JobRunner(registry={"cost": cast(Handler, handler)}, timeouts={"cost": 5})
+    job = await db.fetchrow("INSERT INTO jobs (key, kind) VALUES ('cost:1', 'cost') RETURNING id")
+
+    await runner.run_once()
+    row = await _job(db, "cost:1")
+    assert row["status"] == "failed" and row["attempts"] == 1
+    assert row["last_error"] == "SpendStoreError"
+    notice = await db.fetchrow("SELECT * FROM notifications WHERE kind = 'job_failed'")
+    assert notice["data"] == {"job_id": job["id"], "kind": "cost"}
+    assert "without retrying" in notice["body"]
+
+
+async def test_an_uncertain_commit_fails_the_job_at_once_without_retrying(db):
+    def handler(payload):
+        del payload
+        raise CommitOutcomeUnknownError("commit outcome unknown")
+
+    runner = JobRunner(registry={"uncertain": cast(Handler, handler)}, timeouts={"uncertain": 5})
+    await db.execute("INSERT INTO jobs (key, kind) VALUES ('uncertain:1', 'uncertain')")
+
+    await runner.run_once()
+    row = await _job(db, "uncertain:1")
+    assert row["status"] == "failed" and row["attempts"] == 1
+    assert row["last_error"] == "commit outcome unknown"
+    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'job_failed'") == 1

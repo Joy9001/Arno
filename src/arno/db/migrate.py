@@ -19,6 +19,7 @@ from typing import Any
 from arno.db.conn import Connection, connect
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+PREFLIGHT_DIR = Path(__file__).resolve().parent / "preflight"
 INCLUDE_RE = re.compile(r"^\s*\\i\s+(\S+)\s*$")
 NAME_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 ALLOWED_INCLUDE_ROOT = Path(__file__).resolve().parent
@@ -119,6 +120,19 @@ def _executable_sql(migration: Migration, *, is_superuser: bool) -> str:
     return migration.sql.replace(_SUPERUSER_ROLE_ATTRS, _NON_SUPERUSER_ROLE_ATTRS)
 
 
+def legacy_preflight(version: int) -> str | None:
+    """Repair SQL that runs in the transaction of a pending migration, keyed by its version.
+
+    A data shape an older release wrote cannot be fixed by editing an applied migration without
+    breaking its recorded checksum, so the repair lives in `db/preflight/` and runs only while
+    that migration is still pending.
+    """
+    matches = sorted(PREFLIGHT_DIR.glob(f"{version:04d}_*.sql"))
+    if len(matches) > 1:
+        raise MigrationError(f"More than one preflight for migration {version}: {matches}")
+    return _expand(matches[0]) if matches else None
+
+
 async def run_migrations(
     conn: Connection | None = None, directory: Path = MIGRATIONS_DIR
 ) -> list[int]:
@@ -149,7 +163,10 @@ async def run_migrations(
             if migration.version in recorded:
                 continue
             sql = _executable_sql(migration, is_superuser=is_superuser)
+            preflight = legacy_preflight(migration.version)
             async with conn.transaction():
+                if preflight is not None:
+                    await conn.execute(preflight)
                 await conn.execute(sql)
                 if sql != migration.sql:
                     elevated = await conn.fetchval(

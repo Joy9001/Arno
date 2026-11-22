@@ -468,7 +468,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   return (
     <UserContext.Provider value={user}>
       <div className="app" data-page={page}>
-        <nav className="rail" aria-label="Primary">
+        <nav className="rail" aria-label="Primary" data-testid="primary-nav">
           <button
             type="button"
             className="rail-brand"
@@ -631,7 +631,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           </Dialog.Root>
         )}
 
-        <nav className="tabbar" aria-label="Primary">
+        <nav className="tabbar" aria-label="Primary" data-testid="mobile-nav">
           {TABBAR.map((id) => {
             const item = PAGES.find((entry) => entry.id === id) ?? NAV[0];
             const on = page === id || (id === "ask" && page === "chats");

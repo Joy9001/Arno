@@ -9,7 +9,15 @@ from decimal import Decimal
 
 import pytest
 from pydantic_ai.exceptions import ModelAPIError, ModelContextWindowExceededError
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
+from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.spend import SpendEntry
 
@@ -90,15 +98,24 @@ def test_the_cli_connection_is_replaced_across_loops_and_closed_explicitly(monke
 
 
 async def test_the_backup_model_takes_over_without_sticking(demo_ledger):
-    def failing(messages, info: AgentInfo) -> ModelResponse:
-        raise ModelAPIError("primary", "provider is down")
+    calls = {"primary": 0, "backup": 0}
+
+    def primary(messages, info: AgentInfo) -> ModelResponse:
+        calls["primary"] += 1
+        if calls["primary"] == 1:
+            raise ModelAPIError("primary", "provider is down")
+        return ModelResponse(parts=[TextPart("from the primary")])
 
     def backup(messages, info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[TextPart("from the backup")])
+        calls["backup"] += 1
+        # Keep the run to two model requests: the backup calls a tool, and the next request
+        # must go back to the primary rather than stay stuck on the backup.
+        return ModelResponse(parts=[ToolCallPart("get_financial_context", {}, "call_ctx_backup")])
 
-    agent = build_agent(model=FunctionModel(failing), backup=FunctionModel(backup))
+    agent = build_agent(model=FunctionModel(primary), backup=FunctionModel(backup))
     result = await agent.run("hi", deps=AgentDeps(conversation_id="cnv_backup"))
-    assert result.output == "from the backup"
+    assert result.output == "from the primary"
+    assert calls == {"primary": 2, "backup": 1}, calls
 
 
 def test_a_backup_too_small_refuses_before_sending():
@@ -110,17 +127,20 @@ def test_a_backup_too_small_refuses_before_sending():
     limited = WindowLimited(FM(never), 10)
     messages: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("word " * 1000)])]
     with pytest.raises(ModelContextWindowExceededError):
-        import asyncio
+        asyncio.run(limited.request(messages, None, ModelRequestParameters()))
 
-        asyncio.run(
-            limited.request(
-                messages,
-                None,
-                __import__(
-                    "pydantic_ai.models", fromlist=["ModelRequestParameters"]
-                ).ModelRequestParameters(),
-            )
-        )
+
+def test_a_history_that_fits_the_backup_window_is_sent():
+    seen: list[list[ModelMessage]] = []
+
+    def succeed(messages, info):
+        seen.append(messages)
+        return ModelResponse(parts=[TextPart("ok")])
+
+    limited = WindowLimited(FunctionModel(succeed), 100_000)
+    messages: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("hi")])]
+    asyncio.run(limited.request(messages, None, ModelRequestParameters()))
+    assert seen == [messages]
 
 
 def test_the_turn_ceilings_are_wide_but_finite():
@@ -133,7 +153,7 @@ def test_the_turn_ceilings_are_wide_but_finite():
     assert "first_event_timeout" not in MODEL_SETTINGS
 
 
-async def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_client, demo_ledger):
+async def test_a_backup_reply_carries_a_badge_and_records_the_error(session_client, demo_ledger):
     def failing(messages, info: AgentInfo) -> ModelResponse:
         raise ModelAPIError("primary", "provider is down")
 
@@ -141,9 +161,9 @@ async def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_clien
         lambda messages, info: ModelResponse(parts=[TextPart("from the backup")])
     )
     agent = build_agent(model=streaming_model(failing), backup=backup)
-    authed_client.app.state.agent = agent
-    authed_client.app.state.turns.agent = agent
-    response = authed_client.post(
+    session_client.app.state.agent = agent
+    session_client.app.state.turns.agent = agent
+    response = session_client.post(
         "/api/chat",
         json={
             "id": "thread-backup",
@@ -154,7 +174,7 @@ async def test_a_backup_reply_carries_a_badge_and_records_the_error(authed_clien
         },
     )
     assert response.status_code == 200
-    thread = authed_client.get("/api/threads/thread-backup/messages").json()
+    thread = session_client.get("/api/threads/thread-backup/messages").json()
     parts = [part for message in thread["messages"] for part in message.get("parts", [])]
     assert any(part.get("type") == "data-model-badge" for part in parts)
     row = await demo_ledger.fetchrow("SELECT last_model_error_type FROM settings WHERE id = 1")

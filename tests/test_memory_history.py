@@ -102,7 +102,7 @@ async def test_delete_for_good_removes_the_memory_and_its_superseded_value(ledge
         assert "Prefers" not in str(row["after"])
 
 
-async def test_memories_and_changed_priorities_survive_a_restart(authed_client, settings, ledger):
+async def test_memories_and_changed_priorities_survive_a_restart(session_client, settings, ledger):
     await _remember(ledger, "Prefers tea", subject="drink choice")
     await _remember(ledger, "Prefers coffee", subject="drink choice")
     await update_settings(ledger, floor_paise=1_000_000)
@@ -122,7 +122,7 @@ async def test_memories_and_changed_priorities_survive_a_restart(authed_client, 
     assert restarted_goal["priority"] == 4
     assert restarted_goal["priority_history"]["previous"] == 2
 
-    token = authed_client.cookies[COOKIE_NAME]
+    token = session_client.cookies[COOKIE_NAME]
     with TestClient(create_app(settings)) as restarted:
         restarted.cookies.set(COOKIE_NAME, token)
         response = restarted.get("/api/preferences")

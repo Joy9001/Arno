@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import date
 
+from arno.agent.parser import submit_parser_code
 from arno.importers.baselines import recompute_baselines
+from arno.importers.commit import commit_import, reject_import, undo_import
 from arno.importers.identifiers import find_upi_ref, match_hash, scrub, scrub_account_number
 from arno.importers.reconcile import insert_lines, reconcile, resolve_line
 from arno.ledger import movements as movements_mod
@@ -13,6 +15,9 @@ from arno.ledger.audit import new_id
 from arno.ledger.schedule_payments import link_payment
 from arno.ledger.schedules import create_schedule
 from arno.tools.projection import load_inputs
+from tests.agent_helpers import run_context
+from tests.fixtures import import_helpers as helpers
+from tests.import_fixtures import WALLET_PARSER, wallet_statement
 
 
 async def _account(conn) -> dict:
@@ -508,3 +513,328 @@ async def test_a_schedule_paid_rent_is_left_out_of_the_baseline(ledger):
     inputs = await load_inputs(ledger, as_of=date(2026, 4, 30))
     simulated = next(category for category in inputs.categories if category.name == "Rent")
     assert simulated.baseline_per_day_paise == row["amount_per_day_paise"]
+
+
+# A second copy of a row never books twice, and a released row comes back ---------------------
+
+
+async def test_the_same_row_on_two_accounts_is_not_a_duplicate(ledger):
+    first = await helpers.bank(ledger, name="SBI savings", last4="6789")
+    second = await helpers.bank(ledger, name="Axis savings", last4="1111")
+    row = helpers.row("SWIGGY", debit=45000)
+    original = await helpers.review_import(ledger, first, [row])
+    await commit_import(ledger, original)
+
+    import_id = await helpers.review_import(ledger, second, [row])
+
+    line = await ledger.fetchrow(
+        "SELECT match_state FROM statement_lines WHERE import_id = $1", import_id
+    )
+    assert line["match_state"] == "new"
+    await commit_import(ledger, import_id)
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 2
+
+
+async def test_a_near_duplicate_merges_and_two_identical_purchases_both_stay(ledger):
+    account = await helpers.bank(ledger)
+    logged = await movements_mod.record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=45000,
+        description="swiggy",
+        date=date(2026, 4, 2),
+        capture={"kind": "chat", "ref": "msg_1"},
+    )
+    import_id = await helpers.review_import(
+        ledger,
+        account,
+        [
+            # Different payee spelling, one day off: still the same movement.
+            helpers.row(
+                "UPI/DR/123456789012/SWIGGY BANGALORE/ramesh@okaxis",
+                debit=45000,
+                day="2026-04-03",
+            ),
+            # A second, genuinely separate purchase of the same amount the same day.
+            helpers.row(
+                "UPI/DR/123456789013/SWIGGY BANGALORE/ramesh@okaxis",
+                debit=45000,
+                day="2026-04-03",
+            ),
+        ],
+    )
+
+    states = [
+        row["match_state"]
+        for row in await ledger.fetch(
+            "SELECT match_state FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
+            import_id,
+        )
+    ]
+    assert states == ["certain", "new"]
+    await commit_import(ledger, import_id)
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 2
+    assert (
+        await ledger.fetchval("SELECT count(*) FROM captures WHERE movement_id = $1", logged["id"])
+        == 2
+    )
+
+
+async def test_an_overlapping_reimport_of_the_same_account_ignores_the_second_copy(ledger):
+    account = await helpers.bank(ledger)
+    row = helpers.row("SWIGGY", debit=45000)
+    first = await helpers.review_import(ledger, account, [row])
+    await commit_import(ledger, first)
+
+    overlapping = await helpers.review_import(
+        ledger, account, [row, helpers.row("BLINKIT", debit=20000, day="2026-04-20")]
+    )
+
+    counts = (await ledger.fetchrow("SELECT counts FROM imports WHERE id = $1", overlapping))[
+        "counts"
+    ]
+    assert counts["ignored"] == 1
+    assert counts["new"] == 1
+
+
+async def test_rejecting_an_import_releases_the_row_it_suppressed(ledger):
+    bank = await helpers.bank(ledger)
+    first = await helpers.queued_import(
+        ledger, bank, [helpers.row("SWIGGY BENGALURU", debit=45000)]
+    )
+    second = await helpers.queued_import(
+        ledger,
+        bank,
+        [
+            helpers.row("SWIGGY BENGALURU", debit=45000),
+            helpers.row("BLINKIT", debit=20000, day="2026-04-02"),
+        ],
+    )
+    assert await _states(ledger, second) == ["ignored", "new"]
+    kept = await _nth_line(ledger, second, 1)
+    await resolve_line(ledger, import_id=second, line_id=kept["id"], resolution="ignore")
+    assert await _states(ledger, second) == ["ignored", "ignored"]
+
+    await reject_import(ledger, first, "not my statement")
+
+    assert await _states(ledger, second) == ["new", "ignored"]
+    counts = await ledger.fetchrow("SELECT counts FROM imports WHERE id = $1", second)
+    assert counts["counts"]["new"] == 1
+    assert counts["counts"]["ignored"] == 1
+
+
+async def test_undoing_an_import_releases_the_row_it_suppressed(ledger):
+    bank = await helpers.bank(ledger)
+    committed = await helpers.review_import(
+        ledger, bank, [helpers.row("SWIGGY BENGALURU", debit=45000)]
+    )
+    await commit_import(ledger, committed)
+    waiting = await helpers.queued_import(
+        ledger, bank, [helpers.row("SWIGGY BENGALURU", debit=45000)]
+    )
+    assert await _states(ledger, waiting) == ["ignored"]
+
+    await undo_import(ledger, committed)
+
+    assert await _states(ledger, waiting) == ["new"]
+
+
+async def _states(conn, import_id: str) -> list[str]:
+    rows = await conn.fetch(
+        "SELECT match_state FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
+        import_id,
+    )
+    return [row["match_state"] for row in rows]
+
+
+async def _nth_line(conn, import_id: str, index: int) -> dict:
+    return (
+        await conn.fetch(
+            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
+        )
+    )[index]
+
+
+async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
+    from arno.ledger.audit import undo_group
+
+    account = await helpers.bank(ledger)
+    logged = await movements_mod.record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=45000,
+        description="swiggy",
+        date=date(2026, 4, 2),
+        capture={"kind": "chat", "ref": "msg_1"},
+    )
+    deleted = await movements_mod.correct_movement(ledger, logged["id"], changes={"delete": True})
+    import_id = await helpers.review_import(
+        ledger, account, [helpers.row("SWIGGY", debit=45000, day="2026-04-03")]
+    )
+
+    line = await ledger.fetchrow(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
+    )
+    # The logged row was undone, so the statement's row is new money, not a merge.
+    assert line["match_state"] == "new"
+    assert line["movement_id"] is None
+
+    # An undo of that undo makes the logged row effective again, and then it matches.
+    await undo_group(ledger, deleted["undo_id"])
+    await reconcile(ledger, import_id=import_id, account=account, period=helpers.PERIOD)
+    line = await ledger.fetchrow(
+        "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
+    )
+    assert line["match_state"] == "certain"
+    assert line["movement_id"] == logged["id"]
+
+
+async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
+    from arno.agent.parser import suggest_transfers
+    from arno.importers.reconcile import resolve_line
+
+    here = await create_account(
+        ledger,
+        kind="bank",
+        name="SBI Salary",
+        institution="State Bank of India",
+        last4="7710",
+        opening_balance_paise=10_000_000,
+        opening_balance_as_of=date(2026, 3, 31),
+    )
+    other = await create_account(
+        ledger,
+        kind="bank",
+        name="HDFC Savings",
+        institution="HDFC Bank",
+        last4="4821",
+        opening_balance_paise=0,
+    )
+    # The user already logged the transfer between their own accounts.
+    logged = await movements_mod.record_transfer(
+        ledger,
+        from_account_id=here["id"],
+        to_account_id=other["id"],
+        amount_paise=125000,
+        description="TRANSFER TO SAVINGS 4821",
+        date=date(2026, 4, 2),
+        actor="user",
+    )
+    import_id = await helpers.upload(
+        ledger,
+        wallet_statement(
+            institution="State Bank of India",
+            period=("01/04/2026", "30/04/2026"),
+            opening_paise=10_000_000,
+            rows=[("02/04/2026", "TRANSFER TO SAVINGS 4821", 125000, 0)],
+        ),
+        account_id=here["id"],
+    )
+    submitted = await submit_parser_code(ledger, import_ids=[import_id], code=WALLET_PARSER)
+    assert submitted["status"] == "parser_submitted", submitted
+
+    line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
+    assert line["match_state"] == "certain"
+    assert line["movement_id"] == logged["id"]
+
+    # The parser suggests the other account; the user confirms it on the review screen.
+    from arno.agent.deps import AgentDeps
+
+    suggested = await suggest_transfers(
+        run_context(AgentDeps(conversation_id="conv_transfer")),
+        import_id,
+        [{"row": 0, "account_id": other["id"]}],
+    )
+    assert suggested["status"] == "suggested"
+    await resolve_line(
+        ledger, import_id=import_id, line_id=line["id"], resolution="confirm_transfer"
+    )
+
+    kept = await ledger.fetchrow("SELECT * FROM statement_lines WHERE id = $1", line["id"])
+    assert kept["movement_id"] == logged["id"], "confirming the move must keep the matched record"
+    assert kept["match_state"] == "certain"
+
+    committed = await commit_import(ledger, import_id)
+    assert committed["adjustment_paise"] == 0
+    transfers = await ledger.fetch(
+        """
+        SELECT t.amount FROM pgledger_transfers t
+        JOIN accounts a ON a.ledger_account_id = t.from_account_id
+        WHERE a.id = $1 AND t.amount = 125000
+        """,
+        here["id"],
+    )
+    assert len(transfers) == 1, "one statement line, one movement out of the account"
+
+
+# A review import that matched a logged row is not a ledger write -----------------------------
+
+
+async def _review_import_with_line(ledger, bank, *, amount_paise: int) -> tuple[str, str]:
+    import_id = await helpers.queued_import(
+        ledger, bank, [helpers.row("SWIGGY BENGALURU", debit=amount_paise)]
+    )
+    line_id = await ledger.fetchval(
+        "SELECT id FROM statement_lines WHERE import_id = $1", import_id
+    )
+    return import_id, line_id
+
+
+async def test_a_certain_match_in_review_is_not_an_import_write(ledger):
+    from arno.tools import write as write_tools
+    from tests.invariants import check_ledger
+
+    created = await create_account(
+        ledger, kind="bank", name="Bank", institution="Bank", opening_balance_paise=10_000_000
+    )
+    bank = await ledger.fetchrow("SELECT * FROM v_accounts WHERE id = $1", created["id"])
+    logged = await write_tools.record_movement(
+        ledger,
+        {
+            "kind": "expense",
+            "amount_rupees": "450.00",
+            "account": "Bank",
+            "description": "Swiggy order",
+            "date": "2026-04-01",
+        },
+        message_id=None,
+        conversation_id=None,
+        not_duplicate=True,
+    )
+    assert logged["movement_id"]
+    import_id, line_id = await _review_import_with_line(ledger, bank, amount_paise=45000)
+
+    line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE id = $1", line_id)
+    assert line["match_state"] == "certain"
+    assert line["movement_id"] == logged["movement_id"]
+
+    codes = {violation.code for violation in await check_ledger(ledger)}
+    assert "movement_from_uncommitted_import" not in codes, (
+        "a review import that matched a logged row is not a ledger write"
+    )
+
+
+async def test_a_statement_line_that_created_its_own_movement_is_caught(ledger):
+    from arno.ledger import movements as movements_mod
+    from tests.invariants import check_ledger
+
+    created = await create_account(
+        ledger, kind="bank", name="Bank", institution="Bank", opening_balance_paise=10_000_000
+    )
+    bank = await ledger.fetchrow("SELECT * FROM v_accounts WHERE id = $1", created["id"])
+    _import_id, line_id = await _review_import_with_line(ledger, bank, amount_paise=45000)
+    created_movement = await movements_mod.record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=45000,
+        description="Written before the import was committed",
+        date=date(2026, 4, 1),
+        idempotency_key=f"stmt:{line_id}",
+    )
+    await ledger.execute(
+        "UPDATE statement_lines SET movement_id = $1 WHERE id = $2",
+        created_movement["id"],
+        line_id,
+    )
+    codes = {violation.code for violation in await check_ledger(ledger)}
+    assert "movement_from_uncommitted_import" in codes

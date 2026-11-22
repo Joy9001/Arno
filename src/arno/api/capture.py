@@ -37,7 +37,7 @@ from arno.capture.transcribe import (
 from arno.db.conn import Connection
 from arno.engine.money import money
 from arno.ledger import movements as movements_mod
-from arno.ledger.audit import new_id
+from arno.ledger.audit import new_id, write_group
 from arno.ledger.common import today as ledger_today
 from arno.ledger.payees import is_placeholder_name
 from arno.tools import write as write_tools
@@ -319,15 +319,49 @@ async def log_photo(
         when = ledger_today()
     method = extracted.method or "unknown"
     upi_ref = _clean_upi_ref(extracted.upi_ref)
+    key = f"photo:{row['id']}"
 
-    payee = await write_tools.resolve_payee(
-        conn,
-        merchant,
-        kind="merchant",
-        outside_text=True,
-    )
     try:
-        account_id = await write_tools.default_account_for_payee(conn, str(payee["id"]))
+        # One transaction and one undo group for the whole capture. A refused account or any
+        # exception rolls back the payee and its audit row as well as the movement; undoing the
+        # expense later archives a payee this photo created.
+        async with write_group(conn, actor="user") as group:
+            # Serialize retries of this attachment before resolving any payee or account.
+            await conn.fetchval("SELECT id FROM attachments WHERE id = $1 FOR UPDATE", row["id"])
+            existing_id = await conn.fetchval(
+                "SELECT id FROM movements WHERE idempotency_key = $1", key
+            )
+            if existing_id is not None:
+                result = await movements_mod.get_movement(conn, str(existing_id))
+                if result["reversed"]:
+                    raise write_tools.ToolInputError("This photo was already logged and undone.")
+                result["status"] = "recorded"
+            else:
+                payee = await write_tools.resolve_payee(
+                    conn,
+                    merchant,
+                    kind="merchant",
+                    outside_text=True,
+                    actor="user",
+                    group_id=group.group_id,
+                )
+                account_id = await write_tools.default_account_for_payee(conn, str(payee["id"]))
+                result = await movements_mod.record_expense(
+                    conn,
+                    account_id=account_id,
+                    amount_paise=amount_paise,
+                    description=merchant,
+                    payee_id=str(payee["id"]),
+                    date=when,
+                    idempotency_key=key,
+                    capture={
+                        "kind": "photo",
+                        "ref": str(row["id"]),
+                        "upi_ref": upi_ref,
+                    },
+                    actor="user",
+                    group_id=group.group_id,
+                )
     except write_tools.ToolInputError as exc:
         return await _failure(
             conn,
@@ -337,22 +371,6 @@ async def log_photo(
             note=str(exc),
             persist=record_history,
         )
-
-    result = await movements_mod.record_expense(
-        conn,
-        account_id=account_id,
-        amount_paise=amount_paise,
-        description=merchant,
-        payee_id=str(payee["id"]),
-        date=when,
-        idempotency_key=f"photo:{row['id']}",
-        capture={
-            "kind": "photo",
-            "ref": str(row["id"]),
-            "upi_ref": upi_ref,
-        },
-        actor="user",
-    )
 
     # This updates model context only, not the UI messages table. The agent must
     # see the extracted facts and know the movement has already been logged. A retry of the same

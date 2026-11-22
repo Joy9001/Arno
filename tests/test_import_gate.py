@@ -15,7 +15,8 @@ from arno.importers.readers import Doc, open_documents
 from arno.importers.reconcile import insert_lines
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import new_id
-from tests.import_fixtures import SBI_PARSER, sbi_csv
+from tests.fixtures import import_helpers as helpers
+from tests.import_fixtures import CARD_PARSER, SBI_PARSER, card_statement, sbi_csv
 
 
 async def _active_layout(ledger, fingerprint: str) -> dict:
@@ -442,3 +443,139 @@ async def test_two_active_versions_for_one_layout_are_rejected_and_activation_sw
         first["id"],
     )
     assert [(r["version"], r["is_active"]) for r in rows] == [(1, True), (2, False)]
+
+
+# Replay order, a new header variant, and a card parser ---------------------------------------
+
+
+async def test_the_gate_compares_rows_in_parser_order_not_id_order(ledger, monkeypatch):
+    fingerprint = detect_fingerprint(Doc(sbi_csv()))
+    assert fingerprint
+    account = await _account(ledger)
+    import_id = await new_id(ledger, "imp")
+    attachment_id = await _attachment(ledger, sbi_csv())
+    await ledger.execute(
+        """
+        INSERT INTO imports (id, file_hash, status, attachment_id, account_id, institution,
+                             fingerprint, period_start, period_end, commit_groups)
+        VALUES ($1, 'hash-order', 'committed', $2, $3, 'SBI', $4, '2026-04-01', '2026-04-30',
+                '[]'::jsonb)
+        """,
+        import_id,
+        attachment_id,
+        account["id"],
+        fingerprint,
+    )
+
+    # Two UUIDv7 values in one millisecond may sort newest-first; the gate must not care.
+    state = {"n": 0}
+
+    async def fake(_conn, _prefix):
+        state["n"] += 1
+        return f"stl_{1000 - state['n']:04d}"
+
+    monkeypatch.setattr("arno.importers.reconcile.new_id", fake)
+    await insert_lines(
+        ledger,
+        import_id=import_id,
+        account=account,
+        parsed_account={"rows": ROWS},
+    )
+    monkeypatch.undo()
+
+    current = await _import(
+        ledger,
+        account=account,
+        attachment_id=await _attachment(ledger, sbi_csv()),
+        status="parsing",
+        fingerprint=fingerprint,
+    )
+    result = await run_gate(
+        doc=Doc(sbi_csv()), context=_context(current, fingerprint), code=SBI_PARSER
+    )
+
+    assert result["status"] == "parser_submitted", result
+    assert result["replay"]["checked"] == 1
+    assert result["replay"]["mismatch"] is None
+
+
+async def test_saving_a_new_header_variant_of_a_known_layout_appends_it(ledger):
+    first = await save_version(
+        ledger,
+        institution="PhonePe",
+        kind="wallet",
+        fingerprint="date|narration|chq ref no|debit|credit|balance",
+        parser="rows = []\nrows",
+    )
+    # The next month's export normalizes one header differently: a second variant, not a crash.
+    second = await save_version(
+        ledger,
+        institution="PhonePe",
+        kind="wallet",
+        fingerprint="date|narration|ref no|debit|credit|balance",
+        parser="rows = []\nrows",
+    )
+    assert second["id"] == first["id"]
+    layout = await ledger.fetchrow(
+        "SELECT variants FROM statement_layouts WHERE id = $1", first["id"]
+    )
+    assert sorted(layout["variants"]) == [
+        "date|narration|chq ref no|debit|credit|balance",
+        "date|narration|ref no|debit|credit|balance",
+    ]
+    # The same variant twice stays one entry.
+    await save_version(
+        ledger,
+        institution="PhonePe",
+        kind="wallet",
+        fingerprint="date|narration|ref no|debit|credit|balance",
+        parser="rows = []\nrows",
+    )
+    layout = await ledger.fetchrow(
+        "SELECT variants FROM statement_layouts WHERE id = $1", first["id"]
+    )
+    assert len(layout["variants"]) == 2
+
+
+async def test_a_saved_card_parser_replays_its_committed_statement_unchanged(ledger):
+    from arno.agent.parser import submit_parser_code
+    from arno.importers.commit import commit_import
+
+    card = await helpers.card(ledger, opening_paise=-100000)
+    april = await helpers.upload(
+        ledger,
+        card_statement([("03/04/2026", "SWIGGY BANGALORE", "-350.00")], "1,350.00"),
+        account_id=card["id"],
+    )
+    submitted = await submit_parser_code(ledger, import_ids=[april], code=CARD_PARSER)
+    assert submitted["status"] == "parser_submitted", submitted
+    await commit_import(ledger, april)
+    before = [
+        (row["date"], row["description_raw"], row["amount_paise"], row["balance_paise"])
+        for row in await ledger.fetch(
+            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", april
+        )
+    ]
+
+    may = await helpers.upload(
+        ledger,
+        card_statement(
+            [("04/05/2026", "AMAZON PAY INDIA", "-100.00")],
+            "1,450.00",
+            start="01/05/2026",
+            end="31/05/2026",
+        ),
+        account_id=card["id"],
+    )
+    replayed = await submit_parser_code(ledger, import_ids=[may], code=CARD_PARSER)
+    assert replayed["status"] == "parser_submitted", replayed
+    assert replayed["replay"]["checked"] == 1
+    assert replayed["replay"]["passed"] == 1
+    assert replayed["replay"]["mismatch"] is None
+    after = [
+        (row["date"], row["description_raw"], row["amount_paise"], row["balance_paise"])
+        for row in await ledger.fetch(
+            "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", april
+        )
+    ]
+    assert after == before

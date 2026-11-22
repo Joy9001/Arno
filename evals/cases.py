@@ -410,7 +410,11 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
                 "check_runway": True,
                 "check_baseline": True,
                 "must_say": [
-                    "assum",
+                    "assume",
+                    "assumes",
+                    "assuming",
+                    "assumption",
+                    "assumptions",
                     "conditional",
                     "if your salary",
                     "if salary",
@@ -1076,7 +1080,11 @@ def _long_threads() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
             "We decided to pause the Goa goal contributions and use that money to prepay "
             "the home loan.",
             "What did we decide about the Goa goal? Just tell me; don't change anything.",
-            [["goa"], ["pause", "paused", "hold", "stop"], ["prepay", "loan"]],
+            [
+                ["pause", "paused", "hold", "stop"],
+                ["prepay", "prepayment", "pay down", "pay off", "extra payment"],
+                ["home loan", "mortgage"],
+            ],
             [],
         ),
         (
@@ -1084,21 +1092,46 @@ def _long_threads() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
             "We agreed to keep the floor at ₹25,000 and not add a new subscription this month.",
             "What did we agree about the floor and subscriptions? Just answer; don't "
             "change anything.",
-            [["floor"], ["25,000", "25000", "25k"], ["subscription"]],
+            [
+                ["25,000", "25000", "25k"],
+                [
+                    "no new subscription",
+                    "no new subscriptions",
+                    "not add a new subscription",
+                    "skip new subscriptions",
+                    "hold off on new subscriptions",
+                    "avoid adding a subscription",
+                ],
+            ],
             [],
         ),
         (
             "lt_slice_decision",
             "We chose to pay the Slice card bill in full on the 25th from HDFC.",
             "What did we choose about the Slice bill? Just tell me; don't change anything.",
-            [["slice"], ["25"], ["hdfc"]],
+            [
+                ["25", "25th"],
+                ["hdfc"],
+                ["in full", "full balance", "full amount", "entire bill", "entire balance"],
+            ],
             [],
         ),
         (
             "lt_goa_hinglish",
             "Humne decide kiya ki rent 28,000 hi rahega aur Goa goal continue karega.",
             "Goa goal ke baare mein kya decide hua tha? Bas batao, kuch change mat karo.",
-            [["goa"], ["continue", "chalu", "chal", "keep", "active"]],
+            [
+                [
+                    "continue karega",
+                    "continue contributing",
+                    "continue funding",
+                    "keep contributing",
+                    "keep funding",
+                    "keep it active",
+                    "chalu rahega",
+                    "chalta rahega",
+                ]
+            ],
             ["hinglish"],
         ),
     ]

@@ -1,5 +1,6 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api } from "./api";
+import { clearReverified, markReverified, reverifiedNow } from "./reverified";
 import type { Enrollment, Passkey, User } from "./types";
 
 export type { User } from "./types";
@@ -59,16 +60,14 @@ export async function loginWithPasskey(): Promise<User> {
 
 export async function logout(): Promise<void> {
   await api<void>("/api/auth/logout", { method: "POST" });
+  clearReverified();
 }
 
-let reverifiedUntil = 0;
-
-/**
- * Re-authenticate with a passkey before export or a passkey change. The server checks this, not
+/** Re-authenticate with a passkey before export or a passkey change. The server checks this, not
  * the client; the timestamp only avoids a second prompt inside the same five-minute window.
  */
 export async function ensureFreshPasskey(): Promise<void> {
-  if (Date.now() < reverifiedUntil) return;
+  if (reverifiedNow()) return;
   const begin = await api<{ challenge_id: string; options: AuthenticationOptions }>(
     "/api/auth/reverify/begin",
     { method: "POST" },
@@ -78,11 +77,12 @@ export async function ensureFreshPasskey(): Promise<void> {
     method: "POST",
     body: JSON.stringify({ challenge_id: begin.challenge_id, credential }),
   });
-  reverifiedUntil = Date.now() + 4 * 60 * 1000;
+  markReverified();
 }
 
 export async function logoutAll(): Promise<void> {
   await api<void>("/api/auth/logout-all", { method: "POST" });
+  clearReverified();
 }
 
 export async function listPasskeys(): Promise<Passkey[]> {

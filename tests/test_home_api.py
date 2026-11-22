@@ -11,7 +11,7 @@ from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
 
 
-async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(authed_client, ledger):
+async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(session_client, ledger):
     bank = await create_account(
         ledger, kind="bank", name="Salary bank", opening_balance_paise=1_000_000
     )
@@ -26,7 +26,7 @@ async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(authe
     )
     context = await read_tools.get_financial_context(ledger)
     projection = await projection_tools.project(ledger, runs=50)
-    response = authed_client.get("/api/home?horizon_days=90")
+    response = session_client.get("/api/home?horizon_days=90")
     assert response.status_code == 200
     home = response.json()
     assert context["liquid_total"]["paise"] == home["spendable_paise"] == 1_000_000
@@ -40,13 +40,13 @@ async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(authe
     assert home["cash_quality"]["status"] == "known"
 
 
-async def test_home_composes_one_payload(authed_client):
-    account = authed_client.post(
+async def test_home_composes_one_payload(session_client):
+    account = session_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "SBI Salary", "opening_balance_paise": 18_420_000},
     )
     assert account.status_code == 201, account.text
-    recorded = authed_client.post(
+    recorded = session_client.post(
         "/api/movements",
         json={
             "kind": "expense",
@@ -57,7 +57,7 @@ async def test_home_composes_one_payload(authed_client):
     )
     assert recorded.status_code == 201, recorded.text
 
-    response = authed_client.get("/api/home?horizon_days=90")
+    response = session_client.get("/api/home?horizon_days=90")
     assert response.status_code == 200, response.text
     body = response.json()
 
@@ -88,11 +88,11 @@ async def test_home_composes_one_payload(authed_client):
     assert body["ledger"]["spending"] == 1
     assert body["ledger"]["movements"] >= 1
     assert body["ledger"]["first_date"] <= body["as_of"]
-    assert authed_client.get("/api/ledger/span").json() == body["ledger"]
+    assert session_client.get("/api/ledger/span").json() == body["ledger"]
 
 
-async def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
-    body = authed_client.get("/api/home?horizon_days=90").json()
+async def test_home_reports_no_accounts_rather_than_zero_cash(session_client):
+    body = session_client.get("/api/home?horizon_days=90").json()
 
     assert body["spendable_paise"] == 0
     assert body["cash_quality"]["status"] == "no_accounts"
@@ -100,11 +100,11 @@ async def test_home_reports_no_accounts_rather_than_zero_cash(authed_client):
     assert body["ledger"] == {"movements": 0, "spending": 0, "first_date": None}
 
 
-async def test_home_marks_an_account_without_a_balance_as_unknown(authed_client):
-    created = authed_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
+async def test_home_marks_an_account_without_a_balance_as_unknown(session_client):
+    created = session_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
     assert created.status_code == 201, created.text
 
-    body = authed_client.get("/api/home?horizon_days=90").json()
+    body = session_client.get("/api/home?horizon_days=90").json()
 
     assert body["spendable_paise"] == 0
     assert body["cash_quality"] == {
@@ -116,10 +116,10 @@ async def test_home_marks_an_account_without_a_balance_as_unknown(authed_client)
     }
 
 
-async def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
-    created = authed_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
+async def test_home_does_not_treat_a_movement_as_a_known_balance(session_client):
+    created = session_client.post("/api/accounts", json={"kind": "bank", "name": "SBI Savings"})
     assert created.status_code == 201, created.text
-    recorded = authed_client.post(
+    recorded = session_client.post(
         "/api/movements",
         json={
             "kind": "expense",
@@ -130,7 +130,7 @@ async def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
     )
     assert recorded.status_code == 201, recorded.text
 
-    body = authed_client.get("/api/home?horizon_days=90").json()
+    body = session_client.get("/api/home?horizon_days=90").json()
 
     # The legacy ledger total still carries the recorded movement, but it is not a known cash
     # balance and the UI must not present it as one.
@@ -144,14 +144,14 @@ async def test_home_does_not_treat_a_movement_as_a_known_balance(authed_client):
     }
 
 
-async def test_home_treats_an_explicit_zero_opening_as_known(authed_client):
-    created = authed_client.post(
+async def test_home_treats_an_explicit_zero_opening_as_known(session_client):
+    created = session_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "Zero bank", "opening_balance_paise": 0},
     )
     assert created.status_code == 201, created.text
 
-    body = authed_client.get("/api/home?horizon_days=90").json()
+    body = session_client.get("/api/home?horizon_days=90").json()
 
     assert body["spendable_paise"] == 0
     assert body["cash_quality"] == {
@@ -163,17 +163,17 @@ async def test_home_treats_an_explicit_zero_opening_as_known(authed_client):
     }
 
 
-async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total(authed_client):
-    known_zero = authed_client.post(
+async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total(session_client):
+    known_zero = session_client.post(
         "/api/accounts", json={"kind": "bank", "name": "Zero bank"}
     ).json()
-    stated = authed_client.post(
+    stated = session_client.post(
         f"/api/accounts/{known_zero['id']}/statement-balance",
         json={"balance_paise": 0},
     )
     assert stated.status_code == 200, stated.text
 
-    known = authed_client.get("/api/home?horizon_days=90").json()
+    known = session_client.get("/api/home?horizon_days=90").json()
     assert known["cash_quality"] == {
         "status": "known",
         "known_paise": 0,
@@ -183,8 +183,8 @@ async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total
     }
     assert known["spendable_paise"] == 0
 
-    authed_client.post("/api/accounts", json={"kind": "bank", "name": "HDFC Savings"})
-    partial = authed_client.get("/api/home?horizon_days=90").json()
+    session_client.post("/api/accounts", json={"kind": "bank", "name": "HDFC Savings"})
+    partial = session_client.get("/api/home?horizon_days=90").json()
     assert partial["spendable_paise"] == 0
     assert partial["cash_quality"] == {
         "status": "unknown",
@@ -195,18 +195,18 @@ async def test_home_keeps_a_stated_zero_balance_known_and_scopes_a_partial_total
     }
 
 
-async def test_home_puts_unread_updates_before_newer_read_ones(authed_client, db):
+async def test_home_puts_unread_updates_before_newer_read_ones(session_client, db):
     unread = await create_notification(db, kind="reminder", title="Older unread reminder")
     read = await create_notification(db, kind="reminder", title="Newer read reminder")
     assert unread is not None and read is not None
     await mark_read(db, read["id"])
 
-    body = authed_client.get("/api/home?horizon_days=90").json()
+    body = session_client.get("/api/home?horizon_days=90").json()
 
     assert body["needs_you"][0]["id"] == unread["id"]
 
 
-async def test_notifications_preserve_the_payment_ids_behind_a_price_change(authed_client, db):
+async def test_notifications_preserve_the_payment_ids_behind_a_price_change(session_client, db):
     data = {
         "old_paise": 49900,
         "new_paise": 59900,
@@ -215,40 +215,40 @@ async def test_notifications_preserve_the_payment_ids_behind_a_price_change(auth
     }
     item = await create_notification(db, kind="price_change", title="Price change", data=data)
     assert item is not None
-    response = authed_client.get("/api/notifications")
+    response = session_client.get("/api/notifications")
     assert response.status_code == 200
     result = next(row for row in response.json()["notifications"] if row["id"] == item["id"])
     assert result["data"] == data
 
 
-async def test_home_rejects_an_out_of_range_horizon(authed_client):
-    response = authed_client.get("/api/home?horizon_days=0")
+async def test_home_rejects_an_out_of_range_horizon(session_client):
+    response = session_client.get("/api/home?horizon_days=0")
 
     assert response.status_code == 422
 
 
-async def test_home_caps_the_default_horizon_even_with_a_distant_goal(authed_client, ledger):
+async def test_home_caps_the_default_horizon_even_with_a_distant_goal(session_client, ledger):
     goal = await create_goal(
         ledger, name="Distant goal", target_paise=50_000, deadline=today() + timedelta(days=365)
     )
-    default = authed_client.get("/api/home").json()["projection"]
-    requested = authed_client.get("/api/home?horizon_days=180").json()["projection"]
+    default = session_client.get("/api/home").json()["projection"]
+    requested = session_client.get("/api/home?horizon_days=180").json()["projection"]
     assert default["horizon_days"] == 90
     assert default["goals"][0]["id"] == goal["id"]
     assert requested["horizon_days"] == 180
 
 
-async def test_home_returns_the_same_safe_to_spend_as_the_projection_tool(authed_client, db):
-    empty_home = authed_client.get("/api/home?horizon_days=90").json()
+async def test_home_returns_the_same_safe_to_spend_as_the_projection_tool(session_client, db):
+    empty_home = session_client.get("/api/home?horizon_days=90").json()
     assert empty_home["projection"]["safe_to_spend"] is None
 
-    created = authed_client.post(
+    created = session_client.post(
         "/api/accounts",
         json={"kind": "bank", "name": "SBI Salary", "opening_balance_paise": 18_420_000},
     )
     assert created.status_code == 201, created.text
 
-    home_body = authed_client.get("/api/home?horizon_days=90").json()
+    home_body = session_client.get("/api/home?horizon_days=90").json()
     expected = await projection_tools.project(db, horizon_days=90)
     assert home_body["projection"]["safe_to_spend"] == expected["safe_to_spend"]
     assert home_body["projection"]["safe_to_spend"] is not None

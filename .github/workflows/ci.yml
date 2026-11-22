@@ -59,6 +59,21 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install web dependencies for the contract tests
+        # `test:answers` loads the app through Vite; the SSE schema test uses the AI SDK's
+        # own parser. Both need web/node_modules, which the Python-only job did not have.
+        run: pnpm --dir web install --frozen-lockfile
+
       - name: Install PostgreSQL 18 client and restic
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -96,6 +111,12 @@ jobs:
 
       - name: License audit
         run: uv run python scripts/license_audit.py --python-only
+
+      - name: Answer and result card contract
+        run: pnpm --dir web test:answers
+
+      - name: Frontend interaction tests
+        run: pnpm --dir web test:web
 
       - name: Pytest
         # The runner has 2 cores, so let xdist size itself rather than use the dev-machine N.

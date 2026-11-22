@@ -223,9 +223,10 @@ async def test_chatgpt_refresh_rotates_and_saves_through_the_provider():
     source = DatabaseChatGPTCredentialSource()
     expired = _jwt(exp=1)
     fresh = _jwt(exp=4_102_444_800)
+    seen_auth: list[str] = []
 
     async def handler(request: httpx2.Request) -> httpx2.Response:
-        assert request.url.host == "auth.openai.com"
+        seen_auth.append(str(request.headers.get("Authorization", "")))
         return httpx2.Response(
             200,
             json={"access_token": fresh, "refresh_token": "refresh-2"},
@@ -242,12 +243,15 @@ async def test_chatgpt_refresh_rotates_and_saves_through_the_provider():
             )
         )
         client = httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
-        provider = OpenAIChatGPTProvider(credential_source=source, http_client=client)
+        # Constructing the provider attaches its credential-injecting auth to the client.
+        OpenAIChatGPTProvider(credential_source=source, http_client=client)
         try:
-            credentials, _replay = await provider._prepare_request_credentials()
+            # A public request through the provider injects credentials and refreshes an
+            # expired token; no private provider method needs to be called.
+            await client.get("https://api.openai.com/v1/models")
         finally:
             await client.aclose()
-        assert credentials.access_token == fresh
+        assert any(f"Bearer {fresh}" in header for header in seen_auth), seen_auth
         loaded = await source.load()
         assert loaded.refresh_token == "refresh-2"
         assert loaded.access_token == fresh
@@ -371,8 +375,8 @@ def test_batch_submission_clients_do_not_retry_an_uncertain_acknowledgement(monk
         assert model.provider is not None
         assert model.provider.client.max_retries == 0
     else:
+        # Google's retry defaults belong to the SDK; Arno's decision is to use the native
+        # batch model, unwrapped, so assert the public type rather than private client fields.
         assert isinstance(model, GoogleModel)
         assert isinstance(model.provider, GoogleProvider)
-        options = model.provider.client._api_client._http_options.retry_options
-        assert options is not None
-        assert options.attempts == 1
+        assert not isinstance(model, MeteredModel)

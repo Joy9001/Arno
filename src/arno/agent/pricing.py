@@ -37,9 +37,14 @@ UNKNOWN_SOURCE = "unknown"
 
 
 def validate_pricing(
-    *, provider: str, model: str, provider_url: str | None, billing_mode: str
+    *,
+    provider: str,
+    model: str,
+    provider_url: str | None,
+    billing_mode: str,
+    usage_probes: tuple[RequestUsage, ...] = (),
 ) -> None:
-    """Check paid pricing before dispatch; reported billing requires an explicit contract."""
+    """Validate at least one usage shape the caller can receive from a metered endpoint."""
     if billing_mode not in {"metered", "local", "local_zero", "reported"}:
         raise ValueError("BILLING_MODE must be metered, local, local_zero, or reported.")
     if billing_mode in LOCAL_BILLING_MODES or billing_mode == "reported":
@@ -50,15 +55,17 @@ def validate_pricing(
         or host == "opencode.ai"
     ):
         return
-    probe = ModelResponse(
-        parts=[],
-        model_name=model,
-        provider_name=provider,
-        provider_url=provider_url,
-        usage=RequestUsage(input_tokens=1, output_tokens=1),
-    )
-    if observe_cost(probe, provider=provider, billing_mode=billing_mode).usd is None:
-        raise ValueError(f"No verified inference price for provider {provider!r}, model {model!r}.")
+    for usage in usage_probes or (RequestUsage(input_tokens=1, output_tokens=1),):
+        probe = ModelResponse(
+            parts=[],
+            model_name=model,
+            provider_name=provider,
+            provider_url=provider_url,
+            usage=usage,
+        )
+        if observe_cost(probe, provider=provider, billing_mode=billing_mode).usd is not None:
+            return
+    raise ValueError(f"No verified inference price for provider {provider!r}, model {model!r}.")
 
 
 LOCAL_BILLING_MODES = frozenset({"local", "local_zero"})

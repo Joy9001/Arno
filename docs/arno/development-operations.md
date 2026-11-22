@@ -303,6 +303,7 @@ uv run pytest -q
 pnpm --dir web lint
 pnpm --dir web typecheck
 pnpm --dir web test:answers
+pnpm --dir web test:web
 pnpm --dir web build
 uv lock --check
 uv run python scripts/license_audit.py
@@ -311,9 +312,9 @@ docker compose --env-file .env.example config -q
 
 Replace `test_AREA.py` with the affected test file. Python changes require Ruff, formatting,
 Pyrefly, and affected tests. Run the full Python suite for changes in `ledger/`, `db/`, `tools/`,
-`agent/`, or `api/`. Web changes require lint, typecheck, and build; answer and result card
-changes also require `test:answers`. For dependency changes, run the lock and license checks and
-update third-party notices for a direct addition. See
+`agent/`, or `api/`. Web changes require lint, typecheck, `test:web`, and build; answer and result
+card changes also require `test:answers`. For dependency changes, run the lock and license checks
+and update third-party notices for a direct addition. See
 [definition of done](../../AGENTS.md#definition-of-done) for the complete rules.
 
 For `ledger/`, `tools/`, `importers/`, or `engine/` changes, seed a disposable `_test` database

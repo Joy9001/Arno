@@ -14,7 +14,6 @@ import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import timedelta
 from typing import Any
 
 from arno.agent.chatgpt_auth import background_inference
@@ -416,8 +415,3 @@ class JobRunner:
             logger.exception("job %s failed", job["key"])
             async with connect() as conn:
                 await _fail(conn, job, f"{type(exc).__name__}: {exc}", timed_out=False)
-
-
-def next_backoff(attempts: int) -> timedelta:
-    """Visible for tests: 10s, then 20s, then the job is failed."""
-    return timedelta(seconds=min(300, 5 * (2 ** max(1, attempts))))

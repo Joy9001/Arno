@@ -19,8 +19,8 @@ def _reply_model(model_name: str) -> FunctionModel:
     return FunctionModel(stream_function=reply, model_name=model_name)
 
 
-def _send(authed_client, thread: str, message: str) -> tuple[str, dict]:
-    with authed_client.stream(
+def _send(session_client, thread: str, message: str) -> tuple[str, dict]:
+    with session_client.stream(
         "POST",
         "/api/chat",
         json={
@@ -32,7 +32,7 @@ def _send(authed_client, thread: str, message: str) -> tuple[str, dict]:
         },
     ) as response:
         raw = "".join(response.iter_lines())
-    return raw, authed_client.get(f"/api/threads/{thread}/messages").json()
+    return raw, session_client.get(f"/api/threads/{thread}/messages").json()
 
 
 def _part(thread: dict, type_name: str) -> dict:
@@ -45,13 +45,13 @@ def _part(thread: dict, type_name: str) -> dict:
 
 
 async def test_a_primary_reply_labels_the_actual_model_live_and_after_reload(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     agent = build_agent(model=_reply_model("primary-model"))
-    authed_client.app.state.agent = agent
-    authed_client.app.state.turns.agent = agent
+    session_client.app.state.agent = agent
+    session_client.app.state.turns.agent = agent
 
-    raw, thread = _send(authed_client, "thread-primary-model", "client-primary")
+    raw, thread = _send(session_client, "thread-primary-model", "client-primary")
 
     assert '"type":"data-reply-model"' in raw
     assert '"model":"primary-model"' in raw
@@ -60,15 +60,17 @@ async def test_a_primary_reply_labels_the_actual_model_live_and_after_reload(
     assert part["data"] == {"model": "primary-model", "fallback": False}
 
 
-async def test_a_fallback_reply_labels_the_backup_and_says_it_fell_back(authed_client, demo_ledger):
+async def test_a_fallback_reply_labels_the_backup_and_says_it_fell_back(
+    session_client, demo_ledger
+):
     def failing(messages, info) -> ModelResponse:
         raise ModelAPIError("primary", "provider is down")
 
     agent = build_agent(model=streaming_model(failing), backup=_reply_model("backup-model"))
-    authed_client.app.state.agent = agent
-    authed_client.app.state.turns.agent = agent
+    session_client.app.state.agent = agent
+    session_client.app.state.turns.agent = agent
 
-    raw, thread = _send(authed_client, "thread-reply-fallback", "client-fallback")
+    raw, thread = _send(session_client, "thread-reply-fallback", "client-fallback")
 
     assert '"type":"data-reply-model"' in raw
     assert '"model":"backup-model"' in raw

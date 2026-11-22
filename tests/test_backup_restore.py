@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -17,9 +15,16 @@ from arno.agent.chatgpt_auth import DatabaseChatGPTCredentialSource
 from arno.agent.cost_journal import CostAttempt, record_final, record_intent
 from arno.agent.pricing import CostObservation
 from arno.agent.spend import make_spend_store, post_direct_call
+from arno.backup_restore import RestoreError, prepare_database, restore_from_directory
 from arno.config import get_settings
-from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
+from arno.db.conn import connect, conninfo_to_dict, make_conninfo, quote_ident
+from arno.ledger.accounts import create_account
 from arno.ledger.export import export_pg_dump
+from arno.ledger.movements import record_expense
+from tests.conftest import cluster_lock, fresh_database
+from tests.fixtures.postgres import binary, client_env, dump_database, missing
+
+CLIENT_SKIP = missing() if binary("PG_DUMP", "pg_dump") else "the PostgreSQL client is missing"
 
 
 def _backup_dsn() -> str | None:
@@ -32,40 +37,19 @@ def _backup_dsn() -> str | None:
     return make_conninfo(**info)
 
 
-@asynccontextmanager
-async def _admin_conn() -> AsyncGenerator[Connection]:
-    info = conninfo_to_dict(os.environ["DATABASE_URL"])
-    info["dbname"] = "postgres"
-    async with connect(make_conninfo(**info)) as conn:
-        yield conn
-
-
-async def _restore_database(dump: bytes, name: str) -> None:
-    psql = os.environ.get("PSQL") or shutil.which("psql")
+async def _restore_sql_dump(dump: bytes, target_dsn: str) -> None:
+    psql = binary("PSQL", "psql")
     if psql is None:
         pytest.skip("psql is not installed")
-    info = conninfo_to_dict(os.environ["DATABASE_URL"])
-    info["dbname"] = name
-    dsn = make_conninfo(**info)
-    env = os.environ.copy()
-    if "password" in info:
-        env["PGPASSWORD"] = str(info["password"])
-    async with _admin_conn() as admin:
-        await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        await admin.execute(f'CREATE DATABASE "{name}"')
-    try:
-        result = subprocess.run(
-            [psql, "-v", "ON_ERROR_STOP=1", "-d", dsn],
-            input=dump,
-            capture_output=True,
-            env=env,
-            check=False,
-        )
-        assert result.returncode == 0, result.stderr.decode("utf-8", "replace")[-2000:]
-    except Exception:
-        async with _admin_conn() as admin:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        raise
+    info = conninfo_to_dict(target_dsn)
+    result = subprocess.run(
+        [psql, "-v", "ON_ERROR_STOP=1", "-d", str(info.get("dbname", ""))],
+        input=dump,
+        capture_output=True,
+        env=client_env(target_dsn),
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")[-2000:]
 
 
 async def _counts(dsn: str) -> dict[str, int]:
@@ -84,7 +68,7 @@ async def _cost_state(dsn: str) -> dict[str, list[dict]]:
         }
 
 
-async def test_backup_role_can_dump_and_only_insert_runs(ledger):
+async def test_the_backup_role_reads_everything_and_only_inserts_its_own_runs(ledger):
     dsn = _backup_dsn()
     if dsn is None:
         pytest.skip("BACKUP_PASSWORD is not set")
@@ -103,11 +87,43 @@ async def test_backup_role_can_dump_and_only_insert_runs(ledger):
 
 
 @pytest.mark.xdist_group("cluster")
-@pytest.mark.skipif(
-    not (os.environ.get("PG_DUMP") or shutil.which("pg_dump"))
-    or not (os.environ.get("PSQL") or shutil.which("psql")),
-    reason="pg_dump/psql missing",
-)
+async def test_prepare_database_refuses_to_replace_a_populated_database_without_force():
+    async with fresh_database("arno_restore_populated") as target:
+        async with connect(target) as conn:
+            await conn.execute("CREATE TABLE kept (id int)")
+
+        with pytest.raises(RestoreError, match="already has tables"):
+            await prepare_database(target)
+
+        async with connect(target) as conn:
+            assert await conn.fetchval("SELECT to_regclass('public.kept')") is not None
+
+        # `ensure_roles` is cluster-wide DDL; other workers may be migrating a clone right now.
+        async with cluster_lock():
+            await prepare_database(target, force=True)
+        async with connect(target) as conn:
+            assert await conn.fetchval("SELECT to_regclass('public.kept')") is None
+
+
+@pytest.mark.xdist_group("cluster")
+async def test_prepare_database_fails_closed_when_it_cannot_inspect_the_target():
+    """An unreadable target must refuse: it is about to be dropped, not treated as empty."""
+    async with fresh_database("arno_restore_probe") as target:
+        info = conninfo_to_dict(target)
+        name = str(info["dbname"])
+        admin = make_conninfo(**{**info, "dbname": "postgres"})
+        async with connect(admin) as conn:
+            await conn.execute(f"ALTER DATABASE {quote_ident(name)} ALLOW_CONNECTIONS false")
+        try:
+            with pytest.raises(RestoreError, match="Could not inspect the target database"):
+                await prepare_database(target)
+        finally:
+            async with connect(admin) as conn:
+                await conn.execute(f"ALTER DATABASE {quote_ident(name)} ALLOW_CONNECTIONS true")
+
+
+@pytest.mark.xdist_group("cluster")
+@pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
 async def test_pg_dump_restore_round_trip(ledger):
     settings = get_settings(refresh=True)
     # A real restore must preserve accounting and sign-in state, including an unfinished call.
@@ -154,17 +170,10 @@ async def test_pg_dump_restore_round_trip(ledger):
     source_cost_state = await _cost_state(settings.database_url)
     dump = export_pg_dump(settings.database_url)
     source_counts = await _counts(settings.database_url)
-    restore_name = "arno_restore_test"
-    try:
-        await _restore_database(dump, restore_name)
-        info = conninfo_to_dict(settings.database_url)
-        info["dbname"] = restore_name
-        restored_counts = await _counts(make_conninfo(**info))
-        assert restored_counts == source_counts
-        assert await _cost_state(make_conninfo(**info)) == source_cost_state
-    finally:
-        async with _admin_conn() as admin:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{restore_name}" WITH (FORCE)')
+    async with fresh_database("arno_restore") as target:
+        await _restore_sql_dump(dump, target)
+        assert await _counts(target) == source_counts
+        assert await _cost_state(target) == source_cost_state
 
 
 @pytest.mark.xdist_group("cluster")
@@ -207,13 +216,10 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
     )
     assert extracted.returncode == 0, extracted.stderr.decode("utf-8", "replace")
 
-    restore_name = "arno_restic_restore_test"
-    try:
-        await _restore_database(extracted.stdout, restore_name)
-        info = conninfo_to_dict(settings.database_url)
-        info["dbname"] = restore_name
-        assert await _counts(make_conninfo(**info)) == source_counts
-        async with connect(make_conninfo(**info)) as restored:
+    async with fresh_database("arno_restic_restore") as target:
+        await _restore_sql_dump(extracted.stdout, target)
+        assert await _counts(target) == source_counts
+        async with connect(target) as restored:
             assert (
                 await restored.fetchval(
                     "SELECT count(*) FROM scheduled_questions WHERE prompt = 'Restore question'"
@@ -230,6 +236,105 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
                 )
                 == 1
             )
-    finally:
-        async with _admin_conn() as admin:
-            await admin.execute(f'DROP DATABASE IF EXISTS "{restore_name}" WITH (FORCE)')
+
+
+@pytest.mark.xdist_group("cluster")
+@pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
+async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: Path):
+    """Migration 0036's boundary comes from the dump's own grants, not a second copy in code."""
+    dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=True)
+
+    async with fresh_database("arno_restore_grants") as target:
+        async with cluster_lock():
+            report = await restore_from_directory(
+                tmp_path, target, force=True, require_manifest=False
+            )
+        assert report.ok, report.as_dict()
+        async with connect(target) as restored:
+            reads = {
+                table: await restored.fetchval(
+                    "SELECT has_table_privilege('agent_ro', $1, 'SELECT')", table
+                )
+                for table in (
+                    "v_accounts",
+                    "v_legs",
+                    "v_movement_state",
+                    "movements",
+                    "payees",
+                    "preferences",
+                    "schedule_occurrences",
+                    "v_spending",
+                )
+            }
+            assert all(reads.values()), reads
+            # Nothing from auth, secrets, jobs, raw ledger views/tables, or the audit trail.
+            hidden = {
+                table: await restored.fetchval(
+                    "SELECT has_table_privilege('agent_ro', $1, 'SELECT')", table
+                )
+                for table in (
+                    "accounts",
+                    "movement_legs",
+                    "pgledger_accounts_view",
+                    "pgledger_transfers_view",
+                    "pgledger_entries_view",
+                    "pgledger_idempotency_keys_view",
+                    "users",
+                    "sessions",
+                    "setup_tokens",
+                    "webauthn_credentials",
+                    "vapid_keys",
+                    "audit_log",
+                    "jobs",
+                    "backup_runs",
+                    "attachments",
+                )
+            }
+            assert not any(hidden.values()), hidden
+            assert not await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'movements', 'INSERT')"
+            )
+
+            # The dumper reads everything for `pg_dump` and writes only its own status row.
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
+            )
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'users', 'SELECT')"
+            )
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'backup_runs', 'INSERT')"
+            )
+            assert not await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'backup_runs', 'UPDATE')"
+            )
+
+            # 0006's default privileges come back too, so a later table needs no new grant.
+            await restored.execute("CREATE TABLE restore_later (id int)")
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'restore_later', 'SELECT')"
+            )
+
+
+@pytest.mark.xdist_group("cluster")
+@pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
+async def test_an_older_dump_without_grants_still_restores(ledger, tmp_path: Path):
+    """A dump from an older image still restores and runs; only `agent_ro` stays unprivileged."""
+    bank = await create_account(ledger, kind="bank", name="Old dump bank")
+    await record_expense(ledger, account_id=bank["id"], amount_paise=5_000, description="Tea")
+    dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=False)
+
+    async with fresh_database("arno_restore_old") as target:
+        async with cluster_lock():
+            report = await restore_from_directory(
+                tmp_path, target, force=True, require_manifest=False
+            )
+        assert report.ok, report.as_dict()
+        async with connect(target) as restored:
+            assert await restored.fetchval("SELECT count(*) FROM movements") == 1
+            assert not await restored.fetchval(
+                "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
+            )
+            assert await restored.fetchval(
+                "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
+            )

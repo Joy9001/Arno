@@ -48,25 +48,25 @@ def _walk(client, *, limit: int = 25) -> tuple[list[str], int]:
         assert body["items"], "a page with a cursor must not be empty"
 
 
-async def test_more_than_the_legacy_window_is_reachable_without_duplicates(authed_client, ledger):
+async def test_more_than_the_legacy_window_is_reachable_without_duplicates(session_client, ledger):
     base = datetime(2026, 1, 1, tzinfo=UTC)
     created = [
         await _add_import(ledger, created_at=base + timedelta(minutes=index))
         for index in range(205)
     ]
 
-    first = authed_client.get("/api/import-history").json()
+    first = session_client.get("/api/import-history").json()
     assert len(first["items"]) == 25
     assert first["next_cursor"]
 
-    seen, pages = _walk(authed_client)
+    seen, pages = _walk(session_client)
 
     assert len(seen) == len(set(seen)) == 205
     assert seen == list(reversed(created))
     assert pages == 9
 
 
-async def test_same_timestamp_pages_by_id_descending(authed_client, ledger):
+async def test_same_timestamp_pages_by_id_descending(session_client, ledger):
     moment = datetime(2026, 2, 1, tzinfo=UTC)
     for _ in range(7):
         await _add_import(ledger, created_at=moment)
@@ -75,13 +75,13 @@ async def test_same_timestamp_pages_by_id_descending(authed_client, ledger):
         row["id"]
         for row in await ledger.fetch("SELECT id FROM imports ORDER BY created_at DESC, id DESC")
     ]
-    seen, pages = _walk(authed_client, limit=3)
+    seen, pages = _walk(session_client, limit=3)
 
     assert seen == expected
     assert pages == 3
 
 
-async def test_history_item_matches_legacy_fields_with_one_attachment(authed_client, ledger):
+async def test_history_item_matches_legacy_fields_with_one_attachment(session_client, ledger):
     account = await create_account(
         ledger, kind="bank", name="History bank", opening_balance_paise=0
     )
@@ -120,7 +120,7 @@ async def test_history_item_matches_legacy_fields_with_one_attachment(authed_cli
         "UPDATE imports SET attachment_id = $1 WHERE id = $2", attachment_id, import_id
     )
 
-    body = authed_client.get("/api/import-history", params={"limit": 25}).json()
+    body = session_client.get("/api/import-history", params={"limit": 25}).json()
 
     assert body["next_cursor"] is None
     assert len(body["items"]) == 1
@@ -139,20 +139,20 @@ async def test_history_item_matches_legacy_fields_with_one_attachment(authed_cli
 
     legacy_item = next(
         row
-        for row in authed_client.get("/api/imports").json()["items"]
+        for row in session_client.get("/api/imports").json()["items"]
         if row["import_id"] == import_id
     )
     assert set(item) == set(legacy_item)
 
 
-async def test_legacy_imports_route_keeps_its_shape_and_cap(authed_client, ledger):
+async def test_legacy_imports_route_keeps_its_shape_and_cap(session_client, ledger):
     base = datetime(2026, 4, 1, tzinfo=UTC)
     created = [
         await _add_import(ledger, created_at=base + timedelta(minutes=index))
         for index in range(205)
     ]
 
-    legacy = authed_client.get("/api/imports", params={"limit": 500})
+    legacy = session_client.get("/api/imports", params={"limit": 500})
 
     assert legacy.status_code == 200
     body = legacy.json()
@@ -161,7 +161,7 @@ async def test_legacy_imports_route_keeps_its_shape_and_cap(authed_client, ledge
     assert body["items"][0]["import_id"] == created[-1]
 
 
-async def test_malformed_cursor_is_a_422(authed_client):
+async def test_malformed_cursor_is_a_422(session_client):
     for cursor in (
         "garbage",
         "2026-03-01T00:00:00+00:00|",
@@ -169,7 +169,7 @@ async def test_malformed_cursor_is_a_422(authed_client):
         "not-a-date|imp_missing",
         "2026-03-01|imp_missing",
     ):
-        response = authed_client.get("/api/import-history", params={"cursor": cursor})
+        response = session_client.get("/api/import-history", params={"cursor": cursor})
         assert response.status_code == 422, (cursor, response.text)
 
 

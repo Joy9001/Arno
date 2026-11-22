@@ -36,15 +36,15 @@ async def _account(conn) -> dict:
     )
 
 
-async def test_upload_is_capped_and_accepts_a_statement(authed_client, ledger):
+async def test_upload_is_capped_and_accepts_a_statement(session_client, ledger):
     del ledger
-    too_big = authed_client.post(
+    too_big = session_client.post(
         "/api/attachments",
         files={"file": ("big.bin", b"x" * (25 * 1024 * 1024 + 1), "application/octet-stream")},
     )
     assert too_big.status_code == 413
 
-    upload = authed_client.post(
+    upload = session_client.post(
         "/api/attachments",
         files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
     )
@@ -53,15 +53,15 @@ async def test_upload_is_capped_and_accepts_a_statement(authed_client, ledger):
     assert attachment["detected_kind"] == "text"
 
 
-async def test_delete_statement_file_purges_it(authed_client, db):
-    upload = authed_client.post(
+async def test_delete_statement_file_purges_it(session_client, db):
+    upload = session_client.post(
         "/api/attachments",
         files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
     )
     assert upload.status_code == 201, upload.text
     attachment_id = upload.json()["id"]
 
-    response = authed_client.delete(f"/api/attachments/{attachment_id}")
+    response = session_client.delete(f"/api/attachments/{attachment_id}")
 
     assert response.status_code == 200, response.text
     assert response.json()["purged"] is True
@@ -70,7 +70,7 @@ async def test_delete_statement_file_purges_it(authed_client, db):
     assert row["purged_at"] is not None
 
 
-async def test_password_is_write_only_and_never_stored(authed_client, ledger):
+async def test_password_is_write_only_and_never_stored(session_client, ledger):
     account = await _account(ledger)
     payload = sbi_csv()
     attachment_id = await new_id(ledger, "att")
@@ -96,7 +96,7 @@ async def test_password_is_write_only_and_never_stored(authed_client, ledger):
     )
 
     secret = "ARJU0101-unique-secret"
-    response = authed_client.post(f"/api/imports/{import_id}/password", json={"password": secret})
+    response = session_client.post(f"/api/imports/{import_id}/password", json={"password": secret})
     assert response.status_code == 202, response.text
     assert secret not in response.text
     assert PASSWORDS.get(import_id) == secret
@@ -109,11 +109,11 @@ async def test_password_is_write_only_and_never_stored(authed_client, ledger):
         )
         == 0
     )
-    assert authed_client.get(f"/api/imports/{import_id}/password").status_code == 405
+    assert session_client.get(f"/api/imports/{import_id}/password").status_code == 405
     PASSWORDS.clear()
 
 
-async def test_review_commit_and_undo_over_rest(authed_client, ledger):
+async def test_review_commit_and_undo_over_rest(session_client, ledger):
     account = await _account(ledger)
     for pattern in ("swiggy", "acme", "amazon"):
         await _seed_rule(ledger, pattern)
@@ -142,17 +142,17 @@ async def test_review_commit_and_undo_over_rest(authed_client, ledger):
 
     await submit_parser_code(ledger, import_ids=[import_id], code=SBI_PARSER)
 
-    detail = authed_client.get(f"/api/imports/{import_id}")
+    detail = session_client.get(f"/api/imports/{import_id}")
     assert detail.status_code == 200
     assert detail.json()["status"] == "review"
 
-    committed = authed_client.post(f"/api/imports/{import_id}/commit")
+    committed = session_client.post(f"/api/imports/{import_id}/commit")
     assert committed.status_code == 200, committed.text
     assert committed.json()["status"] == "committed"
 
-    undone = authed_client.post(f"/api/imports/{import_id}/undo")
+    undone = session_client.post(f"/api/imports/{import_id}/undo")
     assert undone.status_code == 200, undone.text
     assert undone.json()["status"] == "rejected"
 
-    history = authed_client.get("/api/imports").json()
+    history = session_client.get("/api/imports").json()
     assert history["items"][0]["import_id"] == import_id

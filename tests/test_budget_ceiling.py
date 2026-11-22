@@ -37,7 +37,7 @@ def _never_called(messages, info: AgentInfo):
     raise AssertionError("the ceiling must stop the model request")
 
 
-async def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(authed_client):
+async def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(session_client):
     calls = {"n": 0}
 
     def script(messages, info: AgentInfo):
@@ -45,9 +45,9 @@ async def test_a_chat_turn_records_the_ceiling_and_does_not_call_the_model(authe
         return ModelResponse(parts=[TextPart("should not run")])
 
     agent = build_agent(model=FunctionModel(script), spend_store=ExhaustedStore())
-    authed_client.app.state.agent = agent
-    authed_client.app.state.turns.agent = agent
-    response = authed_client.post(
+    session_client.app.state.agent = agent
+    session_client.app.state.turns.agent = agent
+    response = session_client.post(
         "/api/chat",
         json={
             "id": "thread-ceiling",

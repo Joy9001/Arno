@@ -109,9 +109,9 @@ def test_workbook_formulas_have_verified_cached_values_and_names_are_strings():
 
 
 async def test_workbook_route_requires_authentication_and_returns_xlsx(
-    authed_client, client, demo_ledger
+    session_client, client, demo_ledger
 ):
-    response = authed_client.get("/api/projection/workbook", params={"horizon_days": 90})
+    response = session_client.get("/api/projection/workbook", params={"horizon_days": 90})
     assert response.status_code == 200
     assert (
         response.headers["content-type"]
@@ -120,18 +120,19 @@ async def test_workbook_route_requires_authentication_and_returns_xlsx(
     assert 'attachment; filename="arno-projection-' in response.headers["content-disposition"]
     assert ZipFile(BytesIO(response.content)).testzip() is None
     assert (
-        authed_client.get("/api/projection/workbook", params={"amount_paise": 10}).status_code
+        session_client.get("/api/projection/workbook", params={"amount_paise": 10}).status_code
         == 422
     )
     assert (
-        authed_client.get("/api/projection/workbook", params={"changes": "{bad"}).status_code == 422
+        session_client.get("/api/projection/workbook", params={"changes": "{bad"}).status_code
+        == 422
     )
     client.cookies.clear()
     assert client.get("/api/projection/workbook").status_code in (401, 403)
 
 
 async def test_the_projection_routes_take_the_emi_terms_the_card_was_asked_with(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     params = {
         "amount_paise": 300_000,
@@ -148,8 +149,8 @@ async def test_the_projection_routes_take_the_emi_terms_the_card_was_asked_with(
         "WHERE name = 'Slice card'",
         ledger_today(),
     )
-    projected = authed_client.get("/api/projection", params=params)
+    projected = session_client.get("/api/projection", params=params)
     assert projected.status_code == 200, projected.text
     hypothetical = projected.json()["hypothetical"]
     assert hypothetical.get("emi_rate_bps") == 1_400
-    assert authed_client.get("/api/projection/workbook", params=params).status_code == 200
+    assert session_client.get("/api/projection/workbook", params=params).status_code == 200

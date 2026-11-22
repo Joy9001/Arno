@@ -358,6 +358,7 @@ async def record_expense(
     actor: str = "user",
     message_id: str | None = None,
     apply_rules: bool = True,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("An expense must be positive")
@@ -366,7 +367,7 @@ async def record_expense(
     if account["kind"] in {"spending", "income", "equity"}:
         raise InvalidLedgerError("An expense comes from a real account, not a system account")
     spending = await system_account(conn, "spending")
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         resolution = await _resolve_label_category(
             conn,
             group,
