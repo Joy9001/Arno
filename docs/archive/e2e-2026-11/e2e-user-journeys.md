@@ -111,7 +111,7 @@ transaction calendar month.
 
 | Alias | Local file | Directly observed | Use |
 |---|---|---|---|
-| SBI-annual | private/statements/sbi/AccountStatement_03112026_193039.pdf | Opening without a password returned an incorrect-password error; content was not decrypted. | Password handling, annual volume, running balances, and bank/card reconciliation. |
+| SBI-annual | private/statements/sbi/<sbi-statement>.pdf | Opening without a password returned an incorrect-password error; content was not decrypted. | Password handling, annual volume, running balances, and bank/card reconciliation. |
 | Slice-Jun | private/statements/slice/slice Credit Card Statement - June 2026.pdf | 7 pages; header 25 MAY - 24 JUN. | First card layout, year inference, mixed credits/debits, opening context. |
 | Slice-Jul | private/statements/slice/slice Credit Card Statement - July 2026.pdf | 9 pages; header 25 JUN - 24 JUL. | Adjacent cycle, parser reuse, cycle versus calendar-month queries. |
 | Slice-Aug | private/statements/slice/slice Credit Card Statement - August 2026.pdf | 10 pages; header 25 JUL - 24 AUG. | Middle-cycle continuity and page-boundary extraction. |

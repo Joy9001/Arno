@@ -2,7 +2,7 @@
 
 This directory builds `arno-phoenix-cost`, the Phoenix service Arno runs as its cost dashboard.
 Stock Phoenix 21.0 cannot show what Arno measures, so this build patches exactly the gaps the
-[implementation plan](../../docs/arno/cost-tracking.md#focused-phoenix-change) names and nothing
+[cost-tracking spec](../../docs/arno/specs/cost-tracking.md#phoenix-cost-customization) names and nothing
 else. Phoenix is Elastic License 2.0; its source and notice ship in this image only, never in the
 Arno image.
 

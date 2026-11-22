@@ -17,4 +17,4 @@ code isn't drawn. 7 nodes, 7 arrows; the accent marks the confirm card and the b
 **Source:** `sd-chat-turn-control.html` (diagram-design skill, default skin, minimal light,
 doc-inline preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 2.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 2.

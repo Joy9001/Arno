@@ -55,8 +55,8 @@ money, never sees a statement password, and never recommends an investment.
 - Text from statements and payee notes is treated as data. After a conversation reads it, any
   lasting change (memory, setup, bulk writes) waits for your tap on a confirm card.
 
-The [system design](docs/arno/system-design.md) and [tool reference](docs/arno/tools.md) go
-deeper. Decisions live in [`plan.md`](docs/arno/plan.md).
+The [architecture guide](docs/arno/architecture.md) and [tool reference](docs/arno/specs/tools.md)
+go deeper. Decisions live in [`plan.md`](docs/arno/plan.md).
 
 ## Results
 
@@ -64,7 +64,7 @@ These sections are written by `arno eval`, `arno backtest`, and `arno hackerrank
 
 ### Agent evals
 
-134 cases against a synthetic persona, three trials each, with a fresh database per trial.
+145 cases against a synthetic persona, three trials each, with a fresh database per trial.
 `pass^3` counts a case only if all three trials pass. The suite and its targets are in
 [`evals/`](evals/README.md).
 
@@ -182,9 +182,9 @@ For phone access, run `tailscale serve --bg 8000` on the host, then set `ARNO_RP
 > Keep `RESTIC_PASSWORD` somewhere other than this machine. The daily backups are encrypted with
 > it, and without it they can't be read.
 
-The [self-hosting guide](docs/arno/self-hosting.md) covers the rest: models (cloud or local
-Ollama), what each provider receives, ports, backups and restore, updates, and
-[upgrading from Fin-Agent](docs/arno/self-hosting.md#66-upgrading-from-fin-agent).
+The [self-hosting guide](docs/arno/operations/self-hosting.md) covers the rest: models (cloud or
+local Ollama), what each provider receives, ports, backups and restore, updates, and
+[upgrading from Fin-Agent](docs/arno/operations/legacy-upgrades.md#upgrade-from-fin-agent).
 
 <details>
 <summary>The <code>arno</code> command</summary>
@@ -216,9 +216,9 @@ arno eval --model X             # run the agent evals (calls the model, so it co
 - There are no analytics. Traces stay on the host in Phoenix. Only the model calls you configure
   leave the machine, and with local models nothing does.
 
-The [security posture](docs/arno/self-hosting.md#7-security-and-privacy-posture) and
-[what leaves the box](docs/arno/self-hosting.md#4-what-leaves-the-box) list what each provider
-receives and keeps.
+The [security posture](docs/arno/operations/self-hosting.md#security-and-privacy-posture) and
+[what leaves the host](docs/arno/operations/self-hosting.md#what-leaves-the-host) list what each
+provider receives and keeps.
 
 ## Develop
 

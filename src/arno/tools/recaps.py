@@ -3,7 +3,7 @@
 The page, the agent's `recap` tool, and the ready notifications all read this module, so a recap
 and an answer about the same period never disagree. Totals and groups come from
 `summarize_spending`; the rows behind a figure come from the same spending-account transfers, so
-they sum to it. The sentences are templates. See `docs/arno/recaps.md`.
+they sum to it. The sentences are templates. See `docs/arno/specs/data-and-engine.md#recaps`.
 """
 
 from __future__ import annotations

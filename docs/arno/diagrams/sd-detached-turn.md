@@ -16,4 +16,4 @@ out; the step 8 text covers them. 5 nodes, 7 arrows; the accent marks the run an
 **Source:** `sd-detached-turn.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 8.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 8.

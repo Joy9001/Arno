@@ -18,4 +18,4 @@ the accent marks the model.
 **Source:** `sd-agent-loop.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 3.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 3.

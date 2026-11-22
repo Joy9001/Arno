@@ -10,9 +10,9 @@ rules in one undoable write, and leaves the rest uncategorized, with the model's
 **Diagram type:** Flowchart. No semantic pattern matched.
 
 **What the budget forced out:** Own-account transfers are decided before commit, by the parser
-subagent and you, so they aren't here ([`../import.md`](../import.md#own-account-moves-need-a-human-yes)).
+subagent and you, so they aren't here ([`../specs/import.md`](../specs/import.md#own-account-transfers-and-card-credits)).
 The payment apps marked "don't categorize by name", refunds taking the original purchase's
-category, and the stripped payment-rail codes are in [`../import.md`](../import.md#categorizing-after-commit).
+category, and the stripped payment-rail codes are in [`../specs/import.md`](../specs/import.md#post-commit-categorization).
 8 nodes, 9 arrows; the accent marks the agent.
 
 ![Rules label most rows, and the model labels the rest](./sd-categorize.png)
@@ -20,4 +20,4 @@ category, and the stripped payment-rail codes are in [`../import.md`](../import.
 **Source:** `sd-categorize.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../import.md`](../import.md), categorizing after commit.
+**Illustrates:** [`../specs/import.md`](../specs/import.md), categorizing after commit.

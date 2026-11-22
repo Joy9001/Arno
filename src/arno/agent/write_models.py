@@ -1,7 +1,7 @@
 """Typed write arguments the model sees.
 
 The ledger functions still take plain dicts, but the tool schema is the contract the model reads.
-Field names follow `docs/arno/tools.md`: write tools take rupees in `*_rupees`, read tools
+Field names follow `docs/arno/specs/tools.md`: write tools take rupees in `*_rupees`, read tools
 return paise. `extra="forbid"` keeps a misspelled field from silently doing nothing.
 """
 

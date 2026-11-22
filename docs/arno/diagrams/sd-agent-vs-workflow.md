@@ -13,7 +13,7 @@ screen.
 semantic pattern matched.
 
 **What the budget forced out:** Photo extraction is left out. A photo's typed fields go to the
-chat agent as a user turn ([`../design.md`](../design.md)), which would add another trigger path.
+chat agent as a user turn ([`../specs/data-and-engine.md`](../specs/data-and-engine.md)), which would add another trigger path.
 Your chat and your own schedules share one trigger node. Reads and writes share one arrow to the
 ledger. The briefing, reminders, and warnings share one node. 8 nodes, 8 arrows; the accent marks
 the three agent runs, one more than the usual two, because the accent is the legend's "agent"
@@ -24,4 +24,4 @@ key here.
 **Source:** `sd-agent-vs-workflow.html` (diagram-design skill, default skin, minimal light,
 doc-inline preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 2.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 2.

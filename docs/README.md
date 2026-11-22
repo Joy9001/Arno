@@ -1,126 +1,165 @@
 # Documentation
 
-Everything written lives here, in three trees that carry different kinds of authority:
+Arno's documentation lives in three trees with distinct levels of authority.
 
-| Tree | What it is | Authority |
+| Tree | Purpose | Authority |
 |---|---|---|
-| [`arno/`](arno/) | The project: plan, design, decisions | Current and authoritative |
-| [`research/`](research/) | Independent surveys of outside fields | Reference. Describes the world, not this project |
-| [`archive/`](archive/) | Superseded work, kept for history | _Not authoritative._ Never cite as a decision |
+| [`arno/`](arno/) | Product plan, architecture, subsystem specifications, operations guides, and open planning | Current and authoritative |
+| [`research/`](research/) | Independent external surveys and prototypes | Reference only. Describes the outside world, not product decisions |
+| [`archive/`](archive/) | Superseded specs and completed point-in-time records | Not authoritative. Never cite as a decision |
+
+The repository root also holds four concise entry points: [`README.md`](../README.md) (overview,
+live scorecards, and quickstart), [`AGENTS.md`](../AGENTS.md) (contributor workflow and checks),
+[`PRODUCT.md`](../PRODUCT.md) (product positioning and principles), and
+[`DESIGN.md`](../DESIGN.md) (visual design tokens and component system).
 
 ---
 
-## Project docs in the `arno/` directory
+## Project documentation in `arno/`
 
-Start with the plan. It owns decisions, and the other docs own the detail. If they disagree, the
-plan wins. The project has the following docs:
+This index is the single map of every living document in `docs/arno/`. Every topic has one owning
+document. If another document conflicts with [`plan.md`](arno/plan.md), `plan.md` wins and the
+other document is stale.
 
-| Doc | Holds |
+### Core documents
+
+Start with these three root files.
+
+| Document | Owns |
 |---|---|
-| [`plan.md`](arno/plan.md) | Start here. The final product: scope, stack, architecture, build order, definition of done |
-| [`design.md`](arno/design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
-| [`tools.md`](arno/tools.md) | Each tool's description, input, output, and logic |
-| [`platform.md`](arno/platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
-| [`harness.md`](arno/harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
-| [`import.md`](arno/import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
-| [`parked.md`](arno/parked.md) | Deliberately out of the product, each with a trigger to revisit |
-| [`system-design.md`](arno/system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
-| [`typing.md`](arno/typing.md) | Python type checking: why Pyrefly, the policy for each path, how to fix a diagnostic, and the tightening plan |
-| [`observability.md`](arno/observability.md) | Operator view: native Phoenix tracing, standard logs, settings, recovery, and owner commands |
-| [`development-operations.md`](arno/development-operations.md) | Maintainer guide: deployment, verification, backups, troubleshooting, and releases |
-| [`cost-tracking.md`](arno/cost-tracking.md) | Inference accounting, native budgets, subscription adapters, Phoenix contract, and definition of done |
-| [`recaps.md`](arno/recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
-| [`web-interface-design.md`](arno/web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
-| [`completion-checklist.md`](arno/completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
-| [`capability-catalog.md`](arno/capability-catalog.md) | Capabilities proposed beyond the built product: acceptance targets, plan rules for external tools, the tool registry, and a proposed priority order |
-| [`engine-blueprint.md`](arno/engine-blueprint.md) | The engine redesign: what the previous engine got wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
-| [`e2e-user-journeys.md`](arno/e2e-user-journeys.md) | Manual UI acceptance catalog: user sequences, real-statement imports, financial invariants, and edge cases |
-| [`e2e-run-log.md`](arno/e2e-run-log.md) | Interactive session results, trace evidence, blockers, and explicitly deferred cases |
-| [`release-hardening.md`](arno/release-hardening.md) | The November 2026 hardening pass: method, findings with commit SHAs, decisions, and what remains simulated, blocked, or impossible here |
+| [`arno/plan.md`](arno/plan.md) | Product scope, stack choices, architecture rules, L0–L10 milestones, open questions, and shipped criteria |
+| [`arno/architecture.md`](arno/architecture.md) | End-to-end system architecture, control model, trust boundaries, reliability, success measures, and system diagrams |
+| [`arno/completion-checklist.md`](arno/completion-checklist.md) | Open owner deployment, real-data, device, and human ship gates |
 
-**Rule for keeping these readable:** a decision and its one-line rationale go in the `plan.md`
-file. Anything that needs a table, a schema, or three paragraphs of justification goes in a
-satellite doc and gets a link. The [`archive/`](archive/) directory shows what happens when that
-rule isn't followed: the May 2026 docs reached nine files and zero code.
+### Subsystem specifications (`arno/specs/`)
 
-## Research surveys in the `research/` directory
+Technical design and contracts for each subsystem.
 
-These surveys are deliberately unfiltered by this project's requirements. They record what exists
-in a field, not what this project should do. Applying them is a separate exercise. The directory
-holds the following surveys:
+| Document | Owns |
+|---|---|
+| [`arno/specs/data-and-engine.md`](arno/specs/data-and-engine.md) | Database schema, trust boundaries and write tiers, projection and affordability engine, pattern detection, money calculators, recaps, backtesting, and financial invariants |
+| [`arno/specs/tools.md`](arno/specs/tools.md) | Contracts for all 14 read tools, 6 write tools, 5 delegation tools, 13 parser functions, and 5 categorizer functions |
+| [`arno/specs/harness.md`](arno/specs/harness.md) | PydanticAI and `pydantic-ai-harness` capabilities, wake turn, prompt map discipline, context compaction, redaction, and eval harness |
+| [`arno/specs/import.md`](arno/specs/import.md) | Statement readers, parser subagent pipeline, verification checks, reconciliation, transfer and card-credit decisions, post-commit categorization, photos, and voice |
+| [`arno/specs/cost-tracking.md`](arno/specs/cost-tracking.md) | Inference pricing, billing modes, native spend budgets, batch accounting, call metering, and the Phoenix supplied-cost contract |
+| [`arno/specs/platform.md`](arno/specs/platform.md) | Repository layout, API surface, authentication and enrollment, scheduler and jobs, database connections and integrity, threat model, and India-specific code |
+| [`arno/specs/web-interface.md`](arno/specs/web-interface.md) | Web navigation, hash routes, page specifications, subagent run views, and frontend stack (visual tokens live in [`DESIGN.md`](../DESIGN.md)) |
+
+### Operations and engineering (`arno/operations/`)
+
+Procedures for running, observing, and maintaining an Arno instance.
+
+| Document | Owns |
+|---|---|
+| [`arno/operations/self-hosting.md`](arno/operations/self-hosting.md) | End-to-end installation, model setup, privacy and provider retention, backups, restore drill, updates, security posture, and troubleshooting |
+| [`arno/operations/legacy-upgrades.md`](arno/operations/legacy-upgrades.md) | One-time migrations for pre-0.3.0 installs: upgrading from Fin-Agent and demoting the superuser `app` role |
+| [`arno/operations/observability.md`](arno/operations/observability.md) | Phoenix tracing, span attributes, cost journal and replay, settings, Phoenix database recovery, and Docker logs |
+| [`arno/operations/development-operations.md`](arno/operations/development-operations.md) | Maintainer deployment file map, local development, testing, E2E journeys, triage, and release checklist |
+| [`arno/operations/typing.md`](arno/operations/typing.md) | Python type-checking policy with Pyrefly, per-path strictness, diagnostic fixes, and tightening roadmap |
+
+### Planning (`arno/planning/`)
+
+Forward-looking scope boundaries and unbuilt proposals.
+
+| Document | Owns |
+|---|---|
+| [`arno/planning/parked.md`](arno/planning/parked.md) | Features kept deliberately out of scope, each with its rationale, future shape, and revisit trigger |
+| [`arno/planning/capability-catalog.md`](arno/planning/capability-catalog.md) | Unbuilt capability proposals (Tiers 2–4), priority order, external-capability rules, and external tool lookup |
+
+### Diagrams (`arno/diagrams/`)
+
+Architecture and workflow diagrams (`.png`, `.svg`, `.html`, and `.md` notes) embedded by
+[`README.md`](../README.md), [`architecture.md`](arno/architecture.md), and the subsystem specs.
+
+---
+
+## Research surveys in `research/`
+
+Research surveys record external landscapes and exploratory prototypes. They are not approved
+product decisions unless explicitly adopted in [`plan.md`](arno/plan.md).
 
 | Survey | Covers |
 |---|---|
-| [`agent-harness-engineering/`](research/agent-harness-engineering/) | The discipline of building the system around a model: context, tools, loop, evals, security, ecosystem. 10 files, about 1,800 lines, annotated sources with a gap log |
-| [`agentic-system-design/`](research/agentic-system-design/) | How whole agentic systems are composed: patterns, multi-agent topology, retrieval and memory, production operations, and 18 case studies |
-| [`agent-toolkit-2026/`](research/agent-toolkit-2026/) | Let's Code's catalog of 404 open source agent tools, shortlisted for each design step. _Filtered by this project's requirements on purpose_ |
-| [`monty-document-parsing/`](research/monty-document-parsing/) | A test of Monty as the sandbox for model-written statement parsers, on every document type, with its scripts. _Applied to this project on purpose, unlike the rest of this tree_ |
-| [`personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw- and Hermes-style agent platforms and their finance skills, plus the "Buy or Wait?" affordability prior art. _Applied to this project on purpose, unlike the rest of this tree_ |
-| [`personal-finance-agent-2026/`](research/personal-finance-agent-2026/) | Consumer finance products, India-specific data access, research tools, and a sourced capability assessment. _Applied recommendations; not approved product decisions_ |
-| [`model-cost-and-gateways-2026/`](research/model-cost-and-gateways-2026/) | Model-cost accounting, spending controls, LiteLLM, Phoenix, subscription access, and gateway alternatives. _Applied recommendations; not approved product decisions_ |
+| [`research/agent-harness-engineering/`](research/agent-harness-engineering/) | Agent harness patterns: context, tools, loop, evals, security, and ecosystem |
+| [`research/agentic-system-design/`](research/agentic-system-design/) | System composition: control patterns, multiagent topology, memory, operations, and 18 case studies |
+| [`research/agent-toolkit-2026/`](research/agent-toolkit-2026/) | Open-source agent tool shortlist filtered by Arno's design steps |
+| [`research/engine-research/`](research/engine-research/) | Numerical engine audit and external benchmark survey |
+| [`research/monty-document-parsing/`](research/monty-document-parsing/) | Prototype evaluation of Monty for model-written statement parsers |
+| [`research/personal-agent-platforms-2026-09-23.md`](research/personal-agent-platforms-2026-09-23.md) | OpenClaw and Hermes agent platforms, finance skills, and affordability prior art |
+| [`research/personal-finance-agent-2026/`](research/personal-finance-agent-2026/) | Consumer finance products, India data access, research tools, and capability assessment |
+| [`research/model-cost-and-gateways-2026/`](research/model-cost-and-gateways-2026/) | Model cost accounting, spend controls, Phoenix, subscription access, and gateway comparisons |
 
-## Superseded work in the `archive/` directory
+## Archived records in `archive/`
 
-This directory holds the May 2026 design pass. It's kept because the reasoning is occasionally
-useful as _evidence_, never as a conclusion. For what's still worth reading and what is known to be
-stale, see [`archive/README.md`](archive/README.md).
+Superseded design passes, completed audits, and point-in-time run logs live under
+[`archive/`](archive/). See [`archive/README.md`](archive/README.md) for the catalog.
 
 ---
 
-## Conventions
+## Documentation standards
 
-These conventions apply to every doc in this tree.
+These standards govern every living document under `docs/arno/` and `docs/README.md`.
 
-### Files and links
+### Structure and lifecycle
 
-- Use lowercase, hyphenated filenames.
-- Use ordinary relative Markdown links, so the tree works on disk and on GitHub.
-- Give each research folder its own `README.md` index and a `sources.md` file that marks the
-  confidence of each source.
-- When a doc is superseded, move it to `archive/` and say so at the top of its replacement—don't
-  edit history in place.
+- **Single source of truth:** Each topic has one owning document listed in the tables above. Other
+  documents link to the owner instead of repeating tables, rules, or procedures.
+- **Root minimalism:** Keep `docs/arno/` root to the three core documents (`plan.md`,
+  `architecture.md`, and `completion-checklist.md`). Place subsystem specifications in `specs/`,
+  runbooks and policies in `operations/`, and unbuilt scope or proposals in `planning/`.
+- **Timeless living documents:** Describe the system as it works today, in present tense. Avoid
+  chronological addenda, dated status diaries, and pre-build future tense in living specs. Git
+  history and GitHub Releases own changelogs.
+- **Archive completed records:** Move superseded specifications, completed audits, acceptance logs,
+  and one-off run logs to `docs/archive/<topic>-YYYY-MM/` and record them in
+  [`archive/README.md`](archive/README.md).
+- **Avoid volatile duplication:** Do not copy prompt text, source-code snippets that drift,
+  `shortcut:` code comments, or inline test-function lists into prose documents. Link to the owning
+  source file or owning specification instead.
+- **Opening scope line:** Open each document with one concise sentence stating what it owns and,
+  when relevant, linking to the document that owns adjacent detail.
+- **Files and links:** Use lowercase, hyphenated filenames and relative Markdown links with
+  descriptive link text. Give each `research/` folder a `README.md` index and a `sources.md` file.
+- **Privacy hygiene:** Never commit real tailnet hostnames, real statement filenames, container IDs,
+  localhost trace URLs, or personal financial figures in any document, including archived records.
 
 ### Writing style
 
-Docs follow the [Google developer documentation style guide](https://developers.google.com/style).
-The following house rules record the choices the guide leaves open and the places this project
-departs from it. Where they differ from the guide, the house rules win.
+Living documents follow the
+[Google developer documentation style guide](https://developers.google.com/style). Where the
+following project rules specify a choice, they take precedence over the guide:
 
-- **Voice:** the author writes in the first person (_I_, _my_) about their own money and setup.
-  Project-level statements name Arno instead of using _we_, _our_, or _us_.
-- **Spelling:** American, in prose. Code keeps its own spelling, so the `instalment` schema value
-  stays even though the prose says _installment_.
-- **Headings:** sentence case. Use a colon, not a dash, before a subtitle, and capitalize the word
-  after it. Avoid code in headings; if you need it, add a noun, as in "the `arno/` directory."
-- **Dates:** write them out, as in "October 7, 2026." In table cells, abbreviate the month, as in
-  "Oct 7, 2026."
-- **Bold:** only for run-in headings at the start of a paragraph or list item, with the ending colon
-  or period inside the bold. After a colon, start the text in lowercase. Don't use bold in table
-  cells or as a stand-in for a heading.
-- **Italics:** for emphasis, sparingly, and for terms and abbreviations on first use. Mark italics
-  with underscores, not asterisks.
-- **Tables:** introduce every table with a complete sentence. Leave a cell blank when there's
-  nothing to say; don't use a dash as a placeholder.
-- **Lists:** end an item with a period when it has a verb, and keep the punctuation consistent
-  within a list.
-- **Abbreviations:** spell out unfamiliar ones on first use in each doc, as in "_net asset value_
-  (_NAV_)." Terms this audience knows, such as API, LLM, PWA, UPI, EMI, and STT, stay short.
-- **Words:** write out _database_, _dependencies_, _environment variables_, _development_,
-  _production_, and _administration_. Use _per_ only for rates, as in "per day," and _for each_
-  otherwise. Close up prefixes, as in _autocapture_ and _multiuser_.
-- **References to the plan:** write `plan.md` §N for a section, "rule N in `plan.md` §4" for one
-  of its rules, `plan.md` §6, LN for an open question, and "milestone N" for a build-order item.
-  Keep the plan's numbered headings, because other docs and the root README link to them.
-- **Satellite docs:** a doc that holds the detail behind a plan section opens with "This file holds
-  the detail behind `plan.md` §N: …" followed by "The `plan.md` file owns decisions, and this file
-  owns their shape. If the two disagree, the plan wins and this file is stale."
-- **Line length:** wrap prose at 100 columns. Table rows, code blocks, and long URLs can run
-  longer.
+- **Voice and person:** Address readers, operators, and maintainers in the second person (_you_).
+  Use the third person (_Arno_, _the owner_) for product behavior and owner-specific constraints.
+  Never use _we_, _our_, or _us_. Use the first person (_I_, _my_) only inside quoted chat examples
+  such as `"How much did I spend?"`.
+- **Spelling:** Use American English in prose. Preserve exact spellings from code and schemas
+  (for example, `instalment`).
+- **Headings:** Use sentence case. Start task headings with a bare infinitive verb and conceptual
+  headings with a noun phrase. Avoid starting headings with _-ing_ words. Keep `plan.md`'s
+  numbered top-level sections (`1.` through `6.`) so existing `plan.md §N` references stay stable.
+- **Bold and italics:** Use `**bold**` for UI elements and run-in headings (place the ending colon
+  or period inside the bold, as in `**Note:**`). Use `_underscores_` for italics, sparingly, for
+  terms on first use and mathematical variables.
+- **Lists and tables:** Introduce every table with a complete sentence. Leave empty cells blank
+  rather than inserting dashes. End list items with periods consistently when items contain verbs.
+- **Dates:** Spell out dates in prose (for example, `November 22, 2026`). Abbreviate months in
+  compact table cells when space is tight (for example, `Nov 22, 2026`).
+- **Abbreviations:** Spell out unfamiliar abbreviations on first use in a document, such as
+  _annual percentage rate_ (_APR_). Common audience terms (`API`, `CLI`, `CSP`, `EMI`, `LLM`,
+  `PWA`, `SQL`, `STT`, `UPI`) do not need expansion.
+- **Line length:** Wrap prose at 100 columns. Table rows, code blocks, and long URLs may exceed
+  100 columns.
 
-The `google-developer-style` plugin is enabled for this repository in `.claude/settings.json`. To
-check a whole doc, run `/google-developer-style:style-check FILE`, replacing `FILE` with the doc's
-path. To see the findings without edits, add `--report-only`. The reviewer it runs looks only for
-files such as `CLAUDE.md` and `STYLE.md`, so tell it that the house rules are in this section. For
-a single style question, use the `/google-developer-style:google-developer-style` skill. The check
-flags a few known false positives in these docs: _holiday_ (bank holidays), _off the internet_, and
-_allowlist_ (used as a noun).
+### Verification
+
+The `google-developer-style` plugin is enabled in `.claude/settings.json`. Before finishing a
+documentation change:
+
+1. Run `style_check.py` on every edited document and resolve all real findings. Known acceptable
+   false positives in Arno docs are _holiday_ (Indian bank holidays), _allowlist_ used as a noun,
+   _MAD_ (median absolute deviation), and _off the_ (matched against the idiom "off the
+   reservation").
+2. Verify that every relative Markdown link, `#anchor`, and embedded diagram path resolves.
+3. Confirm that `docs/README.md` indexes every living document in `docs/arno/` and that no removed
+   or archived document remains linked from active docs or code comments.

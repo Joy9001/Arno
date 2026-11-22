@@ -16,4 +16,4 @@ the evals.
 **Source:** `sd-measure-layers.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 9.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 9.

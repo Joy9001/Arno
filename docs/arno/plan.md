@@ -1,1016 +1,431 @@
 # Arno plan
 
-This file is the core plan: what the product is, what it does, what it's built on, and the order
-it gets built. _This file owns decisions._ Detail lives in the following docs:
-
-| Doc | Holds |
-|---|---|
-| [`design.md`](design.md) | Data model, agent tool surface, projection and affordability engine, pattern detection |
-| [`tools.md`](tools.md) | Each tool's description, input, output, and logic |
-| [`platform.md`](platform.md) | API, web app, auth, notifications, scheduler, deployment, backups, security |
-| [`harness.md`](harness.md) | Agent framework, harness capabilities and their triggers, eval discipline |
-| [`import.md`](import.md) | Statements, photos, and voice: readers, saved parsers, the checks, reconciliation |
-| [`parked.md`](parked.md) | Deliberately out of the product, each with a trigger to revisit |
-| [`system-design.md`](system-design.md) | The ten-step agentic system design walk: where each step is recorded, what waits for which step, and review notes |
-| [`recaps.md`](recaps.md) | Recaps: the stories and periods, computed on the server from ledger rows |
-| [`web-interface-design.md`](web-interface-design.md) | The agent-first web app: navigation, pages, and visual system |
-| [`observability.md`](observability.md) | Operator view: Phoenix tracing, logs, settings, recovery, owner commands |
-| [`completion-checklist.md`](completion-checklist.md) | What still stands between the built layers and "shipped", in dependency order |
-| [`engine-blueprint.md`](engine-blueprint.md) | The engine redesign: what the previous engine got wrong, the scenario matrix, critical-value affordability, calendar-rule patterns, money conventions, the backtest, and the build order |
-| [`capability-catalog.md`](capability-catalog.md) | Capabilities proposed beyond the built product: acceptance targets, plan rules for external tools, the tool registry, and a proposed priority order. Proposals only; a capability is adopted through §5 |
-
-**Rule for keeping this readable:** decisions and their one-line rationale go here. Anything
-that needs a table, a schema, or three paragraphs of justification goes in a satellite doc
-and gets a link. If this file grows by accretion, split it—that's what happened to the
-[May 2026 docs](../archive/), which reached nine files and zero code.
-
-If a satellite disagrees with this file, this file wins and the satellite is stale.
-
-**Replan on October 7, 2026.** The MVP framing is dropped. This plan aims for the final product
-from the start: every layer is built to its final shape, in dependency order, so nothing is
-written twice.
-
-**Complexity review on October 8, 2026.** Breadth that slows a solo build without making the product
-better is parked with triggers: public-internet hosting, net worth from investment statements,
-extra briefings, anomaly detection, editable panels. Depth goes where it can be measured and
-shown: a probabilistic projection, a backtest of its accuracy, citations, and published eval
-scores. Database decided: Postgres, plain SQL.
-
-**Interface redesign on November 8, 2026.** The web app presents the agent as the product and the
-money as what it works on. Six areas: Ask (the agent's home), Chats, Money, Activity, Recaps, and
-Settings. A conversation has a Chat and a Flow view; big answers open a canvas. Money opens on a
-timeline (ledger behind, projection ahead), Activity gains the inbox, and the context rail goes.
-Every figure on these surfaces still comes from an API return. Layout and visual system:
-[`web-interface-design.md`](web-interface-design.md).
-
-**Rename on November 10, 2026.** Fin-Agent is now Arno. The release waits on the rename, so the
-version, the image tags, and the git tag move with it. An existing install moves its data once, by
-[upgrading from Fin-Agent](self-hosting.md#66-upgrading-from-fin-agent); the backup format keeps the
-old name so that archives written before today still restore.
-
-**Engine redesign on November 13, 2026.** The projection, affordability, pattern, and money engine
-is rebuilt on one integer scenario matrix, behind a backtest that scores every change against
-baselines before it ships. Design and build order:
-[`engine-blueprint.md`](engine-blueprint.md). The decisions are in §6. Every step of that build
-order is done: steps 1 to 6 and the HackerRank adapter (step 8) shipped, and calibration (step 7)
-was built, measured, and not admitted.
-
-**App role demoted on November 14, 2026.** The `app` role owns the Arno databases without
-`SUPERUSER` (`LOGIN CREATEDB CREATEROLE`, `pg_signal_backend`, and `ADMIN OPTION` on `agent_ro` and
-`backup`), while `postgres` is the local-socket-only bootstrap superuser with no network password.
-Fresh installs start in this shape; existing volumes convert once with `deploy/demote-app.sh`
-([upgrade steps](self-hosting.md#67-upgrading-an-existing-install) and
-[role setup](platform.md#security)).
-
-**API connection cache on November 14, 2026.** Reverses the earlier one-connection-for-each-use
-decision for the API process: `connect()` now binds to a per-loop cache of up to eight idle
-`asyncpg` connections owned by the API lifespan, opening direct connections immediately when the
-idle cache is empty. Unlike a limiter pool such as `asyncpg.Pool`, which could make a long chat
-stream starve or deadlock other requests, the cache keeps the never-wait behavior. Measured
-before/after warm medians on the demo database (host-to-container, baseline connect `43.9 ms`,
-pre-ping `1.5 ms`): movements list `90.7 ms` → `20.6 ms` (`1` → `0` connects), record expense
-`111.9 ms` → `28.8 ms` (`1` → `0`), undo `122.5 ms` → `36.0 ms` (`1` → `0`), stubbed two-tool
-chat turn `699.4 ms` → `382.6 ms` (`7` → `0`), and home load `2,083.9 ms` → `1,896.0 ms`
-(`6` → `0`). Cache, outage, and uncertain-commit rules:
-[`platform.md`](platform.md#database-connections).
-
-**Decision tools on November 16, 2026.** Four capabilities from the
-[capability catalog](capability-catalog.md) are promoted into §5 as layer L9: a safe-to-spend
-figure, what-ifs with several dated changes, price-change alerts, and what a debt costs with its
-fees. Each one fixes an answer Arno got wrong or could not give, and none reopens a parked
-decision, adds a dependency, or reaches the network. The decisions are in §6, L9.
-
-**Engine hardening on November 21, 2026.** An audit of the numerical core and its callers found
-financial-correctness, trust-boundary, and event-loop freeze bugs alongside an overbuilt external
-benchmark proposal. Layer L10 lands the correctness, safety, and backtest-honesty fixes in three
-ordered milestones with zero new dependencies and zero external corpora; low-ROI benchmark suites,
-micro-optimizations, and unmeasured modeling changes stay out, tracked as explicit `shortcut:`
-ceilings with triggers in §6, L10.
-
----
+This document is Arno's core product plan and decision authority: product scope, stack choices,
+architecture rules, build milestones, open questions, and shipped criteria. For the complete
+documentation map and subsystem owners, see [`docs/README.md`](../README.md). If another document
+disagrees with `plan.md`, `plan.md` wins and the other document is stale.
 
 ## 1. The product
 
-**One sentence:** a self-hosted, open-source finance agent that holds your whole financial
-picture—accounts, cards, obligations, goals, people you owe—and answers any question about it,
-including whether you can afford something and what it costs you.
+Arno is a self-hosted, open-source personal finance agent that holds your complete financial
+picture—accounts, cards, obligations, goals, and people you owe—and answers any question the data
+supports, including whether you can afford a purchase and what it costs.
 
-"Can I afford this?" was the spark, not the scope. An agent that has the data should answer
-anything the data supports. The following table answers the basic questions:
+"Can I afford this?" was the initial spark, not the scope boundary. The following table summarizes
+the product's positioning:
 
-| Question | Answer |
+| Question | Decision |
 |---|---|
-| Who uses it? | One person for each instance. Others self-host their own copy |
-| Where does it run? | Anywhere Docker runs—laptop, mini PC, VPS. Reached over a private Tailscale network, never the open internet |
-| What's its main face? | Web app (PWA): the agent first, with read-only live panels around it. CLI for administration and development |
-| Who is it for first? | Me. India-first; everything India-specific lives in one folder |
-| What license does it use? | Open source, permissive (MIT or Apache-2.0). No GPL or AGPL in the shipped image |
+| Who uses it? | One person for each instance; others self-host their own copy |
+| Where does it run? | Any x86-64 Docker host (laptop, mini PC, or VPS), reached over a private Tailscale network and never exposed to the public internet |
+| What is its main interface? | Agent-first web app (PWA) with read-only financial panels around it; CLI for host administration and development |
+| Which country is supported? | India-first; all country-specific logic lives in `src/arno/india/` |
+| What license applies? | MIT for Arno application code; permissive dependencies only (no GPL, AGPL, SSPL, or Elastic code in the shipped image) |
 
-**Done is:** it knows my complete financial situation, I can ask it anything about my money and
-get a correct answer with real tradeoffs, it warns me before things go wrong, its forecasts are
-measured against what actually happened, I've used it for four weeks without falling back to
-mental math or a spreadsheet—and someone else has installed it from the docs alone.
+**Done is:** Arno holds the owner's complete financial picture, answers any supported question with
+computed tradeoffs, warns before cash flow turns, measures its forecasts against actual outcomes,
+survives four weeks of daily use without falling back to mental math or a spreadsheet, and is
+installed by a second person from the documentation alone.
 
 ---
 
-## 2. Scope: The final product
+## 2. Scope
 
-The following sections define what the final product covers and what it leaves out.
+The following sections define what Arno includes, what it leaves out, its non-functional targets,
+and its operating constraints.
 
 ### The principle
 
 **"Answers any question" is a property of the tool surface, not a feature list.** A small set of
-orthogonal tools over complete data composes into an unbounded question space. Scope is controlled
-by the data model and the tool count, not by enumerating questions. Tools and schema:
-[`design.md`](design.md).
+orthogonal tools over complete ledger data composes into an unbounded question space. Scope is
+governed by the data model and tool contracts in [`specs/data-and-engine.md`](specs/data-and-engine.md)
+and [`specs/tools.md`](specs/tools.md).
 
-### What it knows
+### What Arno knows
 
-The following table sets what the agent knows, by area:
+The following table records each domain area in the ledger:
 
-| Area | Decision |
+| Area | Scope |
 |---|---|
-| Accounts | Multiple bank accounts, credit cards (with statement and due cycles), cash, wallets, loans, asset accounts |
-| Currency | One base currency for each instance, configurable. Foreign purchases logged at the charged amount |
-| Income | Fixed salary, variable or freelance (expected versus confirmed), bonuses, and one-offs |
-| Obligations | Rent, EMIs, subscriptions, insurance, family transfers as a type of their own; card installment plans (no-cost EMI, "slice in 3") |
-| Goals | Goals with deadlines. Target, date, fenced savings, contribution plan |
-| Floor | A fixed amount the projection must never cross |
-| People | Splits, lending, borrowing, reimbursements—what each person owes is a ledger balance |
-| Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds). Net worth driven by investment statements is parked until I hold investments |
-| Categories | Editable defaults, merchant→category rules learned from corrections. Rules always win; the LLM only categorizes unknown merchants. A correction about a payee or UPI ID ("ramesh@okaxis is my landlord") applies to that payee's past and future transactions |
-| Memory | Agent-managed typed memories: each one is a preference (how the agent behaves), a fact (the user's world), or a rule (how their money data is treated). The agent saves lasting ones on its own and shows a "Remembered" card with undo; all visible and editable in settings. Memory never holds a number the ledger owns |
-| Conversations | Threads you can see, reopen, or start at any time, kept and searchable. Every ledger write links to the message that caused it |
+| Accounts | Multiple bank accounts, credit cards (statement and due cycles, credit limit, finance and EMI terms), cash, wallets, loans, and hand-updated asset accounts |
+| Currency | One configurable base currency for each instance; foreign purchases are recorded at the charged amount |
+| Income | Fixed salary, variable or freelance income (expected versus confirmed), bonuses, and one-offs |
+| Obligations | Rent, EMIs, subscriptions, insurance, family transfers, and card installment plans |
+| Goals | Goals with target amounts, deadlines, priority, fenced savings, and contribution plans |
+| Floor | A fixed balance threshold that the projection must not cross |
+| People | Splits, lending, borrowing, and reimbursements modeled as ledger balances |
+| Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds); statement-driven net worth stays parked |
+| Categories | Editable defaults with a reducible flag and learned merchant-to-category rules; rules always win over model categorization, and payee corrections can apply retroactively |
+| Memory | Agent-managed typed memories (`preference`, `fact`, or `rule`), keyed by `(kind, subject)` so updates replace active entries while keeping history in `audit_log`; never holds balances owned by the ledger |
+| Conversations | Persistent, searchable chat threads where every ledger write links back to the message that caused it |
 
-### How data gets in
+### How data enters
 
-Day to day: chat, voice, and photos. Statements are the monthly reconciliation that catches what
+Day-to-day capture uses chat, voice notes, and photos. Monthly statement imports reconcile what
 daily capture missed.
 
-1. **Chat:** text, in any mix of English and Hinglish. Also how setup happens: a conversation
-   walks through accounts, income, obligations, goals, and the floor.
-2. **Voice notes:** push-to-talk, speech-to-text, then the same chat path.
-3. **Photos:** a receipt or a UPI payment screenshot becomes one transaction, image kept as an
-   attachment. On Android, the installed app is a share target, so a screenshot goes straight from
-   the UPI app to Arno.
-4. **Statement import:** PDF, spreadsheet, or text, from any bank; password-protected files; a
-   12-month backfill at setup. The agent learns each new layout once. Reconciles against rows
-   already logged. See [`import.md`](import.md).
-5. **Web UI:** uploads, the import review screen, and settings. Panels are read-only; edits go
-   through chat, where every write has undo.
+1. **Chat:** Text in English, Hindi, or Hinglish. Initial setup also runs through chat, walking
+   through accounts, income, obligations, goals, and the floor.
+2. **Voice notes:** Push-to-talk audio sent through speech-to-text into the chat path.
+3. **Photos:** Receipts or UPI payment screenshots extracted by an isolated vision call into one
+   undoable transaction with the image kept as an attachment. On Android, the installed PWA acts as
+   a share target.
+4. **Statement imports:** PDF, spreadsheet, or text statements (including password-protected files)
+   parsed by a background parser subagent that saves and replays one parser for each bank layout.
+   Imports reconcile against logged rows and commit only after user review
+   ([`specs/import.md`](specs/import.md)).
+5. **Web interface:** File uploads, import review, and settings are editable screens; financial
+   panels are read-only so edits flow through chat with undo.
 
-**Balances update from statements and explicit statements of balance only.** The agent never
-nags for a balance; it always states how old its numbers are.
+**Balances update only from committed statements or explicit statements of balance.** Arno never
+nags for balances and always reports how old its figures are.
 
-**One record per real money movement, however it was captured.** A payment logged by chat, shared
-as a photo, and later found on a statement is one record. Certain matches merge on import;
-uncertain ones go to the import review screen and are never merged silently
-([`import.md`](import.md)).
+**One record represents each real money movement, regardless of capture path.** Certain matches
+merge on import; uncertain matches wait on the import review screen.
 
-**Useful from the first conversation.** A spoken snapshot—balances, card dues, salary day—is
-enough for answers and verdicts on day one. Statements and the 12-month backfill deepen it later.
+**Useful from the first conversation.** A spoken snapshot of balances, card dues, and salary day is
+enough for answers and affordability verdicts on day one.
 
-### What it answers and does
+### What Arno answers and does
 
-- **Any question about the ledger:** read tools plus a read-only `run_query(sql)` escape hatch.
-- **Modeling:** multistep what-ifs the read tools don't answer directly, such as prepaying a loan,
-  interest saved, or how a monthly saving grows. The agent writes a short Python script that calls
-  the read tools in a sandbox (Code Mode), and the script is shown with the answer.
-- **Affordability:** yes, yes-but, or no, from a projection computed in code. Scheduled events are
-  exact; day-to-day spending is simulated from my own history, so the verdict carries a
-  probability ("94% chance you stay above the floor"). "Yes-but" may propose any of the
-  following: wait until date X, pay by card or EMI, delay a goal, or cut a reducible category.
-- **Safe to spend:** the largest amount that can be spent today with the projection still passing
-  the same test a `yes` passes, from the same run.
-- **What-ifs beyond a purchase:** the same engine run on dated changes that have not happened: no
-  income for a while, a paused or changed schedule, a new recurring payment or income, a one-time
-  amount. It says whether the plan holds and how long the money lasts. Nothing is saved.
-- **What a debt costs:** a loan's schedule, prepayment, fee, and _annual percentage rate_ (_APR_,
-  the yearly cost including fees), and what carrying a card balance costs at the card's own
-  finance charge. Arno never assumes a card's rate.
-- **Citations:** every number in an answer links to the rows and schedules behind it.
-- **Proactive:** bill, EMI, and card-due reminders; risk warnings when the projection turns; a
-  weekly briefing; and detection of recurring charges: new ones, missed ones, and ones whose
-  amount moved to a new level.
-  Delivered to an in-app inbox plus web push. These run as fixed code, so they work when the LLM
-  is down.
-- **Your own scheduled questions:** "every Sunday, tell me what I spent on food". The agent runs
-  on your schedule, read-only, and answers into the inbox
-  ([system design, step 2](system-design.md#agent-or-workflow-for-each-path)).
-- **Writes:** chat writes, photos, and memory saves land immediately with an inline card and undo.
-  Statement imports go through a review screen before commit. The one exception is a lasting or
-  wide write—a memory save, a setup change, or a change to many rows—in a conversation that has
-  read outside text. It asks for one tap first (rule 2 in §4).
-- **Advice boundary:** facts and tradeoffs only. It never recommends what to do with investments
-  or which product to buy.
-- **Spending means consumption.** Moving money between your own accounts (including paying a card
-  bill), lending, settlements, reimbursements, and savings or investment outflows such as SIPs and
-  FDs never count as spend. A refund offsets the purchase it reverses.
-- **Never moves money.** It reads, records, and models; paying is always done by you, in your own
-  bank or UPI app.
-- **Language:** replies in English by default; follows the user's language or mix when they write
-  in it.
+- **Ledger queries:** Orthogonal read tools plus a read-only `run_query(sql)` escape hatch running
+  as `agent_ro`.
+- **Multistep modeling:** For what-ifs beyond a single read tool, the agent writes a short Python
+  script over the read tools in a sandbox (Code Mode) and shows the script with the answer.
+- **Affordability:** Computed in code as `yes`, `yes-but`, or `no` from 16,384 seeded daily
+  scenarios. Scheduled events are exact and variable spend is resampled from history. A `yes`
+  requires at least a 90% probability of staying above the floor and at least a 99% probability of
+  meeting every obligation. A `yes-but` requires a same-date plan (card or EMI, delayed goal
+  contribution, or reducible-category cut); a wait-only date remains `no`.
+- **Safe to spend:** The largest cash payment today that still passes the `yes` test, read from the
+  same projection run.
+- **Multi-event what-ifs:** Up to 12 dated hypothetical changes (stopped income, paused or changed
+  schedules, added recurring or one-time flows) evaluated by the same projection engine without
+  saving changes, returning plan health and runway in days.
+- **Debt cost analysis:** Loan amortization with prepayment, processing fees, and nominal _annual
+  percentage rate_ (_APR_), side-by-side offer comparison (`compare_offers`), and credit-card payoff
+  walks at the card's stored or stated finance charge (never an assumed card rate).
+- **Recaps:** Server-computed daily, weekly, and monthly template stories where every figure links
+  to the ledger rows that sum to it ([`specs/data-and-engine.md`](specs/data-and-engine.md#recaps)).
+- **Citations:** Every answer figure links to the ledger rows, schedules, or tool outputs behind it.
+- **Proactive monitoring:** Fixed-code jobs generate bill, EMI, and card-due reminders, projection
+  risk warnings, weekly briefings, and recurring-charge or price-change proposals into the inbox
+  and web push. Because these run as code, they work even when the LLM is unavailable.
+- **User-scheduled questions:** Read-only prompts run on your schedule with per-run spend ceilings
+  and deliver answers to the inbox.
+- **Write discipline:** Everyday chat writes, photos, and memory saves land immediately with an
+  inline undo card. Statement imports wait for the review screen. Lasting or wide writes (memory,
+  setup, bulk category rules) require a tap on a confirm card in any conversation that has read
+  outside text (rule 2 in §4).
+- **Spending definition:** Spending measures consumption only. Own-account transfers (including card
+  bill payments), lending, settlements, reimbursements, and savings or investment outflows do not
+  count as spending; refunds offset the purchases they reverse.
+- **Advice and action boundaries:** Arno states facts and tradeoffs only. It never moves money and
+  never recommends investments or financial products.
+- **Language:** Replies default to English and follow the user's language or mix (such as Hindi or
+  Hinglish) when they write in it.
 
-### Deliberately out
+### Deliberately out of scope
 
-Chat-app integrations (Signal, Telegram, WhatsApp), native Android app, real-time voice
-conversation, editable panels, SMS and email autocapture, balance nudges, receipt line items, net
-worth from investment statements, broker APIs, tax engine, category budgets, multicurrency,
-multiuser households, a projection for each account, extra briefings (daily, monthly, payday),
-anomaly detection, public-internet access, encryption inside the database, a locale-pack
-interface, arm64 images, hidden memory extraction, OCR for scanned statements, and a separate code
-sandbox. Each has a trigger in
-[`parked.md`](parked.md).
+The following capabilities are parked with explicit revisit triggers in
+[`planning/parked.md`](planning/parked.md): chat-app bridges (Signal, Telegram, WhatsApp), native
+Android app, real-time voice conversation, editable financial panels, SMS and email autocapture,
+balance nudges, OCR for scanned statements, receipt line items, statement-driven investment net
+worth, broker APIs, tax engine, category budgets, multicurrency, multiuser households, per-account
+projections, extra briefings (daily, monthly, payday), anomaly detection, dedicated AI gateway,
+public-internet hosting, Tailscale-identity setup, encryption inside Postgres, locale-pack
+interface, arm64 images, egress proxy, external job library, MCP server, direct Claude Agent SDK
+subscription runtime, hidden semantic memory extraction, and a separate code sandbox.
 
-To decide whether something comes back in, ask: _does the agent answer questions about my money
-incorrectly, or fail to warn me, without it?_ If not, it stays parked.
+Promote a parked item only when its absence causes Arno to answer incorrectly or miss a warning.
+Unbuilt proposals beyond the core product live in
+[`planning/capability-catalog.md`](planning/capability-catalog.md).
 
 ### Non-functional requirements
 
-The following table states what each requirement demands:
+The following table states the non-functional targets:
 
 | Requirement | Target |
 |---|---|
-| Scale | One user for each instance, and the data is small ([assumptions](system-design.md#scale-assumptions)) |
-| Latency | Backend traces measure first streamed output and turn completion: targets are about 2 s to first output, about 5 s for an answer that needs one lookup, and about 15 s for a multistep what-if on a cloud model. Browser render timing is deferred. Local models may be slower |
-| Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or a VPS |
-| Durability | Do not lose the ledger. A daily `pg_dump` shipped off-site encrypted, from before the first real money goes in, with a tested restore |
-| Security | Private network only (Tailscale). Passkey login. Host disk encryption at rest and encrypted off-site backups. Deployment secrets use environment variables; native ChatGPT sign-in credentials use an access-restricted database table |
-| Privacy | Inference provider is switchable for each role; nothing else leaves the box except encrypted backups and contentless push pings |
-| Honesty | Tools distinguish _zero_ from _unknown_, and every number carries its age and source |
-| Measured | Forecast accuracy (backtest), engine accuracy (HackerRank samples), and agent reliability (`pass^k` for each model) are measured and published, not claimed. Targets: [success measures](system-design.md#success-measures) |
-| Autonomy | The agent never starts a write on its own except saving a memory, and never moves money ([autonomy for each kind of action](system-design.md#autonomy-for-each-kind-of-action)) |
-
-Honesty is a real requirement, not a nicety: a general query surface over incomplete data
-otherwise answers confidently with no basis.
+| Scale | One user for each instance; see [scale assumptions](architecture.md#scale-assumptions) |
+| Latency | Backend trace targets are about 2 s to first streamed output, about 5 s for a single-lookup answer, and about 15 s for a multistep what-if on a cloud model (current measured eval median is 23.4 s; tracked in [`completion-checklist.md`](completion-checklist.md)) |
+| Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or VPS |
+| Durability | Daily encrypted off-site `pg_dump` through restic with a verified restore drill |
+| Security | Private Tailscale network only, WebAuthn passkey login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an access-restricted table for native ChatGPT sign-in tokens |
+| Privacy | Per-role provider switch; only configured inference requests, encrypted backups, and contentless push pings leave the host |
+| Honesty | Tools distinguish zero from unknown and report data age, coverage gaps, and source IDs |
+| Measured quality | Published agent eval `pass^3` scorecards, synthetic projection backtests, and HackerRank "Buy or Wait" scores ([success measures](architecture.md#success-measures)) |
+| Autonomy | The agent starts no write on its own except saving visible, undoable memories, and never moves money |
 
 ### Constraints
 
-- **One developer,** 15-20 hours a week.
-- **India-first:** INR, UPI, Indian statement formats, Hinglish, and Indian holidays.
-- **No bank APIs.** India's Account Aggregator network serves only institutions regulated by
-  RBI, SEBI, IRDAI, or PFRDA ([Sahamati](https://sahamati.org.in/financial-information-user-fiu)),
-  so data comes from statements and from the user.
-- **Permissive licenses only** (§1).
-- **Modest hardware:** a laptop, mini PC, or VPS. LLM cost isn't a constraint, but it's metered.
+- **Solo maintainer:** Built and maintained at 15–20 hours a week.
+- **India-first:** INR in integer paise, UPI workflows, Indian statement layouts, Hinglish, and
+  Indian bank holidays.
+- **No bank APIs:** India's Account Aggregator network serves regulated financial institutions only
+  ([Sahamati](https://sahamati.org.in/financial-information-user-fiu)), so data comes from
+  statements and user capture.
+- **Permissive licenses only:** MIT application code and permissive runtime dependencies.
+- **Modest hardware:** Runs on a laptop, mini PC, or small VPS; inference spend is metered.
 
 ---
 
 ## 3. Stack
 
-The following sections cover build-versus-buy decisions, the chosen stack, and the provider switch.
+Arno buys commodity infrastructure and builds only the financial core.
 
 ### Build versus buy
 
-The playbook's rule: _buy, unless the piece is core to the product_. The following table applies
-it to each piece:
+The following table records the build-versus-buy decision for each component:
 
-| Piece | Decision | Why |
+| Component | Decision | Rationale |
 |---|---|---|
-| Agent loop, tool calling, UI streaming | Buy: PydanticAI | Harness library, Vercel-AI-protocol adapter, provider switching. [`harness.md`](harness.md) |
-| Reading statement files | Buy: `pypdfium2`, `python-calamine`, and the like | One reader for each kind of file. [`import.md`](import.md) |
-| Parsing a statement layout | Build once: the agent writes a parser in Monty, saved for that layout | No parser for each bank. Tested on synthetic files; the L3 spike is the real test. [System design, step 5](system-design.md#imports-the-agent-writes-the-parser) |
-| Speech-to-text | Buy: any OpenAI-compatible STT endpoint | whisper.cpp's native server locally, or a cloud API |
-| Photo extraction | Buy: any OpenAI-compatible vision model | The `VISION_*` role, local or cloud |
-| Passkeys, web push | Buy: `py_webauthn`, `pywebpush` | Arno doesn't invent its own security code |
-| Private access + HTTPS | Buy: Tailscale | `tailscale serve` gives HTTPS on the tailnet; nothing is exposed to the internet |
-| Off-site backup | Buy: restic | Encrypts, dedupes, any S3-compatible target, zero app code |
-| Agent evals | Buy: `pydantic_evals` | Ships with PydanticAI, and runs the agent unchanged. [System design, step 9](system-design.md#agent-evals) |
-| Observability | Buy: Phoenix and the standard Phoenix OpenTelemetry SDK | Native Pydantic AI agent, model, and tool traces export directly to Phoenix; standard Python/Uvicorn logs stay on Docker stdout. No Collector, Loki, Prometheus, or Grafana. See the [operator guide](observability.md) |
-| Double-entry ledger core | Buy: pgledger, vendored | MIT, pure Postgres SQL, built-in idempotency. Credited in `THIRD_PARTY_NOTICES.md` and the README. Fit check in [system design, step 4](system-design.md#step-4-ground-truth) |
-| Mapping extracted rows → the Arno schema | Build | No library knows the Arno data model |
-| Projection and affordability engine | Build | This _is_ the product |
-| Pattern detection | Build | Small, rule-based, needs Arno's schedules and categories |
+| Agent loop, tool calling, streaming | Buy: PydanticAI + `pydantic-ai-harness` | Harness capabilities, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
+| Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
+| Statement layout parsing | Build: agent-written Monty parsers saved per layout | Avoids maintaining bank-specific scrapers ([`specs/import.md`](specs/import.md)) |
+| Speech-to-text | Buy: OpenAI-compatible STT endpoint | Local `whisper.cpp` server (`local-stt` profile) or cloud API |
+| Photo and textless-page vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role, local or cloud |
+| Passkeys and web push | Buy: `py_webauthn`, `pywebpush` | Standard cryptographic and WebAuthn protocols |
+| Private HTTPS access | Buy: Tailscale (`tailscale serve`) | End-to-end encrypted tailnet access with zero public exposure |
+| Off-site backups | Buy: restic (with rclone) | Encrypted, deduplicated backups to S3-compatible or cloud targets |
+| Agent evaluations | Buy: `pydantic_evals` | Runs the production agent directly against cloned test databases |
+| Observability | Buy: Arize Phoenix + OpenTelemetry SDK | Native PydanticAI spans export over OTLP/HTTP to a pinned supplied-cost Phoenix build ([`operations/observability.md`](operations/observability.md)) |
+| Double-entry ledger core | Buy: vendored `pgledger` | MIT-licensed pure Postgres SQL with idempotency keys |
+| Ledger mapping, projection engine, patterns | Build | Core product differentiator ([`specs/data-and-engine.md`](specs/data-and-engine.md)) |
 
-Anything not listed: search PyPI or npm first, and write code only if nothing fits.
+### Technology choices
 
-### Choices
+The following table records the stack for each layer:
 
-The following table records the choice for each layer:
-
-| Layer | Choice | Why |
+| Layer | Choice | Rationale |
 |---|---|---|
-| Backend language | Python 3.14 | Already set up; the whole agent ecosystem is here |
-| Agent | PydanticAI + `pydantic-ai-harness` | [`harness.md`](harness.md) |
-| API | FastAPI | Built on Pydantic; OpenAPI is the contract every client shares. Also serves the static web build |
-| LLM | Switchable for each role | Chat, vision, and STT each take `*_BASE_URL`, `*_API_KEY`, and `*_MODEL`. Any OpenAI-compatible endpoint, local (Ollama) or cloud. Cost is not a constraint; Spend Limits still meter it |
-| Database | PostgreSQL 18, pinned | Chosen Oct 8, 2026, over SQLite: a read-only role and statement timeout enforced by the database for `run_query`, real date and numeric types, `pgvector` if semantic memory returns, and the industry default. Costs one container and an occasional major-version upgrade |
-| Data access | Plain SQL through asyncpg, Pydantic models at the boundary | No ORM. The agent writes raw SQL against this schema, so the schema stays readable SQL. One Postgres driver across the app, the tools, and the harness's spend store |
-| Migrations | Numbered `.sql` files + a `schema_version` table | No migration framework |
-| Type checking | Pyrefly, `strict` preset, any warning fails | Chosen Nov 10, 2026, over basedpyright: it understands Pydantic models without a plugin and sets strictness for each path. The pure money core is strictest. Policy and the tightening plan: [`typing.md`](typing.md) |
-| Engine arithmetic | NumPy, integer arrays only | Chosen Nov 13, 2026, for the redesigned engine: 16,384 scenarios need array arithmetic, and pure Python takes seconds for 1,000. BSD-3-Clause. Added with the scenario kernel, not before ([`engine-blueprint.md`](engine-blueprint.md)) |
-| Background jobs | A `jobs` table and one loop in the API process | One process needs no broker or job library, and the jobs stay in every dump. [System design, step 8](system-design.md#jobs-a-plain-table-and-one-loop) |
-| Web app | Vite and React, Vercel AI SDK 7 `useChat`, shadcn/ui's chat patterns, Streamdown | A static build means no Node server in production, and it runs under a strict content security policy, where a Next.js static export came up blank. [System design, step 10](system-design.md#web-stack) |
-| Distribution | Docker Compose: API, Postgres, backup sidecar, and Phoenix; optional Ollama and whisper.cpp | The initial target is Windows with Docker Desktop. Phoenix publishes on localhost with auth; native Pydantic AI spans export over OTLP/HTTP, and the pinned Phoenix build accepts Arno's supplied costs. The agent container retains its separate filesystem boundary |
-| License | Application code: MIT | Runtime dependencies and standalone service images have their own licenses, recorded in `THIRD_PARTY_NOTICES.md`. Phoenix is included in normal startup and can be disabled with the standard `OTEL_SDK_DISABLED` |
+| Backend language | Python 3.14 (`uv`) | Primary ecosystem for PydanticAI and numerical tooling |
+| Agent framework | PydanticAI + `pydantic-ai-harness` (pinned) | Native Code Mode, compaction, delegation, and spend limits |
+| API server | FastAPI + Uvicorn | Pydantic-native OpenAPI contracts; also serves the static web build |
+| Database | PostgreSQL 18 (pinned) | Enforces the `agent_ro` read-only role and 2-second timeout natively; supports real date/numeric types and `pgvector` if needed |
+| Data access | Plain SQL over `asyncpg` + per-loop idle connection cache (up to 8 connections) | Schema stays transparent for `run_query`; never-wait cache avoids pool deadlocks on long chat streams ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
+| Migrations | Numbered `.sql` files + `schema_version` table | Plain transactional SQL with recorded checksums |
+| Type checking | Pyrefly (`strict` preset, zero warnings) | Native Pydantic understanding and per-path strictness ([`operations/typing.md`](operations/typing.md)) |
+| Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
+| Background jobs | Plain `jobs` table + single API-process loop | Zero broker overhead; jobs persist in every `pg_dump` |
+| Web interface | Vite, React, `@assistant-ui/*`, `@radix-ui/themes`, Radix Primitives, `motion`, `Recharts`, `zustand` | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
+| Deployment | Docker Compose (`db`, `api`, `backup`, `phoenix`; optional `local-llm` and `local-stt`) | Single host deployment; loopback-only ports behind Tailscale |
+| License | MIT (application code) | Separate Phoenix image carries Elastic License 2.0 outside the Arno image; all direct dependencies audited in CI |
 
-### Provider switch
+### Provider switch and inference accounting
 
-Cost accounting, November 12, 2026: Arno uses native Pydantic AI and genai-prices for known
-providers, narrow reported billing for OpenCode, and an explicit zero for local inference. The
-existing free Cohere fallback has a verified published zero tariff while its exact model is absent
-from the catalog; unknown models never inherit that rate. Each
-role takes `*_PROVIDER` and `*_BILLING_MODE` (`metered`, `local`, or `reported`; no subscription
-mode). Phoenix is the only cost dashboard; a dedicated gateway stays
-[parked](parked.md#dedicated-ai-gateway). The
-[cost tracking and budgets implementation](cost-tracking.md) is built but not owner deployed: it
-prices every inference path, uses the native runaway budgets, and runs a pinned Phoenix
-supplied-cost build. Scratch restore, image, and invariant checks passed. Paid-provider, real
-sign-in, and owner-deployment acceptance remain pending, as the
-[acceptance log](cost-tracking-acceptance.md) records.
+Every model role (`CHAT`, `PARSE`, `BATCH`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses
+environment variables for endpoint, model ID, provider, and billing mode (`metered`, `local`, or
+`reported`). Exact dated model IDs are pinned rather than floating aliases, and model changes
+re-run the eval scorecard.
 
-Each role uses one code path for local and cloud:
-
-```
-CHAT_BASE_URL=http://ollama:11434/v1      # or https://api.<provider>.com/v1
-CHAT_MODEL=qwen3:4b                       # or a cloud model id
-CHAT_PROVIDER=ollama                      # or openai, anthropic, openai-chatgpt, opencode, openrouter
-CHAT_BILLING_MODE=local                   # or metered, reported
-VISION_BASE_URL=...  VISION_MODEL=...     # photos, statement pages with no text
-STT_BASE_URL=http://whisper:8000/v1      # or a cloud transcription endpoint
-CHAT_FALLBACK_BASE_URL=...  CHAT_FALLBACK_MODEL=...   # optional backup when the main endpoint fails
-CHAT_FALLBACK_CONTEXT_WINDOW=...                      # the window the backup's server really uses
-```
-
-No reversible PII-scrubbing layer: identifiers the product doesn't use are dropped at import
-instead ([system design, step 7](system-design.md#identifiers-at-import-not-a-scrubbing-layer)).
-No routing by content inside a role, but a role may name a backup endpoint that takes over when
-the main one fails, and replies the backup produced carry a badge. Which role runs where is the
-self-hoster's choice.
-
-**The design target is a frontier model.** Tool shapes, Code Mode, and prompts are chosen for
-what a capable model can do, so a strong model is never held to a basic level. Local models stay
-supported through this switch, and the eval scorecard records what each one handles. A small
-model's limits go in the scorecard; they are never designed into the product.
-
-Model IDs are pinned to exact, dated versions, never floating aliases, and any model change re-runs
-the eval scorecard. The categorizer agent and briefing prose use the chat role. The parser subagent
-uses an optional `PARSE` role that falls back to chat, and an optional `BATCH` role takes big
-categorizing backfills ([system design, step 3](system-design.md#models)).
+The design target is a frontier model; local models (such as Ollama and `whisper.cpp`) remain
+supported through the same code path, with their capabilities measured on the eval scorecard.
+Cost accounting uses native PydanticAI usage, `genai-prices`, narrow reported-billing adapters,
+explicit zero for local models, and the pinned Phoenix build as the sole cost dashboard
+([`specs/cost-tracking.md`](specs/cost-tracking.md)).
 
 ---
 
 ## 4. Architecture
 
-The following diagram shows the processes and how requests flow between them:
+One FastAPI process serves the static web app, REST endpoints, chat stream, and background job loop
+over one PostgreSQL database. Every client—web PWA, CLI, or a future mobile app—speaks to the same
+API. For the full architecture, control model, and diagrams, see
+[`architecture.md`](architecture.md).
 
+```text
+Browser / PWA ──┐                          [API process] ────────────> LLM endpoints (chat, vision, STT)
+CLI (on host) ──┴── HTTPS over tailnet ──>   FastAPI: static web, auth, REST, chat stream
+                                             PydanticAI agent -> plain-Python tools -> ledger / engine
+                                             job loop: briefings, reminders, patterns, risk, recaps, replay
+                                                   │  └── native OTLP spans ──> [Phoenix]
+                                                   v
+                                             [Postgres 18] ── pg_dump ──> [backup sidecar] ── restic ──> off-site
 ```
- Browser / PWA ──┐                          [API process] ────────────> LLM endpoints (chat, vision, STT)
- (future Android)├── HTTPS over tailnet ──>   FastAPI: static web app, auth,      local or cloud
- CLI (on host) ──┘                            REST, chat (Vercel AI stream)
-                                              PydanticAI agent ─> tools ─> ledger / engine
-                                              job loop: parsing, briefing, reminders, patterns, risk
-                                                    │  └──native spans──> [Phoenix]
-                                                    v
-                                              [Postgres] ──pg_dump──> [backup sidecar] ──restic──> off-site
-```
 
-One API process, one Postgres database. The agent is a backend service; every interface—web, CLI,
-a future Android app or chat-app bridge—is a client of the same API. Detail:
-[`platform.md`](platform.md).
+### Architecture rules
 
-### The rules
+Code must never violate these four rules:
 
-1. **The model decides what to compute; code computes it.** The model reasons freely: it decides
-   what to look at, models scenarios, and explains tradeoffs. Every number it states comes from a
-   tool return—the ledger, the engine, `run_query`, or a script it ran in Code Mode—and never from
-   its own head. A claim about a current balance, a due, goal progress, or another mutable
-   financial fact needs a live tool result from that turn. Use the pinned snapshot and earlier
-   chat for historical context. A check after each reply notes any amount it can't trace.
-   Affordability verdicts come only from the tested engine.
-2. **Untrusted text never makes a lasting change unseen.** Statements are parsed in a run with no
-   write or ledger tools, and photos by an isolated, tool-less model call into a typed schema.
-   Fields that still carry other people's words—payee names, UPI notes—reach the agent marked as
-   data. Writes that are visible and undoable stay instant. Writes that last or reach wide—memory,
-   setup, many rows—need a confirming tap in any conversation that has read such text. Voice
-   transcripts are the user's own words and take the normal chat path.
-3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, the REST API,
-   and any future MCP server wrap the same functions.
-4. **The database is the whole state.** Photos live in it; a dump from `pg_dump` is a complete
-   backup and export.
+1. **The model decides what to compute; code computes it.** Every figure the agent states must come
+   from a tool return or a `run_code` script output. Claims about current balances, dues, or goal
+   progress require a live tool result from that turn. A post-reply check (`agent/number_check.py`)
+   flags untraced amounts. Affordability verdicts come only from the tested engine.
+2. **Untrusted text never makes a lasting change unseen.** Statements run in a parser subagent with
+   no write or ledger tools; photos run in an isolated tool-less vision call. Statement-derived text
+   and parser reports mark the conversation as tainted. Everyday undoable writes stay instant;
+   lasting or wide writes (memories, setup changes, bulk category rules) require an explicit confirm
+   card tap in any tainted conversation.
+3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, REST API, and
+   any future MCP server wrap the same functions in `src/arno/tools/` and `src/arno/ledger/`.
+   Framework adapters belong strictly in `src/arno/agent/`.
+4. **The database is the whole state.** Attachments, ledger entries, schedules, memories, jobs, and
+   cost journals live in PostgreSQL so `pg_dump` produces a complete backup and export.
 
 ---
 
-## 5. Build order
+## 5. Build milestones
 
-Every layer is built to its final shape—no throwaway versions. Order is by dependency.
-_Real money goes into it from L2 onward_, so backups land in L1, before it holds anything worth
-losing. Settings sections land with the layer that needs them. Milestones are binary. No dates.
+Layers L0 through L10 are built in dependency order and shipped through `v0.4.2`. Open verification,
+owner-setup, and human ship gates are tracked in
+[`completion-checklist.md`](completion-checklist.md).
 
 ### L0: Foundations
 
-1. Repository reset: `pyproject.toml` dependencies match this plan; `src/arno/`, `web/`,
-   `compose.yaml`.
-2. Postgres in compose for development and production; numbered SQL migrations with
-   `schema_version`; the `app` and read-only `agent_ro` roles.
-3. Schema v1: pgledger vendored unmodified at a pinned commit, with its licenses,
-   `THIRD_PARTY_NOTICES.md`, and a "Built on" credit in the README; then every table in
-   [`design.md`](design.md), money as whole paise.
-4. The `docker compose up` command serves the web shell and an API health check, reached over
-   HTTPS through `tailscale serve` on the host. The web shell ships with a strict content security
-   policy, which blocks inline scripts and images from other origins.
-5. Auth: first-run setup through an enrollment link and terminal QR code, passkey login, sessions,
-   adding a device from Settings, passkey reset from the host CLI
-   ([platform](platform.md#enrollment-links)).
-6. CI: ruff, Pyrefly, pytest against a Postgres service container with model requests blocked, web
-   lint and build.
+1. Repository layout, `pyproject.toml`, `src/arno/`, `web/`, and `compose.yaml`.
+2. PostgreSQL 18 with numbered transactional SQL migrations (`schema_version`) and five isolated
+   roles (`postgres`, `app`, `agent_ro`, `backup`, `phoenix`), with `app` demoted to non-superuser.
+3. Vendored `pgledger` core with `THIRD_PARTY_NOTICES.md` and integer-paise schema.
+4. Static web shell and `/api/health` served behind `tailscale serve` under a strict content
+   security policy.
+5. Passkey authentication: first-run enrollment link and terminal QR code, WebAuthn sessions,
+   device management in Settings, and host-CLI passkey reset.
+6. CI pipeline: Ruff, Pyrefly, pytest against Postgres with model requests blocked, license audit,
+   web lint/typecheck/build, and answer-contract tests.
 
 ### L1: Ledger
 
-7. Accounts—bank, card (cycle, limit), cash, wallet, loan, asset—through the API and read-only
-   panels.
-8. Movements: record as balanced transfers through pgledger, correct by reversal, edit labels;
-   splits, lending, and reimbursements through payees' ledger accounts.
-9. Schedules: income (fixed, variable, one-off), obligations, family transfers, installment
-   plans—recurrence rules, holiday-aware "last working day."
-   Payment status comes from explicit allocations of recorded ledger movements to individual
-   occurrences, with partial payments, reversal-aware evidence, and undo. Matching never records
-   another transaction or infers payment from a date or confirmation flag. Future projections
-   reserve only the amount still expected. Generated card-due forecasts remain separate from
-   statement-bill settlement; see [schedule payment evidence](design.md#schedule-payment-evidence).
-10. Goals with fenced savings; categories with a reducible flag; learned categorization rules.
-11. Audit log with undo for every write; full export (CSV, JSON, and `pg_dump`).
-12. Backup sidecar: `pg_dump` shipped off-site by restic whenever the last success is over 24 hours
-    old; a restore tested locally.
-13. Demo persona: a seeded synthetic ledger—the demo instance, the test fixtures, and the
-    template database every eval trial clones.
+7. Accounts (bank, credit card with cycle and terms, cash, wallet, loan, asset) and read-only views.
+8. Balanced double-entry movements through `pgledger`, `movement_legs` spine, unified reversal
+   state (`movement_reversal_state`), splits, lending, and reimbursements.
+9. Schedules (income, obligations, family transfers, card installments) with Indian holiday-aware
+   recurrence and explicit reversal-aware payment allocations (`schedule_payments`).
+10. Goals with fenced savings, reducible categories, and learned categorization rules.
+11. Audit log with undo for every write and full data export (CSV, JSON excluding secrets, and
+    `pg_dump`).
+12. Encrypted off-site backup sidecar (`pg_dump` + manifest + restic) and verified `arno restore`.
+13. Deterministic synthetic demo persona (`arno demo seed`) for demos, tests, and eval templates.
 
-### L2: Agent (dogfooding starts)
+### L2: Agent
 
-14. Web chat streams from the PydanticAI agent; threads listed, stored, and full-text searchable.
-    The server holds each thread's history, with a pinned financial snapshot, a per-turn reminder,
-    compaction, and prompt caching. Instructions tuned by trial and error
-    ([step 6](system-design.md#step-6-context-and-memory)). A turn outlives its connection: you can
-    leave, reattach, or stop it, and every ending saves both records
-    ([step 8](system-design.md#every-ending-saves-the-same-two-records)).
-15. Same build runs against Ollama and a cloud endpoint by environment variables alone; Spend
-    Limits with counters in Postgres; a backup model and timeouts. Phoenix starts with Compose and
-    receives native Pydantic AI traces; see the [operator guide](observability.md). Design probes
-    inform tests but do not replace product-level acceptance checks.
-16. Read tools, including `run_query` on the `agent_ro` role with a statement timeout, the tested
-    `amortize` and `compound` functions, and `show_chart`; zero versus unknown, data age, and source
-    IDs (for citations) in every return. Code Mode over the read tools, so the agent can run
-    multistep modeling in the sandbox; write tools stay direct calls. Arno emits cards from
-    the `run_code` return. A check after each reply notes any amount it can't trace, and any reply
-    can be flagged. Specs in [`tools.md`](tools.md).
-17. Write tools with inline write-show-undo cards; corrections learn rules. Outside text is
-    marked in tool returns, and lasting or wide writes ask first in a conversation that has read
-    it ([`design.md`](design.md#untrusted-text-and-write-tiers)).
-18. Memory: the agent saves preferences unprompted, with a "Remembered" card and undo; visible
-    in settings, where each can be turned off or deleted.
-19. Setup conversation lands accounts, income, obligations, goals, floor, and estimated baselines.
-20. CLI: chat plus administration (setup, migrate, export, passkey reset).
+14. Streaming web chat with persistent searchable threads, pinned financial snapshot, per-turn
+    reminders, compaction, prompt caching, and detached turns that survive disconnects.
+15. Environment-driven provider switching (cloud and local), Postgres spend limits, fallback model,
+    inference cost metering, and native Phoenix OTLP tracing.
+16. Orthogonal read tools (including `run_query`, `amortize`, `compound`, `show_chart`) behind Code
+    Mode, structured result cards, post-reply number check, and reply flagging.
+17. Direct write tools with inline undo cards, outside-text taint tracking, and confirm cards for
+    lasting or wide writes in tainted conversations.
+18. Agent-managed typed memories (`preference`, `fact`, `rule`) with inline undo cards and Settings
+    management.
+19. Agent-led setup conversation for accounts, income, obligations, goals, floor, and baselines.
+20. Host CLI (`arno`) for chat, migrations, setup, exports, backups, and diagnostics.
 
-### L3: Import
+### L3: Import and recaps
 
-21. **Spike:** a fresh model writes a parser for my real SBI, Union Bank, and Slice statements in
-    Monty. Output is a decision for each bank. Protocol in [`import.md`](import.md).
-22. Pipeline: upload → the main agent hands it to the parser subagent in the background → replay,
-    repair, or write the bank's parser → the gate → dedupe and reconcile against logged rows →
-    review screen → commit. The subagent runs under one `DelegationTasks` owner; the `jobs` table
-    keeps the scheduled work. Redesigned November 7, 2026 ([`import.md`](import.md#the-pipeline)).
-23. The parser subagent: its instructions, host functions, `ask_parent`, and `Planning`; parser
-    versions saved after commit, statement files kept, and every new version replayed on them.
-    Every run is visible step by step: each script is titled from the host calls it made, with
-    the script's first comment line shown as the agent's own note. A run that uses its 120-step
-    budget pauses instead of failing, and Continue resumes the same task with a fresh budget.
-    One import reads at most 150 PDF pages; a longer statement is downloaded in shorter date
-    ranges. Decided November 9, 2026 ([run view](web-interface-design.md#subagent-runs)).
-    When a background task settles while no one is chatting, the server starts a turn with no
-    user message, and the main agent reads the report and tells the user what happened. It may
-    start the parser once more by itself for a failure a second try can fix; a report from that
-    retry gets no further retry, and only the user continues a paused run. The harness keeps the
-    report and leaves the wake to the host; the host's rules are in `agent/wake.py`. Decided
-    November 9, 2026 ([wake turn](harness.md#the-wake-turn)).
-    Recaps are a server feature: one engine (`tools/recaps.py`) computes every story from
-    ledger rows on demand, and the Recaps page, the agent's `recap` tool, and the ready
-    notifications all read it. Stories are templates, never model prose; every figure opens the
-    rows that sum to it. A new month pushes and a new week goes to the inbox; only "opened" is
-    stored. Decided November 9, 2026 ([recaps](recaps.md)).
-24. A 12-month backfill done for my accounts; baselines recomputed from real rows.
+21. Real-statement parser spike confirming Monty parsers on real bank statements without OCR or
+    third-party scrapers (Union Bank remains open pending statements).
+22. Background parser subagent pipeline under `DelegationTasks`: upload, replay/repair/write,
+    verification checks, regression gate against stored statements, reconciliation, review screen,
+    and atomic commit/undo.
+23. Step-by-step parser run visibility, pause/continue on the 120-step budget, 150-page PDF limit,
+    host-driven wake turns when background tasks settle, and server-computed daily, weekly, and
+    monthly recaps (`tools/recaps.py`) shared across the web app, `recap` tool, and inbox.
+24. Twelve-month real-statement backfill committed through the review screen with recomputed
+    baselines (open in [`completion-checklist.md`](completion-checklist.md)).
 
-**L3 status, November 10, 2026.** The pipeline's code is hardened: one transaction per commit and
-per undo, one card sign convention, a commit that re-matches movements logged after the review, and
-an undo that takes the categorization it caused with it. An import's printed opening now books at
-the statement's first day; `arno repair-openings` applies that to imports committed before the
-change, so every date a statement covers reads as the printed running balance. Union Bank still has
-no statement, so its format and parser decision wait on one, and the remaining Slice cycles wait on
-corrected exports or manual rows. Milestone 24 keeps its open box: the backfill was committed with
-local code rather than the review screen, and those two import gaps remain. Detail:
-[release-hardening.md](release-hardening.md).
+### L4: Evals
 
-### L4: Evals (gate: engine work starts when this exists)
+25. `pydantic_evals` suite (145 cases on the demo persona, cloned database per trial, `pass^3`
+    grading, 50 injection notes, Hindi/Hinglish/voice tags).
+26. Published model scorecards in [`README.md`](../../README.md#agent-evals) via `arno eval`.
 
-25. At least 50 agent-eval tasks in `pydantic_evals`, shaped by real usage and rewritten on the demo
-    persona: a balance of answer and refuse cases, Hinglish, modeling questions that need a script,
-    50 prompt-injection notes, a fresh database for each trial cloned from the demo template,
-    `pass^3`, run against every configured model. Shape in [`harness.md`](harness.md#tests-and-evals).
-26. Model scorecard: `pass^3` by category, fooled rate, number flags, and median cost and latency for
-    each configured model, cloud and local, published in the README. `arno eval --model X` runs
-    it for a self-hoster.
+### L5: Projection and pattern engine
 
-### L5: Engine
-
-27. `project()`: 16,384 seeded scenarios on an integer kernel, day by day over income,
-    obligations, installments, card cycles, fenced goals, detected series, and resampled whole
-    days of spend, against the floor (median, P10-P90 band, floor probability, first crossing, and
-    safe to spend). A pure-Python walk is its test oracle.
-28. Affordability: the verdict and up to four minimal plans that combine a card or EMI, a skipped
-    goal contribution, and a spending cut, each rerun on the same scenarios; a wait date is
-    context only. All computed in code.
-29. **Backtest:** `project()` run from weekly past origins over the real backfill, scored as a
-    distribution beside three baselines, and published. Until the real ledger has a measurable
-    origin, the README carries the synthetic households' held-out run.
-30. **HackerRank "Buy or Wait":** the shipped engine scores 86.8% on the 25 labeled samples
-    (status 22/25, amount within 5% 21/25, earliest within 3 days 22/25), published in the README.
-    The scorer is an adapter: stream inference is the pattern engine, and the safe amount, the
-    earliest date, and every plan come from `project()`. The dataset's own levers (stopping or
-    reducing one named stream, a merchant's fixed instalment dates) have no product equivalent, so
-    the adapter searches them and checks each with `project()`. The earlier 88.8% came from a
-    parallel implementation and is retired. The three status misses are all plans that stop or
-    reduce a stream. In two, the adapter's safe amount differs from the label's by under 3% of
-    the ask, which is enough to cross the threshold. In the third it is 13% lower, and the cause
-    was not isolated: other amount estimates for variable streams move it by under 2 points, and
-    no subset of the projected payments accounts for it. No adapter change was made, because a
-    change chosen to flip these samples would fit the test set. The data stays local and is never
-    committed.
-31. Projection and verdict render as inline chart cards with citations, plus a projection panel.
-
-**L5 status, November 10, 2026.** The engine survived the money-critical journeys and the fixes
-they forced: a reduce-EMI prepayment no longer stretches the loan, a month-end rule lands on a short
-month's last day, an unknown card bill stays unknown, and loan interest is booked once a calendar
-month. A backtest was run against a copy of the live ledger. With no income schedule in that ledger
-every month is unusable as a measurement, so `arno backtest --publish` refused to write and
-milestone 29 stays open until the owner adds a salary schedule. Milestone 30 is done as of November
-12: `arno hackerrank` scores the engine at 88.8% on the 25 externally labeled samples, and the
-README carries the block. On November 15 the scorer became an adapter over the shipped engine,
-which scores 86.8% (milestone 30). The same day the owner allowed the backtest and pattern scoring
-to run on the development instance's real ledger, reporting aggregate numbers only; nothing is
-committed or published, and a confirmed salary schedule will make its months count. The owner
-confirmed one on November 13, after the ledger's last scoreable origin, and a real-ledger origin
-also needs that salary's payments linked (§6, "Backtest outcome"), so the real ledger becomes a
-measurement once 90 days follow a confirmed, linked salary. The synthetic households' held-out
-backtest is published: the engine beats every baseline in every cell, and its P10-P90 band holds
-66% to 74% of outcomes. Detail: [release-hardening.md](release-hardening.md).
+27. Integer-array scenario kernel (`project()`): 16,384 seeded scenarios over schedules, card
+    cycles, fenced goals, high-confidence detected series, and whole-day resampled spend.
+28. Critical-value affordability verdicts (`yes`, `yes-but`, `no`) with up to four minimal
+    same-date tradeoff plans verified on the same scenarios.
+29. Synthetic holdout backtest against four baselines (including `empirical_flat`) published in
+    `README.md`, plus local `arno backtest --source db` once the real ledger has 90 days of linked
+    confirmed income.
+30. HackerRank "Buy or Wait" adapter over the shipped engine (86.8% on 25 labeled local samples,
+    published in `README.md`).
+31. Inline projection and verdict chart cards with source citations and a Timeline view.
 
 ### L6: Watch
 
-32. Job schedules, notification inbox, web push from the installed PWA; an alert when backups stop.
-    Background work is visible while it runs and says what it did.
-33. Weekly briefing; bill, EMI, and card-due reminders; risk warnings when the projection turns.
-    Your own scheduled questions, run by the agent read-only, with a spend limit for each run.
-34. Recurring-charge detection—new and missed subscriptions—presented as proposals, never
-    silent writes.
+32. Built-in job schedules, notification inbox, web push notifications, and 48-hour stale-backup
+    alerts.
+33. Weekly briefings, bill/EMI/card-due reminders (3-day lead), projection risk episodes, and
+    user-scheduled read-only questions with per-run spend limits.
+34. Calendar-rule recurring-charge detection (new, missed, and price-change proposals).
 
 ### L7: Capture
 
-35. Voice notes: push-to-talk in the web app → STT → chat. Hinglish eval cases pass.
-36. Photos: receipt or UPI screenshot → isolated vision extraction → one transaction, logged at
-    once with an undo card that shows the image beside the extracted fields; Android share target.
+35. Push-to-talk voice notes through OpenAI-compatible STT (local `whisper.cpp` with Silero VAD or
+    cloud) into chat.
+36. Isolated vision extraction for receipts and UPI screenshots (instant undoable transaction with
+    stored image) and Android PWA share-target support.
 
 ### L8: Ship
 
-37. Restore drill on a fresh machine: given the backup and the restic password, the ledger comes
-    back.
-38. Security pass: threat model, dependency audit, security headers.
-39. Docs: install (Docker + Tailscale), configure LLMs. License file, versioned image.
-40. Someone else installs it from the docs alone.
-41. Four weeks of daily use without falling back to mental math or a spreadsheet.
+37. Fresh-machine off-site restore drill using only the recovery kit and `RESTIC_PASSWORD`.
+38. Security pass: threat model, dependency and license audits, strict CSP, and secret redaction.
+39. Complete self-hosting guide, MIT license, and versioned GHCR container images.
+40. Second-person installation from [`operations/self-hosting.md`](operations/self-hosting.md) alone.
+41. Four weeks of daily use by the owner without falling back to mental math or a spreadsheet.
 
-**L8 status, November 3, 2026.** Milestones 37-39 are built; 37 is not yet tested the way it is
-written. 37 is `arno restore`: the sidecar writes a per-table manifest with every dump, and the
-command restores the newest restic snapshot into a fresh database, recomputes the manifest, and
-checks the ledger's balances. `tests/test_l8_ship.py` runs the round trip through a real restic
-repository, and CI runs it green (run 41627342626). That drill ran on this build host, not on a fresh
-machine; the fresh-machine restore, using only the restic password, stays open in
-[`completion-checklist.md`](completion-checklist.md) group B.
-38 is the refreshed threat model in [`platform.md`](platform.md#security), the exact CSP and
-headers, the fresh-passkey wall on export and passkey changes, log sanitization, the `agent_ro` and
-Phoenix isolation, and the Python + web license audit with `pip-audit`/`pnpm audit` in CI. 39 is
-**MIT** ([`LICENSE`](../../LICENSE)), the versioned `ghcr.io/joy9001/arno` and
-`arno-backup` images, the release workflow, a pre-migration `pg_dump`, 10 MB log rotation, and
-[`self-hosting.md`](self-hosting.md). The `v0.1.0` tag is published: its release workflow pushed
-`0.1.0` and `v0.1.0` for both `ghcr.io/joy9001/arno` and `arno-backup` (run 41628402245).
+### L9: Decision tools and Tier-0 acceptance
 
-**Observability status, November 5, 2026.** The production stack uses Pydantic AI's native
-OpenTelemetry instrumentation and the standard Phoenix SDK, exporting agent, model, and tool spans
-directly to Phoenix. Standard Python/Uvicorn logs stay on Docker stdout. The custom Collector,
-Loki, Prometheus, Grafana, dashboards, alerts, metric helpers, manual spans, and log bridge were
-removed from source, Compose, and tests. Existing Phoenix and Postgres volumes are untouched.
-
-Milestones 40 and 41 are **not** done, and no code change can make them done. 40 needs a second
-person to install from the docs alone; 41 needs four weeks of the owner's daily use without a
-spreadsheet or mental-math fallback. A clean-room Compose check ran on this build host on
-November 3, 2026, from the documented steps and a separate project name, ports, volumes, and env
-file: the images built, `/api/health` returned 200 with schema 11, the first-run enrollment link
-printed, the backup sidecar produced a restic snapshot with its manifest, and
-`arno restore` brought it back with `required_tables`, `schema_version`,
-`ledger_transfers_balance`, `account_balances_match_entries`, and `manifest_matches` all `ok`. That
-is not milestone 40: it was the same owner, the same Windows/Docker Desktop host, and no
-Tailscale, phone, or passkey. The Linux Compose grace period, `tailscale serve`, and a real
-second installer remain unexercised.
-
-**Release-hardening status, November 10, 2026.** A four-wave audit over the money paths, the agent
-loop, imports, and the platform fixed every P0 it found and left the invariant checker green through
-six real-model journeys and three regression rounds. Two human-shaped gates were rehearsed again and
-stay simulated, never ticked: a fresh install from the docs on this same host (milestone 40) and a
-restore into a brand-new cluster (milestone 37, with the restic password and the OAuth client). The
-audit also changed one live-data task: after upgrading, the owner runs `arno repair-openings`
-once so every committed statement's opening sits at its first day. The whole record, with findings,
-commit SHAs, decisions, and the checklist items that remain, is
-[release-hardening.md](release-hardening.md).
-
-### L9: Decision tools
-
-Promoted from the [capability catalog](capability-catalog.md) on November 16, 2026. Catalog IDs are
-in parentheses.
-
-42. Safe to spend (C28): `project` returns the largest cash payment today that keeps the floor
-    probability and every obligation at the verdict's own thresholds, from the run it already
-    makes. The home page and the projection card show it.
-43. What-ifs with several changes (C29): `project` takes up to twelve dated changes, with or
-    without a purchase, applied to the projection inputs by a pure module. The result names each
-    change, says whether the plan holds, gives the runway in days, and keeps the unchanged figures.
-44. Price-change alerts (C30): a recurring charge that moves to a new amount raises one proposal at
-    the first payment at the new level, for a detected series and for a confirmed schedule.
-45. What a debt costs (C11): `amortize` takes a processing fee and returns the APR; `card_payoff`
-    walks a card balance under the minimum due or a fixed payment, at the card's own stored or
-    stated finance charge.
-46. Tier-0 acceptance (every tier-0 entry in the catalog): two or more offers for one purchase
-    compare side by side in `compare_offers`, and every debt figure carries `complete_cost` and
-    what it leaves out (C11). Payment evidence resolves a reminder, a missed-payment alert, or a
-    card bill inside the payment's own undoable write (migration `0043`, C18). Settings gains a
-    History section over `audit_log` and a deletion preview with a delete-everything flow behind
-    a fresh passkey (C21). The projection exports as a workbook through XlsxWriter, moved up from
-    tier 4 (C20). A memory with the same kind and an optional `subject` replaces the active one,
-    and its previous value is read from `audit_log` (migration `0044`, C01). Any tool return with
-    outside text flags the conversation at one boundary, and document and vision text is redacted
-    before a model reads it; image-reading runs record no trace content, because an image cannot
-    be redacted (C21). A failed parse is retried from the import screen (C04). Between equally
-    cheap plans, the engine offers to delay the less important goal (C06).
-
-**L9 status, November 16, 2026.** Milestones 42 to 45 are built and on `main`, each with its tests,
-its instruction rules, and eval cases for those rules. A streamed reply now keeps the provider's
-reported cost for every read; before that fix the spend gate stopped the weekly briefing, and would
-have stopped any streamed paid run on a provider that reports its own cost. What remains open is
-in [`completion-checklist.md`](completion-checklist.md), section F.
+42. Safe-to-spend headroom computed directly from the projection run and shown on **Ask** and
+    projection cards.
+43. Multi-event what-if scenarios (`engine/scenario.py`, up to 12 dated changes) with runway in days.
+44. Recurring-charge price-change alerts at the first payment exceeding a 2% step.
+45. Debt cost tools: loan `amortize` with fees and APR, `card_payoff` with stored or stated card
+    rates, `compare_offers` side-by-side comparison, and explicit `complete_cost`/`not_included`
+    disclosures.
+46. Tier-0 acceptance additions: payment-evidence alert resolution, Settings **History** and
+    **Delete everything**, XlsxWriter projection workbook export, `(kind, subject)` memory
+    replacement, unified outside-text redaction and vision trace suppression, parse retry, and
+    priority-ordered goal deferral.
 
 ### L10: Engine hardening
 
-Added on November 21, 2026, from an audit of the numerical core and its callers. Every milestone
-keeps zero new dependencies and zero external corpora, and runs before milestone 41's four-week
-clock starts. Decisions and deferred `shortcut:` ceilings are in §6, L10.
-
-47. Trust boundaries, leak safety, and off-loop compute: reject `arno backtest --source db
-    --publish`, default `arno hackerrank --publish` to off, and exit before writing when the local
-    dataset is absent (`cli.py`); enforce `MAX_PAISE` and a 600-month cap at every projection and
-    money boundary, cap `series.detect` input to the last 200 payments, and assert
-    `0 < bound < 2**32` in `kernel.below()`; wrap model-facing `median_low` figures through
-    `_money_low()`; run `load_snapshot` inside one read-only `REPEATABLE READ` transaction; cache
-    `IndiaCalendar` with `expand=False`, move `project()`, `afford()`, and workbook generation off
-    the FastAPI event loop via `asyncio.to_thread` behind `asyncio.Semaphore(2)`, cap fast-path
-    home and risk-check horizons to `BASE_HORIZON_DAYS` unless requested, and cap deferrable goals
-    in `_plans` to the top eight by priority.
-48. Financial correctness across projection, affordability, patterns, and money: include
-    credit-card bill due dates and day-0 obligations in `obligation_days`; switch `load_snapshot`
-    from global `attributed=True` to category-level attribution so unlinked schedules never
-    double-count; share one card billing split and due-date helper across projection and
-    `schedules.upcoming()`; include unpaid overdue and due-today obligations inside
-    `MISSED_AFTER_DAYS` clamped to tomorrow with a gap note; charge card obligations before loose
-    resampled spend in `_charge_after_loose`; unify `_min_held(scenarios, threshold)` across floor
-    probability, first crossing, safe to spend, and `afford()`; fix `inputs.py` marshaling (`as_of`
-    leak, multi-card share, `first`-based history window, unknown-amount obligation gaps),
-    `risk_state.last_checked_at`, partial-payment preservation in `ChangeAmount`, and
-    `ROUND_HALF_UP` in `format_paise`. In affordability, enforce the 0.99 obligation gate inside
-    `_least_cut`, make `_dominates` a strict partial order, carry a capped-card `MAX_CUT_BPS`
-    candidate into `_verify`, recompute `cost_paise` after bisection, account for bills clearing
-    before future card dates, keep every delayed goal in structured tradeoffs, copy `applied.meta`,
-    and assert the horizon precondition in `apply_changes`. In patterns and recurrence, handle
-    date-only `UNTIL=YYYYMMDD` and comma `BYMONTHDAY` clamping, fix `rule_interval_days`
-    (`BYSETPOS=1` and `FREQ=DAILY`) and `None` cadence matching in `same_charge`, unify
-    `_summarize_amounts` onto `price_step`, pass `Rule.rrule` into proposals, and align `series.py`
-    `as_of` censoring. In `money.py`, pin a local `Decimal` context, label or alias `30e/360` and
-    `actual/365f`, break on early-zero `card_emi`, fix `prepay(reduce="tenure")` on a coincident
-    rate reset, reject out-of-horizon `rate_changes` and note coarse-unit balloons, reject daily
-    rest in `infer_rate` with exact plateau semantics, reject negative IRR in `_compute_apr`, and
-    fail fast on negative amortization in `card_payoff`. Guard these with an exact-enumeration
-    common-random-numbers affordability oracle (`runs=512`), a top-8 cadence prune test via
-    `_detect_with`, an RBI KFS Annex B test vector, and boundary day-count tests.
-49. Backtest honesty and engine invariants: fix `scoring.hac_estimate` to center each group on its
-    own mean (adding between-group variance once at lag 0) and return `nan` for `n < 2` in
-    `diebold_mariano`; fix persona schedule-exclusion leakage (`created <= as_of`), group persona
-    detections by normalized payee text, add a probabilistic `empirical_flat` baseline beside point
-    `schedule_mean`, and guard short personas under 105 days; add synchronous `check_engine()` to
-    `tests/invariants.py` and replace its tautological `payment_status` check; republish the
-    holdout synthetic backtest once after milestones 47 to 49 settle.
-
-**L10 status, November 21, 2026.** Milestones 47 to 49 are implemented. Ruff and Pyrefly pass.
-On PostgreSQL 18, 1,907 tests passed and five were skipped. The seeded demo passed 804
-invariant checks. The README's synthetic holdout scored 978 origins and includes the
-`empirical_flat` baseline.
-
-**Estimate:** at 15-20 hours a week, roughly 7-9 months. L3 (import) is the one genuinely
-unpredictable layer, which is why it opens with a spike. If a layer runs past twice its share,
-something has crept in—check it against [`parked.md`](parked.md).
+47. Trust-boundary and off-loop compute guards: block `--source db --publish`, cap projection/money
+    bounds and dense-payee history, run `load_snapshot` in one `REPEATABLE READ` transaction, and
+    offload `project()`, `afford()`, and workbook builds via `asyncio.to_thread` behind a semaphore.
+48. Financial correctness fixes across projection, affordability, patterns, and money math
+    (category-level attribution, shared card billing splits, overdue obligation clamping, strict
+    partial-order plan dominance, RBI KFS Annex B APR vector, negative-amortization guard).
+49. Backtest honesty and invariant hardening: per-group HAC centering, causal persona schedule
+    visibility, `empirical_flat` baseline, and synchronous `check_engine()` invariants. Deferred
+    modeling hypotheses and scale ceilings stay recorded as `shortcut:` comments in code until
+    their real-ledger triggers fire.
 
 ---
 
 ## 6. Open questions
 
-Answer each when its layer arrives, not before.
+Only genuinely unresolved questions remain here. Settled design decisions live in their owning
+specifications under [`specs/`](specs/) and [`operations/`](operations/).
 
-- **L0:** do Compose restarts and the 30-second grace period behave on Linux?
-- **L2:** is the [number check](system-design.md#the-number-check) noisy on real replies? If so, its
-  note comes off and only the trace keeps it. If it's quiet, numbers become tappable to their source.
-  Which local chat models handle which tasks? The scorecard records it. What are the real token
-  counts, and is a 1-hour prompt cache worth it? How often do confirm cards appear and get tapped?
-  Traces answer all three. Are the model timeouts right for a real provider, and do the latency
-  targets hold?
-- **L3:** settled in the Milestone 21 spike and recorded here.
-  - **What does Slice export, and in what format?** Unlocked monthly PDFs, one for each cycle that
-    runs from the 25th to the 24th.
-  - **Can a fresh model write parsers for real statements in Monty, or is a separate sandbox
-    needed?** It can, so no separate sandbox is needed. A fresh model wrote parsers that verify on
-    the real SBI and Slice statements.
-  - **Is `xfina` or OCR worth adding?** No. `xfina` 0.10.0 recognized neither SBI file and has no
-    Slice support, and every real file had a text layer or was a spreadsheet.
-  - **Union Bank.** Still open: no statement was provided, so its format and parser decision wait on
-    one. Counts and quirks per bank are in [`import.md`](import.md#the-spike-milestone-21-in-the-plan).
-  - **Do Slice's exports carry every repayment?** No. The PDFs omit several repayments that the
-    app shows, and one is a day off. The importer treats an own-account move as a transfer only
-    after the user confirms it on the review screen, and a statement whose printed closing
-    disagrees with those confirmed moves keeps the difference as a visible adjustment rather than
-    silently counting the payment as spending.
-- **L5:** settled in code and recorded here.
-  - **Resample single days or whole weeks?** Single days, with separate weekday and weekend pools.
-    Weekend spend clusters survive without resampling whole weeks, and one bad week cannot repeat
-    as a block. The engine reports the method in `data_quality`.
-  - **What floor probability makes a "yes"—90% or 95%?** 90%. It matches the published P10-P90
-    band: a `yes` means the tenth-percentile path still clears the floor. 95% would make the
-    verdict and the band describe different things.
-  - **Card share of variable spend—learned or set?** Learned for each category from the last 90
-    days of spending on that card. With too little card history the share is zero (cash) and
-    `data_quality` says so; there is no per-account setting to keep in sync. Since the L5
-    redesign, a whole past day keeps its own cash and card split, so the share applies only to a
-    category drawn on its own, from a stated estimate or a short history.
-- **L5 redesign:** decided November 13, 2026, and built through the last step of its build
-  order. The engine is rebuilt to [`engine-blueprint.md`](engine-blueprint.md), in that document's
-  build order. A model change ships only if it beats the one before it on the new backtest.
-  - **NumPy.** A runtime dependency for the scenario kernel (§3).
-  - **Scenario count.** 16,384 at every horizon, replacing 1,000.
-  - **Model switches.** Each one was scored on the tuning seeds of the ten synthetic households,
-    978 weekly origins, against a bar fixed before the first result: a 1% lower mean CRPS over
-    the ten (target, horizon) cells, with no cell significantly worse. Whole-day vectors, the
-    short-history prior, and rare large days were admitted; blocks, recency weights, and
-    per-scenario pool resampling were not, and pool resampling is retested after step 6 because
-    it was better in every cell but under the bar.
-  - **Block resampling.** Blocks of 2 or 3 days gained nothing (+0.03% and +0.07%, with one 14-day
-    cell worse), so single days stay and the L5 answer above holds.
-  - **Obligation rule.** An obligation is met when at least 99% of scenarios can pay it. This
-    replaces "no run misses one", which tightened as the run count rose.
-  - **First floor crossing.** The first date by which more than 10% of scenarios have crossed, so
-    it is absent exactly when the floor probability passes.
-  - **Goal slips.** The "no goal slips" clause of a `yes` goes, because it could never fail. A
-    goal slips only through the delay-a-goal tradeoff.
-  - **Detected series.** A detected recurring charge the user has not confirmed enters the
-    projection as an outflow when its confidence is at least 0.999, it is spend, and no confirmed
-    schedule covers it. Each scenario keeps it alive or not, skips or pays each expected date,
-    moves the date within its jitter, and draws its amount; the data-quality gap names it and it
-    is cited as a source. Detected income never enters the base case; with no confirmed income the
-    projection stays unusable.
-  - **EMI cost.** A card EMI carries interest, fee, and GST. The rate comes from the what-if,
-    then the card, then a labeled default of 16% a year; zero only for a stated no-cost offer.
-    The 18% GST on interest and the processing fee follows CSB Bank's One credit card EMI terms
-    (April 2024).
-  - **Pattern thresholds.** Two posterior thresholds, a lower one to propose a series and a
-    higher one to project it. Both come from the synthetic households' tuning seeds: 0.9 held
-    precision and recall at 0.99, and 0.999 held precision at 1.0.
-  - **Quantiles.** Order statistics with no interpolation; published numbers shift by a few
-    paise.
-  - **Short history.** Below 14 real days the pool is topped up with pseudo-days at 0, ½, 1, 1½,
-    and 2 times the stated daily estimate, weighted so real days count r : 14 − r. It cut mean
-    CRPS by 3.4%. Once the ledger covers 14 days, a category with a computed baseline is drawn
-    from whole days however sparse it is, and the prior is kept for a young ledger or a stated
-    estimate.
-  - **Payment attribution.** A payment that settled a schedule, one a projected series matched,
-    and one marked one-off leave the spend pool, and a category an obligation covers is simulated
-    from what is left instead of dropped. A rare day replaces that day's everyday draw instead of
-    adding to it. With both, step 6 lowered mean CRPS by 5.9% on the tuning seeds, every cell 3%
-    to 10% better; attribution before those two fixes was 0.5% worse.
-  - **One-off mark.** Decided and built on November 15, 2026, because the rare-day stream ships.
-    A payment marked `movements.one_off` leaves the spend history: it is neither everyday nor rare
-    spend. The movement correction tool and the movement dialog both set it, and both are
-    undoable.
-  - **Backtest outcome.** Decided November 15, 2026. The base case counts only confirmed income,
-    so it is scored against the balance that followed without the income it was told to leave
-    out: a credit after the origin counts only if it pays an income schedule confirmed by then.
-    Scoring it against the whole balance measured the policy, not the forecast: the freelancer
-    household's outcome fell above every scenario at every origin. On the real ledger the payment
-    has to be linked to its occurrence, and an origin whose confirmed income in the window is not
-    all linked is dropped and counted. Refunds and repayments stay in the outcome.
-  - **Spend keeps its card.** Decided November 15, 2026. A resampled day's card spend stays on its
-    card past the limit; only new charges (a what-if purchase, a card EMI, a detected series) are
-    held to it, after that day's resampled spend has used its share of the headroom. The history
-    already shows spend moving to cash while a card was full, so holding resampled spend to the
-    limit again moved cash out early: the low-limit household's outcomes fell above its P90 almost
-    half the time. It lowered mean CRPS by 1.2% on the tuning seeds.
-  - **Calibration.** Decided November 15, 2026: not shipped. After the two changes above, the
-    tuning seeds' P10-P90 coverage was 74% to 77% against the 80% target, short of it at 7 to 30
-    days. A per-horizon map of where outcomes fell in their forecasts, shrunk toward the identity
-    and cross-fitted seed against seed, lifted coverage to 77% to 79% but left mean CRPS where it
-    was (ratio 1.0008), so it failed the same bar as every model switch. The engine reports its
-    own quantiles. Most of the remaining shortfall is spend that drifts upward, which recency
-    weights did not fix, and a ledger too young to show its spread.
-  - **Release gate.** Decided November 15, 2026: "shipped" waits for the engine redesign. The four
-    weeks of daily use start once the new engine has landed.
-- **L6:** settled in code and recorded here.
-  - **Notification and briefing times.** The notification time is 08:00 Asia/Kolkata and the
-    weekly briefing is Sunday at that time. Both are settings; nightly risk, pattern, baseline,
-    and backup checks run at 02:00-03:00 India time so they don't compete with a reminder. A
-    schedule that was missed while the machine slept fires once, keyed by its period.
-  - **Reminder lead days.** 3 days before a bill, EMI, or card due date. A reminder is keyed by
-    the source and due date, so it appears once inside the lead window.
-  - **Recurring-charge thresholds.** Calendar-rule hypotheses scored by an exact alignment
-    likelihood, not gaps around 7, 30, or 365 days: weekly, fortnightly, four-weekly, twice
-    monthly, monthly on a day, last day, last working day, n-th weekday, quarterly, half-yearly,
-    and yearly. The date-in-month rules are also tried moved to the next and the previous Indian
-    working day, and the last working day is the last day's previous-working-day form. At least 3
-    payments. A series is proposed at confidence 0.9 and projected at 0.999; on the synthetic
-    households' tuning seeds 0.9 held precision and recall at 0.99, and 0.999 held precision at
-    1.0. An expected occurrence 3 or more days late with no matching payment is a missed charge.
-    Detection runs nightly and after every import, and only proposes; it never writes a schedule.
-  - **Risk episodes.** The engine's own 90% floor threshold decides a warning. One warning goes
-    out per episode when the floor probability falls below it or the first crossing moves earlier;
-    the episode re-arms after the probability recovers and the crossing no longer moves earlier.
-    The check runs nightly and after every ledger or setup write.
-  - **Backup alert.** 48 hours after the last recorded successful sidecar backup, once per outage;
-    a new success starts the next episode.
-  - **Scheduled questions.** Read-only, with the pinned financial snapshot and CodeMode read tools
-    only. Each run has 20 model requests and a $1 default ceiling (`spend_limit_usd`), against the
-    shared $20 daily ceiling. The answer goes to the Inbox.
-- **L7:** the cloud-versus-local Hinglish comparison is **not measured on this host**. No paired
-  Hinglish audio corpus has been recorded, so the Hinglish and voice-transcript eval cases test
-  the agent downstream of a transcript, not the speech model. The code path is one for
-  both. Locally, the `local-stt` Compose profile runs whisper.cpp v1.9.5's native `whisper-server`
-  with Silero VAD. It replaced Speaches on November 14, 2026. The images copy the prebuilt server
-  and its ggml/Whisper libraries from the commit-tagged official CPU or CUDA image, so the final
-  image carries no compiler or CUDA toolkit; the CPU target is the default and the GPU override
-  adds the CUDA 13 runtime and a server that includes compute capability 7.5. The API still sees one
-  OpenAI-compatible `/v1/audio/transcriptions` endpoint. `STT_MODEL` selects the weights and is
-  also the trace label: `small` (default) or `large-v3-turbo`. The server ignores the multipart
-  model field, decodes the browser's WebM through ffmpeg, and defaults to no context between
-  requests.
-  Synthetic WebM checks on the GTX 1650 preserved the spoken amounts 500, 1,500, and 50 rupees,
-  including a quiet recording; pure silence and white noise returned empty text with VAD enabled.
-  These checks establish local integration, not Hinglish accuracy or a cloud comparison.
-  **Qwen3-ASR 0.6B and 1.7B are Apache-2.0** (checked on Hugging Face, November 3, 2026),
-  and vLLM serves them through the same OpenAI-compatible `/v1/audio/transcriptions` API,
-  including its prompt field, so Qwen3-ASR is a viable local alternative to Whisper. The
-  payee-name context prompt is implemented and on by default (`STT_PAYEE_CONTEXT=1`); whether it
-  improves recognition is untested, so it is an option rather than a claim. A cloud STT endpoint
-  receives those payee names too; setting `STT_PAYEE_CONTEXT=0` keeps them local.
-- **L8:** **MIT.** It lets anyone use, modify, and redistribute Arno freely, matches the
-  vendored pgledger license, and adds no patent or notice machinery a one-person project has to
-  maintain. The permissive-license audit in CI keeps the dependency side honest. Apache-2.0's
-  patent grant was the only real argument for it, and nothing in the stack or the product turns on
-  patents. Recorded November 3, 2026.
-- **Cross-layer, settled in the November 2026 release-hardening pass.** Each one ends an ambiguity
-  that two code paths, or a doc and the code, answered differently. The full record is
-  [release-hardening.md](release-hardening.md).
-  - **Card statement signs.** Statement figures are ledger-signed below the statement text: a parser
-    negates a card's printed balances, and a printed opening the user types is converted once by
-    account kind ([import.md](import.md#signs)).
-  - **A wait-only plan is not affordability.** A "wait until date X" tradeoff alone leaves the
-    verdict `no`; `yes-but` needs a same-date tradeoff ([design.md](design.md#affordability)).
-  - **Coverage needs every account.** Unfiltered coverage is complete only when every active account
-    that has ever committed a statement covers the period ([tools.md](tools.md)).
-  - **Month ends.** A monthly rule on the 29th, 30th, or 31st falls on the last day of a shorter
-    month ([design.md](design.md)).
-  - **Loan interest.** Interest is charged once per calendar month per loan; a later payment in that
-    month is all principal ([tools.md](tools.md)).
-  - **Split remainder.** An equal split's paise remainder goes to my share ([tools.md](tools.md)).
-  - **Confirm cards.** A turn's confirm cards are answered together; a partial answer writes nothing
-    and keeps every card pending (rule 2 in §4, [design.md](design.md#untrusted-text-and-write-tiers)).
-  - **Exports.** JSON and CSV exports exclude credential and session tables; `pg_dump` stays
-    complete because it is the backup and restore source ([platform.md](platform.md#security)).
-  - **Tracing is opt-in.** No Phoenix collector endpoint means nothing is registered
-    ([observability.md](observability.md)).
-  - **Openings.** A statement's opening books at the statement's first day, and
-    `arno repair-openings` applies that to imports already committed ([import.md](import.md)).
-  - **Secret redaction.** Redaction is keyword-anchored and shape-aware: an OTP, PIN, CVV,
-    password, passcode, or API key next to its keyword is redacted in English, Hinglish, and
-    Devanagari, and in either word order; plain words, amounts, dates, and UPI ids stay
-    ([harness.md](harness.md#day-one)).
-  - **Approval sentences.** When the model writes none, the host writes one plain sentence per
-    confirm card from the tool and its arguments ([design.md](design.md#untrusted-text-and-write-tiers)).
-  - **Backtest publishing.** An origin without a usable starting point is not a measurement: it
-    is dropped and counted, and `arno backtest --publish` refuses a run with no scored origin
-    (`engine/backtest.py`).
-- **Schema redesign on November 13, 2026.** One spine and one source of truth across the ledger
-  ([`design.md`](design.md), migrations `0031`-`0038`):
-  - **`movement_legs` spine.** Every `pgledger_transfers` row pairs 1:1 with `movement_legs`,
-    enforced at commit by a `DEFERRABLE INITIALLY DEFERRED` foreign key; labels live on the leg.
-  - **One reversal state.** `movement_reversal_state(as_of)` and `v_movement_state` define
-    "effectively reversed" once in SQL (`1 - sum(child signs) <= 0`), replacing divergent queries.
-  - **One home for an account's name.** `accounts.name` is `NULL` on `person` and `goal` accounts;
-    `v_accounts` resolves their names from `payees` and `goals`, and `pgledger_accounts.name`
-    stores the `acc_*` ID.
-  - **Named agent read model.** `agent_ro` reads 23 objects (`v_accounts`, `v_legs` with
-    `from_account_liquid` and `to_account_liquid`, `v_movement_state`, `v_spending`, `v_balances`
-    without view-level sorting, `v_owed`, and 17 domain tables, excluding raw `accounts`,
-    `movement_legs`, and `pgledger_*` views); indexes, settings (`random_page_cost = 1.1`), and
-    constraints land only with measured evidence.
-- **L9:** decided November 15 and 16, 2026, and settled in code.
-  - **Safe to spend.** The kernel is linear in cash, so a cash payment today lowers every
-    scenario by the same amount. The figure is the smaller of the floor headroom and the tightest
-    obligation's headroom, at the exact scenario ranks the verdict uses, so the amount is a `yes`
-    and one paisa more is not. It is zero when the forecast already fails and absent when no liquid
-    balance is known. It covers the whole projection horizon, not only the days to payday.
-  - **Changes in a what-if.** Five kinds: stop income, pause a schedule, change a schedule's
-    amount, add a recurring flow, add a one-time flow. A change cannot start in the past, and two
-    changes on the same schedule cannot overlap, so the result does not depend on their order. An
-    added outflow, recurring or one-time, is an obligation and is tested for payability. An added
-    or raised inflow counts in the result, which says that it assumes income not yet confirmed;
-    income the ledger holds as unconfirmed still never funds a `yes`. With no purchase the result
-    says whether the plan holds by the same rule as a `yes`.
-  - **Runway.** The whole days from today to the first floor crossing of the changed projection,
-    and absent when there is none inside the horizon.
-  - **Price steps.** At least 3 payments at the old level, then every later payment at one new
-    level more than 2% away. One payment is enough to report, so a rise shows at the first charge;
-    a single odd payment followed by a return is not a step. A step older than 90 days is not
-    reported, so a backfill raises no stale alerts. For a confirmed schedule the old level is its
-    stated amount, and a partial payment in progress is not a price drop.
-  - **APR.** The monthly rate at which the schedule's payments equal the amount disbursed after
-    the fee and its GST, times 12: the convention a loan's own rate uses, so a loan with no fee has
-    an APR equal to its rate. The fee is treated as deducted at disbursal.
-  - **Card payoff.** A monthly walk: the finance charge on the opening balance, 18% GST on it,
-    then the payment. There is no default finance charge: with none stored or stated the tool
-    refuses and the agent asks. A minimum due of 5% of the statement balance with a ₹200 floor is
-    assumed, and labeled, when the card's own rule is not known. The walk assumes no new spending.
-    The projection still pays every card bill in full.
-- **L10:** decided November 21, 2026, after the engine audit and benchmark survey
-  ([review](../research/engine-research/review.md),
-  [benchmarks](../research/engine-research/benchmarks.md)). Arno is a single-user, India-first
-  finance engine (10 to 50 chat turns a day, 100 to 500 movements a month), so financial
-  correctness, leak prevention, and freeze guards land now while institutional benchmark rigs and
-  unmeasured modeling switches stay out.
-  - **Verification kept.** Zero new dependencies and zero external corpora: RBI KFS Annex B APR
-    vector (nominal `12 * monthly IRR`, matching India; no effective-annual toggle), 10 boundary
-    day-count unit tests, an exact-enumeration common-random-numbers affordability oracle
-    (`runs=512`), a top-8 cadence prune test via `_detect_with` (no production `prune` flag), a
-    concurrent `/api/health` off-loop responsiveness check, cap tests for 15 goals and 800-row
-    payees, and synchronous `check_engine()` in `tests/invariants.py`.
-  - **Benchmarks and optimizations cut.** Rejected as low ROI for a solo Indian retail build:
-    OpenGamma Strata 400-pair Java fixtures, ACTUS institutional contracts, CFPB Reg Z and EU CCD
-    vectors, PKDD'99 Berka (1993–98 Czech data without UPI, card cycles, or Indian holidays),
-    TCPD/TCPDBench, Tatbul/BBVA multi-plan metrics, Dominick's retail prices, ReBIT AA and
-    `camt.053` loaders (no bank APIs, §2), academic multivariate and tail-risk econometrics
-    (`VS_1`, 2-D Energy, Kupiec/Christoffersen, `Z2`/`FZ0`, WIS, M5 0.01/0.99 tails, Czado PIT,
-    90% MCS, Giacomini-White, multi-seed CI gates), FCA audit-row schemas, FinRegLab perturbation
-    sweeps, k6 1–10 RPS load rigs and custom event-loop metrics, ASV/`pytest-memray`/5% PR
-    wall-time gates, PractRand/BigCrush PRNG batteries (SplitMix64 is already literature-proven and
-    oracle-checked), and micro-optimizations (`card{k}_series` skip for unshipped `limit_spend`,
-    `_verify` spec caching, `price_step` inner bound, invariant query batching).
-  - **Attribution over auto-linking.** Unlinked schedules are guarded by category-level attribution
-    in `load_snapshot` rather than auto-linking historical rows in `create_schedule`, preserving
-    milestone 9's rule that payment matching is always explicit.
-  - **Tracked deferrals (`shortcut:` debt ledger).** Each deferred modeling hypothesis or scale
-    ceiling lands verbatim as a `shortcut:` code comment at its seam during milestones 47 to 49,
-    without speculative code, and stays deferred until its trigger fires (especially milestone 29's
-    real-ledger backtest):
-
-    ```text
-    engine/affordability.py (0.99 gate): shortcut: point estimate at S=16384 has +-0.15pp 95% CI on 0.99 gate, revisit with one-sided Wilson LCB or higher S only after real-ledger coverage error drops below 2pp
-    engine/projection.py (MODEL): shortcut: iid daily draws (block_length=1) ignore multi-day spend bursts, revisit when milestone 29 real-ledger backtest shows clustered breaches or CRPS gain at L=2/3
-    engine/series.py (_MAX_CANDIDATES=8): shortcut: pre-DP heuristic prunes to top 8 rules per payee, revisit if recall@8 test or real ledger misses a recurring bill ranked below 8th
-    engine/series.py (_MAX_SAMPLES=12): shortcut: variable bills sample uniformly from last 12 payments only, revisit if milestone 29 shows seasonal or tail misses on real utility bills
-    engine/projection.py (MAD==0) & engine/kernel.py (Poisson): shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on k=1, revisit if real-ledger rare spikes breach P10 in milestone 29
-    engine/affordability.py (card EMI): shortcut: hypothetical card EMI charges installments to limit instead of blocking full principal on day 1, revisit when modeling card EMI near a tight credit limit
-    engine/projection.py & engine/kernel.py (card float): shortcut: unknown unbilled split front-loads 100% balance to first due date and projection assumes cards pay in full, revisit if user revolves a card balance or imports balances without recent spend
-    engine/patterns.py & tools/patterns.py (matching): shortcut: one detected series per payee and raw token overlap in same_merchant, revisit when a real payee holds two plans or false-matches generic words
-    engine/affordability.py (goal relief): shortcut: goal deferral checks top 8 goals in [when, when+31] only, revisit if a real ledger has >8 active goals or needs pre-purchase goal deferral
-    engine/series.py (dense payee cap): shortcut: series.detect caps payee history at last 200 payments, revisit if a high-frequency merchant needs >200 rows to detect cadence
-    tools/projection.py (off-loop compute): shortcut: max 2 concurrent off-loop projections and 90d fast-path cap on home/risk, revisit if multiuser hosting is unparked or home needs multi-year goal horizons
-    engine/money.py (conventions): shortcut: India nominal 12*monthly IRR and 30e/360 + actual/365f only, revisit if a non-India locale pack or US 30/360 / EU effective APR is requested
-    engine/kernel.py & engine/affordability.py (memory/verify): shortcut: chunk peak ~100-365 MiB (scales with cards) and _verify rebuilds prepare() per bisection step, revisit if deployed on <1 GiB RAM or worst-case afford() exceeds 15s
-    engine/backtest.py (backtest cadence): shortcut: single seed (S=16384) run manually without CI gate or multi-metric econometrics, revisit once milestone 29 has >=90d of linked real-ledger origins
-    ```
+- **Linux container shutdown (L0):** Do Compose restarts and the 30-second `stop_grace_period`
+  behave cleanly on a Linux host (not only Windows Docker Desktop)?
+- **Real-use agent traces (L2):** Across four weeks of real owner usage, is the post-reply number
+  check quiet enough to keep visible (or turn into tappable citations), what are real token counts
+  and prompt-cache hit rates, how often do confirm cards appear, and should the 5 s / 15 s latency
+  targets be revised against measured cloud-model latency?
+- **Local chat models (L2/L4):** Which local Ollama models pass the eval scorecard on practical
+  hardware?
+- **Union Bank statements (L3):** What file format and layout does Union Bank export, and does a
+  saved Monty parser handle it cleanly?
+- **Hinglish speech recognition (L7):** How does local `whisper.cpp` compare against cloud STT (or
+  Qwen3-ASR) on real owner Hinglish audio, and does `STT_PAYEE_CONTEXT=1` measurably improve
+  merchant recognition?
 
 ---
 
 ## What "shipped" means
 
-All of the following must be true:
+Arno is shipped when all four gates hold:
 
-- Every milestone in §5 done
-- Used daily for four weeks with no spreadsheet or mental-math fallback
-- Installed by someone else from the docs alone
-- No fix pushed in the last week
+1. Every build milestone in §5 is complete.
+2. The owner uses Arno daily for four weeks without falling back to mental math or a spreadsheet.
+3. A second person installs Arno from [`operations/self-hosting.md`](operations/self-hosting.md)
+   alone.
+4. No code fix is pushed during the final week.
 
-Then it's shipped. Parked items get promoted from a working, used system—not from a document.
-
-Milestones 40 and 41 are the human gates in that list. They are recorded as open until a second
-person has installed the instance from [`self-hosting.md`](self-hosting.md) alone and the owner
-has used it daily for four weeks. Passing tests, a clean-room install on the build host, or a
-complete code audit is not a substitute for either.
-
+Passing automated tests, a local clean-room rehearsal, or a code audit does not satisfy the human
+gates. Track open gates in [`completion-checklist.md`](completion-checklist.md).

@@ -7,9 +7,10 @@ this file holds only what you can't read off the code.
 
 ## Where the truth lives
 
-- [`docs/arno/plan.md`](docs/arno/plan.md) owns decisions. If a satellite doc
-  (`design.md`, `tools.md`, `platform.md`, `harness.md`, `import.md`) disagrees, the plan wins and
-  the satellite is stale. Read the matching satellite before changing its area.
+- [`docs/arno/plan.md`](docs/arno/plan.md) owns decisions. [`docs/README.md`](docs/README.md) is
+  the single index of every living document across `docs/arno/` (core docs on root; `specs/`,
+  `operations/`, and `planning/` subfolders). If another doc disagrees with `plan.md`, the plan
+  wins and the other doc is stale. Read the owning spec before changing its area.
 - `docs/archive/` is superseded. Never cite it as a decision. `docs/research/` describes the
   outside world, not this project.
 - Never hand-edit the README blocks between `<!-- eval-scorecard -->`, `<!-- backtest -->`, and
@@ -70,7 +71,7 @@ full set.
 - Iterating: `uv run pytest tests/test_<area>.py -q -n 0`.
 - Any Python change: `uv run ruff check . && uv run ruff format --check .` (line length 100) and
   `uv run pyrefly check` (zero errors and zero warnings; how to fix one without hiding it is in
-  [`typing.md`](docs/arno/typing.md)), then the affected test files. Run the whole
+  [`typing.md`](docs/arno/operations/typing.md)), then the affected test files. Run the whole
   `uv run pytest -q` once at the end when you touch `ledger/`, `db/`, `tools/`, `agent/`, or
   `api/`, since they are shared.
 - Never run more than one full `uv run pytest` at a time: each invocation spawns 4 xdist workers
@@ -137,6 +138,8 @@ or fixtures; use the synthetic demo persona (`src/arno/demo/`) and `tests/fixtur
   imperative mood (`feat(import): …`, `fix(chat): …`), no co-author trailer.
 - Fix the foundation, not the symptom. No stopgap wrappers or interim layers; each layer is built to
   its final shape, in dependency order.
-- Docs follow the house style in [`docs/README.md`](docs/README.md#conventions): American spelling,
-  sentence-case headings, prose wrapped at 100 columns, `plan.md` §N references. New decisions go
-  in `plan.md`; anything needing a table or schema goes in a satellite doc with a link.
+- Docs follow the standards in [`docs/README.md`](docs/README.md#documentation-standards): Google
+  developer documentation style (present tense, second person, sentence-case headings, American
+  spelling, 100-column prose wrap), single source of truth per topic, timeless living docs, and
+  completed audits/logs archived under `docs/archive/`. New decisions go in `plan.md`; subsystem
+  details go in the owning doc under `docs/arno/{specs,operations,planning}/`.

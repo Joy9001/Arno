@@ -10,7 +10,7 @@ pattern matched.
 
 **What the budget forced out:** Ten steps exceed the nine-node budget, so the four groups are the
 nodes and the steps are rows inside them. Status isn't drawn—it changes every step, and the walk
-table in [`../system-design.md`](../system-design.md) holds it. The accent marks step 2, the
+table in [`../architecture.md`](../architecture.md) holds it. The accent marks step 2, the
 question that makes the design agentic, and the evals loop back to step 1.
 
 ![Agentic system design in ten steps](./sd-framework.png)
@@ -18,4 +18,4 @@ question that makes the design agentic, and the evals loop back to step 1.
 **Source:** `sd-framework.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), the framework.
+**Illustrates:** [`../architecture.md`](../architecture.md), the framework.

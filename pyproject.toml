@@ -80,7 +80,7 @@ testpaths = ["tests"]
 addopts = "-n 4 --dist loadgroup"
 
 [tool.pyrefly]
-# Type-checking policy: docs/arno/typing.md. CI fails on any error or warning.
+# Type-checking policy: docs/arno/operations/typing.md. CI fails on any error or warning.
 project-includes = ["src", "tests", "evals", "scripts"]
 search-path = ["src", "."]
 python-version = "3.14"

@@ -39,7 +39,7 @@ RCLONE_CONFIG_GDRIVE_TOKEN='{"access_token":"...","token_type":"Bearer","refresh
 ```
 
 Get the token with `rclone authorize "drive"` and a base64 blob that carries the client and the
-`drive.file` scope; `docs/arno/self-hosting.md` §6.1 has the console steps and the command.
+`drive.file` scope; `docs/arno/operations/self-hosting.md` has the console steps and the command.
 `drive.file` covers only the files this client creates, not the rest of your Drive. The client
 secret and refresh token are credentials: keep them out of git.
 

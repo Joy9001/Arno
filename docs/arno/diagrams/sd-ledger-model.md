@@ -18,5 +18,5 @@ and its link to the transfers.
 **Source:** `sd-ledger-model.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../design.md`](../design.md) and [`../system-design.md`](../system-design.md),
+**Illustrates:** [`../specs/data-and-engine.md`](../specs/data-and-engine.md) and [`../architecture.md`](../architecture.md),
 step 4.

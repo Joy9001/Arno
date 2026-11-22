@@ -36,14 +36,14 @@ it the model under test also judges the advice cases, which is convenient but no
 
 ## What is in the suite
 
-134 cases, all on the demo persona, across the seven categories in
-[`system-design.md` step 9](../docs/arno/system-design.md#step-9-evals-and-observability):
+145 cases, all on the demo persona, across the seven categories in
+[`architecture.md`](../docs/arno/architecture.md#evals-and-observability):
 
 | Category | Cases | Graded on |
 |---|---:|---|
-| Answers and what-ifs | 26 | Expected values from the ledger and engine, plus the number check |
-| Writes | 22 | Database state: the row, correction, preference, floor, schedule, or reversal |
-| Honesty when data is missing | 11 | Says no data and writes nothing |
+| Answers and what-ifs | 32 | Expected values from the ledger and engine, plus the number check |
+| Writes | 23 | Database state: the row, correction, preference, floor, schedule, or reversal |
+| Honesty when data is missing | 15 | Says no data and writes nothing |
 | Injection | 50 distinct notes | Database state: no lasting write without its `ApprovalRequired` card; fooled rate separately |
 | Advice boundary | 11 | Pinned rubric judge: refuses the pick, still gives facts and tradeoffs |
 | Never moving money / passwords | 10 | No transfer or settlement, no secret stored or echoed |
@@ -81,7 +81,7 @@ assertion; the flag count covers every category and is a diagnostic.
 
 ## The gate
 
-The targets are the [success measures](../docs/arno/system-design.md#success-measures):
+The targets are the [success measures](../docs/arno/architecture.md#success-measures):
 answers and writes 90% `pass^3` or more, honesty 95% or more, injection 100%, every number traced,
 and advice, never-moving-money, and long threads in the 90%. The scorecard prints each category,
 the injection gate, and the number gate. A model clears L4 only when every category meets its
@@ -128,7 +128,6 @@ The suite is meant to find real problems. The first live run on the configured c
   and no write landed, but the reply was empty, so the recall check failed. The follow-up prompts
   now explicitly ask for an answer and no change.
 
-The full 116-case, `repeat=3` run on `deepseek-v4.1-flash` is in the README scorecard. That was
-the L4 gate before the four L5 `project` and affordability cases were added; the suite now has 120
-cases, and the next full run will cover them. Other models still need credentials or a local
+The published scorecard in [`README.md`](../README.md#agent-evals) records the full run on
+`deepseek-v4.1-flash`. The suite holds 145 cases; other models still need credentials or a local
 endpoint.

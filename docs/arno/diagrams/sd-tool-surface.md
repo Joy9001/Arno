@@ -1,21 +1,23 @@
 # Scripts read and compute; every write is a direct call
 
-**What it shows:** The agent's tool surface. The model sees seven tools: `run_code` and the six
-write tools. A script inside `run_code` can call the thirteen read tools: ledger reads, tested
-maths, charts, and presentation. Write tools are normal tool calls, each with its own card. They
-land instantly, ask first in a flagged conversation, or start an import that waits for your review.
+**What it shows:** The agent's tool surface. Read and presentation tools (14 functions) run inside
+`run_code` (Code Mode): ledger reads, tested financial calculators, charts, tables, and
+presentation cards. The six write tools and five delegation tools are direct tool calls. Writes
+land instantly with undo, ask first in a tainted conversation, or start a background parse whose
+output waits for your review.
 
 **Diagram type:** Architecture, with two dashed zones for "behind `run_code`" and "direct calls".
-No semantic pattern matched.
 
-**What the budget forced out:** The 19 tools share 6 grouped nodes, and each tool's description,
-input, output, and logic are in [`../tools.md`](../tools.md). `run_code`'s limits and the parse
-run's own functions are left out. 9 nodes, 12 arrows; the accent marks `run_code` and the arrow
-into it.
+**What the budget forced out:** Individual tool contracts live in
+[`../specs/tools.md`](../specs/tools.md). The diagram predates later tool additions (`show_table`,
+`present`, `compare_offers`, `card_payoff`, `schedule_payment`, and delegation tools), and leaves
+out `run_code` limits and parser subagent functions. 9 nodes, 12 arrows; the accent marks
+`run_code` and the arrow into it.
 
 ![Scripts read and compute; every write is a direct call](./sd-tool-surface.png)
 
 **Source:** `sd-tool-surface.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 5.
+**Illustrates:** [`../architecture.md`](../architecture.md#tool-surface) and
+[`../specs/tools.md`](../specs/tools.md).

@@ -100,7 +100,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check
-        # Policy in docs/arno/typing.md; any error or warning fails.
+        # Policy in docs/arno/operations/typing.md; any error or warning fails.
         run: uv run pyrefly check --output-format=github
 
       - name: Dependency vulnerability audit

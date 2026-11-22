@@ -70,7 +70,7 @@ J01 sequence, not a pass for the catalog's E starting state.
 | Field | Observed evidence |
 |---|---|
 | User action window | 6 November 2026, 21:44:36-21:45:11 IST; ledger date 2026-11-06, Asia/Kolkata. |
-| UI | Existing authenticated Chrome tab, `https://joy04-dev.tailf9d528.ts.net/#home`; Browser MCP used to inspect Arno. |
+| UI | Existing authenticated Chrome tab, `https://<host>.ts.net/#home`; Browser MCP used to inspect Arno. |
 | Build | HEAD `e0b720a16bb635c10bbeca50c516ce532f6d247a`; working tree clean before progress-document edits. API container `3b7a1ebf0db7`, image `sha256:c0ca7657f6b9a37fa3e8ae0d4e1e732167b552fafde5a3801951834c75148894`. Source/image equivalence not asserted. |
 | Starting state | Two seeded accounts; both without stated balances. Saved card limit and billing dates exist. Exact financial values are in ignored private evidence. No ledger activity appears in Money or Recent activity. |
 | Model | `deepseek-v4.1-flash`, provider endpoint `opencode.ai`. No configuration changed. |

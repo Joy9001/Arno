@@ -16,4 +16,4 @@ nodes, 5 arrows; the accent marks the record that compaction changes and the arr
 **Source:** `sd-thread-records.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 6.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 6.

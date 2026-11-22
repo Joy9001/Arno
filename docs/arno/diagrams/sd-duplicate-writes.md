@@ -10,13 +10,13 @@ is a third, separate layer.
 the questions are too long for diamond shapes.
 
 **What the budget forced out:** The user's answer to the agent's question (new, or the same one)
-isn't drawn; the outcome box says the agent writes only if you confirm. The exact time window and
-fields of the suspected-duplicate check wait for step 4. 6 nodes, 5 arrows; the accent marks the
-check the outside review added.
+isn't drawn; the outcome box says the agent writes only if you confirm. Duplicate-check field rules
+live in [`../specs/tools.md`](../specs/tools.md). 6 nodes, 5 arrows; the accent marks the
+near-duplicate check.
 
 ![A chat write can't land twice](./sd-duplicate-writes.png)
 
 **Source:** `sd-duplicate-writes.html` (diagram-design skill, default skin, minimal light,
 doc-inline preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 2, decision D.
+**Illustrates:** [`../architecture.md`](../architecture.md#reliability-and-failure-modes).

@@ -15,4 +15,4 @@ the point where the cache ends.
 **Source:** `sd-context-stack.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 6.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 6.

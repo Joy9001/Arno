@@ -18,4 +18,4 @@ privileged moment.
 **Source:** `sd-trust-boundaries.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).
 
-**Illustrates:** [`../system-design.md`](../system-design.md), step 7.
+**Illustrates:** [`../architecture.md`](../architecture.md), step 7.

@@ -793,7 +793,7 @@ def import_spike(
         None, help="Opening balance in paise when the bank statement does not print one."
     ),
     write: bool = typer.Option(
-        True, "--write/--no-write", help="Write docs/arno/import-spike-results.md."
+        True, "--write/--no-write", help="Write private/import-spike-results.md."
     ),
 ) -> None:
     """Milestone 21: a fresh parse run per bank, then rerun the parser on the rest.
@@ -830,7 +830,8 @@ def import_spike(
     text = report.markdown()
     typer.echo(text)
     if write:
-        target = Path("docs/arno/import-spike-results.md")
+        target = Path("private/import-spike-results.md")
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
         typer.echo(f"wrote {target}")
 

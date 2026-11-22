@@ -82,7 +82,7 @@ Durable constraints:
 - Explicitly undecided or parked: native Android app, public-internet access, multicurrency,
   multiuser, editable panels, locale-pack interface, net worth from investment statements, broker
   APIs, tax engine, budgets, SMS/email autocapture, OCR for scanned statements, arm64 images. Each
-  has a revisit trigger in `docs/arno/parked.md`.
+  has a revisit trigger in `docs/arno/planning/parked.md`.
 
 ## Brand Commitments
 

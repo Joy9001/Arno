@@ -13,7 +13,7 @@ not drawn.
 
 **What the budget forced out:** The four streams (confirmed schedules, detected series, everyday
 pool, rare large spend), the model switches inside the kernel, the verification rerun, and the
-HackerRank adapter are in [`../engine-blueprint.md`](../engine-blueprint.md). 8 nodes, 8 arrows;
+HackerRank adapter are in [`../specs/data-and-engine.md`](../specs/data-and-engine.md). 8 nodes, 8 arrows;
 the accent marks the scenario kernel and the affordability search.
 
 ![One scenario matrix answers every question](./engine-composition.png)
@@ -21,4 +21,4 @@ the accent marks the scenario kernel and the affordability search.
 **Source:** `engine-composition.html` (diagram-design skill, default skin, minimal light,
 doc-inline preset).
 
-**Illustrates:** [`../engine-blueprint.md`](../engine-blueprint.md), section 9.
+**Illustrates:** [`../specs/data-and-engine.md`](../specs/data-and-engine.md), section 9.

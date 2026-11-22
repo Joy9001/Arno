@@ -1,9 +1,9 @@
 """Whole-ledger and deterministic engine invariants.
 
-The rules are the "Financial invariants" list in `docs/arno/e2e-user-journeys.md`, derived
-from the write paths in `ledger/movements.py` and `tests`' own view definitions. The two balance
-checks come from `backup_restore.verify_database`, which the restore drill already relies on, so
-there is one definition of "the ledger balances".
+The rules are the financial invariants in `docs/arno/specs/data-and-engine.md#financial-invariants`,
+derived from `ledger/movements.py` and `tests`' own view definitions. The two balance checks come
+from `backup_restore.verify_database`, which the restore drill already relies on, so there is one
+definition of "the ledger balances".
 
 Run it against a scratch database::
 
