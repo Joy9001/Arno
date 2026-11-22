@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any, Literal, override
 
 from opentelemetry import trace
@@ -26,8 +24,8 @@ from pydantic_ai.models import ModelRequestContext
 from pydantic_ai.output import PendingModelResponse
 from pydantic_ai.settings import merge_model_settings
 from pydantic_ai.toolsets import FunctionToolset
-from pydantic_ai.usage import RequestUsage, UsageLimits
-from pydantic_ai_harness.spend import SpendEntry, SpendLimitExceeded, UnpricedModelError
+from pydantic_ai.usage import UsageLimits
+from pydantic_ai_harness.spend import SpendEntry, SpendLimitExceeded
 
 from arno.agent.capabilities import (
     MODEL_SETTINGS,
@@ -37,7 +35,6 @@ from arno.agent.capabilities import (
 )
 from arno.agent.cost_journal import CostAttempt, current_cost_identity, record_intent
 from arno.agent.models import primary_model
-from arno.agent.pricing import LOCAL_BILLING_MODES, observe_cost, validate_pricing
 from arno.agent.spend import (
     COST_STOP_ERRORS,
     SHARED_DAILY_BUDGET,
@@ -46,9 +43,19 @@ from arno.agent.spend import (
 )
 from arno.db.conn import connect
 from arno.importers import rules as rules_mod
+from arno.importers.batch_accounting import (
+    BATCH_MAX_OUTPUT_TOKENS,
+    BatchAccounting,
+    attempt_to_record,
+    batch_identity,
+    batch_model_name,
+    ensure_no_pending_batch,
+    estimate_batch_usd,
+    estimate_token,
+    settle_token,
+    trace_id,
+)
 from arno.importers.rules import normalize_pattern
-from arno.ledger.audit import write_group
-from arno.ledger.categories import upsert_rule_in_group
 
 logger = logging.getLogger("arno.agent.categorizer")
 
@@ -56,11 +63,6 @@ CHUNK_PAYEES = 12  # smaller chunks keep each reply short and its prompt small
 CHUNK_CONCURRENCY = 8
 CHECK_PAYEES = 5
 BATCH_MAX_WAIT = timedelta(seconds=30)
-# The labeling reply is bounded so a batch estimate has a real output ceiling. 2048 tokens is
-# several times the longest reply a chunk of 12 payees produces.
-BATCH_MAX_OUTPUT_TOKENS = 2048
-# A conservative input bound: the instructions, output schema, and framing, not just the payees.
-BATCH_PROMPT_OVERHEAD_TOKENS = 4096
 CATEGORIZE_USAGE_LIMITS = UsageLimits(request_limit=40, tool_calls_limit=80)
 
 
@@ -348,71 +350,6 @@ async def batch_results(ctx: RunContext[CategorizerDeps], batch_id: str) -> dict
     return {"answers": _hold(ctx, answers), "agreement": agreement, "failed": []}
 
 
-def _batch_identity(model: Any) -> tuple[str, str]:
-    """The batch model's pricing identity and billing mode, without inventing either."""
-    try:
-        provider = str(model.provider.name).strip().lower()
-    except Exception:  # noqa: BLE001 - a test double has no provider
-        provider = ""
-    if not provider:
-        provider = os.environ.get("BATCH_PROVIDER", "").strip().lower()
-    if provider == "gemini":
-        provider = "google"
-    billing = os.environ.get("BATCH_BILLING_MODE", "").strip().lower() or "metered"
-    return provider, billing
-
-
-def _batch_model_name(model: Any) -> str:
-    return str(getattr(model, "model_name", "") or "")
-
-
-def estimate_batch_usd(payloads: list[dict[str, Any]], *, model: Any) -> Decimal:
-    """A conservative priced bound for the whole batch, before anything is submitted.
-
-    Every item is priced with its prompt's byte length (an upper bound on tokens) plus the fixed
-    prompt/tool-schema overhead, and the configured output cap. A model whose identity cannot be
-    priced rejects the batch rather than submitting work the budget cannot see.
-    """
-    provider, billing = _batch_identity(model)
-    if billing in LOCAL_BILLING_MODES:
-        return Decimal(0)
-    model_name = _batch_model_name(model)
-    try:
-        validate_pricing(
-            provider=provider,
-            model=model_name,
-            provider_url=None,
-            billing_mode=billing,
-        )
-    except ValueError as exc:
-        raise UnpricedModelError(
-            f"No verified price for the batch model {model_name!r}; refusing to submit."
-        ) from exc
-    total = Decimal(0)
-    for payload in payloads:
-        prompt = str(payload["prompt"])
-        usage = RequestUsage(
-            input_tokens=max(1, len(prompt.encode("utf-8")) + BATCH_PROMPT_OVERHEAD_TOKENS),
-            output_tokens=BATCH_MAX_OUTPUT_TOKENS,
-        )
-        probe = ModelResponse(parts=[], usage=usage, model_name=model_name, provider_name=provider)
-        observation = observe_cost(probe, provider=provider, billing_mode=billing)
-        if observation.usd is None or not observation.complete:
-            raise UnpricedModelError(
-                f"No verified price for the batch model {model_name!r}; refusing to submit."
-            )
-        total += observation.usd
-    return total
-
-
-def _trace_id() -> str:
-    """Keep the submission's real trace when tracing is on; a replay still needs an ID."""
-    context = trace.get_current_span().get_span_context()
-    if context.is_valid:
-        return trace.format_trace_id(context.trace_id)
-    return secrets.token_hex(16)
-
-
 def _batch_attempt(
     *,
     provider: str,
@@ -435,40 +372,6 @@ def _batch_attempt(
         session_id=current_cost_identity()[0],
         started_at=started_at,
     )
-
-
-def _attempt_record(attempt: CostAttempt) -> dict[str, str]:
-    return {
-        "attempt_id": attempt.attempt_id,
-        "trace_id": attempt.trace_id,
-        "span_id": attempt.span_id,
-        "role": attempt.role,
-        "provider": attempt.provider,
-        "model": attempt.model,
-        "billing_mode": attempt.billing_mode,
-        "workload": attempt.workload or "",
-        "session_id": attempt.session_id or "",
-        "started_at": attempt.started_at.isoformat(),
-    }
-
-
-async def ensure_no_pending_batch(conn: Any, import_id: str) -> None:
-    """An uncollected or uncertain estimate must not cause another paid submission."""
-    pending = await conn.fetchval(
-        """
-        SELECT id FROM categorize_runs WHERE import_id=$1 AND accounting <> '{}'::jsonb
-          AND NOT coalesce((accounting->>'settle_applied')::boolean, false)
-        ORDER BY started_at LIMIT 1
-        """,
-        import_id,
-    )
-    if pending:
-        from arno.jobs.runner import JobGaveUp
-
-        raise JobGaveUp(
-            f"Batch {pending} is pending or has uncertain accounting. Inspect that batch before "
-            "starting another categorization; no new submission was made."
-        )
 
 
 async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dict[str, Any]:
@@ -498,8 +401,8 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
     payloads, _categories_list = await _payloads_for(ctx, keys)
     agent = build_labeling_agent(ctx.deps.batch_model)
     estimate = estimate_batch_usd(payloads, model=ctx.deps.batch_model)
-    provider, billing = _batch_identity(ctx.deps.batch_model)
-    model_name = _batch_model_name(ctx.deps.batch_model)
+    provider, billing = batch_identity(ctx.deps.batch_model)
+    model_name = batch_model_name(ctx.deps.batch_model)
 
     limits = spend_limits(store, budgets=[shared_daily_budget()])
     if limits is None:
@@ -518,7 +421,7 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
         )
 
     now = datetime.now(UTC)
-    submission_trace = _trace_id()
+    submission_trace = trace_id()
     attempts = [
         _batch_attempt(
             provider=provider,
@@ -530,21 +433,21 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
         )
         for _payload in payloads
     ]
-    accounting: dict[str, Any] = {
-        "phase": "estimate_pending",
-        "keys": [status.key],
-        "items": len(payloads),
-        "provider": provider,
-        "model": model_name,
-        "billing_mode": billing,
-        "estimate_usd": str(estimate),
-        "estimate_token": f"categorize-batch-estimate:{batch_id}",
-        "settle_token": f"categorize-batch-settle:{batch_id}",
-        "estimate_at": now.isoformat(),
-        "estimate_applied": False,
-        "settle_applied": False,
-        "provisional": False,
-    }
+    accounting = BatchAccounting(
+        phase="estimate_pending",
+        keys=[status.key],
+        items=len(payloads),
+        provider=provider,
+        model=model_name,
+        billing_mode=billing,
+        estimate_usd=str(estimate),
+        estimate_token=estimate_token(batch_id),
+        settle_token=settle_token(batch_id),
+        estimate_at=now,
+        estimate_applied=False,
+        settle_applied=False,
+        provisional=False,
+    )
     # The intention reaches Postgres before the counter write, so a crash leaves a visible row
     # rather than an unexplained charge.
     async with connect() as conn, conn.transaction():
@@ -552,7 +455,7 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
         await ensure_no_pending_batch(conn, ctx.deps.import_id)
         await conn.execute(
             "UPDATE categorize_runs SET accounting = $1, updated_at = now() WHERE id = $2",
-            accounting,
+            accounting.to_record(),
             batch_id,
         )
         for attempt in attempts:
@@ -566,17 +469,17 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
                     usd=estimate,
                     requests=len(payloads),
                     ttl=status.budget.ttl,
-                    token=accounting["estimate_token"],
+                    token=accounting.estimate_token,
                 )
             ]
         )
-        accounting["phase"] = "estimate_applied"
-        accounting["estimate_applied_at"] = datetime.now(UTC).isoformat()
-        accounting["estimate_applied"] = True
+        accounting.phase = "estimate_applied"
+        accounting.estimate_applied_at = datetime.now(UTC)
+        accounting.estimate_applied = True
         async with connect() as conn:
             await conn.execute(
                 "UPDATE categorize_runs SET accounting = $1, updated_at = now() WHERE id = $2",
-                accounting,
+                accounting.to_record(),
                 batch_id,
             )
 
@@ -598,10 +501,10 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
                     "history": ModelMessagesTypeAdapter.dump_python(
                         result.all_messages(), mode="json"
                     ),
-                    "attempt": _attempt_record(attempt),
+                    "attempt": attempt_to_record(attempt),
                 }
             )
-        accounting["phase"] = "submitted"
+        accounting.phase = "submitted"
         from arno.jobs.runner import enqueue_job
 
         async with connect() as conn, conn.transaction():
@@ -615,7 +518,7 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
                 batch_id,
                 saved,
                 ctx.deps.check_answers,
-                accounting,
+                accounting.to_record(),
             )
             await enqueue_job(
                 conn,
@@ -626,12 +529,12 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
     except Exception as exc:
         from arno.jobs.runner import JobGaveUp
 
-        accounting["phase"] = "submit_ambiguous"
+        accounting.phase = "submit_ambiguous"
         try:
             async with connect() as conn:
                 await conn.execute(
                     "UPDATE categorize_runs SET accounting=$1, updated_at=now() WHERE id=$2",
-                    accounting,
+                    accounting.to_record(),
                     batch_id,
                 )
         except Exception:
@@ -646,58 +549,10 @@ async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dic
     return {"batch_id": batch_id, "requests": len(saved), "status": "pending"}
 
 
-async def _label_movements(
-    conn: Any,
-    group: Any,
-    *,
-    movement_ids: list[str],
-    category_id: str,
-    rule_id: str,
-) -> int:
-    labeled = 0
-    for movement_id in movement_ids:
-        before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
-        if before is None:
-            continue
-        legs = await conn.fetch(
-            "SELECT * FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id",
-            movement_id,
-        )
-        for leg in legs:
-            if str(leg["category_id"] or "") == category_id:
-                continue
-            after = await conn.fetchrow(
-                """
-                UPDATE movement_legs SET category_id = $1, updated_at = now()
-                WHERE transfer_id = $2
-                RETURNING *
-                """,
-                category_id,
-                leg["transfer_id"],
-            )
-            group.record_updated("movement_legs", str(leg["transfer_id"]), dict(leg), dict(after))
-        await conn.execute(
-            """
-            UPDATE movements SET category_rule_id = $1, category_hint = NULL
-            WHERE id = $2
-            """,
-            rule_id,
-            movement_id,
-        )
-        after = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
-        group.record_updated("movements", movement_id, dict(before), dict(after))
-        labeled += 1
-    return labeled
-
-
 async def save_categories(
     ctx: RunContext[CategorizerDeps], distrust: list[str] | None = None
 ) -> dict[str, Any]:
-    """One write group: labels trusted answers, writes llm rules, keeps a hint on the rest.
-
-    Saves every answer the host holds. `distrust` names the keys the agent would not stand
-    behind; those, a null or unknown category, and "Other" all stay uncategorized.
-    """
+    """Tool adapter: validate the answers this run holds, then let the rules engine save them."""
     held = ctx.deps.answers
     if not held:
         raise ModelRetry("This run holds no answers yet; ask about the payees first.")
@@ -707,73 +562,13 @@ async def save_categories(
         raise ModelRetry("No answer was held for these keys: " + ", ".join(unknown))
     async with connect() as conn:
         _names, by_name = await _categories(conn)
-        rules_written = 0
-        labeled = 0
-        uncategorized = 0
-        async with write_group(conn, actor="agent") as group:
-            # The import's row lock comes first, as it does in undo, and the rows are read under
-            # it: a save that waited for an undo finds nothing left to label.
-            await rules_mod.lock_import(conn, ctx.deps.import_id)
-            pending = await rules_mod.pending_rows(conn, ctx.deps.import_id)
-            for key, (category, reason) in held.items():
-                movement_ids = pending.get(key)
-                if not movement_ids:
-                    continue
-                chosen = by_name.get(normalize_pattern(category or ""))
-                category_id, category_name = chosen if chosen else (None, None)
-                trusted = (
-                    key not in distrusted and category_id is not None and category_name != "Other"
-                )
-                if trusted:
-                    rule = await upsert_rule_in_group(
-                        conn,
-                        group,
-                        pattern=key,
-                        category_id=str(category_id),
-                        source="llm",
-                    )
-                    labeled += await _label_movements(
-                        conn,
-                        group,
-                        movement_ids=movement_ids,
-                        # A user rule for this payee wins the upsert; label with the rule that
-                        # actually stands, never the answer it overrode.
-                        category_id=str(rule["category_id"]),
-                        rule_id=str(rule["id"]),
-                    )
-                    rules_written += 1
-                    continue
-                hint = {
-                    "category_id": str(category_id) if category_id else None,
-                    "reason": (reason or "").strip() or None,
-                }
-                for movement_id in movement_ids:
-                    before = await conn.fetchrow(
-                        "SELECT * FROM movements WHERE id = $1", movement_id
-                    )
-                    if before is None:
-                        continue
-                    await conn.execute(
-                        "UPDATE movements SET category_hint = $1 WHERE id = $2",
-                        hint,
-                        movement_id,
-                    )
-                    after = await conn.fetchrow_required(
-                        "SELECT * FROM movements WHERE id = $1", movement_id
-                    )
-                    group.record_updated("movements", movement_id, dict(before), dict(after))
-                    uncategorized += 1
-            if group.entries:
-                # The import owns this group: undoing the import reverts these labels and rules.
-                await rules_mod.record_categorize_group(
-                    conn, import_id=ctx.deps.import_id, group_id=group.group_id
-                )
-        return {
-            "undo_id": group.group_id,
-            "labeled": labeled,
-            "uncategorized": uncategorized,
-            "rules": rules_written,
-        }
+        return await rules_mod.apply_categorization_answers(
+            conn,
+            import_id=ctx.deps.import_id,
+            answers=held,
+            categories=by_name,
+            distrust=distrusted,
+        )
 
 
 class _BatchRequestSpans(AbstractCapability[Any]):

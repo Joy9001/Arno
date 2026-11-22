@@ -10,9 +10,15 @@ from pydantic_ai.messages import ModelResponse
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai_harness.spend import InMemorySpendStore, SpendEntry, UnpricedModelError
 
-from arno.agent.categorizer import estimate_batch_usd
-from arno.agent.spend import SPEND_DEDUP_RETAIN, SpendStoreError
-from arno.importers.categorize import _settle
+from arno.agent.spend import SPEND_DEDUP_RETAIN, SpendStoreError, shared_day_status
+from arno.importers.batch_accounting import (
+    BatchAccounting,
+    estimate_batch_usd,
+    finish_collection,
+    settle,
+    within_settlement_horizon,
+)
+from arno.importers.categorize import collect_batch
 from arno.ledger.audit import new_id
 
 KEY = "shared daily|day|*|2026-11-12"
@@ -55,15 +61,15 @@ async def test_a_collection_correction_is_posted_once_after_a_marker_gap(db):
     await store.add_many(
         [SpendEntry(key=KEY, usd=Decimal("0.10"), requests=2, ttl=None, token="estimate")]
     )
-    accounting = _accounting()
+    accounting = BatchAccounting.from_record(_accounting())
 
-    await _settle(db, run_id, accounting, store=store, actual_usd=Decimal("0.07"))
+    await settle(db, run_id, accounting, store=store, actual_usd=Decimal("0.07"))
     assert (await store.get_many([KEY]))[KEY].usd == Decimal("0.07")
 
     # The counter write committed but the applied marker did not. The same token must not
     # subtract the correction a second time.
-    accounting["settle_applied"] = False
-    await _settle(db, run_id, accounting, store=store, actual_usd=Decimal("0.07"))
+    accounting.settle_applied = False
+    await settle(db, run_id, accounting, store=store, actual_usd=Decimal("0.07"))
     assert (await store.get_many([KEY]))[KEY].usd == Decimal("0.07")
 
 
@@ -75,11 +81,56 @@ async def test_a_correction_outside_the_replay_horizon_pauses_and_keeps_the_esti
     )
 
     with pytest.raises(SpendStoreError):
-        await _settle(db, run_id, _accounting(old=True), store=store, actual_usd=Decimal("0.07"))
+        await settle(
+            db,
+            run_id,
+            BatchAccounting.from_record(_accounting(old=True)),
+            store=store,
+            actual_usd=Decimal("0.07"),
+        )
 
     assert (await store.get_many([KEY]))[KEY].usd == Decimal("0.10")
     saved = await db.fetchrow("SELECT accounting FROM categorize_runs WHERE id = $1", run_id)
     assert saved["accounting"]["phase"] == "paused_horizon"
+
+
+def test_legacy_accounting_dicts_parse_with_safe_defaults():
+    """A row saved before attempts, keys, or a provider existed is still one batch state."""
+    empty = BatchAccounting.from_record(None)
+    assert empty.to_record() == {}
+    assert empty.phase is None
+    assert empty.keys == []
+    assert empty.attempt is None
+    assert empty.estimate_at is None
+    assert not within_settlement_horizon(empty)
+
+    broken = BatchAccounting.from_record({"estimate_at": "not a timestamp"})
+    assert broken.estimate_at is None
+    assert not within_settlement_horizon(broken)
+
+    normalized = BatchAccounting.from_record({"provider": "Gemini", "estimate_usd": 0.1})
+    assert normalized.provider == "google"
+    assert normalized.estimate_usd == "0.1"
+
+
+async def test_a_legacy_batch_without_keys_settles_its_full_actual_to_the_shared_day(db):
+    run_id = await _run(db)
+    store = InMemorySpendStore()
+    status = await shared_day_status(store)
+    accounting = BatchAccounting.from_record(
+        {
+            "estimate_usd": "0.10",
+            "settle_token": "categorize-batch-settle:run",
+            "estimate_at": datetime.now(UTC).isoformat(),
+            "estimate_applied": True,
+        }
+    )
+    assert accounting.keys == []
+    assert accounting.estimate_token == ""
+
+    await settle(db, run_id, accounting, store=store, actual_usd=Decimal("0.15"))
+    assert (await store.get_many([status.key]))[status.key].usd == Decimal("0.05")
+    assert accounting.settle_applied
 
 
 def _unused(messages, info) -> ModelResponse:
@@ -104,18 +155,19 @@ def test_a_priced_batch_estimate_is_a_conservative_positive_amount(monkeypatch):
 
 async def test_collection_retries_only_settlement_from_saved_answers(db):
     from arno.agent.spend import StrictSpendStore
-    from arno.importers.categorize import _finish_collection, collect_batch
 
     run_id = await _run(db)
     row = await db.fetchrow_required("SELECT * FROM categorize_runs WHERE id=$1", run_id)
     store = InMemorySpendStore()
     await store.add_many([SpendEntry(key=KEY, usd=Decimal("0.10"), requests=1, token="estimate")])
-    accounting = {**_accounting(), "actual_usd": "0.07", "phase": "settlement_pending"}
+    accounting = BatchAccounting.from_record(
+        {**_accounting(), "actual_usd": "0.07", "phase": "settlement_pending"}
+    )
     answers = [{"key": "synthetic", "category": "Food"}]
     await db.execute(
         "UPDATE categorize_runs SET batch_answers=$1,accounting=$2 WHERE id=$3",
         answers,
-        accounting,
+        accounting.to_record(),
         run_id,
     )
 
@@ -123,7 +175,7 @@ async def test_collection_retries_only_settlement_from_saved_answers(db):
         async def add_many(self, entries):
             raise RuntimeError("transient store outage")
 
-    result = await _finish_collection(
+    result = await finish_collection(
         db,
         row,
         accounting,

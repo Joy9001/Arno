@@ -23,7 +23,7 @@ from pydantic_ai.capabilities import BatchModelRequests
 from pydantic_ai.exceptions import SuspendedResponseExpired, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.output import PendingModelResponse
-from pydantic_ai_harness.spend import SpendEntry, UnpricedModelError
+from pydantic_ai_harness.spend import UnpricedModelError
 
 from arno.agent.capabilities import drain_events
 from arno.agent.categorizer import (
@@ -31,29 +31,28 @@ from arno.agent.categorizer import (
     CategorizerDeps,
     build_categorizer_agent,
     build_labeling_agent,
-    ensure_no_pending_batch,
 )
-from arno.agent.cost_journal import CostAttempt, record_final
+from arno.agent.cost_journal import record_final
 from arno.agent.models import batch_model as configured_batch_model
 from arno.agent.models import primary_model
 from arno.agent.pricing import observe_cost
-from arno.agent.spend import (
-    SPEND_DEDUP_RETAIN,
-    SpendStoreError,
-    ceiling_name,
-    shared_day_status,
-    spend_store_scope,
-)
+from arno.agent.spend import SpendStoreError, ceiling_name, spend_store_scope
 from arno.db.conn import Connection, connect
 from arno.importers import rules as rules_mod
+from arno.importers.batch_accounting import (
+    BatchAccounting,
+    attempt_from_record,
+    ensure_no_pending_batch,
+    finish_collection,
+    normalize_provider,
+    poll_delay,
+    save_accounting,
+)
 from arno.jobs.runner import JobGaveUp, enqueue_job
 from arno.ledger.audit import new_id
 from arno.notifications import create_notification, send_push_for_kind
 
 logger = logging.getLogger("arno.importers.categorize")
-
-COLLECT_POLL_MINUTES = 2
-COLLECT_POLL_MAX_MINUTES = 30
 
 
 async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
@@ -238,143 +237,6 @@ async def run_categorize(
     return result
 
 
-def _poll_delay(polls: int) -> timedelta:
-    minutes = min(COLLECT_POLL_MAX_MINUTES, COLLECT_POLL_MINUTES * (2 ** max(0, polls)))
-    return timedelta(minutes=minutes)
-
-
-def _attempt_from(entry: dict[str, Any]) -> CostAttempt | None:
-    """The item's original journal identity, or `None` for a batch submitted before it existed."""
-    raw = entry.get("attempt")
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return CostAttempt(
-            attempt_id=str(raw["attempt_id"]),
-            trace_id=str(raw["trace_id"]),
-            span_id=str(raw["span_id"]),
-            role=str(raw["role"]),
-            provider=str(raw["provider"]),
-            model=str(raw["model"]),
-            billing_mode=str(raw["billing_mode"]),
-            workload=str(raw.get("workload") or "") or None,
-            session_id=str(raw.get("session_id") or "") or None,
-            started_at=datetime.fromisoformat(str(raw["started_at"])),
-        )
-    except KeyError, ValueError:
-        return None
-
-
-async def _save_accounting(conn: Connection, run_id: str, accounting: dict[str, Any]) -> None:
-    await conn.execute(
-        "UPDATE categorize_runs SET accounting = $1, updated_at = now() WHERE id = $2",
-        accounting,
-        run_id,
-    )
-
-
-def _within_settlement_horizon(accounting: dict[str, Any]) -> bool:
-    """Whether a stable token can still be replayed without risking a second charge."""
-    raw = accounting.get("estimate_at")
-    if not raw:
-        return False
-    try:
-        posted = datetime.fromisoformat(str(raw))
-    except ValueError:
-        return False
-    if posted.tzinfo is None:
-        posted = posted.replace(tzinfo=UTC)
-    return datetime.now(UTC) - posted <= SPEND_DEDUP_RETAIN
-
-
-async def _settle(
-    conn: Connection,
-    run_id: str,
-    accounting: dict[str, Any],
-    *,
-    store: Any,
-    actual_usd: Decimal,
-) -> None:
-    """Post `actual - estimate` once to the saved keys, using the stable settlement token."""
-    if accounting.get("settle_applied"):
-        return
-    if not _within_settlement_horizon(accounting):
-        accounting["phase"] = "paused_horizon"
-        await _save_accounting(conn, run_id, accounting)
-        raise SpendStoreError(
-            "The batch estimate is older than the spend deduplication horizon; "
-            "settlement paused rather than risking a second charge."
-        )
-    keys = [str(key) for key in accounting.get("keys") or [] if key]
-    if not keys:
-        # A batch submitted before accounting existed was never estimated, so its full actual is
-        # the honest settlement. It is still posted once through a stable token.
-        status = await shared_day_status(store)
-        keys = [status.key]
-    estimate = Decimal(str(accounting.get("estimate_usd") or "0"))
-    delta = actual_usd - estimate
-    token = str(accounting.get("settle_token") or f"categorize-batch-settle:{run_id}")
-    await store.add_many(
-        [SpendEntry(key=key, usd=delta, requests=0, ttl=None, token=token) for key in keys]
-    )
-    accounting["settle_applied"] = True
-    accounting["settle_applied_at"] = datetime.now(UTC).isoformat()
-    accounting["actual_usd"] = str(actual_usd)
-
-
-async def _finish_collection(
-    conn: Connection,
-    row: dict[str, Any],
-    accounting: dict[str, Any],
-    *,
-    answers: list[dict[str, Any]],
-    actual: Decimal,
-    store: Any,
-    polls: int,
-) -> dict[str, Any]:
-    """Settle saved results without requesting or resubmitting provider work."""
-    run_id = str(row["id"])
-    if accounting.get("provisional"):
-        accounting["phase"] = "collected_provisional"
-    else:
-        try:
-            await _settle(conn, run_id, accounting, store=store, actual_usd=actual)
-        except SpendStoreError as exc:
-            if accounting.get("phase") == "paused_horizon":
-                raise JobGaveUp(
-                    f"Batch settlement exceeded its safe recovery horizon: {exc}"
-                ) from exc
-            accounting["phase"] = "paused_store"
-            await _save_accounting(conn, run_id, accounting)
-            polls += 1
-            await enqueue_job(
-                conn,
-                key=f"collect_batch:{run_id}:settle:{polls}",
-                kind="collect_batch",
-                payload={"run_id": run_id, "import_id": str(row["import_id"]), "polls": polls},
-                run_at=datetime.now(UTC) + _poll_delay(polls - 1),
-            )
-            return {"status": "settlement_pending", "polls": polls}
-        accounting["phase"] = "settled"
-
-    async with conn.transaction():
-        await conn.execute(
-            """
-            UPDATE categorize_runs SET accounting=$1, finished_at=now(), updated_at=now()
-            WHERE id=$2
-            """,
-            accounting,
-            run_id,
-        )
-        await enqueue_job(
-            conn,
-            key=f"categorize_import:{row['import_id']}:batch:{run_id}",
-            kind="categorize_import",
-            payload={"import_id": str(row["import_id"]), "batch_id": run_id},
-        )
-    return {"status": "collected", "answers": len(answers), "run_id": run_id}
-
-
 async def collect_batch(
     conn: Connection,
     run_id: str,
@@ -393,15 +255,15 @@ async def collect_batch(
     if row is None:
         return {"status": "gone"}
     if row["batch_answers"] is not None:
-        accounting = dict(row["accounting"] or {})
-        if accounting.get("phase") in {"settlement_pending", "paused_store"}:
+        accounting = BatchAccounting.from_record(dict(row["accounting"] or {}))
+        if accounting.phase in {"settlement_pending", "paused_store"}:
             async with spend_store_scope(spend_store) as store:
-                return await _finish_collection(
+                return await finish_collection(
                     conn,
                     row,
                     accounting,
                     answers=list(row["batch_answers"]),
-                    actual=Decimal(str(accounting["actual_usd"])),
+                    actual=Decimal(accounting.actual_usd or "0"),
                     store=store,
                     polls=polls,
                 )
@@ -423,16 +285,14 @@ async def collect_batch(
         )
         return {"status": "no_batch_model"}
 
-    accounting = dict(row["accounting"] or {})
-    if not accounting.get("estimate_at"):
-        accounting["estimate_at"] = row["started_at"].isoformat()
-    provider = str(accounting.get("provider") or "")
-    if not provider:
-        provider = str(getattr(getattr(batch, "provider", None), "name", "") or "")
-    if provider == "gemini":
-        provider = "google"
-    billing_mode = str(accounting.get("billing_mode") or "metered")
-    model_name = str(accounting.get("model") or getattr(batch, "model_name", "") or "")
+    accounting = BatchAccounting.from_record(dict(row["accounting"] or {}))
+    if not accounting.estimate_at:
+        accounting.estimate_at = row["started_at"]
+    provider = normalize_provider(
+        str(accounting.provider or getattr(getattr(batch, "provider", None), "name", "") or "")
+    )
+    billing_mode = accounting.billing_mode
+    model_name = str(accounting.model or getattr(batch, "model_name", "") or "")
 
     agent = build_labeling_agent(batch)
     answers: list[dict[str, Any]] = []
@@ -448,15 +308,15 @@ async def collect_batch(
         try:
             for entry in runs:
                 history = ModelMessagesTypeAdapter.validate_python(entry["history"])
-                attempt = _attempt_from(entry)
+                attempt = attempt_from_record(entry)
                 try:
                     result = await agent.run(
                         message_history=history,
                         capabilities=[batching],
                     )
                 except SuspendedResponseExpired as exc:
-                    accounting["phase"] = "paused_ambiguous"
-                    await _save_accounting(conn, run_id, accounting)
+                    accounting.phase = "paused_ambiguous"
+                    await save_accounting(conn, run_id, accounting)
                     raise JobGaveUp(
                         "The provider no longer holds this batch; it was not resubmitted."
                     ) from exc
@@ -484,9 +344,9 @@ async def collect_batch(
                     if item.get("key") in keys:
                         answers.append(item)
         except SpendStoreError as exc:
-            if accounting.get("phase") != "paused_horizon":
-                accounting["phase"] = "paused_store"
-                await _save_accounting(conn, run_id, accounting)
+            if accounting.phase != "paused_horizon":
+                accounting.phase = "paused_store"
+                await save_accounting(conn, run_id, accounting)
             raise JobGaveUp(f"Batch accounting stopped: {exc}") from exc
 
         if pending:
@@ -496,23 +356,23 @@ async def collect_batch(
                 key=f"collect_batch:{run_id}:{polls}",
                 kind="collect_batch",
                 payload={"run_id": run_id, "import_id": str(row["import_id"]), "polls": polls},
-                run_at=datetime.now(UTC) + _poll_delay(polls - 1),
+                run_at=datetime.now(UTC) + poll_delay(polls - 1),
             )
             return {"status": "pending", "polls": polls}
 
         # Save provider results before touching the ledger. A collection retry can then settle
         # with the original token even after a provider job expires or the model config changes.
-        accounting["provisional"] = provisional
-        accounting["actual_usd"] = str(actual)
-        accounting["phase"] = "settlement_pending"
+        accounting.provisional = provisional
+        accounting.actual_usd = str(actual)
+        accounting.phase = "settlement_pending"
         await conn.execute(
             "UPDATE categorize_runs SET batch_answers=$1, accounting=$2, updated_at=now() "
             "WHERE id=$3",
             answers,
-            accounting,
+            accounting.to_record(),
             run_id,
         )
-        return await _finish_collection(
+        return await finish_collection(
             conn,
             row,
             accounting,

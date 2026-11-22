@@ -230,6 +230,85 @@ async def _label(
     return True
 
 
+async def apply_categorization_answers(
+    conn: Connection,
+    *,
+    import_id: str,
+    answers: dict[str, tuple[str | None, str | None]],
+    categories: dict[str, tuple[str, str]],
+    distrust: set[str] | None = None,
+) -> dict[str, Any]:
+    """One write group: label trusted answers, write llm rules, hint on the rest.
+
+    The import's row lock comes first, as it does in undo, and the rows are read under it: a save
+    that waited for an undo finds nothing left to label. A user rule that wins the upsert supplies
+    the category actually used, so the movement never keeps the answer it overrode.
+    """
+    # Imported here: categories imports this module for rule matching at import time.
+    from arno.ledger.categories import upsert_rule_in_group
+
+    distrusted = distrust or set()
+    rules_written = 0
+    labeled = 0
+    uncategorized = 0
+    async with write_group(conn, actor="agent") as group:
+        await lock_import(conn, import_id)
+        pending = await pending_rows(conn, import_id)
+        for key, (category, reason) in answers.items():
+            movement_ids = pending.get(key)
+            if not movement_ids:
+                continue
+            chosen = categories.get(normalize_pattern(category or ""))
+            category_id, category_name = chosen if chosen else (None, None)
+            trusted = key not in distrusted and category_id is not None and category_name != "Other"
+            if trusted:
+                rule = await upsert_rule_in_group(
+                    conn,
+                    group,
+                    pattern=key,
+                    category_id=str(category_id),
+                    source="llm",
+                )
+                for movement_id in movement_ids:
+                    if await _label(
+                        conn,
+                        group,
+                        movement_id,
+                        str(rule["category_id"]),
+                        str(rule["id"]),
+                    ):
+                        labeled += 1
+                rules_written += 1
+                continue
+            hint = {
+                "category_id": str(category_id) if category_id else None,
+                "reason": (reason or "").strip() or None,
+            }
+            for movement_id in movement_ids:
+                before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
+                if before is None:
+                    continue
+                await conn.execute(
+                    "UPDATE movements SET category_hint = $1 WHERE id = $2",
+                    hint,
+                    movement_id,
+                )
+                after = await conn.fetchrow_required(
+                    "SELECT * FROM movements WHERE id = $1", movement_id
+                )
+                if dict(after) != dict(before):
+                    group.record_updated("movements", movement_id, dict(before), dict(after))
+                uncategorized += 1
+        if group.entries:
+            await record_categorize_group(conn, import_id=import_id, group_id=group.group_id)
+    return {
+        "undo_id": group.group_id,
+        "labeled": labeled,
+        "uncategorized": uncategorized,
+        "rules": rules_written,
+    }
+
+
 async def _refund_source(
     conn: Connection, *, row: dict[str, Any], key: str, amount: int
 ) -> dict[str, Any] | None:
