@@ -119,8 +119,7 @@ function findReceipt(value: unknown, depth = 0): ProjectionPayload | null {
 
 function receiptFromPart(part: Part): ProjectionPayload | null {
   if (isRecord(part.data) && part.data.card === "projection") {
-    const receipt = parseVerdictReceipt(part.data);
-    if (receipt) return receipt;
+    return parseVerdictReceipt(part.data);
   }
   const nested = part.data === undefined ? null : findReceipt(part.data);
   if (nested) return nested;
@@ -206,12 +205,10 @@ function toTurns(messages: readonly Message[], running: boolean): Turn[] {
       if (part.type === "text" && part.text?.trim()) {
         current.answer = current.answer ? `${current.answer}\n${part.text}` : part.text;
       }
-      const strong =
-        isRecord(part.data) && part.data.card === "projection"
-          ? parseVerdictReceipt(part.data)
-          : null;
+      const isProjectionCard = isRecord(part.data) && part.data.card === "projection";
+      const strong = isProjectionCard ? parseVerdictReceipt(part.data) : null;
       if (strong) current.receipt = strong;
-      else if (!current.receipt) {
+      else if (!isProjectionCard && !current.receipt) {
         const receipt = receiptFromPart(part);
         if (receipt) current.receipt = receipt;
       }

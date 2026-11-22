@@ -44,7 +44,12 @@ async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] 
     # The account-then-import lock order commit and undo share: without the row lock, two repairs
     # or a repair racing a commit can plan against a bank balance the other has already moved.
     row = await lock_account_and_import(conn, item["id"])
-    if row is None:
+    if (
+        row is None
+        or row["status"] != "committed"
+        or row["undone_at"] is not None
+        or (row["review"] or {}).get("anchors_repaired") is not None
+    ):
         return None
     account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", row["account_id"])
     check = row["check_result"] or {}
@@ -62,6 +67,7 @@ async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] 
         period_start=period_start,
         period_end=period_end,
         closing=row["closing_balance_paise"],
+        adjustment_confirmed=True,
     )
     review = {
         "anchors_repaired": True,

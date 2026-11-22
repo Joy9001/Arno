@@ -10,6 +10,7 @@ import { lowAmount, projectionReadiness } from "../projectionData";
 import { SafeToSpend } from "../SafeToSpend";
 import { PriceChange } from "../PriceChange";
 import { WorkbookLink, type ProjectionPayload } from "../projection";
+import { parseProjectionReceipt } from "../projectionReceipt";
 import type { CashQuality, Movement, NotificationItem } from "../types";
 import { useApi } from "../useApi";
 import { FirstRun, FirstRunStarters } from "./FirstRun";
@@ -67,7 +68,16 @@ function NoticedCards({ starters }: { starters: ReactNode }) {
       </>
     ) : null;
   }
-  const data = home.data;
+  const parsedProjection = parseProjectionReceipt(home.data.projection);
+  if (!parsedProjection) {
+    return (
+      <>
+        {starters}
+        <p className="ask-noticed-error">Could not read the projection payload.</p>
+      </>
+    );
+  }
+  const data: HomePayload = { ...home.data, projection: parsedProjection };
   // Until cash, the forecast, and recaps all have something to show, the home says what each needs.
   const firstRun = firstRunSteps(data).some((step) => !step.ready);
 

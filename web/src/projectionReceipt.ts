@@ -124,7 +124,7 @@ export const projectionSchema = z
     }),
     runs: number.optional(),
     sources: z.array(z.object({
-      kind: z.string(), id: z.string(), name: z.string(), detail: optionalText,
+      kind: z.string(), id: z.string(), name: displayString, detail: displayOptional,
       amount_paise: number.optional(),
     }).loose()).optional(),
     source_ids: z.record(z.string(), z.array(z.string())).optional(),
@@ -171,6 +171,13 @@ export function parseProjectionReceipt(value: unknown): ProjectionReceipt | null
 
 /** Flow shows a receipt only once the engine has reached an affordability verdict. */
 export function parseVerdictReceipt(value: unknown): ProjectionReceipt | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as Record<string, unknown>).verdict !== "string"
+  ) {
+    return null;
+  }
   const receipt = parseProjectionReceipt(value);
   return receipt?.verdict ? receipt : null;
 }

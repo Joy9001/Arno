@@ -21,6 +21,7 @@ from arno.agent.deps import AgentDeps
 from arno.agent.turns import PreparationBusy, TurnBusy
 from arno.agent.wake import WakePolicy, may_retry, waiting_reports
 from arno.db.conn import connect
+from arno.tools.mark import flag_outside_text
 
 logger = logging.getLogger("arno.chat")
 
@@ -64,9 +65,10 @@ async def start_server_turn(
     run_id: str | None = None
     try:
         history, outside = await history_mod.ensure_history(conn, thread)
-        deps.flagged = (
-            deps.flagged or flagged or thread.get("outside_text_at") is not None or outside
-        )
+        should_flag = deps.flagged or flagged
+        if should_flag and thread.get("outside_text_at") is None and not outside:
+            await flag_outside_text(conn, thread_id)
+        deps.flagged = should_flag or thread.get("outside_text_at") is not None or outside
         run_id = f"run_{uuid.uuid4().hex}"
         await history_mod.mark_run_started(conn, thread_id, run_id)
         reply_id = f"msg_{uuid.uuid4().hex}"

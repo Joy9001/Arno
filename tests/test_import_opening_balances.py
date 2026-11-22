@@ -631,3 +631,41 @@ async def test_plan_uses_one_closing_and_period_end_for_review_and_commit(ledger
     assert plan.period_end == date(2026, 1, 15)
     assert plan.closing_adjustment_paise == 10_000
     assert plan.stated_balance is None
+
+
+async def test_repair_books_nonzero_closing_difference_and_skips_undone(ledger):
+    from arno.importers.repair import _repair_one, repair_openings
+    from arno.ledger.movements import record_expense
+
+    account = await _stated_bank(ledger)
+    import_id = await _legacy_import(
+        ledger,
+        account,
+        start=BANK_START,
+        end=BANK_END,
+        opening=BANK_OPENING,
+        rows=BANK_ROWS,
+        closing=BANK_CLOSING,
+    )
+    # A manual expense dated inside the statement period creates a non-zero closing difference.
+    await record_expense(
+        ledger,
+        account_id=account["id"],
+        amount_paise=50_000,
+        description="Cash ATM fee",
+        date=date(2026, 1, 20),
+    )
+
+    preview = await repair_openings(ledger, dry_run=True)
+    assert len(preview) == 1
+    assert preview[0]["replaced_adjustment_paise"] == 50_000
+
+    applied = await repair_openings(ledger, dry_run=False)
+    assert applied == preview
+    assert await _balance_on(ledger, account, BANK_END) == BANK_CLOSING
+
+    # Re-calling _repair_one on an already-repaired or undone import is a no-op under the lock.
+    assert await _repair_one(ledger, {"id": import_id}) is None
+    await undo_import(ledger, import_id)
+    assert await _repair_one(ledger, {"id": import_id}) is None
+    assert await check_ledger(ledger) == []

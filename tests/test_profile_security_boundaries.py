@@ -480,3 +480,39 @@ async def test_run_code_crash_after_run_query_still_taints_conversation(demo_led
         await agent.run("inspect", deps=deps, message_history=[])
     assert deps.flagged
     await _assert_flagged(demo_ledger, thread)
+
+
+async def test_woken_flagged_server_turn_persists_outside_text_at(ledger):
+    from types import SimpleNamespace
+
+    from arno.agent.builder import build_agent
+    from arno.api.wake import start_server_turn
+
+    thread = await _thread(ledger, "cnv_wake_persists_taint")
+    row = await ledger.fetchrow_required("SELECT * FROM conversations WHERE id = $1", thread)
+
+    class _Guard:
+        async def acquire(self) -> None:
+            pass
+
+        def release(self) -> None:
+            pass
+
+    class _Turns:
+        def get(self, thread_id: str) -> None:
+            del thread_id
+            return None
+
+        def prepare(self, thread_id: str) -> _Guard:
+            del thread_id
+            return _Guard()
+
+        async def start(self, **kwargs: Any) -> None:
+            del kwargs
+
+    app = SimpleNamespace(state=SimpleNamespace(turns=_Turns(), agent=build_agent()))
+    deps = AgentDeps(conversation_id=thread)
+    await start_server_turn(app, ledger, thread=dict(row), deps=deps, flagged=True)
+
+    assert deps.flagged
+    await _assert_flagged(ledger, thread)

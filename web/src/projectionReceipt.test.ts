@@ -125,11 +125,17 @@ describe("parseProjectionReceipt", () => {
         id: "g1", name: "<outside>Holiday</outside> fund", deadline: null,
         completes_on: null, slips_days: null, reached: false,
       }],
+      sources: [{
+        kind: "schedule", id: "sch_1", name: "<outside>Netflix</outside>",
+        detail: "Monthly <outside>auto-debit</outside>",
+      }],
     });
     expect(receipt?.verdict_reason).toBe("Plan holds because income arrived.");
     expect(receipt?.tradeoffs?.[0].kind).toBe("cut_spend");
     expect(receipt?.tradeoffs?.[0].detail).toBe("Trim Food by 10%");
     expect(receipt?.goals?.[0].name).toBe("Holiday fund");
+    expect(receipt?.sources?.[0].name).toBe("Netflix");
+    expect(receipt?.sources?.[0].detail).toBe("Monthly auto-debit");
   });
 });
 
