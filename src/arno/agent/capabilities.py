@@ -64,7 +64,7 @@ from arno.agent.spend import (
 )
 from arno.db.conn import connect
 from arno.ledger.common import today as ledger_today
-from arno.tools.mark import flag_outside_text, has_mark
+from arno.tools.mark import contains_outside, flag_outside_text
 
 logger = logging.getLogger("arno.agent")
 
@@ -252,34 +252,81 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
         }
 
 
-def _contains_outside(value: Any) -> bool:
-    if has_mark(value):
-        return True
+def _has_outside(value: Any) -> bool:
+    """Adapt PydanticAI return objects onto `mark.contains_outside`."""
     if isinstance(value, ToolReturn):
         return any(
-            _contains_outside(item) for item in (value.return_value, value.content, value.metadata)
+            _has_outside(item) for item in (value.return_value, value.content, value.metadata)
         )
     if isinstance(value, ToolReturnPart):
-        return _contains_outside(value.content)
+        return _has_outside(value.content) or _has_outside(value.metadata)
     if isinstance(value, dict):
-        return any(_contains_outside(key) or _contains_outside(item) for key, item in value.items())
+        return any(
+            (key == "outside_text" and item is True) or _has_outside(key) or _has_outside(item)
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
-        return any(_contains_outside(item) for item in value)
-    return False
+        return any(_has_outside(item) for item in value)
+    return contains_outside(value)
 
 
-class OutsideToolReturns(AbstractCapability[AgentDeps]):
-    """Persist taint from marked tool results, including Code Mode's nested returns."""
+async def _flag_conversation(ctx: RunContext[AgentDeps]) -> None:
+    deps = ctx.deps
+    conversation_id = getattr(deps, "conversation_id", None)
+    if not conversation_id:
+        return
+    if not deps.flagged:
+        async with connect() as conn:
+            await flag_outside_text(conn, conversation_id)
+        deps.flagged = True
+
+
+class OutsideTextTaint(AbstractCapability[AgentDeps]):
+    """Persist conversation taint across tool returns, retry errors, and parser task reports."""
 
     @override
     async def after_tool_execute(
         self, ctx: RunContext[AgentDeps], *, call: Any, tool_def: Any, args: Any, result: Any
     ) -> Any:
-        if ctx.deps and ctx.deps.conversation_id and _contains_outside(result):
-            async with connect() as conn:
-                await flag_outside_text(conn, ctx.deps.conversation_id)
-            ctx.deps.flagged = True
+        if ctx.deps and not ctx.deps.flagged and _has_outside(result):
+            await _flag_conversation(ctx)
         return result
+
+    @override
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[AgentDeps],
+        *,
+        call: Any,
+        tool_def: Any,
+        args: Any,
+        handler: Any,
+    ) -> Any:
+        from pydantic_ai.exceptions import ModelRetry, ToolRetryError
+
+        try:
+            return await handler(args)
+        except ModelRetry as exc:
+            if ctx.deps and not ctx.deps.flagged and _has_outside(exc.message):
+                await _flag_conversation(ctx)
+            raise
+        except ToolRetryError as exc:
+            if ctx.deps and not ctx.deps.flagged and _has_outside(exc.tool_retry):
+                await _flag_conversation(ctx)
+            raise
+
+    @override
+    async def before_model_request(self, ctx: RunContext[AgentDeps], request_context: Any) -> Any:
+        deps = ctx.deps
+        if deps is None or not getattr(deps, "conversation_id", None) or deps.flagged:
+            return request_context
+        for message in request_context.messages:
+            if not isinstance(message, ModelRequest):
+                continue
+            if any(is_task_report(part) for part in message.parts):
+                await _flag_conversation(ctx)
+                break
+        return request_context
 
 
 # What a script can reach. Monty resolves only part of the standard library, so a name it
@@ -359,49 +406,6 @@ class CodeModeHints(AbstractCapability[AgentDeps]):
             raise ToolRetryError(
                 replace(retry, content=f"{message.rstrip()}\n\n{sandbox_help()}")
             ) from exc
-
-
-def _task_marker(part: Any) -> str | None:
-    """A stable identity for a delivered parser report or question."""
-    if not is_task_report(part):
-        return None
-    content = part.content
-    if isinstance(content, list):
-        for item in content:
-            metadata = getattr(item, "metadata", None)
-            if isinstance(metadata, dict):
-                task_id = metadata.get("task_id")
-                if task_id:
-                    detail = metadata.get("generation") or metadata.get("question_id") or ""
-                    return f"{task_id}:{detail}"
-    return f"task:{repr(content)[:80]}"
-
-
-class TaskTextIsOutside(AbstractCapability[AgentDeps]):
-    """A parser report or question is outside text: it was written by a model that read a file."""
-
-    def __init__(self) -> None:
-        self._flagged: set[str] = set()
-
-    @override
-    async def before_model_request(self, ctx: RunContext[AgentDeps], request_context: Any) -> Any:
-        deps = ctx.deps
-        conversation_id = getattr(deps, "conversation_id", None)
-        if not conversation_id:
-            return request_context
-        markers: set[str] = set()
-        for message in request_context.messages:
-            if not isinstance(message, ModelRequest):
-                continue
-            for part in message.parts:
-                marker = _task_marker(part)
-                if marker is not None and marker not in self._flagged:
-                    markers.add(marker)
-        if markers:
-            async with connect() as conn:
-                await flag_outside_text(conn, conversation_id)
-            self._flagged |= markers
-        return request_context
 
 
 async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
@@ -525,9 +529,8 @@ def build_capabilities(
             target_tokens=target,
         ),
         ToolErrorsToModel(),
-        OutsideToolReturns(),
+        OutsideTextTaint(),
         CodeModeHints(),
-        TaskTextIsOutside(),
     ]
     if subagents is not None:
         capabilities.append(subagents)
@@ -570,8 +573,8 @@ __all__ = [
     "STALL_SECONDS",
     "SUMMARY_PROMPT",
     "CodeModeHints",
+    "OutsideTextTaint",
     "RootSpanIO",
-    "TaskTextIsOutside",
     "ToolErrorsToModel",
     "WRITE_TOOLS",
     "build_capabilities",

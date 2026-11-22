@@ -193,9 +193,9 @@ _Figure: Statement text, parser reports, and payee notes cross an explicit untru
 lasting or wide writes require confirmation once a thread is tainted
 ([note](diagrams/sd-trust-boundaries.md))._
 
-- **Taint propagation:** Any tool return carrying statement text or payee notes (`mark()`), as well
-  as every `parser` subagent report or question (`TaskTextIsOutside`), flags the conversation as
-  tainted.
+- **Taint propagation:** Any tool return or retry error carrying statement text or payee notes
+  (`mark()`), as well as every `parser` subagent report or question (`OutsideTextTaint`), flags the
+  conversation as tainted.
 - **Write gating:** In a tainted conversation, `update_setup`, `preference`, and `correct_movement`
   with `scope="future"` or `scope="all"` require an explicit confirm-card approval before writing.
   A turn's confirm cards are answered all-or-nothing.

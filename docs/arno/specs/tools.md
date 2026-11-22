@@ -754,7 +754,7 @@ following table describes each tool:
   attachments directly into `AgentDeps.statement_attachments` (`src/arno/agent/builder.py`). The
   main agent delegates with plain prose—`delegate_task("parser", "Import the statement files from
   this turn.", background=True)`—and ends its turn.
-- **Taint on every report or question:** `TaskTextIsOutside` flags the conversation on every
+- **Taint on every report or question:** `OutsideTextTaint` flags the conversation on every
   delivered parser report or question, regardless of whether raw statement text was quoted
   ([data-and-engine.md](data-and-engine.md#outside-text-and-taint-tracking)).
 - **Backgrounding, budgets, and passwords:** `TaskControl(auto_background_after=15.0)` moves any

@@ -867,6 +867,9 @@ async def test_card_payoff_adapter_errors_present_and_code_mode(demo_ledger):
     assert pos_res["months"] == res["months"]
 
     # An error echoing an outside_text person account marks the name and flags the conversation.
+    from pydantic_ai import Agent
+
+    from arno.agent.capabilities import OutsideTextTaint
     from arno.ledger.payees import create_payee
 
     thread_id, message_id = await _thread(demo_ledger, "cnv_card_outside", "msg_card_outside")
@@ -877,12 +880,39 @@ async def test_card_payoff_adapter_errors_present_and_code_mode(demo_ledger):
         outside_text=True,
         actor="system",
     )
-    flagged_ctx = cast(
-        RunContext[AgentDeps],
-        SimpleNamespace(deps=AgentDeps(conversation_id=thread_id, message_id=message_id)),
+    seen_retry: list[str] = []
+
+    def retry_script(messages, info):
+        del info
+        retries = [
+            str(part.content)
+            for msg in messages
+            for part in getattr(msg, "parts", ())
+            if getattr(part, "part_kind", None) in {"retry-prompt", "tool-return"}
+        ]
+        if not retries:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "card_payoff",
+                        {"card": "Outside person payee", "monthly_rate_percent": 3.5},
+                    )
+                ]
+            )
+        seen_retry.extend(retries)
+        return ModelResponse(parts=[TextPart("Not a credit card.")])
+
+    retry_deps = AgentDeps(conversation_id=thread_id, message_id=message_id)
+    retry_agent = Agent(
+        FunctionModel(retry_script),
+        deps_type=AgentDeps,
+        retries=2,
+        tools=[card_payoff_tool],
+        capabilities=[OutsideTextTaint()],
     )
-    with pytest.raises(ModelRetry, match="<outside>Outside person payee</outside>"):
-        await card_payoff_tool(flagged_ctx, card="Outside person payee", monthly_rate_percent=3.5)
+    await retry_agent.run("Card payoff", deps=retry_deps)
+    assert any("<outside>Outside person payee</outside>" in msg for msg in seen_retry)
+    assert retry_deps.flagged
     assert await demo_ledger.fetchval(
         "SELECT outside_text_at IS NOT NULL FROM conversations WHERE id = $1", thread_id
     )

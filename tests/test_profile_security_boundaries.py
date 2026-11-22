@@ -9,7 +9,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai_harness.code_mode import CodeMode
 
-from arno.agent.capabilities import OutsideToolReturns
+from arno.agent.capabilities import OutsideTextTaint
 from arno.agent.deps import AgentDeps
 from arno.agent.parser import ParseReport, _redact_cells, _redact_words, build_parser_agent
 from arno.agent.toolset import correct_movement, preference, update_setup
@@ -51,7 +51,7 @@ def _write_agent(tool: Any, tool_name: str, arguments: dict[str, Any]) -> Agent[
         deps_type=AgentDeps,
         output_type=[str, DeferredToolRequests],
         tools=[read_page, tool],
-        capabilities=[OutsideToolReturns()],
+        capabilities=[OutsideTextTaint()],
     )
 
 
@@ -210,7 +210,7 @@ async def test_the_capabilities_boundary_is_what_taints_a_synthetic_tool_return(
     assert await ledger.fetchval(
         "SELECT outside_text_at IS NULL FROM conversations WHERE id = $1", thread
     )
-    await run("cnv_synthetic_with_boundary", [OutsideToolReturns()])
+    await run("cnv_synthetic_with_boundary", [OutsideTextTaint()])
     await _assert_flagged(ledger, "cnv_synthetic_with_boundary")
 
 
@@ -294,7 +294,7 @@ async def test_marked_nested_tool_return_requires_memory_approval(ledger):
             FunctionToolset(tools=[outside]).with_metadata(code_mode=True),
             FunctionToolset(tools=[preference]),
         ],
-        capabilities=[CodeMode(tools={"code_mode": True}), OutsideToolReturns()],
+        capabilities=[CodeMode(tools={"code_mode": True}), OutsideTextTaint()],
     )
     result = await agent.run("read", deps=AgentDeps(conversation_id=thread))
     assert isinstance(result.output, DeferredToolRequests)
@@ -330,7 +330,7 @@ async def test_unmarked_tool_return_does_not_taint_conversation(ledger):
         FunctionModel(model),
         deps_type=AgentDeps,
         tools=[safe_tool],
-        capabilities=[OutsideToolReturns()],
+        capabilities=[OutsideTextTaint()],
     )
     deps = AgentDeps(conversation_id=thread)
     await agent.run("read", deps=deps)
@@ -389,3 +389,94 @@ def test_positioned_words_and_split_cells_redact_secrets_without_mutating_input(
         assert "4111 1111 1111 1111" not in str(result)
     assert [word["text"] for word in words] == ["Card", "4111", "1111", "1111", "1111"]
     assert cells[0][1:] == ["4111", "1111", "1111", "1111"]
+
+
+async def test_mark_module_detects_flags_and_clears_without_truncating(ledger):
+    from arno.ledger.payees import create_payee
+    from arno.tools.mark import (
+        clear_confirmed_marks,
+        contains_outside,
+        flag_outside_text,
+        is_conversation_flagged,
+        mark,
+        strip_marks,
+    )
+
+    assert contains_outside({"outside_text": True})
+    assert not contains_outside({"outside_text": False, "name": "Ordinary"})
+    assert contains_outside([{"nested": (mark("Statement memo"),)}])
+    long_name = "A" * 240
+    assert strip_marks(f"<outside>{long_name}</outside>") == long_name
+
+    thread = await _thread(ledger, "cnv_mark_interface")
+    assert not await is_conversation_flagged(ledger, thread)
+    await flag_outside_text(ledger, thread)
+    assert await is_conversation_flagged(ledger, thread)
+
+    payee = await create_payee(
+        ledger, display_name="Imported Cafe", kind="merchant", outside_text=True, actor="system"
+    )
+    await clear_confirmed_marks(ledger, ["<outside>Imported Cafe</outside>"])
+    assert not await ledger.fetchval("SELECT outside_text FROM payees WHERE id = $1", payee["id"])
+
+
+async def test_any_tool_retry_with_outside_text_taints_conversation(ledger):
+    from pydantic_ai.exceptions import ModelRetry
+
+    thread = await _thread(ledger, "cnv_global_retry_taint")
+
+    def failing_tool() -> str:
+        raise ModelRetry(f"Did you mean {OUTSIDE_PAGE}?")
+
+    def model(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del info
+        if "failing_tool" not in _answered(messages):
+            return ModelResponse(parts=[ToolCallPart("failing_tool", {})])
+        return ModelResponse(parts=[TextPart("Done.")])
+
+    deps = AgentDeps(conversation_id=thread)
+    agent = Agent(
+        FunctionModel(model),
+        deps_type=AgentDeps,
+        retries=2,
+        tools=[failing_tool],
+        capabilities=[OutsideTextTaint()],
+    )
+    await agent.run("check", deps=deps)
+    assert deps.flagged
+    await _assert_flagged(ledger, thread)
+
+
+async def test_run_code_crash_after_run_query_still_taints_conversation(demo_ledger):
+    from arno.agent.builder import build_agent
+
+    thread = await _thread(demo_ledger, "cnv_run_code_crash_taint")
+    called = {"n": 0}
+
+    def model(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        called["n"] += 1
+        if called["n"] == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "run_code",
+                        {
+                            "code": (
+                                "res = await run_query(\n"
+                                "    sql='SELECT description FROM movements LIMIT 1'\n"
+                                ")\n"
+                                "raise ValueError(str(res['rows']))"
+                            )
+                        },
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("Script failed.")])
+
+    deps = AgentDeps(conversation_id=thread)
+    agent = build_agent()
+    with agent.override(model=FunctionModel(model)):
+        await agent.run("inspect", deps=deps, message_history=[])
+    assert deps.flagged
+    await _assert_flagged(demo_ledger, thread)

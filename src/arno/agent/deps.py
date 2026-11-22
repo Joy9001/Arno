@@ -38,8 +38,6 @@ class AgentDeps:
     may_retry: bool = False
     # Opened statement documents for the parser subagent, keyed by import id. Lives for one run.
     parse_docs: dict[str, Doc] = field(default_factory=dict)
-    # Charts and cards a tool produced inside this turn, for the post-run extractor.
-    cards: list[dict[str, object]] = field(default_factory=list)
     # Bounded result snapshots for this turn. IDs are never reused across turns.
     presentation: ResultRegistry = field(default_factory=ResultRegistry)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.

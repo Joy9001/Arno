@@ -30,6 +30,7 @@ from arno.notifications import (
     subscribe,
     unsubscribe,
 )
+from arno.tools.mark import flag_outside_text
 
 router = APIRouter(
     prefix="/api",
@@ -114,10 +115,7 @@ async def post_notification_chat(notification_id: str, conn: Database) -> dict[s
         title=f"Inbox: {notification['title']}"[:80],
     )
     if outside:
-        await conn.execute(
-            "UPDATE conversations SET outside_text_at = now(), updated_at = now() WHERE id = $1",
-            thread["id"],
-        )
+        await flag_outside_text(conn, thread["id"])
     client_id = await new_id(conn, "msg")
     await history_mod.record_user_message(
         conn,

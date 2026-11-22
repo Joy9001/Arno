@@ -1109,11 +1109,14 @@ async def test_agent_project_turns_validation_errors_into_model_retry(demo_ledge
                     seen_retry.append(str(part.content))
         return ModelResponse(parts=[TextPart("Which schedule did you mean?")])
 
+    from arno.agent.capabilities import OutsideTextTaint
+
     agent = Agent(
         FunctionModel(script),
         deps_type=AgentDeps,
         retries=2,
         toolsets=[FunctionToolset(tools=[agent_tools.project])],
+        capabilities=[OutsideTextTaint()],
     )
     result = await agent.run("Pause my Gym schedule", deps=AgentDeps(conversation_id="cnv_retry"))
     assert result.output == "Which schedule did you mean?"

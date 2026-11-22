@@ -27,7 +27,7 @@ from arno.agent.presentation import (
     build_answer,
 )
 from arno.agent.write_models import Movement, MovementChanges, SetupData
-from arno.db.conn import Connection, connect, quote_ident
+from arno.db.conn import Connection, connect
 from arno.engine.money import MAX_PAISE, DayCount, Offer, money
 from arno.engine.money import Prepay as PrepayPayload
 from arno.engine.money import amortize as amortize_fn
@@ -40,7 +40,12 @@ from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
 from arno.tools import recaps as recaps_tools
 from arno.tools import write as write_tools
-from arno.tools.mark import clear_mark, flag_outside_text, has_mark
+from arno.tools.mark import (
+    clear_confirmed_marks,
+    contains_outside,
+    flag_outside_text,
+    is_conversation_flagged,
+)
 
 logger = logging.getLogger("arno.agent.toolset")
 
@@ -256,9 +261,11 @@ async def _finish_read(
     kind: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> ToolReturn:
-    if payload.get("outside_text"):
+    # Flag before returning to a `run_code` script so a script crash cannot exfiltrate raw SQL rows.
+    if not ctx.deps.flagged and contains_outside(payload):
         async with connect() as conn:
             await flag_outside_text(conn, ctx.deps.conversation_id)
+        ctx.deps.flagged = True
     card = payload.pop("_card", None)
     cards: list[dict[str, Any]] = []
     if kind is not None:
@@ -478,8 +485,6 @@ async def project(
                 changes=raw_changes,
             )
         except ValueError as exc:
-            if has_mark(str(exc)):
-                await flag_outside_text(conn, ctx.deps.conversation_id)
             raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
     # The card echoes its own arguments so it can download a workbook of this same request.
@@ -635,8 +640,6 @@ async def card_payoff(
                     start_date=start,
                 )
             except (money_tools.ToolInputError, ValueError) as exc:
-                if has_mark(str(exc)):
-                    await flag_outside_text(conn, ctx.deps.conversation_id)
                 raise ModelRetry(str(exc)) from exc
     else:
         try:
@@ -829,11 +832,10 @@ async def _conversation_flagged(ctx: RunContext[AgentDeps]) -> bool:
     if ctx.deps.flagged:
         return True
     async with connect() as conn:
-        row = await conn.fetchrow(
-            "SELECT outside_text_at FROM conversations WHERE id = $1",
-            ctx.deps.conversation_id,
-        )
-    return bool(row and row["outside_text_at"] is not None)
+        flagged = await is_conversation_flagged(conn, ctx.deps.conversation_id)
+    if flagged:
+        ctx.deps.flagged = True
+    return flagged
 
 
 async def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
@@ -884,24 +886,6 @@ async def _call_write(
 def _write_return(payload: dict[str, Any]) -> ToolReturn:
     card = payload.pop("card", None)
     return ToolReturn(return_value=payload, metadata=_card_data(card) if card else None)
-
-
-async def _clear_confirmed_marks(names: list[str]) -> None:
-    if not names:
-        return
-    async with connect() as conn:
-        for name in names:
-            clean = name.replace("<outside>", "").replace("</outside>", "").strip()
-            if not clean:
-                continue
-            for table, column in (("payees", "display_name"), ("schedules", "name")):
-                rows = await conn.fetch(
-                    f"SELECT id FROM {quote_ident(table)} "
-                    f"WHERE lower({quote_ident(column)}) = lower($1)",  # noqa: S608
-                    clean,
-                )
-                for row in rows:
-                    await clear_mark(conn, table, row["id"])
 
 
 async def record_movement(
@@ -1008,12 +992,13 @@ async def update_setup(
         )
     )
     if ctx.tool_call_approved and payload.get("status") != "outcome_unknown":
-        try:
-            await _clear_confirmed_marks(
-                [str(value) for value in payload_data.values() if isinstance(value, str)]
-            )
-        except Exception:  # noqa: BLE001 - the write landed; a stale mark is not a failed write
-            logger.warning("could not clear a confirmed outside-text mark")
+        confirmed = [str(value) for value in payload_data.values() if isinstance(value, str)]
+        if confirmed:
+            try:
+                async with connect() as conn:
+                    await clear_confirmed_marks(conn, confirmed)
+            except Exception:  # noqa: BLE001 - the write landed; a stale mark is not a failed write
+                logger.warning("could not clear a confirmed outside-text mark")
     return _write_return(payload)
 
 
@@ -1043,9 +1028,6 @@ async def schedule_payment(
             message_id=ctx.deps.message_id,
         )
     )
-    if payload.pop("outside_text", False):
-        async with connect() as conn:
-            await flag_outside_text(conn, ctx.deps.conversation_id)
     return _write_return(payload)
 
 

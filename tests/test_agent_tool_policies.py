@@ -385,10 +385,11 @@ async def test_a_failed_mark_cleanup_does_not_turn_a_saved_setup_into_a_failure(
 
     await _flagged_thread("thread-mark-cleanup")
 
-    async def broken(names):
+    async def broken(conn, names):
+        del conn, names
         raise RuntimeError("the connection dropped after the write")
 
-    monkeypatch.setattr(toolset, "_clear_confirmed_marks", broken)
+    monkeypatch.setattr(toolset, "clear_confirmed_marks", broken)
     deps = AgentDeps(conversation_id="thread-mark-cleanup", flagged=True)
     ctx = RunContext(deps=deps, model=TestModel(), usage=RunUsage(), tool_call_approved=True)
 

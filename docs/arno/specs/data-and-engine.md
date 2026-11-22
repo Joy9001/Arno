@@ -314,15 +314,15 @@ The following sources count as outside text:
 - Any new name supplied to a write in a flagged conversation unless that name appears in your own
   message text.
 
-**Tracking mechanism:** `mark()` wraps outside text in `<outside>` and `</outside>` markers, strips
-embedded closing markers and invisible characters, caps the string at 200 characters, and sets
-`conversations.outside_text_at`. Two capabilities enforce taint at the server boundary:
+**Tracking mechanism:** `mark()` (`src/arno/tools/mark.py`) wraps outside text in `<outside>` and
+`</outside>` markers, strips embedded closing markers and invisible characters, caps the string at
+200 characters, and owns `conversations.outside_text_at` persistence and confirmed-mark clearing.
+One stateless capability enforces taint across the agent boundary:
 
-- `OutsideToolReturns` (`src/arno/agent/capabilities.py`) inspects every tool return—including
-  nested Code Mode returns—and flags the conversation whenever marked text is present.
-- `TaskTextIsOutside` (`src/arno/agent/capabilities.py`) flags the conversation whenever any parser
-  subagent report or question is delivered to the thread. Handing off an upload does not flag the
-  thread; receiving any report or question from the parser does.
+- `OutsideTextTaint` (`src/arno/agent/capabilities.py`) inspects tool returns (including nested
+  Code Mode returns), tool retry errors, and delivered `parser` subagent reports or questions,
+  flagging the conversation whenever outside text is present. Handing off an upload does not flag
+  the thread; receiving any report or question from the parser does.
 
 Server code owns `outside_text_at`; the model cannot set or clear it. A clean thread starts unflagged
 unless its pinned financial snapshot contains a name that still carries `outside_text = true`. Once
