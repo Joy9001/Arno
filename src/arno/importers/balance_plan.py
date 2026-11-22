@@ -270,16 +270,16 @@ def line_date_or_none(lines: list[dict[str, Any]]) -> date | None:
 def resolve_balance_window(row: dict[str, Any], lines: list[dict[str, Any]]) -> BalanceWindow:
     """The one closing and the one period both the preview and the booking plan against.
 
-    The import's stored closing is the figure commit books; a check that still carries it (a
-    manual-opening re-check, or an older row) is the fallback. Missing dates fall back to the
-    statement's own first and last rows, so a forecast cannot use a different window than booking.
+    `imports.closing_balance_paise` is the sole closing figure (`NULL` means no closing balance to
+    reconcile or book). Missing dates fall back to the statement's own first and last rows, so a
+    forecast cannot use a different window than booking.
     """
-    check = row["check_result"] or {}
-    closing = row["closing_balance_paise"]
-    if closing is None:
-        value = check.get("closing_paise")
-        if isinstance(value, int) and not isinstance(value, bool):
-            closing = value
+    raw_closing = row["closing_balance_paise"]
+    closing = (
+        int(raw_closing)
+        if isinstance(raw_closing, int) and not isinstance(raw_closing, bool)
+        else None
+    )
     period_start = row["period_start"] or min((line["date"] for line in lines), default=None)
     period_end = row["period_end"] or line_date_or_none(lines)
     return BalanceWindow(closing=closing, period_start=period_start, period_end=period_end)
