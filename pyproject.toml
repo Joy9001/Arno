@@ -1,6 +1,6 @@
 [project]
 name = "arno"
-version = "0.4.1"
+version = "0.4.2"
 description = "Private, self-hosted personal finance agent"
 license = "MIT"
 license-files = ["LICENSE"]
