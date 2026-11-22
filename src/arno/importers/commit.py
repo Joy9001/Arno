@@ -17,6 +17,13 @@ from datetime import date
 from typing import Any, cast
 
 from arno.db.conn import Connection
+from arno.importers.balance_plan import (
+    apply_balances,
+    resolve_balance_window,
+    restore_account_balance,
+    stated_balance_conflict,
+    stated_balance_reason,
+)
 from arno.importers.checks import opening_is_evidenced
 from arno.importers.layouts import save_version
 from arno.importers.reconcile import (
@@ -24,14 +31,11 @@ from arno.importers.reconcile import (
     release_suppressed_duplicates,
     rematch_new_lines,
 )
-from arno.india.formatting import format_paise
 from arno.jobs.runner import enqueue_job
 from arno.ledger import movements as movements_mod
 from arno.ledger.audit import undo_group, write_group
-from arno.ledger.common import system_account
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from arno.ledger.payees import is_placeholder_name
-from arno.ledger.postings import TransferSpec, create_movement_in_group
 from arno.tools.write import resolve_payee
 
 logger = logging.getLogger("arno.importers.commit")
@@ -246,285 +250,6 @@ async def _new_movement(
     return {"id": record["id"], "undo_id": [record["undo_id"], *payee_groups]}
 
 
-async def _account_balance_at(
-    conn: Connection, ledger_account_id: str, day: date, *, before: bool = False
-) -> int:
-    comparison = "<" if before else "<="
-    row = await conn.fetchrow(
-        f"""
-        SELECT coalesce(sum(e.amount), 0)::bigint AS balance
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-        JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = $1
-          AND m.date {comparison} $2
-        """,  # noqa: S608 - the comparison is a constant of this module
-        ledger_account_id,
-        day,
-    )
-    return int(row["balance"]) if row else 0
-
-
-async def _book_adjustment(
-    conn: Connection,
-    account: dict[str, Any],
-    *,
-    amount: int,
-    day: date,
-    description: str,
-) -> str:
-    """One visible balance adjustment against Equity: an opening or an anchor, never spending."""
-    equity = await system_account(conn, "equity")
-    if amount > 0:
-        transfer = TransferSpec(
-            from_account_id=equity["id"],
-            to_account_id=account["id"],
-            amount_paise=amount,
-        )
-    else:
-        transfer = TransferSpec(
-            from_account_id=account["id"],
-            to_account_id=equity["id"],
-            amount_paise=-amount,
-        )
-    async with write_group(conn, actor="user") as group:
-        await create_movement_in_group(
-            conn,
-            group,
-            date=day,
-            description=description,
-            kind="adjustment",
-            transfers=[transfer],
-        )
-    return group.group_id
-
-
-_TRUSTED_OPENINGS = ("printed", "manual", "ledger")
-
-
-def statement_opening(check: dict[str, Any]) -> int | None:
-    """The opening the checks trusted: the printed figure, the user's answer, or the ledger's own.
-
-    A parser's fallback zero is a claim, not a fact, so it places nothing.
-    """
-    if check.get("opening_source") not in _TRUSTED_OPENINGS:
-        return None
-    value = check.get("opening_paise")
-    if not isinstance(value, int) or isinstance(value, bool):
-        return None
-    return value
-
-
-def statement_balance_on(
-    lines: list[dict[str, Any]], check: dict[str, Any], day: date
-) -> int | None:
-    """The statement's own balance on `day`: its opening plus every row dated on or before it."""
-    opening = statement_opening(check)
-    if opening is None:
-        return None
-    running = opening
-    for line in sorted(lines, key=lambda line: line["date"]):
-        if line["date"] > day:
-            break
-        running += int(line["amount_paise"])
-    return running
-
-
-async def stated_balance_conflict(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    check: dict[str, Any],
-    lines: list[dict[str, Any]],
-    period_start: date | None,
-    period_end: date | None,
-) -> tuple[int, int] | None:
-    """The user's stated balance and the statement's own, when the two disagree on a day it covers.
-
-    A stated balance is a fact about its day. Inside the statement's period the bank's own rows
-    are the evidence for that day, so the statement wins — but the user is told and confirms. A
-    figure that is only the last committed statement's own closing is not the user's claim: the
-    closing adjustment already states it, so it is not a second confirmation.
-    """
-    day = account.get("statement_balance_as_of")
-    stated = account.get("statement_balance_paise")
-    if day is None or not isinstance(stated, int) or isinstance(stated, bool):
-        return None
-    if isinstance(day, str):
-        day = date.fromisoformat(day)
-    if period_start is None or period_end is None or not period_start <= day <= period_end:
-        return None
-    from_statement = await conn.fetchrow(
-        """
-        SELECT 1 FROM imports
-        WHERE account_id = $1 AND status = 'committed' AND undone_at IS NULL
-          AND period_end = $2 AND closing_balance_paise = $3
-        LIMIT 1
-        """,
-        account["id"],
-        day,
-        stated,
-    )
-    if from_statement is not None:
-        return None
-    shown = statement_balance_on(lines, check, day)
-    if shown is None or shown == stated:
-        return None
-    return stated, shown
-
-
-def stated_balance_reason(stated: int, day: date, statement: int) -> str:
-    """Why a commit replaces a stated balance, in one host-written sentence."""
-    return (
-        f"You stated {format_paise(stated)} on {day.isoformat()}; the statement shows "
-        f"{format_paise(statement)} on that day. Committing replaces your figure with the "
-        "statement's; confirm that first."
-    )
-
-
-async def _superseded_anchors(
-    conn: Connection, ledger_account_id: str, start: date, end: date
-) -> list[dict[str, Any]]:
-    """The balance adjustments a statement's own dates now explain, oldest first."""
-    rows = await conn.fetch(
-        """
-        SELECT m.id, m.date,
-               sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
-        FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE m.kind = 'adjustment'
-          AND ms.is_effective
-          AND m.date BETWEEN $2 AND $3
-          AND (t.from_account_id = $1 OR t.to_account_id = $1)
-        GROUP BY m.id, m.date
-        HAVING sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END) <> 0
-        ORDER BY m.date, m.id
-        """,
-        ledger_account_id,
-        start,
-        end,
-    )
-    return [dict(row) for row in rows]
-
-
-async def _reanchor_opening(
-    conn: Connection,
-    account: dict[str, Any],
-    *,
-    period_start: date | None,
-    period_end: date | None,
-    opening: int | None,
-) -> tuple[list[str], int, int]:
-    """Book the statement's opening at its first day and supersede what it explains.
-
-    An account with no earlier entry, or one a later statement moved, holds no balance at
-    `period_start`: book the printed opening there. A balance adjustment dated inside the
-    statement is the old answer to a question this statement now answers row by row, so it is
-    reversed; a genuine difference still shows in the closing adjustment.
-    """
-    groups: list[str] = []
-    if period_start is None or opening is None:
-        return groups, 0, 0
-    superseded = await _superseded_anchors(
-        conn, account["ledger_account_id"], period_start, period_end or period_start
-    )
-    booked = opening - await _account_balance_at(
-        conn, account["ledger_account_id"], period_start, before=True
-    )
-    if booked:
-        groups.append(
-            await _book_adjustment(
-                conn,
-                account,
-                amount=booked,
-                day=period_start,
-                description=f"Opening balance for {account['name']} statement",
-            )
-        )
-    for row in superseded:
-        async with write_group(conn, actor="user") as group:
-            await movements_mod.reverse_movement(group, str(row["id"]))
-        groups.append(group.group_id)
-    return groups, booked, len(superseded)
-
-
-async def _hold_later_anchor(
-    conn: Connection,
-    account: dict[str, Any],
-    *,
-    period_end: date | None,
-) -> tuple[str | None, int]:
-    """Keep a balance stated after the statement: the balance on that day stays its figure.
-
-    A stated balance is a fact about its day. The statement's own dates never reach it, so the
-    difference is genuine and visible at that day, never inside the period the statement explains.
-    """
-    anchor_day = account["statement_balance_as_of"]
-    anchor_paise = account["statement_balance_paise"]
-    if period_end is None or anchor_day is None or anchor_paise is None or anchor_day <= period_end:
-        return None, 0
-    current = await _account_balance_at(conn, account["ledger_account_id"], anchor_day)
-    residual = int(anchor_paise) - current
-    if residual == 0:
-        return None, 0
-    group = await _book_adjustment(
-        conn,
-        account,
-        amount=residual,
-        day=anchor_day,
-        description=f"Stated balance re-anchor for {account['name']} statement",
-    )
-    return group, residual
-
-
-async def _closing_difference(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    closing: int,
-    day: date,
-) -> int:
-    ledger = await _account_balance_at(conn, account["ledger_account_id"], day)
-    return int(closing) - ledger
-
-
-async def _adjust_closing(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    closing: int,
-    day: date,
-) -> tuple[str | None, int]:
-    difference = await _closing_difference(conn, account=account, closing=closing, day=day)
-    if difference == 0:
-        return None, 0
-    equity = await system_account(conn, "equity")
-    async with write_group(conn, actor="user") as group:
-        if difference > 0:
-            transfer = TransferSpec(
-                from_account_id=equity["id"],
-                to_account_id=account["id"],
-                amount_paise=difference,
-            )
-        else:
-            transfer = TransferSpec(
-                from_account_id=account["id"],
-                to_account_id=equity["id"],
-                amount_paise=-difference,
-            )
-        await create_movement_in_group(
-            conn,
-            group,
-            date=day,
-            description=f"Balance adjustment for {account['name']} statement",
-            kind="adjustment",
-            transfers=[transfer],
-        )
-    return group.group_id, difference
-
-
 async def commit_import(
     conn: Connection,
     import_id: str,
@@ -548,6 +273,25 @@ async def commit_import(
         )
 
 
+async def lock_account_and_import(conn: Connection, import_id: str) -> dict[str, Any] | None:
+    """Lock the account, then the import row: the gate commit, undo, and repair all share.
+
+    The account's row lock is the gate, so two operations on one account wait for each other
+    rather than for a row each of them holds. The import's own row lock makes a double POST, a
+    retry, and two concurrent commits book once.
+    """
+    account_id = await conn.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id)
+    if account_id is not None:
+        await conn.fetchval("SELECT id FROM accounts WHERE id = $1 FOR UPDATE", account_id)
+    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
+    if row is None:
+        return None
+    if row["account_id"] is not None and row["account_id"] != account_id:
+        # A parser re-bound the import while this waited for its row: take that gate too.
+        await conn.fetchval("SELECT id FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"])
+    return row
+
+
 async def _lock_import_scope(conn: Connection, import_id: str) -> dict[str, Any] | None:
     """Take the account, the import, and the payees it names, in an order both paths share.
 
@@ -558,19 +302,10 @@ async def _lock_import_scope(conn: Connection, import_id: str) -> dict[str, Any]
     gate: the import's own row and its payees come under it, payees in id order, so two
     operations on one account wait for each other rather than for a row each of them holds.
     """
-    account_id = await conn.fetchval("SELECT account_id FROM imports WHERE id = $1", import_id)
-    if account_id is not None:
-        await conn.fetchval("SELECT id FROM accounts WHERE id = $1 FOR UPDATE", account_id)
-    # The row lock makes a double POST, a retry, and two concurrent commits book once.
-    row = await conn.fetchrow("SELECT * FROM imports WHERE id = $1 FOR UPDATE", import_id)
+    row = await lock_account_and_import(conn, import_id)
     if row is None:
         return None
     if row["account_id"] is not None:
-        if row["account_id"] != account_id:
-            # A parser re-bound the import while this waited for its row: take that gate too.
-            await conn.fetchval(
-                "SELECT id FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"]
-            )
         await conn.fetch(
             """
             SELECT id FROM payees
@@ -694,9 +429,10 @@ async def _commit(
             details={"invalid_credit_sources": invalid_sources},
         )
     group_ids = [str(group) for group in (row["commit_groups"] or [])]
-    period_start = row["period_start"] or min((line["date"] for line in lines), default=None)
-    period_end = row["period_end"] or line_date_or_none(lines)
-    opening = statement_opening(check)
+    window = resolve_balance_window(row, lines)
+    period_start = window.period_start
+    period_end = window.period_end
+    closing = window.closing
     conflict = await stated_balance_conflict(
         conn,
         account=account,
@@ -786,51 +522,19 @@ async def _commit(
         )
         committed_lines += 1
 
-    anchor_groups, opening_booked, superseded = await _reanchor_opening(
+    outcome, balance_review = await apply_balances(
         conn,
-        account,
+        account=account,
+        check=check,
         period_start=period_start,
         period_end=period_end,
-        opening=opening,
+        closing=closing,
+        adjustment_confirmed=adjustment_confirmed,
     )
-    group_ids.extend(anchor_groups)
+    group_ids.extend(outcome.groups)
 
-    closing = row["closing_balance_paise"]
-    adjustment_difference = 0
-    if closing is not None and period_end is not None:
-        difference = await _closing_difference(
-            conn, account=account, closing=int(closing), day=period_end
-        )
-        # A statement whose closing disagrees with the ledger is a real difference, not a
-        # rounding. It is the user's call: the review says the amount, and commit books it only
-        # when the review screen carried that confirmation.
-        if difference and not adjustment_confirmed:
-            raise ConflictLedgerError(
-                closing_adjustment_reason(difference, period_end)
-                + " Confirm the adjustment first.",
-                details={"adjustment_paise": difference, "adjustment_confirmed": False},
-            )
-        adjustment_group, adjustment_difference = await _adjust_closing(
-            conn, account=account, closing=int(closing), day=period_end
-        )
-        if adjustment_group:
-            group_ids.append(adjustment_group)
-
-    reanchored = 0
-    anchor_group, reanchored = await _hold_later_anchor(conn, account, period_end=period_end)
-    if anchor_group:
-        group_ids.append(anchor_group)
-
-    # A backdated statement must not replace a newer stated balance or erase one when the
-    # statement prints no closing balance.
-    existing_as_of = account["statement_balance_as_of"]
-    statement_updated = (
-        closing is not None
-        and period_end is not None
-        and (existing_as_of is None or period_end >= existing_as_of)
-    )
     async with conn.transaction():
-        if statement_updated:
+        if balance_review["statement_updated"]:
             await conn.execute(
                 """
                 UPDATE accounts
@@ -855,22 +559,7 @@ async def _commit(
                 parser=parser,
                 source_import_id=import_id,
             )
-        review = dict(row["review"] or {})
-        review["account_before"] = {
-            "statement_balance_paise": account["statement_balance_paise"],
-            "statement_balance_as_of": (
-                account["statement_balance_as_of"].isoformat()
-                if account["statement_balance_as_of"]
-                else None
-            ),
-        }
-        review["adjustment_paise"] = adjustment_difference
-        review["statement_updated"] = statement_updated
-        review["opening_booked_paise"] = opening_booked
-        review["superseded_anchors"] = superseded
-        review["reanchored_paise"] = reanchored
-        # The repair command skips an import whose anchors this commit already placed.
-        review["anchors_repaired"] = True
+        review = {**(row["review"] or {}), **balance_review}
         await conn.execute(
             """
             UPDATE imports
@@ -911,69 +600,6 @@ async def _commit(
     return result
 
 
-def closing_adjustment_reason(difference: int, day: date) -> str:
-    """Why a commit books a balance adjustment, in one host-written sentence."""
-    side = "above" if difference > 0 else "below"
-    return (
-        f"The statement's closing balance is {format_paise(abs(difference))} {side} the ledger "
-        f"at {day.isoformat()}, so committing it books that difference as a visible balance "
-        "adjustment."
-    )
-
-
-def closing_source_reason(closing: int) -> str:
-    """Why the review's closing came from the rows instead of a printed figure."""
-    return (
-        "No printed closing balance was read on this statement, so the closing shown here "
-        f"({format_paise(closing)}) is its last row's running balance. Check it against the "
-        "statement's own closing line before committing."
-    )
-
-
-async def review_closing_adjustment(
-    conn: Connection,
-    *,
-    import_id: str,
-    account: dict[str, Any],
-    check: dict[str, Any],
-    period_start: date | None,
-    period_end: date | None,
-) -> int:
-    """The balance adjustment a commit would book at the statement's last day, before it runs.
-
-    The review screen states this amount, so the same arithmetic the commit does: the rows it
-    would write (a merge only moves the difference), the opening it would book at the first day,
-    and the adjustments the statement's own dates supersede. A forecast is not the booking: the
-    commit recomputes the difference and refuses to book one the review did not confirm.
-    """
-    closing = check.get("closing_paise")
-    if not isinstance(closing, int) or isinstance(closing, bool) or period_end is None:
-        return 0
-    lines = await conn.fetch("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
-    delta = 0
-    for line in lines:
-        if line["match_state"] == "ignored":
-            continue
-        amount = int(line["amount_paise"])
-        already = 0
-        if line["movement_id"]:
-            movement_id = str(line["movement_id"])
-            if await _movement_date(conn, movement_id) <= period_end:
-                already = await _net_on_account(conn, movement_id, account["ledger_account_id"])
-        delta += amount - already
-    opening = statement_opening(check)
-    if opening is not None and period_start is not None:
-        delta += opening - await _account_balance_at(
-            conn, account["ledger_account_id"], period_start, before=True
-        )
-        for row in await _superseded_anchors(
-            conn, account["ledger_account_id"], period_start, period_end
-        ):
-            delta -= int(row["net"])
-    ledger = await _account_balance_at(conn, account["ledger_account_id"], period_end)
-    return int(closing) - (ledger + delta)
-
-
 async def _touches_account(conn: Connection, movement_id: str, ledger_account_id: str) -> bool:
     row = await conn.fetchrow(
         """
@@ -988,10 +614,6 @@ async def _touches_account(conn: Connection, movement_id: str, ledger_account_id
         ledger_account_id,
     )
     return row is not None
-
-
-def line_date_or_none(lines: list[dict[str, Any]]) -> date | None:
-    return max((line["date"] for line in lines), default=None)
 
 
 async def _pending_adjustment(conn: Connection, import_id: str) -> int | None:
@@ -1032,47 +654,14 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
         # writes when it reverts the movement and labels the commit group created.
         if result.get("undo_undo_id"):
             undoing.add(str(result["undo_undo_id"]))
-    review = dict(row["review"] or {})
-    before = review.get("account_before") or {}
-    statement_updated = review.get("statement_updated", True)
     async with conn.transaction():
-        current = await conn.fetchrow(
-            """
-            SELECT statement_balance_paise, statement_balance_as_of
-            FROM accounts WHERE id = $1
-            """,
-            row["account_id"],
+        await restore_account_balance(
+            conn,
+            account_id=row["account_id"],
+            review=row["review"],
+            period_end=row["period_end"],
+            closing=row["closing_balance_paise"],
         )
-        current_as_of = current["statement_balance_as_of"] if current else None
-        # Restore only while this import is still the effective balance source. A newer
-        # statement, or a manual balance on the same date, must survive the undo.
-        is_effective = (
-            current is not None
-            and (
-                row["period_end"] is None
-                or current_as_of is None
-                or current_as_of <= row["period_end"]
-            )
-            and (
-                row["period_end"] is None
-                or current_as_of != row["period_end"]
-                or row["closing_balance_paise"] is None
-                or current["statement_balance_paise"] == row["closing_balance_paise"]
-            )
-        )
-        if before and statement_updated and is_effective:
-            await conn.execute(
-                """
-                UPDATE accounts
-                SET statement_balance_paise = $1, statement_balance_as_of = $2, updated_at = now()
-                WHERE id = $3
-                """,
-                before.get("statement_balance_paise"),
-                date.fromisoformat(before["statement_balance_as_of"])
-                if before.get("statement_balance_as_of")
-                else None,
-                row["account_id"],
-            )
         await conn.execute(
             """
             UPDATE statement_lines
@@ -1120,12 +709,8 @@ async def reject_import(conn: Connection, import_id: str, reason: str | None = N
 
 
 __all__ = [
-    "closing_adjustment_reason",
-    "closing_source_reason",
     "commit_import",
+    "lock_account_and_import",
     "reject_import",
-    "review_closing_adjustment",
-    "stated_balance_conflict",
-    "stated_balance_reason",
     "undo_import",
 ]

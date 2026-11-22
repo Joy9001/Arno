@@ -17,12 +17,8 @@ from typing import Any
 
 from arno.db.conn import Connection
 from arno.engine.money import money
-from arno.importers.commit import (
-    _adjust_closing,
-    _hold_later_anchor,
-    _reanchor_opening,
-    statement_opening,
-)
+from arno.importers.balance_plan import apply_balances, statement_opening
+from arno.importers.commit import lock_account_and_import
 
 
 class _Rollback(Exception):
@@ -45,38 +41,33 @@ async def _candidates(conn: Connection) -> list[dict[str, Any]]:
 
 
 async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] | None:
-    account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", item["account_id"])
-    opening = statement_opening(item["check_result"] or {})
+    # The account-then-import lock order commit and undo share: without the row lock, two repairs
+    # or a repair racing a commit can plan against a bank balance the other has already moved.
+    row = await lock_account_and_import(conn, item["id"])
+    if row is None:
+        return None
+    account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", row["account_id"])
+    check = row["check_result"] or {}
+    opening = statement_opening(check)
     if account is None or opening is None:
         # No evidenced opening places the curve, so there is nothing exact to repair.
         return None
-    period_start = item["period_start"]
-    period_end = item["period_end"]
+    period_start = row["period_start"]
+    period_end = row["period_end"]
 
-    groups, opening_booked, superseded = await _reanchor_opening(
+    outcome, _ = await apply_balances(
         conn,
-        account,
+        account=account,
+        check=check,
         period_start=period_start,
         period_end=period_end,
-        opening=opening,
+        closing=row["closing_balance_paise"],
     )
-    adjustment = 0
-    if item["closing_balance_paise"] is not None and period_end is not None:
-        group, adjustment = await _adjust_closing(
-            conn, account=account, closing=int(item["closing_balance_paise"]), day=period_end
-        )
-        if group:
-            groups.append(group)
-    reanchored = 0
-    group, reanchored = await _hold_later_anchor(conn, account, period_end=period_end)
-    if group:
-        groups.append(group)
-
     review = {
         "anchors_repaired": True,
-        "opening_booked_paise": opening_booked,
-        "superseded_anchors": superseded,
-        "reanchored_paise": reanchored,
+        "opening_booked_paise": outcome.opening_booked_paise,
+        "superseded_anchors": outcome.superseded_anchors,
+        "reanchored_paise": outcome.reanchored_paise,
     }
     await conn.execute(
         """
@@ -84,7 +75,7 @@ async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] 
         SET commit_groups = $1, review = coalesce(review, '{}'::jsonb) || $2::jsonb
         WHERE id = $3
         """,
-        [str(group) for group in (item["commit_groups"] or [])] + groups,
+        [str(group) for group in (row["commit_groups"] or [])] + outcome.groups,
         review,
         item["id"],
     )
@@ -93,10 +84,10 @@ async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] 
         "account": str(account["name"]),
         "period_start": period_start,
         "period_end": period_end,
-        "opening_paise": opening_booked,
-        "replaced_adjustment_paise": adjustment,
-        "superseded": superseded,
-        "reanchored_paise": reanchored,
+        "opening_paise": outcome.opening_booked_paise,
+        "replaced_adjustment_paise": outcome.adjustment_paise,
+        "superseded": outcome.superseded_anchors,
+        "reanchored_paise": outcome.reanchored_paise,
     }
 
 

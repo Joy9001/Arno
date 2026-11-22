@@ -13,17 +13,16 @@ from datetime import date, datetime
 from typing import Any
 
 from arno.db.conn import Connection, connect
+from arno.importers.balance_plan import (
+    closing_adjustment_reason,
+    closing_source_reason,
+    plan_balances,
+    stated_balance_reason,
+)
 from arno.importers.checks import (
     check_statement,
     opening_is_evidenced,
     stated_opening_to_ledger,
-)
-from arno.importers.commit import (
-    closing_adjustment_reason,
-    closing_source_reason,
-    review_closing_adjustment,
-    stated_balance_conflict,
-    stated_balance_reason,
 )
 from arno.importers.identifiers import scrub_account_number
 from arno.importers.passwords import PASSWORDS
@@ -526,28 +525,13 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         and account_row is not None
         and row["check_status"] == "VERIFIED"
     ):
-        closing_adjustment = await review_closing_adjustment(
-            conn,
-            import_id=import_id,
-            account=account_row,
-            check=check,
-            period_start=row["period_start"],
-            period_end=row["period_end"],
-        )
-        if closing_adjustment:
-            closing_adjustment_note = closing_adjustment_reason(
-                closing_adjustment, row["period_end"]
-            )
+        plan = await plan_balances(conn, account=account_row, row=row, lines=lines)
+        closing_adjustment = plan.closing_adjustment_paise
+        if closing_adjustment and plan.period_end is not None:
+            closing_adjustment_note = closing_adjustment_reason(closing_adjustment, plan.period_end)
         # A stated balance the statement's own rows disagree with is a confirmation, not a
         # silent replacement: the payload says both figures before anything is committed.
-        stated_balance = await stated_balance_conflict(
-            conn,
-            account=account_row,
-            check=check,
-            lines=lines,
-            period_start=row["period_start"],
-            period_end=row["period_end"],
-        )
+        stated_balance = plan.stated_balance
         if check.get("closing_source") == "last running balance" and isinstance(
             row["closing_balance_paise"], int
         ):

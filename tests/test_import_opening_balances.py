@@ -9,7 +9,13 @@ from typing import Any
 from typer.testing import CliRunner
 
 from arno.cli import app as cli_app
-from arno.importers.commit import _adjust_closing, commit_import, undo_import
+from arno.importers.balance_plan import (
+    BalanceReviewSnapshot,
+    adjust_closing,
+    plan_balances,
+    resolve_balance_window,
+)
+from arno.importers.commit import commit_import, undo_import
 from arno.ledger import movements as movements_mod
 from arno.ledger.accounts import create_account, set_statement_balance
 from arno.ledger.audit import new_id
@@ -410,7 +416,7 @@ async def _legacy_import(
                 date=day,
             )
         groups.append(str(record["undo_id"]))
-    adjustment_group, _difference = await _adjust_closing(
+    adjustment_group, _difference = await adjust_closing(
         conn, account=account, closing=closing, day=end
     )
     if adjustment_group:
@@ -546,3 +552,82 @@ async def test_the_repair_command_prints_what_it_would_change(ledger):
     assert "nothing written" in result.output.lower()
     assert await _curve(ledger, account) == broken
     assert await repair_openings(ledger, dry_run=False) != []
+
+
+# --- the shared balance plan -------------------------------------------------------------------
+
+
+def test_balance_review_snapshot_reads_legacy_rows():
+    legacy = BalanceReviewSnapshot.model_validate({})
+    assert legacy.statement_updated is True
+    assert legacy.account_before is None
+    assert legacy.anchors_repaired is None
+    # repair.py selects rows where this key is absent; a JSON null is not the same thing.
+    assert "anchors_repaired" not in legacy.to_review_json()
+    empty_before = BalanceReviewSnapshot.model_validate({"account_before": {}})
+    assert empty_before.account_before is None
+    null_flag = BalanceReviewSnapshot.model_validate({"statement_updated": None})
+    assert null_flag.statement_updated is True
+
+    full = BalanceReviewSnapshot.model_validate(
+        {
+            "account_before": {
+                "statement_balance_paise": 290_000,
+                "statement_balance_as_of": "2026-11-01",
+            },
+            "statement_updated": False,
+            "adjustment_paise": 12_000,
+            "opening_booked_paise": 200_000,
+            "superseded_anchors": 2,
+            "reanchored_paise": 5_000,
+            "anchors_repaired": True,
+        }
+    )
+    assert full.account_before is not None
+    assert full.account_before.statement_balance_as_of == date(2026, 11, 1)
+    assert full.to_review_json() == {
+        "account_before": {
+            "statement_balance_paise": 290_000,
+            "statement_balance_as_of": "2026-11-01",
+        },
+        "statement_updated": False,
+        "adjustment_paise": 12_000,
+        "opening_booked_paise": 200_000,
+        "superseded_anchors": 2,
+        "reanchored_paise": 5_000,
+        "anchors_repaired": True,
+    }
+
+
+async def test_plan_uses_one_closing_and_period_end_for_review_and_commit(ledger):
+    account = await _stated_bank(ledger)
+    import_id = await _review(
+        ledger,
+        account,
+        [_row("2026-01-15", "SALARY", credit=100_000, balance=300_000)],
+        start=BANK_START,
+        end=date(2026, 1, 31),
+        opening=BANK_OPENING,
+        closing=300_000,
+    )
+    # The stored closing is the figure a commit books, and a missing period falls back to the
+    # statement's own rows. The check still carries the older closing: the plan must ignore it.
+    await ledger.execute(
+        "UPDATE imports SET closing_balance_paise = 310_000, period_end = NULL WHERE id = $1",
+        import_id,
+    )
+    row = await ledger.fetchrow("SELECT * FROM imports WHERE id = $1", import_id)
+    lines = await ledger.fetch(
+        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id", import_id
+    )
+    window = resolve_balance_window(row, lines)
+    assert window.closing == 310_000
+    assert window.period_start == BANK_START
+    assert window.period_end == date(2026, 1, 15)
+
+    plan = await plan_balances(ledger, account=account, row=row, lines=lines)
+    assert plan.closing == 310_000
+    assert plan.period_start == BANK_START
+    assert plan.period_end == date(2026, 1, 15)
+    assert plan.closing_adjustment_paise == 10_000
+    assert plan.stated_balance is None

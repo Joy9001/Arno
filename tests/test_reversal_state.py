@@ -8,9 +8,9 @@ from datetime import date, timedelta
 import pytest
 
 from arno.db.conn import connect
+from arno.importers.balance_plan import book_adjustment, superseded_anchors
 from arno.importers.baselines import recompute_baselines
 from arno.importers.categorize import _counts as categorize_counts
-from arno.importers.commit import _book_adjustment, _superseded_anchors
 from arno.importers.periods import ledger_opening
 from arno.importers.reconcile import insert_lines, reconcile
 from arno.importers.rules import apply_rules, check_payees, pending_payees
@@ -238,8 +238,8 @@ async def test_importers_and_categorize_use_reversal_state_across_undo_of_undo(l
     opened = await ledger_opening(ledger, account["id"], date(2026, 4, 1))
     assert opened is not None and opened["as_of"] == "2026-03-20"
 
-    # Adjustment anchor inside period (M -> R1 -> R2) for _superseded_anchors.
-    adj_group = await _book_adjustment(
+    # Adjustment anchor inside period (M -> R1 -> R2) for superseded_anchors.
+    adj_group = await book_adjustment(
         ledger,
         acc_row,
         amount=5_000,
@@ -251,13 +251,13 @@ async def test_importers_and_categorize_use_reversal_state_across_undo_of_undo(l
     )
     assert [
         row["id"]
-        for row in await _superseded_anchors(
+        for row in await superseded_anchors(
             ledger, acc_row["ledger_account_id"], date(2026, 4, 1), date(2026, 4, 30)
         )
     ] == [adj_id]
     undone_adj = await undo_group(ledger, adj_group)
     assert (
-        await _superseded_anchors(
+        await superseded_anchors(
             ledger, acc_row["ledger_account_id"], date(2026, 4, 1), date(2026, 4, 30)
         )
         == []
@@ -271,7 +271,7 @@ async def test_importers_and_categorize_use_reversal_state_across_undo_of_undo(l
     assert undone_adj["status"] == "undone"
     assert [
         row["id"]
-        for row in await _superseded_anchors(
+        for row in await superseded_anchors(
             ledger, acc_row["ledger_account_id"], date(2026, 4, 1), date(2026, 4, 30)
         )
     ] == [adj_id]
