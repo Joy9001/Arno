@@ -352,6 +352,8 @@ export function Card({
     const kind = String(data.kind ?? "");
     const attachmentId = String(data.attachment_id ?? "");
     const url = data.url ? String(data.url) : `/api/attachments/${attachmentId}`;
+    // Reading is not configured: a Retry could never succeed.
+    const retryable = data.retryable !== false;
     return (
       <div className="chat-card capture-card retry">
         {kind === "photo" && (
@@ -364,15 +366,17 @@ export function Card({
             <strong>{displayText(String(data.title ?? "Capture failed"))}</strong>
           </div>
           <p>{displayText(String(data.note ?? "The file is saved. Retry it."))}</p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => onRetryCapture?.(kind, attachmentId)}
-          >
-            <RotateCcw size={14} aria-hidden="true" />
-            Retry
-          </Button>
+          {retryable && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onRetryCapture?.(kind, attachmentId)}
+            >
+              <RotateCcw size={14} aria-hidden="true" />
+              Retry
+            </Button>
+          )}
         </div>
       </div>
     );

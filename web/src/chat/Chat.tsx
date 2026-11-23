@@ -52,6 +52,7 @@ import {
 import { ChatSurfaceContext, type ChatSurfaceState } from "./surface";
 import {
   ChatTransport,
+  CHAT_JOIN_STRATEGY,
   ServerDictationAdapter,
   VoiceAttachments,
   cancelActiveDictation,
@@ -182,7 +183,7 @@ function StopRunButton() {
         className="aui-composer-cancel size-7 rounded-full"
         aria-label="Stop generating"
         onClick={() => {
-          const threadId = liveThreadId(aui);
+          const threadId = aui.threadListItem.getState().remoteId;
           if (threadId) void surface.onStop?.(threadId);
         }}
       >
@@ -451,7 +452,24 @@ function useArnoThreadRuntime({
 }) {
   const aui = useAui();
   const threadId = useAuiState((state) => state.threadListItem.id);
-  const history = useMemo(() => createHistoryAdapter(aui), [aui]);
+  const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const history = useMemo(
+    () =>
+      createHistoryAdapter(aui, (running) => {
+        const id = aui.threadListItem.getState().remoteId;
+        if (!id) return;
+        if (running) {
+          // A reply the server started (an inbox follow-up, a task report) is still
+          // streaming when the thread opens: follow it instead of showing a silent thread.
+          window.dispatchEvent(new CustomEvent(FOLLOW_REPLY_EVENT, { detail: { threadId: id } }));
+          return;
+        }
+        // A finished turn is already saved; keeping its checkpoint would offer
+        // a Resume that can only replay the transcript.
+        checkpoints.clear(id);
+      }),
+    [aui, checkpoints],
+  );
   // One storage per thread runtime; its key follows the thread's identity as
   // the local id is replaced by the server id.
   const storage = useMemo(
@@ -464,10 +482,13 @@ function useArnoThreadRuntime({
   );
 
   useEffect(() => {
-    if (!threadId) return;
-    checkpoints.set(threadId, storage);
-    return () => checkpoints.release(threadId, storage);
-  }, [checkpoints, storage, threadId]);
+    // The server and the stream checkpoint use the remote id; the slot keeps
+    // its local id after initialization.
+    const id = remoteId ?? threadId;
+    if (!id) return;
+    checkpoints.set(id, storage);
+    return () => checkpoints.release(id, storage);
+  }, [checkpoints, storage, threadId, remoteId]);
 
   // A reply the server started (a task report arrived while no one was chatting) has no
   // checkpoint here. Giving it one is the library's idle-follower path: the runtime attaches
@@ -508,7 +529,16 @@ function useArnoThreadRuntime({
     canResume: true,
     adapters: { history, dictation, attachments: attachmentAdapter },
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithApprovalResponses,
-    onFinish,
+    // Stored replies arrive as separate messages (a turn the server started on
+    // its own, then later ones); merging them folds every answer but the last
+    // into the activity panel.
+    joinStrategy: CHAT_JOIN_STRATEGY,
+    onFinish: () => {
+      // A stream that ended normally needs no resume, whether or not the
+      // server's finish marker reached the checkpoint reader.
+      storage.clear();
+      onFinish();
+    },
     onResumeError: (error) => {
       if (!threadId) return;
       // 204/404 means the replay is gone. A non-retryable failure cannot replay
@@ -707,6 +737,19 @@ function ChatShell({
 }: ChatShellProps) {
   const aui = useAui();
   const running = useAuiState((state) => state.thread.isRunning);
+  const threadItems = useAuiState((state) => state.threads.threadItems);
+  const lastServerRunning = useRef(new Map<string, boolean>());
+  useEffect(() => {
+    // A server-started turn that ends while its stream is not attached leaves a
+    // checkpoint behind; the list's falling edge is the server saying it is over.
+    for (const item of threadItems) {
+      const next = (item.custom as { running?: boolean } | undefined)?.running === true;
+      if (lastServerRunning.current.get(item.id) === true && !next && !running) {
+        checkpoints.clear(item.remoteId ?? item.id);
+      }
+      lastServerRunning.current.set(item.id, next);
+    }
+  }, [threadItems, running, checkpoints]);
   const title = useAuiState((state) => state.threadListItem.title);
   const threadId = useAuiState(
     (state) => state.threadListItem.remoteId ?? state.threadListItem.id,
@@ -875,7 +918,8 @@ function ChatShell({
    */
   const appendCard = useCallback(
     (originId: string, card: CaptureCard, id: string) => {
-      if (liveThreadId(aui) === originId) {
+      const item = aui.threadListItem.getState();
+      if (liveThreadId(aui) === originId || item.remoteId === originId) {
         aui.thread.append({
           role: "assistant",
           content: [{ type: "data", id, name: "card", data: card }],
@@ -899,29 +943,44 @@ function ChatShell({
 
   const uploadPhoto = useCallback(
     async (file: File, originId: string) => {
-      if (running && liveThreadId(aui) === originId) {
-        pendingPhoto.current.set(originId, file);
+      const activeRemote = aui.threadListItem.getState().remoteId;
+      if (running && (liveThreadId(aui) === originId || activeRemote === originId)) {
+        pendingPhoto.current.set(activeRemote ?? originId, file);
         return;
       }
-      setSurfaceError(originId, null);
-      setCapture(originId, { kind: "uploading", message: "Reading the photo…" });
+      // A new conversation starts with a local placeholder id; the upload must
+      // create the server row once, like a send does. Every key below uses the
+      // settled id, which is what the surface reads once the row exists.
+      let remoteId = activeRemote ?? originId;
+      if (!activeRemote) {
+        try {
+          remoteId = (await aui.threadListItem.initialize()).remoteId;
+        } catch (caught) {
+          const message = errorMessage(caught);
+          setSurfaceError(originId, message);
+          setCapture(originId, { kind: "error", message });
+          return;
+        }
+      }
+      setSurfaceError(remoteId, null);
+      setCapture(remoteId, { kind: "uploading", message: "Reading the photo…" });
       const form = new FormData();
       form.append("file", file, file.name || "photo.png");
       try {
         const result = await api<CaptureResult>(
-          `/api/chat/${encodeURIComponent(originId)}/photo`,
+          `/api/chat/${encodeURIComponent(remoteId)}/photo`,
           { method: "POST", body: form },
         );
         if (result.status === "logged") {
-          appendCard(originId, result.card, `photo_${result.attachment_id}`);
+          appendCard(remoteId, result.card, `photo_${result.attachment_id}`);
         } else {
-          appendCard(originId, result.card, `capture_retry_${result.attachment_id}`);
+          appendCard(remoteId, result.card, `capture_retry_${result.attachment_id}`);
         }
-        setCapture(originId, null);
+        setCapture(remoteId, null);
       } catch (caught) {
         const message = errorMessage(caught);
-        setSurfaceError(originId, message);
-        setCapture(originId, { kind: "error", message });
+        setSurfaceError(remoteId, message);
+        setCapture(remoteId, { kind: "error", message });
       }
     },
     [appendCard, aui, running, setCapture, setSurfaceError],
@@ -956,12 +1015,13 @@ function ChatShell({
     async (kind: string, attachmentId: string, messageId: string) => {
       if (running) return;
       const originId = liveThreadId(aui);
-      if (!originId) return;
-      setSurfaceError(originId, null);
+      const remoteId = aui.threadListItem.getState().remoteId;
+      if (!originId || !remoteId) return;
+      setSurfaceError(remoteId, null);
       try {
         if (kind === "photo") {
           const result = await api<CaptureResult>(
-            `/api/chat/${encodeURIComponent(originId)}/photo/${encodeURIComponent(attachmentId)}`,
+            `/api/chat/${encodeURIComponent(remoteId)}/photo/${encodeURIComponent(attachmentId)}`,
             { method: "POST" },
           );
           if (liveThreadId(aui) !== originId) {
@@ -973,15 +1033,15 @@ function ChatShell({
             if (standaloneCaptureFailure(aui, messageId)) {
               aui.thread.deleteMessage(messageId);
             }
-            appendCard(originId, result.card, `photo_${attachmentId}`);
+            appendCard(remoteId, result.card, `photo_${attachmentId}`);
           } else {
-            setSurfaceError(originId, result.note);
-            setCapture(originId, { kind: "error", message: result.note });
+            setSurfaceError(remoteId, result.note);
+            setCapture(remoteId, { kind: "error", message: result.note });
           }
           return;
         }
         const result = await api<TranscribeResult>(
-          `/api/transcribe/${encodeURIComponent(attachmentId)}?thread_id=${encodeURIComponent(originId)}`,
+          `/api/transcribe/${encodeURIComponent(attachmentId)}?thread_id=${encodeURIComponent(remoteId)}`,
           { method: "POST" },
         );
         if (liveThreadId(aui) !== originId) {
@@ -990,20 +1050,20 @@ function ChatShell({
         }
         if (result.status === "transcribed") {
           aui.thread.deleteMessage(messageId);
-          voice.set(originId, attachmentId);
+          voice.set(remoteId, attachmentId);
           aui.thread.append({
             role: "user",
             content: [{ type: "text", text: result.transcript }],
             startRun: true,
           });
         } else {
-          setSurfaceError(originId, result.note);
-          setCapture(originId, { kind: "error", message: result.note });
+          setSurfaceError(remoteId, result.note);
+          setCapture(remoteId, { kind: "error", message: result.note });
         }
       } catch (caught) {
         const message = errorMessage(caught);
-        setSurfaceError(originId, message);
-        setCapture(originId, { kind: "error", message });
+        setSurfaceError(remoteId, message);
+        setCapture(remoteId, { kind: "error", message });
       }
     },
     [appendCard, aui, running, setCapture, setSurfaceError, voice],

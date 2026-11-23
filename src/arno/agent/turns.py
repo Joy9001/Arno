@@ -27,11 +27,16 @@ from pydantic_ai_harness.subagents import DelegationReports, DelegationTasks
 from arno.agent import capabilities as caps
 from arno.agent.cards import cards_from_messages, data_part
 from arno.agent.deps import AgentDeps
-from arno.agent.history import join_text, merge_text_parts, save_records
+from arno.agent.history import (
+    join_text,
+    merge_text_parts,
+    save_records,
+    without_empty_responses,
+)
 from arno.agent.models import opencode_conversation
 from arno.agent.number_check import check_messages
 from arno.agent.presentation import keep_last_answer
-from arno.agent.wake import KeepRetryMark, WakePolicy
+from arno.agent.wake import KeepRetryMark, ParserNeedsFiles, WakePolicy
 from arno.db.conn import connect
 from arno.engine.money import money
 
@@ -506,6 +511,7 @@ class TurnManager:
                     all_messages=all_messages,
                     extra_cards=turn.initial_cards,
                     reply_id=turn.reply_id,
+                    trace_id=turn.deps.trace_id,
                 )
                 if failed_attempts:
                     await conn.execute(
@@ -530,7 +536,7 @@ class TurnManager:
         The captured list is every message of the run, history included, so it is cut to this
         turn the same way a finished turn is.
         """
-        messages = list(captured)
+        messages = without_empty_responses(list(captured))
         await self._save(
             turn,
             _this_turn(messages, turn.history, turn.run_id, turn.message_id),
@@ -589,7 +595,7 @@ class TurnManager:
                 )
 
             async def on_cancel(exc: RunCancelled) -> None:
-                messages = list(exc.all_messages())
+                messages = without_empty_responses(list(exc.all_messages()))
                 turn_messages = _this_turn(messages, turn.history, turn.run_id, turn.message_id)
                 await self._save(turn, turn_messages, ending="cancelled", all_messages=messages)
 
@@ -609,6 +615,7 @@ class TurnManager:
                 )
                 if self.tasks is not None:
                     reports.append(KeepRetryMark(self.tasks))
+                    reports.append(ParserNeedsFiles())
                 if turn.wake is not None:
                     reports.append(turn.wake)
                 bound = self.tasks.bind() if self.tasks is not None else nullcontext()

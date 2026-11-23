@@ -140,3 +140,18 @@ def test_native_pydantic_ai_spans_reach_phoenix_with_one_root():
                 }
             )
     assert any(item.get("openinference.project.name") == PROJECT for item in resources)
+
+
+def test_a_logical_request_exports_no_token_counts_of_its_own():
+    from opentelemetry.sdk.trace import ReadableSpan as SdkSpan
+
+    from arno.observability import without_logical_usage
+
+    usage = {"gen_ai.usage.input_tokens": 100, "llm.token_count.prompt": 100}
+    parent = SdkSpan(name="chat m", attributes={"arno.cost.role": "logical_request", **usage})
+    attempt = SdkSpan(name="chat m", attributes={"arno.cost.role": "attempt", **usage})
+
+    exported_parent = without_logical_usage(parent)
+    assert dict(exported_parent.attributes or {}) == {"arno.cost.role": "logical_request"}
+    # The metered attempt keeps its counts: each model call is counted once.
+    assert without_logical_usage(attempt) is attempt

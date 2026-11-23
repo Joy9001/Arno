@@ -16,6 +16,8 @@ class AgentDeps:
     conversation_id: str
     message_id: str | None = None
     run_id: str | None = None
+    # Set by the run's root span: the trace a saved reply links to, for Flag.
+    trace_id: str | None = None
     # The authenticated principal for trace attribution. Opaque, stable, never derived from
     # financial data; absent on CLI and scheduled runs, which use the local-actor label.
     user_id: str | None = None
@@ -30,6 +32,9 @@ class AgentDeps:
     # Server-set: statement attachment IDs uploaded with this turn. Filenames stay out: they are
     # outside text and these go into the instructions. No import starts here.
     statement_attachments: tuple[str, ...] = ()
+    # Server-set: one host-written sentence per photo this turn's message carried, saying whether
+    # it was logged. Photos never reach the parser, so this is how the model knows what happened.
+    photo_outcomes: tuple[str, ...] = ()
     # Server-set: parser tasks in this thread that stopped on their step budget and can continue.
     paused_parser_tasks: tuple[str, ...] = ()
     # Server-set on a turn the server started with no message: the background tasks whose

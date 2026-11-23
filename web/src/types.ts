@@ -411,6 +411,8 @@ export type NotificationChat = {
   title: string | null;
   message: string;
   outside_text: boolean;
+  /** True when Arno's reply to the seeded message started; the opened thread follows it. */
+  started: boolean;
 };
 
 export type ScheduledQuestion = {

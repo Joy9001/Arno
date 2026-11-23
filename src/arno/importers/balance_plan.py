@@ -312,6 +312,116 @@ async def _superseded_anchors(
     return [dict(row) for row in rows]
 
 
+def _opening_description(account: dict[str, Any]) -> str:
+    return f"Opening balance for {account['name']} statement"
+
+
+def _reanchor_description(account: dict[str, Any]) -> str:
+    return f"Stated balance re-anchor for {account['name']} statement"
+
+
+async def _live_adjustments(
+    conn: Connection, ledger_account_id: str, day: date, description: str
+) -> list[dict[str, Any]]:
+    """This module's own live adjustments of one kind on one day, with their net on the account."""
+    rows = await conn.fetch(
+        """
+        SELECT m.id,
+               sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
+        FROM movements m
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        WHERE m.kind = 'adjustment'
+          AND ms.is_effective
+          AND m.date = $2
+          AND m.description = $3
+          AND (t.from_account_id = $1 OR t.to_account_id = $1)
+        GROUP BY m.id
+        ORDER BY m.id
+        """,
+        ledger_account_id,
+        day,
+        description,
+    )
+    return [dict(row) for row in rows]
+
+
+async def _rebook(
+    conn: Connection,
+    account: dict[str, Any],
+    *,
+    day: date,
+    description: str,
+    wanted: int,
+) -> list[str]:
+    """Make this day's adjustments of one kind net to `wanted`: reverse them and book it once."""
+    rows = await _live_adjustments(conn, account["ledger_account_id"], day, description)
+    if sum(int(row["net"]) for row in rows) == wanted:
+        return []
+    groups: list[str] = []
+    for row in rows:
+        async with write_group(conn, actor="user") as group:
+            await movements_mod.reverse_movement(group, str(row["id"]))
+        groups.append(group.group_id)
+    if wanted:
+        groups.append(
+            await _book_adjustment(conn, account, amount=wanted, day=day, description=description)
+        )
+    return groups
+
+
+async def _rebalance_later_openings(
+    conn: Connection, account: dict[str, Any], *, after: date
+) -> list[str]:
+    """Re-place the openings of later statements once earlier rows explain their first day.
+
+    A statement committed before an older one booked its printed opening to fill an empty
+    ledger. When the older statement lands, its rows already carry the balance to that day, so
+    the later opening must shrink to what is still unexplained, or every day of the later
+    statement reads high by the overlap. Oldest later statement first, since each one's first
+    day depends on the ones before it.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT period_start, check_result FROM imports
+        WHERE account_id = $1 AND status = 'committed' AND undone_at IS NULL
+          AND period_start > $2
+        ORDER BY period_start, committed_at, id
+        """,
+        account["id"],
+        after,
+    )
+    groups: list[str] = []
+    description = _opening_description(account)
+    for row in rows:
+        opening = statement_opening(row["check_result"] or {})
+        if opening is None:
+            continue
+        day = row["period_start"]
+        before = await _account_balance_at(conn, account["ledger_account_id"], day, before=True)
+        groups.extend(
+            await _rebook(conn, account, day=day, description=description, wanted=opening - before)
+        )
+    return groups
+
+
+async def rebalance_after(
+    conn: Connection, account: dict[str, Any], *, period_end: date | None
+) -> tuple[list[str], int]:
+    """Re-place what sits after a statement: later openings, then a later stated balance.
+
+    Commit runs this after booking a statement; the repair runs it for imports committed before
+    the commit path did. With nothing stale it writes nothing.
+    """
+    groups: list[str] = []
+    if period_end is not None:
+        groups.extend(await _rebalance_later_openings(conn, account, after=period_end))
+    anchor_groups, reanchored = await _hold_later_anchor(conn, account, period_end=period_end)
+    groups.extend(anchor_groups)
+    return groups, reanchored
+
+
 async def _reanchor_opening(
     conn: Connection,
     account: dict[str, Any],
@@ -343,7 +453,7 @@ async def _reanchor_opening(
                 account,
                 amount=booked,
                 day=period_start,
-                description=f"Opening balance for {account['name']} statement",
+                description=_opening_description(account),
             )
         )
     for row in superseded:
@@ -358,28 +468,29 @@ async def _hold_later_anchor(
     account: dict[str, Any],
     *,
     period_end: date | None,
-) -> tuple[str | None, int]:
+) -> tuple[list[str], int]:
     """Keep a balance stated after the statement: the balance on that day stays its figure.
 
     A stated balance is a fact about its day. The statement's own dates never reach it, so the
     difference is genuine and visible at that day, never inside the period the statement explains.
+    The re-anchor is recomputed, not stacked: an earlier re-anchor on that day is replaced by the
+    one difference that is still unexplained, which is zero once the rows explain it.
     """
     anchor_day = account["statement_balance_as_of"]
     anchor_paise = account["statement_balance_paise"]
     if period_end is None or anchor_day is None or anchor_paise is None or anchor_day <= period_end:
-        return None, 0
+        return [], 0
+    description = _reanchor_description(account)
     current = await _account_balance_at(conn, account["ledger_account_id"], anchor_day)
-    residual = int(anchor_paise) - current
-    if residual == 0:
-        return None, 0
-    group = await _book_adjustment(
-        conn,
-        account,
-        amount=residual,
-        day=anchor_day,
-        description=f"Stated balance re-anchor for {account['name']} statement",
+    held = sum(
+        int(row["net"])
+        for row in await _live_adjustments(
+            conn, account["ledger_account_id"], anchor_day, description
+        )
     )
-    return group, residual
+    wanted = int(anchor_paise) - (current - held)
+    groups = await _rebook(conn, account, day=anchor_day, description=description, wanted=wanted)
+    return groups, (wanted - held) if groups else 0
 
 
 async def _closing_difference(
@@ -533,10 +644,8 @@ async def apply_balances(
         if adjustment_group:
             groups.append(adjustment_group)
 
-    reanchored = 0
-    anchor_group, reanchored = await _hold_later_anchor(conn, account, period_end=period_end)
-    if anchor_group:
-        groups.append(anchor_group)
+    later_groups, reanchored = await rebalance_after(conn, account, period_end=period_end)
+    groups.extend(later_groups)
 
     existing_as_of = account["statement_balance_as_of"]
     statement_updated = (

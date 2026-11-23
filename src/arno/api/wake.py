@@ -124,13 +124,32 @@ async def wake(app: Any, thread_id: str) -> bool:
         thread = await history_mod.get_thread(conn, thread_id)
         if thread is None:
             return False
+        # The one automatic retry needs the files the failed run had: a parser reads only the
+        # attachments its turn carries, so without these a retry can only report "no files".
+        failed_files: tuple[str, ...] = ()
+        if retry:
+            failed_files = tuple(
+                str(row["attachment_id"])
+                for row in await conn.fetch(
+                    """
+                    SELECT DISTINCT i.attachment_id
+                    FROM imports i
+                    JOIN attachments a ON a.id = i.attachment_id
+                    WHERE i.task_id = ANY($1::text[]) AND i.status = 'failed'
+                      AND a.data IS NOT NULL AND a.purged_at IS NULL
+                    ORDER BY i.attachment_id
+                    """,
+                    [record.id for record in reports],
+                )
+            )
         deps = AgentDeps(
             conversation_id=thread_id,
             # The report is model-written from a statement, and no one is watching: lasting
             # writes this turn makes go on a confirm card.
             paused_parser_tasks=paused_parser_tasks(tasks, thread_id),
             woken_by=tuple(record.id for record in reports),
-            may_retry=retry,
+            may_retry=retry and bool(failed_files),
+            statement_attachments=failed_files,
         )
         try:
             await start_server_turn(
@@ -138,7 +157,7 @@ async def wake(app: Any, thread_id: str) -> bool:
                 conn,
                 thread=thread,
                 deps=deps,
-                policy=WakePolicy(may_retry=retry),
+                policy=WakePolicy(may_retry=retry and bool(failed_files)),
                 flagged=True,
             )
         except Exception as exc:  # noqa: BLE001 - a failed wake leaves the report for the next

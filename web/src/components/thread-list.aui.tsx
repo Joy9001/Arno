@@ -8,6 +8,7 @@ import {
   AuiIf,
   ThreadListItemPrimitive,
   ThreadListPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -18,6 +19,7 @@ import {
 import {
   forwardRef,
   Fragment,
+  useEffect,
   useMemo,
   useState,
   useSyncExternalStore,
@@ -84,6 +86,25 @@ export const ThreadListRoot: FC<
 export const ThreadListItems: FC<
   ComponentPropsWithoutRef<"div"> & { searchQuery?: string }
 > = ({ className, searchQuery = "", ...props }) => {
+  const aui = useAui();
+  // A turn the server started ends without this client sending anything, so no
+  // finish callback refreshes the list. While a row says it runs, ask the
+  // server until it settles; that is what ends its "Replying…" spinner.
+  const anyRunning = useAuiState((state) =>
+    state.threads.threadItems.some(
+      (item) => (item.custom as ThreadItemMeta | undefined)?.running === true,
+    ),
+  );
+  useEffect(() => {
+    if (!anyRunning) return;
+    const handle = window.setInterval(() => {
+      void aui.threads.reload().catch(() => {
+        // A failed refresh keeps the old row; the next tick tries again.
+      });
+    }, 3000);
+    return () => window.clearInterval(handle);
+  }, [anyRunning, aui]);
+
   return (
     <div
       data-slot="aui_thread-list-items"

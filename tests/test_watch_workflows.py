@@ -124,6 +124,41 @@ async def test_briefing_uses_one_model_call_and_falls_back_to_the_template(db):
     assert "Your week" in fallback["body"]
 
 
+async def test_briefing_prose_is_capped_and_a_token_limit_falls_back(db):
+    seen: dict[str, Any] = {}
+
+    def record(messages: list, info: AgentInfo):
+        del messages
+        seen.update(info.model_settings or {})
+        return ModelResponse(parts=[TextPart("A short brief written from the numbers.")])
+
+    sent = await send_weekly_briefing(
+        db,
+        as_of=date(2026, 11, 1),
+        period="2099-W03",
+        model=streaming_model(record),
+    )
+    assert sent is not None
+    assert seen["max_tokens"] == 600
+
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    async def capped(messages: list, info: AgentInfo):
+        del messages, info
+        raise UnexpectedModelBehavior("Model token limit (600) exceeded")
+        yield ""  # pragma: no cover
+
+    fallback = await send_weekly_briefing(
+        db,
+        as_of=date(2026, 11, 1),
+        period="2099-W04",
+        model=FunctionModel(stream_function=capped),
+    )
+    assert fallback is not None
+    assert fallback["data"]["prose"] == "template"
+    assert fallback["body"] == fallback["data"]["template"]
+
+
 async def test_reminders_are_created_once_inside_the_lead_window(db):
     due = ledger_today() + timedelta(days=3)
     await db.execute(
@@ -177,6 +212,34 @@ async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
 
     rows = await db.fetch("SELECT * FROM notifications WHERE kind = 'risk_warning'")
     assert len(rows) == 2
+
+
+async def test_risk_stays_quiet_while_setup_makes_the_projection_meaningless(db, monkeypatch):
+    state: dict[str, Any] = {
+        "floor_paise": 0,
+        "floor_probability": 0.0,
+        "floor_threshold": 0.9,
+        "first_floor_crossing": "2026-11-01",
+        "median_low": {"date": "2026-11-01", "paise": -5000},
+        "data_quality": {"gaps": [], "setup_gaps": ["no confirmed income schedule"]},
+        "source_ids": {},
+    }
+
+    async def fake_project(conn, **kwargs):
+        del conn, kwargs
+        return dict(state)
+
+    monkeypatch.setattr("arno.tools.projection.project", fake_project)
+
+    assert await risk_warning(db) is None
+    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'risk_warning'") == 0
+    checked = await db.fetchval("SELECT last_checked_at FROM risk_state WHERE id = 1")
+    assert checked is not None
+
+    # Once the income schedule exists the same projection is a real warning.
+    state["data_quality"]["setup_gaps"] = []
+    warning = await risk_warning(db)
+    assert warning is not None and warning["kind"] == "risk_warning"
 
 
 async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(ledger):
@@ -241,6 +304,39 @@ async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(
     covered = await detect(ledger, as_of=as_of)
     assert not any(
         p["kind"] == "new_subscription" and p["payee_id"] == netflix["id"] for p in covered
+    )
+
+
+async def test_a_recurring_notice_names_the_payee_not_the_statement_narration(ledger):
+    """A bank's narration token is not the merchant's name; the payee's display name is."""
+    from arno.jobs.patterns import run_pattern_detection
+    from arno.ledger.accounts import create_account
+    from arno.ledger.movements import record_expense
+    from arno.ledger.payees import create_payee
+
+    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
+    coffee = await create_payee(
+        ledger, display_name="Corner Store Coffee", kind="merchant", outside_text=True
+    )
+    for month in (6, 7, 8, 9):
+        await record_expense(
+            ledger,
+            account_id=bank["id"],
+            amount_paise=45_000,
+            description="UPI/DR/620529146532/Corner S/YESB/cornerst/AT 17565",
+            payee_id=coffee["id"],
+            date=date(2026, month, 1),
+        )
+
+    rows = await run_pattern_detection(ledger, as_of=date(2026, 10, 15))
+
+    notice = next(row for row in rows if row["kind"] == "new_subscription")
+    assert notice["title"] == "New recurring charge: Corner Store Coffee"
+    assert notice["body"].startswith("Corner Store Coffee charged")
+    assert notice["dedupe_key"].startswith("pattern:new:")
+    # The key keeps the payee's normalized name, so an already-sent notice is not re-sent.
+    assert (
+        notice["dedupe_key"] == f"pattern:new:corner store coffee:30:{notice['data']['last_date']}"
     )
 
 

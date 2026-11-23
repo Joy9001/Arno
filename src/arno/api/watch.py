@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from arno import scheduled_questions as questions_mod
 from arno.agent import history as history_mod
-from arno.api.deps import Database, current_session
+from arno.agent.deps import AgentDeps
+from arno.agent.turns import PreparationBusy, TurnBusy
+from arno.api.deps import Database, Session, current_session
 from arno.api.notification_query import list_page as list_notification_page
+from arno.api.wake import start_server_turn
 from arno.jobs.schedules import (
     ensure_builtin_schedules,
     job_status,
@@ -31,6 +35,8 @@ from arno.notifications import (
     unsubscribe,
 )
 from arno.tools.mark import flag_outside_text
+
+logger = logging.getLogger("arno.watch")
 
 router = APIRouter(
     prefix="/api",
@@ -103,8 +109,15 @@ async def post_read(notification_id: str, conn: Database) -> dict[str, Any]:
 
 
 @router.post("/notifications/{notification_id}/chat")
-async def post_notification_chat(notification_id: str, conn: Database) -> dict[str, Any]:
-    """Open a new chat seeded with this notification; the user can ask a follow-up."""
+async def post_notification_chat(
+    notification_id: str, request: Request, session: Session, conn: Database
+) -> dict[str, Any]:
+    """Open a new chat seeded with this notification, and have Arno answer it.
+
+    The seeded message ends with a request, so a thread left waiting on the user would never
+    reply. The server starts the turn here, as an import retry does; the client follows the
+    reply it did not open.
+    """
     row = await conn.fetchrow("SELECT * FROM notifications WHERE id = $1", notification_id)
     if row is None:
         raise HTTPException(status_code=404, detail="That notification does not exist.")
@@ -117,18 +130,40 @@ async def post_notification_chat(notification_id: str, conn: Database) -> dict[s
     if outside:
         await flag_outside_text(conn, thread["id"])
     client_id = await new_id(conn, "msg")
-    await history_mod.record_user_message(
+    message = await history_mod.record_user_message(
         conn,
         thread_id=thread["id"],
         client_id=client_id,
         text=text,
     )
     await mark_read(conn, notification_id)
+    started = False
+    if getattr(request.app.state, "turns", None) is not None:
+        try:
+            await start_server_turn(
+                request.app,
+                conn,
+                thread=thread,
+                deps=AgentDeps(
+                    conversation_id=str(thread["id"]),
+                    message_id=str(message["id"]),
+                    user_id=str(session["user_id"]),
+                    flagged=outside,
+                ),
+                flagged=outside,
+            )
+            started = True
+        except TurnBusy, PreparationBusy:
+            # A reply already runs here; the seeded message waits for the user's next turn.
+            pass
+        except Exception:  # noqa: BLE001 - the seeded thread is still usable by hand
+            logger.exception("could not start a turn for the notification in %s", thread["id"])
     return {
         "thread_id": thread["id"],
         "title": thread["title"],
         "message": text,
         "outside_text": outside,
+        "started": started,
     }
 
 

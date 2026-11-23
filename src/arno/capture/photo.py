@@ -10,6 +10,7 @@ The caller marks the text fields as outside text before they reach the chat mode
 
 from __future__ import annotations
 
+import os
 from datetime import date as Date
 from typing import Any, Literal
 
@@ -21,6 +22,19 @@ from arno.agent.models import vision_model
 from arno.agent.redaction import redact_text
 
 MAX_AMOUNT_PAISE = 1_000_000_000_000
+
+
+class VisionNotConfigured(RuntimeError):
+    """No VISION endpoint is set, so the photo can never be read; the caller says so."""
+
+
+def vision_configured() -> bool:
+    """True when VISION names a real endpoint and model, not the closed default tests use."""
+    base_url = os.environ.get("VISION_BASE_URL", "").strip().rstrip("/")
+    model = os.environ.get("VISION_MODEL", "").strip()
+    closed = base_url == "http://127.0.0.1:9" or "127.0.0.1:9/" in base_url
+    return bool(base_url and model and not closed and not model.endswith("-unconfigured"))
+
 
 INSTRUCTIONS = (
     "Read one receipt or a UPI payment screenshot from GPay, PhonePe, Paytm, or another app. "
@@ -67,8 +81,11 @@ async def extract_payment_photo(
     output reaches a span. The typed text it returns is redacted here, before any caller can
     store it or forward it to the chat model.
     """
-    from arno.agent.capabilities import spend_limits
+    from arno.agent.capabilities import RetryTransientModelErrors, spend_limits
     from arno.agent.spend import spend_store_scope
+
+    if model is None and not vision_configured():
+        raise VisionNotConfigured("vision is not configured")
 
     async with spend_store_scope(spend_store) as store:
         limits = spend_limits(store)
@@ -76,7 +93,7 @@ async def extract_payment_photo(
             model or vision_model(),
             output_type=PaymentPhoto,
             instructions=INSTRUCTIONS,
-            capabilities=[limits] if limits is not None else None,
+            capabilities=[RetryTransientModelErrors(), *([limits] if limits is not None else [])],
             name="receipt-vision",
         )
         agent.instrument = False
@@ -101,5 +118,7 @@ __all__ = [
     "INSTRUCTIONS",
     "MAX_AMOUNT_PAISE",
     "PaymentPhoto",
+    "VisionNotConfigured",
     "extract_payment_photo",
+    "vision_configured",
 ]

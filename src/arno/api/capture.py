@@ -28,7 +28,7 @@ from fastapi import (
 
 from arno.agent import history as history_mod
 from arno.api.deps import Database, PreparationDep, current_session
-from arno.capture.photo import extract_payment_photo
+from arno.capture.photo import VisionNotConfigured, extract_payment_photo
 from arno.capture.transcribe import (
     TranscriptionError,
     payee_names_prompt,
@@ -174,6 +174,7 @@ async def _failure(
     kind: str,
     note: str,
     persist: bool = True,
+    retryable: bool = True,
 ) -> dict[str, Any]:
     card = {
         "card": "capture-retry",
@@ -182,6 +183,7 @@ async def _failure(
         "attachment_id": attachment_id,
         "url": f"/api/attachments/{attachment_id}",
         "note": note,
+        "retryable": retryable,
     }
     if persist and thread is not None:
         await _save_card(
@@ -291,8 +293,23 @@ async def log_photo(
             bytes(row["data"]),
             media_type=str(row["content_type"] or "image/png"),
         )
+    except VisionNotConfigured:
+        logger.warning("photo extraction skipped: vision is not configured")
+        return await _failure(
+            conn,
+            thread=thread,
+            attachment_id=str(row["id"]),
+            kind="photo",
+            note=(
+                "Photo reading is not set up. Set VISION_BASE_URL and VISION_MODEL so receipts "
+                "and UPI screenshots can be read."
+            ),
+            persist=record_history,
+            retryable=False,
+        )
     except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the retry card
-        logger.warning("photo extraction failed: %s", type(exc).__name__)
+        # The message names the failure (a missing price, a refused endpoint) without the image.
+        logger.warning("photo extraction failed: %s: %s", type(exc).__name__, str(exc)[:200])
         return await _failure(
             conn,
             thread=thread,

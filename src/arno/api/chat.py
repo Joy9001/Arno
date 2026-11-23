@@ -44,6 +44,10 @@ class ThreadRename(ApiModel):
     title: str = Field(min_length=1, max_length=200)
 
 
+class ThreadCreate(ApiModel):
+    title: str | None = Field(default=None, max_length=200)
+
+
 class PreferenceUpdate(ApiModel):
     active: bool
 
@@ -188,6 +192,14 @@ async def _unread_statements(conn: Any, thread_id: str) -> list[dict[str, str]]:
         {"attachment_id": str(row["id"]), "filename": str(row["filename"] or "statement")}
         for row in rows
     ]
+
+
+def _photo_outcome(result: dict[str, Any]) -> str:
+    """One host-written sentence about a photo, for the model. No text read from the image."""
+    if result.get("status") == "logged":
+        return "logged as one movement; its card has Undo"
+    note = str(result.get("note") or "it could not be read")
+    return f"not logged: {note}"
 
 
 def _photo_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -362,6 +374,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 text = "Import the attached statement."
         initial_cards: list[dict[str, Any]] = []
         statement_attachments = tuple(statement["attachment_id"] for statement in statements)
+        photo_outcomes: list[str] = []
 
         for photo in photos:
             row = await conn.fetchrow(
@@ -375,6 +388,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 )
             result = await log_photo(conn, thread, dict(row), record_history=False)
             initial_cards.append(result["card"])
+            photo_outcomes.append(_photo_outcome(result))
 
         history, outside = await history_mod.ensure_history(conn, thread)
         answered: set[str] = set()
@@ -464,6 +478,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         capture_kind=capture_kind,
         capture_ref=capture_ref,
         statement_attachments=statement_attachments,
+        photo_outcomes=tuple(photo_outcomes),
         paused_parser_tasks=paused_parser_tasks(getattr(app.state, "tasks", None), thread_id),
     )
     adapter = await VercelAIAdapter.from_request(
@@ -629,9 +644,13 @@ def _merge_saved_state(
             None,
         )
         if last_assistant is not None:
+            # A card an earlier reply already shows belongs to that reply; only a card no message
+            # carries is restored, onto the last reply. Checking the last reply alone re-added
+            # every earlier write card under the newest answer on each load.
             existing = {
                 json.dumps(part.get("data"), sort_keys=True, default=str)
-                for part in last_assistant.get("parts", [])
+                for message in messages
+                for part in message.get("parts", [])
                 if isinstance(part, dict) and part.get("type") == "data-card"
             }
             parts = last_assistant.setdefault("parts", [])
@@ -691,6 +710,14 @@ async def get_thread_messages(request: Request, conn: Database, thread_id: str) 
         "running": bool(turn is not None and not turn.done.is_set()),
         "as_of": ledger_today().isoformat(),
     }
+
+
+@router.post("/threads", status_code=201)
+async def create_thread(conn: Database, body: ThreadCreate | None = None) -> dict[str, Any]:
+    """Create a thread row before its first message, so the client never keys it by a local id."""
+    title = body.title.strip() if body and body.title and body.title.strip() else None
+    thread = await history_mod.create_thread(conn, title=title)
+    return {"id": thread["id"], "title": thread["title"] or "New chat"}
 
 
 @router.patch("/threads/{thread_id}")

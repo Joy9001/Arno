@@ -475,7 +475,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
             aria-label="Arno, ask"
             onClick={() => navigate("ask")}
           >
-            <Orb size={38} live />
+            <Orb size={38} />
           </button>
           {NAV.map(({ id, label, Icon }) => (
             <button

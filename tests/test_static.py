@@ -53,6 +53,25 @@ def test_unknown_page_paths_fall_back_to_the_shell(tmp_path, settings, clean_dat
     assert "Arno" in response.text
 
 
+def test_a_host_probe_for_a_health_or_model_endpoint_is_a_plain_404(
+    tmp_path, settings, clean_database
+):
+    with _client(tmp_path, settings) as client:
+        for path in ("/health", "/v1/models", "/v1/chat/completions"):
+            response = client.get(path)
+            assert response.status_code == 404, path
+            assert response.headers["content-type"].startswith("application/problem+json")
+            assert "text/html" not in response.headers["content-type"]
+
+
+def test_a_missing_asset_is_a_404_not_the_shell(tmp_path, settings, clean_database):
+    with _client(tmp_path, settings) as client:
+        response = client.get("/assets/missing.js")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")
+
+
 def test_api_paths_never_fall_back_to_the_shell(tmp_path, settings, clean_database):
     with _client(tmp_path, settings) as client:
         response = client.get("/api/not-a-route")
@@ -70,7 +89,7 @@ def test_missing_build_is_a_plain_503(tmp_path, settings, clean_database):
     assert "Web build missing" in response.json()["title"]
 
 
-def test_static_route_serves_the_shell_when_an_asset_resolves_outside_the_build(
+def test_a_built_asset_resolved_outside_the_build_is_a_404_not_the_shell(
     tmp_path, settings, clean_database, monkeypatch
 ):
     build = tmp_path / "dist"
@@ -91,6 +110,5 @@ def test_static_route_serves_the_shell_when_an_asset_resolves_outside_the_build(
     with _client(build, settings) as client:
         response = client.get("/assets/app.js")
 
-    assert response.status_code == 200
-    assert response.content == (build / "index.html").read_bytes()
-    assert response.headers["cache-control"] == "no-store"
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/problem+json")

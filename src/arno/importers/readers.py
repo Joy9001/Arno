@@ -7,14 +7,17 @@ extension, and a locked Office file is decrypted here before Calamine sees it.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import datetime as dt
 import io
 import json
 import re
 import struct
+import threading
 import zipfile
 import zlib
+from collections.abc import Callable
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, TypedDict, override
@@ -581,6 +584,24 @@ class Doc:
             + chunk(b"IDAT", zlib.compress(raw, 6))
             + chunk(b"IEND", b"")
         )
+
+
+_DOC_LOCK = threading.Lock()
+
+
+async def in_doc_worker[T](fn: Callable[[], T]) -> T:
+    """Run document work (PDF text extraction, word redaction) on a worker thread.
+
+    Opening a 57-page statement and reading every page's words took seconds of CPU, and on the
+    event loop it stalled every request, poll, and job for that long. PDFium is not thread-safe,
+    so one lock serializes document work across imports; the loop stays free.
+    """
+
+    def call() -> T:
+        with _DOC_LOCK:
+            return fn()
+
+    return await asyncio.to_thread(call)
 
 
 def open_documents(data: bytes, *, password: str | None = None) -> list[Doc]:

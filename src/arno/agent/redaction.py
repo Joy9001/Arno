@@ -103,6 +103,9 @@ _DETECTORS: list[TextDetector] = [
             # A card that fails Luhn is still a card: four groups of four, starting with a payment
             # card's industry digit, is one and nothing else.
             "card_number": r"\b(?=[2-6])(?:\d{4}[ -]){3}\d{4}\b",
+            # An email address has a dotted domain; a UPI handle (ramesh@okaxis) does not, so
+            # handles stay readable for payees. A statement header prints the holder's email.
+            "email": r"(?<![\w.+-])[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b",
         },
     ),
     keyword_secret_data,

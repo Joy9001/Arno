@@ -28,8 +28,33 @@ RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    dumped: list[dict[str, Any]] = json.loads(ModelMessagesTypeAdapter.dump_json(messages))
+    dumped: list[dict[str, Any]] = json.loads(
+        ModelMessagesTypeAdapter.dump_json(_latest_instructions_only(messages))
+    )
     return dumped
+
+
+def _latest_instructions_only(messages: list[Any]) -> list[Any]:
+    """Keep the system instructions on the last request only.
+
+    Every request carries the full instructions (about 33 KB here), and the next run sends its own
+    for the new request, so earlier copies only made each saved thread grow by that much per step:
+    98 messages weighed 1 MB and the whole value is rewritten every turn.
+    """
+    from dataclasses import replace
+
+    from pydantic_ai.messages import ModelRequest
+
+    last = max(
+        (index for index, message in enumerate(messages) if isinstance(message, ModelRequest)),
+        default=-1,
+    )
+    return [
+        replace(message, instructions=None)
+        if isinstance(message, ModelRequest) and index != last and message.instructions
+        else message
+        for index, message in enumerate(messages)
+    ]
 
 
 def _load(data: Any) -> list[Any]:
@@ -37,7 +62,29 @@ def _load(data: Any) -> list[Any]:
 
     if not data:
         return []
-    return ModelMessagesTypeAdapter.validate_python(data)
+    # Rows saved before failed turns were cleaned can still hold an empty response.
+    return without_empty_responses(ModelMessagesTypeAdapter.validate_python(data))
+
+
+def without_empty_responses(messages: list[Any]) -> list[Any]:
+    """Drop model responses that carry no answer and no tool call.
+
+    A request the provider failed or the user stopped leaves a response with no parts, or with
+    only reasoning. Kept, it is sent back on every later turn as an empty assistant message, which
+    some providers reject and every model misreads.
+    """
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+
+    def answers(part: Any) -> bool:
+        if isinstance(part, TextPart):
+            return bool(part.content.strip())
+        return isinstance(part, ToolCallPart)
+
+    return [
+        message
+        for message in messages
+        if not isinstance(message, ModelResponse) or any(answers(part) for part in message.parts)
+    ]
 
 
 async def create_thread(

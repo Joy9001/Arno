@@ -17,7 +17,7 @@ from typing import Any
 
 from arno.db.conn import Connection
 from arno.engine.money import money
-from arno.importers.balance_plan import apply_balances, statement_opening
+from arno.importers.balance_plan import apply_balances, rebalance_after, statement_opening
 from arno.importers.commit import lock_account_and_import
 
 
@@ -97,20 +97,82 @@ async def _repair_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] 
     }
 
 
-async def repair_openings(conn: Connection, *, dry_run: bool) -> list[dict[str, Any]]:
-    """Repair every import whose anchors were placed by the old commit path."""
+async def _committed(conn: Connection) -> list[dict[str, Any]]:
+    """Every live committed import with an account, oldest statement first."""
+    return await conn.fetch(
+        """
+        SELECT id FROM imports
+        WHERE status = 'committed' AND undone_at IS NULL AND account_id IS NOT NULL
+        ORDER BY account_id, period_start NULLS LAST, committed_at, id
+        """
+    )
+
+
+async def _rebalance_one(conn: Connection, item: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-place what sits after one import, as its commit does today.
+
+    An older statement committed after a newer one left the newer opening on top of rows that
+    already explain it. The writes join this import, so undoing it restores exactly what it found.
+    """
+    row = await lock_account_and_import(conn, item["id"])
+    if row is None or row["status"] != "committed" or row["undone_at"] is not None:
+        return None
+    account = await conn.fetchrow("SELECT * FROM v_accounts WHERE id = $1", row["account_id"])
+    if account is None:
+        return None
+    groups, reanchored = await rebalance_after(conn, account, period_end=row["period_end"])
+    if not groups:
+        return None
+    await conn.execute(
+        "UPDATE imports SET commit_groups = $1 WHERE id = $2",
+        [str(group) for group in (row["commit_groups"] or [])] + groups,
+        item["id"],
+    )
+    return {
+        "import_id": str(item["id"]),
+        "account": str(account["name"]),
+        "period_start": row["period_start"],
+        "period_end": row["period_end"],
+        "opening_paise": 0,
+        "replaced_adjustment_paise": 0,
+        "superseded": 0,
+        "reanchored_paise": reanchored,
+        "later_openings_rebooked": True,
+    }
+
+
+async def _each_in_its_own_transaction(
+    conn: Connection, items: list[dict[str, Any]], step: Any, *, dry_run: bool
+) -> list[dict[str, Any]]:
     changes: list[dict[str, Any]] = []
-    for item in await _candidates(conn):
+    for item in items:
         detail: dict[str, Any] | None = None
         try:
             async with conn.transaction():
-                detail = await _repair_one(conn, item)
+                detail = await step(conn, item)
                 if dry_run:
                     raise _Rollback
         except _Rollback:
             pass
         if detail is not None:
             changes.append(detail)
+    return changes
+
+
+async def repair_openings(conn: Connection, *, dry_run: bool) -> list[dict[str, Any]]:
+    """Repair every import whose anchors an older commit path placed.
+
+    Two passes: imports that never had the opening repair, then every committed import's later
+    openings and stated balance, which an out-of-order commit could leave stale. A dry run rolls
+    each transaction back, so the second pass previews against the unrepaired first pass; the
+    preview can list a later-opening change the first pass would have made unnecessary.
+    """
+    changes = await _each_in_its_own_transaction(
+        conn, await _candidates(conn), _repair_one, dry_run=dry_run
+    )
+    changes += await _each_in_its_own_transaction(
+        conn, await _committed(conn), _rebalance_one, dry_run=dry_run
+    )
     return changes
 
 
@@ -123,6 +185,12 @@ def format_changes(changes: list[dict[str, Any]]) -> str:
             if change["period_start"] and change["period_end"]
             else "no period"
         )
+        if change.get("later_openings_rebooked"):
+            lines.append(
+                f"{change['account']}: {period} · later statement openings re-placed · stated "
+                f"balance re-anchored {money(change['reanchored_paise'])['text']}"
+            )
+            continue
         lines.append(
             f"{change['account']}: {period} · opening booked "
             f"{money(change['opening_paise'])['text']} at the first day · closing difference "

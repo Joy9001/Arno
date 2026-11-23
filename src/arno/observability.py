@@ -24,14 +24,14 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, override
 
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanContext, SpanKind, TraceFlags
-from phoenix.otel import register
+from phoenix.otel import BatchSpanProcessor, HTTPSpanExporter, register
 from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
@@ -84,8 +84,63 @@ def bootstrap_observability() -> Any:
     # alone rewrites a bare env URL to the gRPC port. The standard batch processor keeps
     # export off the request path.
     _provider = register(endpoint=endpoint, batch=True)
+    # Replaces register's default processor: the same batch export, through the usage filter.
+    _provider.add_span_processor(
+        BatchSpanProcessor(
+            span_exporter=UsageOnceExporter(HTTPSpanExporter(endpoint=endpoint, headers=_headers()))
+        )
+    )
     Agent.instrument_all()
     return _provider
+
+
+_USAGE_PREFIXES = ("gen_ai.usage.", "llm.token_count.", "llm.cost.")
+
+
+def without_logical_usage(span: ReadableSpan) -> ReadableSpan:
+    """The span as exported: a logical request keeps no token or cost counts.
+
+    Each model attempt has its own metered span with the counts, and the request around it is
+    tagged `logical_request`. Phoenix sums token counts over every span, so the parent's own copy
+    doubled every trace's and session's tokens.
+    """
+    attributes = span.attributes or {}
+    if attributes.get("arno.cost.role") != "logical_request":
+        return span
+    kept = {key: value for key, value in attributes.items() if not key.startswith(_USAGE_PREFIXES)}
+    return ReadableSpan(
+        name=span.name,
+        context=span.context,
+        parent=span.parent,
+        resource=span.resource,
+        attributes=kept,
+        events=span.events,
+        links=span.links,
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class UsageOnceExporter(SpanExporter):
+    """Export through `without_logical_usage`, so each model call's tokens are counted once."""
+
+    def __init__(self, inner: SpanExporter) -> None:
+        self.inner = inner
+
+    @override
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self.inner.export([without_logical_usage(span) for span in spans])
+
+    @override
+    def shutdown(self) -> None:
+        self.inner.shutdown()
+
+    @override
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.inner.force_flush(timeout_millis)
 
 
 def shutdown_observability() -> None:

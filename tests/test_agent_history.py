@@ -336,3 +336,20 @@ async def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_led
     text = str(part.content)
     assert "20000" in text
     assert len(text) < 11_000
+
+
+def test_saved_history_keeps_the_instructions_on_the_last_request_only():
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    from arno.agent.history import _dump
+
+    messages = [
+        ModelRequest(parts=[UserPromptPart("one")], instructions="long instructions"),
+        ModelResponse(parts=[TextPart("a")]),
+        ModelRequest(parts=[UserPromptPart("two")], instructions="long instructions"),
+    ]
+
+    dumped = _dump(messages)
+
+    assert dumped[0].get("instructions") is None
+    assert dumped[2]["instructions"] == "long instructions"

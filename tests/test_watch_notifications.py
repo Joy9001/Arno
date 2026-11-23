@@ -85,6 +85,38 @@ async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(sessio
     ) is not None
 
 
+async def test_opening_a_notification_starts_arno_s_own_reply(session_client, db, monkeypatch):
+    calls: list[tuple[str, bool, bool]] = []
+
+    async def record(app, conn, *, thread, deps, policy=None, flagged=False):
+        del app, conn, policy
+        calls.append((str(thread["id"]), flagged, deps.flagged))
+        return str(thread["id"])
+
+    monkeypatch.setattr("arno.api.watch.start_server_turn", record)
+    row = await create_notification(
+        db,
+        kind="risk_warning",
+        title="Your projection is riskier",
+        body="The chance of staying above zero is 55%.",
+        data={"outside_text": True},
+    )
+    assert row is not None
+
+    opened = session_client.post(f"/api/notifications/{row['id']}/chat")
+
+    assert opened.status_code == 200, opened.text
+    body = opened.json()
+    assert body["started"] is True
+    assert calls == [(body["thread_id"], True, True)]
+    seeded = await db.fetchrow(
+        "SELECT role, body_text FROM messages WHERE conversation_id = $1 ORDER BY created_at",
+        body["thread_id"],
+    )
+    assert seeded["role"] == "user"
+    assert "Help me with this." in seeded["body_text"]
+
+
 async def test_push_subscription_and_a_contentless_ping(session_client, db, monkeypatch):
     key = session_client.get("/api/push/key")
     assert key.status_code == 200

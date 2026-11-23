@@ -39,10 +39,27 @@ def payee_key(narration: Any, counterparty: Any = None) -> str:
     """The payee a rule matches: the parsed counterparty when there is one, else the narration
     with payment-rail tokens, UPI handles, and long reference numbers removed."""
     text = str(counterparty or "").strip()
-    if not text or is_placeholder_name(text):
-        # No counterparty, or a rail token ("DR", "UPI") that names nobody: the narration still
-        # names the merchant.
-        text = str(narration or "")
+    key = _clean_key(text) if text and not is_placeholder_name(text) else ""
+    if _letters(key) < MIN_KEY_LETTERS:
+        # No counterparty, a rail token ("DR", "UPI") that names nobody, or a fragment such as a
+        # lone initial or a day number: the narration still names the merchant.
+        key = _clean_key(str(narration or ""))
+    # A key that names only a rail token, a placeholder, or a fragment is no payee: no rule is
+    # ever learned for it, and no match is attempted against it.
+    if is_placeholder_name(key) or _letters(key) < MIN_KEY_LETTERS:
+        return ""
+    return key
+
+
+MIN_KEY_LETTERS = 3
+"""A payee key with fewer letters names nobody ("m", "08"); the model only guessed at those."""
+
+
+def _letters(text: str) -> int:
+    return sum(1 for char in text if char.isalpha())
+
+
+def _clean_key(text: str) -> str:
     if "@" in text and " " not in text:
         # A UPI handle is the only name this line has; keep its local part.
         text = text.split("@", 1)[0]
@@ -50,10 +67,7 @@ def payee_key(narration: Any, counterparty: Any = None) -> str:
     text = _RAIL_RE.sub(" ", text)
     text = _LONG_NUMBER_RE.sub(" ", text)
     text = _NOISE_RE.sub(" ", text.lower())
-    key = _SPACE_RE.sub(" ", text).strip()[:200]
-    # A key that names only a rail token or a placeholder is no payee: no rule is ever learned
-    # for it, and no match is attempted against it.
-    return "" if is_placeholder_name(key) else key
+    return _SPACE_RE.sub(" ", text).strip()[:200]
 
 
 def is_payment_app(key: str) -> bool:

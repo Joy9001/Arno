@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -173,14 +174,11 @@ async def test_the_loop_claims_at_most_two_jobs_at_once(db):
 
     async def handler(payload):
         started.append(payload["n"])
-        import asyncio
-
         await asyncio.sleep(0.1)
 
     runner = JobRunner(
         registry={"sleepy": cast(Handler, handler)},
         concurrency=2,
-        poll_seconds=10,
         timeouts={"sleepy": 5},
     )
     for index in range(3):
@@ -190,8 +188,6 @@ async def test_the_loop_claims_at_most_two_jobs_at_once(db):
             {"n": index},
         )
 
-    import asyncio
-
     claimed = await runner.tick()
     assert claimed == 2
     assert len(runner._running) == 2
@@ -200,6 +196,46 @@ async def test_the_loop_claims_at_most_two_jobs_at_once(db):
     assert await runner.tick() == 1
     await asyncio.gather(*list(runner._running))
     assert sorted(started) == [0, 1, 2]
+
+
+async def test_a_tick_does_not_resync_the_recurring_schedules(db, monkeypatch):
+    """Seeding and mirroring every second was the idle load; a tick only claims and enqueues."""
+    from arno.jobs import schedules as schedules_mod
+
+    async def never(*args, **kwargs):
+        raise AssertionError("a tick must not seed or mirror the schedules")
+
+    monkeypatch.setattr(schedules_mod, "ensure_builtin_schedules", never)
+    monkeypatch.setattr(schedules_mod, "sync_scheduled_questions", never)
+    runner = JobRunner(registry={"quick": cast(Handler, lambda payload: {})}, timeouts={"quick": 5})
+    await db.execute("INSERT INTO jobs (key, kind) VALUES ('quick:tick', 'quick')")
+
+    assert await runner.tick() == 1
+    await asyncio.gather(*list(runner._running))
+    assert (await _job(db, "quick:tick"))["status"] == "done"
+
+
+async def test_an_enqueue_wakes_an_idle_loop_without_waiting_for_the_cap(db):
+    started = asyncio.Event()
+
+    async def handler(payload):
+        del payload
+        started.set()
+        return {}
+
+    runner = JobRunner(
+        registry={"wake": cast(Handler, handler)},
+        concurrency=1,
+        max_idle_seconds=60,
+        timeouts={"wake": 5},
+    )
+    runner.start()
+    try:
+        await asyncio.sleep(0)
+        await enqueue_job(db, key="wake:1", kind="wake")
+        await asyncio.wait_for(started.wait(), timeout=5)
+    finally:
+        await runner.stop()
 
 
 async def test_a_cost_stop_fails_the_job_at_once_without_retrying(db):

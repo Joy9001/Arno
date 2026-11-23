@@ -404,6 +404,7 @@ async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     assert payload["status"] == "failed"
     assert payload["card"]["card"] == "capture-retry"
     assert payload["card"]["kind"] == "photo"
+    assert payload["card"]["retryable"] is True
 
     attachment = await demo_ledger.fetchrow(
         "SELECT kind, data FROM attachments WHERE id = $1", payload["attachment_id"]
@@ -436,6 +437,32 @@ async def test_a_failed_vision_call_leaves_the_photo_and_a_retry_card(
     )
 
 
+async def test_a_photo_without_a_vision_endpoint_says_so_and_offers_no_retry(
+    session_client, demo_ledger
+):
+    response = session_client.post(
+        "/api/chat/cnv_photo_unset/photo",
+        files={"file": ("upi.png", PNG, "image/png")},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["card"]["retryable"] is False
+    assert "VISION_BASE_URL" in payload["note"]
+    assert "VISION_MODEL" in payload["note"]
+
+    retried = session_client.post(f"/api/chat/cnv_photo_unset/photo/{payload['attachment_id']}")
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["status"] == "failed"
+    assert retried.json()["card"]["retryable"] is False
+    assert (
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM captures WHERE ref = $1", payload["attachment_id"]
+        )
+        == 0
+    )
+
+
 async def test_a_card_number_the_vision_model_reads_never_reaches_the_chat_model(
     session_client, demo_ledger, monkeypatch
 ):
@@ -456,6 +483,9 @@ async def test_a_card_number_the_vision_model_reads_never_reaches_the_chat_model
         )
 
     monkeypatch.setattr("arno.capture.photo.vision_model", lambda: FunctionModel(script))
+    # The scripted model stands in for a configured endpoint, which the capture path checks first.
+    monkeypatch.setenv("VISION_BASE_URL", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("VISION_MODEL", "stub-vision")
     response = session_client.post(
         "/api/chat/cnv_photo_secret/photo",
         files={"file": ("card.png", PNG, "image/png")},

@@ -654,8 +654,9 @@ and `OTEL_SDK_DISABLED=true` disables tracing and agent instrumentation complete
 
 Phoenix retains traces indefinitely by default unless you configure a policy in Phoenix or set
 `PHOENIX_DEFAULT_RETENTION_POLICY_DAYS`. Ledger backups include the `llm_calls` cost journal but
-exclude Phoenix's database. The `cost_replay` job re-exports finalized cost metadata every five
-minutes. To finalize interrupted ordinary calls after stopping `api`, run a one-off container:
+exclude Phoenix's database. The `cost_replay` schedule checks every five minutes and re-exports
+finalized cost metadata only when a row is waiting. To finalize interrupted ordinary calls after
+stopping `api`, run a one-off container:
 
 ```bash
 docker compose stop api

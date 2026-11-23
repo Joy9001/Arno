@@ -179,3 +179,33 @@ async def test_a_backup_reply_carries_a_badge_and_records_the_error(session_clie
     assert any(part.get("type") == "data-model-badge" for part in parts)
     row = await demo_ledger.fetchrow("SELECT last_model_error_type FROM settings WHERE id = 1")
     assert row["last_model_error_type"]
+
+
+async def test_a_transient_provider_error_is_asked_again_and_a_lasting_one_is_not():
+    import pytest as _pytest
+    from pydantic_ai import Agent as _Agent
+    from pydantic_ai.exceptions import ModelHTTPError, ModelServerError
+    from pydantic_ai.messages import ModelResponse as _Response
+    from pydantic_ai.messages import TextPart as _Text
+    from pydantic_ai.models.function import FunctionModel as _Function
+
+    from arno.agent.capabilities import RetryTransientModelErrors
+
+    calls: list[int] = []
+
+    def flaky(messages, info):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ModelServerError("m", "Streaming response failed: [502]", in_stream=True)
+        return _Response(parts=[_Text("ok")])
+
+    agent = _Agent(_Function(flaky), capabilities=[RetryTransientModelErrors(base_delay=0)])
+    assert (await agent.run("hi")).output == "ok"
+    assert len(calls) == 2
+
+    def rejected(messages, info):
+        raise ModelHTTPError(400, "m", body="bad request")
+
+    strict = _Agent(_Function(rejected), capabilities=[RetryTransientModelErrors(base_delay=0)])
+    with _pytest.raises(ModelHTTPError):
+        await strict.run("hi")

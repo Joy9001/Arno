@@ -108,6 +108,32 @@ async def test_a_retry_report_gets_no_second_retry_and_a_stopped_task_waits_sile
     assert not may_retry([_report(prompt=RETRY_MARK + "Import again.")])
 
 
+async def _failed_import(conn, task_id: str) -> str:
+    """A statement the reported task failed on, with its file still stored."""
+    import hashlib
+
+    from arno.importers.pipeline import create_import
+    from arno.ledger.audit import new_id
+
+    payload = b"Date,Narration,Debit,Credit,Balance\n"
+    attachment_id = await new_id(conn, "att")
+    await conn.execute(
+        """
+        INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
+        VALUES ($1, 'statement', 'statement.csv', 'text/csv', $2, $3, $4)
+        """,
+        attachment_id,
+        len(payload),
+        hashlib.sha256(payload).hexdigest(),
+        payload,
+    )
+    row = await create_import(conn, attachment_id=attachment_id)
+    await conn.execute(
+        "UPDATE imports SET status = 'failed', task_id = $1 WHERE id = $2", task_id, row["id"]
+    )
+    return attachment_id
+
+
 async def test_a_waiting_report_starts_a_turn_that_reads_it_first(ledger):
     requests: list[ModelRequest] = []
 
@@ -125,6 +151,7 @@ async def test_a_waiting_report_starts_a_turn_that_reads_it_first(ledger):
     async with owner.opened():
         await history_mod.create_thread(ledger, title="Statement", thread_id=THREAD)
         owner.records[TASK] = _report()
+        failed_file = await _failed_import(ledger, TASK)
         turns = TurnManager(agent, tasks=owner)
         app = SimpleNamespace(state=SimpleNamespace(tasks=owner, turns=turns, agent=agent))
         rewoken: list[str] = []
@@ -137,6 +164,8 @@ async def test_a_waiting_report_starts_a_turn_that_reads_it_first(ledger):
         assert await wake(app, THREAD)
         turn = turns.get(THREAD)
         assert turn is not None and turn.deps.woken_by == (TASK,) and turn.deps.may_retry
+        # The one retry carries the failed import's file, so the parser can read it again.
+        assert turn.deps.statement_attachments == (failed_file,)
         # No one is watching and the report came from a statement: lasting writes ask first.
         assert turn.deps.flagged
         assert _follow_up(owner.records[TASK], turns) == "replying"
@@ -186,10 +215,17 @@ async def test_a_thread_with_a_running_turn_is_not_woken(ledger):
 
 
 async def test_the_woken_turn_is_told_what_to_say_and_whether_it_may_retry(ledger):
-    deps = AgentDeps(conversation_id=THREAD, woken_by=(TASK,), may_retry=True)
+    deps = AgentDeps(
+        conversation_id=THREAD,
+        woken_by=(TASK,),
+        may_retry=True,
+        statement_attachments=("att_failed",),
+    )
     text = await _instructions(SimpleNamespace(deps=deps))
     assert "A background task reported" in text and "start the parser once more" in text
     assert "Do not start the parser again" not in text
+    # A woken turn's files are the failed run's: the upload block for a new message is not shown.
+    assert "Uploaded statement files" not in text
 
     deps.may_retry = False
     assert "Do not start the parser again" in await _instructions(SimpleNamespace(deps=deps))
@@ -252,3 +288,30 @@ async def test_a_failed_wake_start_clears_the_run_marker(ledger, monkeypatch):
     )
     assert row["run_started_at"] is None
     assert row["active_run_id"] is None
+
+
+async def test_a_parser_task_without_statement_files_is_refused_before_it_runs():
+    from arno.agent.wake import ParserNeedsFiles
+
+    class Event:
+        vetoed: str | None = None
+
+        def veto(self, reason: str) -> None:
+            self.vetoed = reason
+
+    policy = ParserNeedsFiles()
+    refused = Event()
+    await policy.needs_files(
+        cast(Any, SimpleNamespace(deps=AgentDeps(conversation_id=THREAD))), cast(Any, refused)
+    )
+    assert refused.vetoed and "no statement file" in refused.vetoed
+
+    allowed = Event()
+    await policy.needs_files(
+        cast(
+            Any,
+            SimpleNamespace(deps=AgentDeps(conversation_id=THREAD, statement_attachments=("a",))),
+        ),
+        cast(Any, allowed),
+    )
+    assert allowed.vetoed is None

@@ -113,7 +113,16 @@ A parser subagent's execution stays folded out of the main transcript. The chat 
 import run card with a host-generated status line, progress indicator, inline password or
 account-selection controls when waiting, **Watch** or **Open run**, and **Continue** when paused on
 the step budget. When a task settles while you are away, the wake-turn reply streams into the open
-thread automatically ([`harness.md#wake-turn`](harness.md#wake-turn)).
+thread automatically ([`harness.md#wake-turn`](harness.md#wake-turn)). Its status line is a plain
+sentence built from the task's outcome; the raw error stays on the run page. Every mounted card for
+one task shares a single poller (`useRun` in `web/src/run/runData.ts`), and a settled task is read
+once.
+
+Each stored reply renders as its own message (`joinStrategy: "none"`), so a reply a wake turn
+wrote after an earlier answer never folds that answer into the activity panel. A thread that is
+still running when it opens (a wake turn, or Arno answering an inbox item) follows its stream. A
+new conversation gets its server id from `POST /api/threads` before its first message, photo, or
+voice note.
 
 Detailed run progress opens in two places:
 

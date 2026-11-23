@@ -275,6 +275,69 @@ async def test_a_longer_statement_replaces_an_earlier_opening(ledger):
     assert await check_ledger(ledger) == []
 
 
+async def _live_adjustments_named(conn, prefix: str) -> int:
+    value = await conn.fetchval(
+        """
+        SELECT count(*) FROM movements m
+        WHERE m.kind = 'adjustment' AND m.description LIKE $1
+          AND NOT EXISTS (SELECT 1 FROM movements r WHERE r.reverses_id = m.id)
+        """,
+        f"{prefix}%",
+    )
+    return int(value)
+
+
+async def test_an_older_statement_committed_after_a_newer_one_keeps_every_day_right(ledger):
+    # The newer statement lands first and books its printed opening on an empty ledger. The older
+    # one, committed next, explains that opening with its own rows. Before the fix the newer
+    # opening stayed on top, so every day of the newer statement read high by it and a stated
+    # balance re-anchor at the end hid the error.
+    created = await create_account(ledger, kind="bank", name="SBI main", institution="SBI")
+    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", created["id"])
+    older_rows = [_row("2025-06-10", "NEFT CR/SALARY", credit=50_000, balance=150_000)]
+    newer_rows = [
+        _row("2026-05-10", "UPI/DR/1/RENT", debit=40_000, balance=110_000),
+        _row("2026-09-10", "NEFT CR/SALARY", credit=20_000, balance=130_000),
+    ]
+    newer = await _review(
+        ledger,
+        account,
+        newer_rows,
+        start=date(2026, 4, 1),
+        end=date(2026, 11, 1),
+        opening=150_000,
+        closing=130_000,
+    )
+    await commit_import(ledger, newer)
+    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    after_newer = await _curve(ledger, account)
+    older = await _review(
+        ledger,
+        account,
+        older_rows,
+        start=date(2025, 4, 1),
+        end=date(2026, 3, 31),
+        opening=100_000,
+        closing=150_000,
+    )
+
+    await commit_import(ledger, older)
+
+    for day in (date(2025, 6, 10), date(2026, 3, 31)):
+        assert await _balance_on(ledger, account, day) == _running(older_rows, 100_000, day), day
+    for day in (date(2026, 4, 1), date(2026, 5, 10), date(2026, 9, 10), date(2026, 11, 1)):
+        assert await _balance_on(ledger, account, day) == _running(newer_rows, 150_000, day), day
+    # One opening (the older statement's) and no stated-balance re-anchor are live.
+    assert await _live_adjustments_named(ledger, "Opening balance") == 1
+    assert await _live_adjustments_named(ledger, "Stated balance re-anchor") == 0
+    assert await check_ledger(ledger) == []
+
+    # Undoing the older statement restores the newer one's curve exactly.
+    await undo_import(ledger, older)
+    assert await _curve(ledger, account) == after_newer
+    assert await check_ledger(ledger) == []
+
+
 async def test_a_balance_stated_after_the_import_is_still_an_adjustment_at_its_day(ledger):
     created = await create_account(
         ledger, kind="bank", name="SBI savings", institution="SBI", last4="6789"

@@ -12,6 +12,12 @@ from arno.tools.mark import mark
 from tests.agent_helpers import streaming_model
 
 
+def test_redaction_removes_an_email_but_keeps_a_upi_handle():
+    redacted = redact_text("statement for joy.m@gmail.com, paid ramesh@okaxis via paytmqr@paytm")
+    assert "joy.m@gmail.com" not in redacted
+    assert "ramesh@okaxis" in redacted and "paytmqr@paytm" in redacted
+
+
 def test_redaction_removes_secrets_but_keeps_upi_and_utr():
     text = (
         "card 4111 1111 1111 1111, PAN ABCDE1234F, aadhaar 2345 6789 0123, "

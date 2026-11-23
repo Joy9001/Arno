@@ -16,7 +16,7 @@ from typing import Any
 
 from arno.db.conn import Connection, connect
 from arno.engine.money import money
-from arno.engine.projection import BASE_HORIZON_DAYS, Projection
+from arno.engine.projection import BASE_HORIZON_DAYS, UNUSABLE_SETUP_GAPS, Projection
 from arno.ledger.audit import new_id
 from arno.notifications import create_notification, send_push_for_kind
 from arno.tools import projection as projection_tools
@@ -38,11 +38,17 @@ async def risk_warning(
 
 
 async def _record_risk(conn: Connection, projection: Projection) -> dict[str, Any] | None:
-    ages = projection["data_quality"].get("balance_ages")
+    data_quality = projection["data_quality"]
+    ages = data_quality.get("balance_ages")
     if ages is not None and not any(
         row.get("known") and row.get("kind") in {"bank", "cash", "wallet"} for row in ages
     ):
         # No verified liquid balance: the curve is a provisional net change, not a low balance.
+        await conn.execute("UPDATE risk_state SET last_checked_at = now() WHERE id = 1")
+        return None
+    # A projection with no income or liquid account measures its own missing setup, not danger,
+    # so onboarding must not open with a warning. The same gaps make a backtest unpublishable.
+    if any(gap in UNUSABLE_SETUP_GAPS for gap in data_quality.get("setup_gaps") or []):
         await conn.execute("UPDATE risk_state SET last_checked_at = now() WHERE id = 1")
         return None
     state = await conn.fetchrow("SELECT * FROM risk_state WHERE id = 1 FOR UPDATE")

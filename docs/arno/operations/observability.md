@@ -89,8 +89,9 @@ touching the network and finalizes that row once the response or error is known.
 and identity fields only (no prompts, replies, documents, credentials, or provider bodies), have no
 `agent_ro` grant, and are backed up with the `arno` database.
 
-The `cost_replay` job runs every five minutes and re-exports finalized rows older than five minutes
-whose recovery export has not succeeded, reusing the original project, trace ID, and span ID.
+The `cost_replay` schedule is checked every five minutes and re-exports finalized rows older than
+five minutes whose recovery export has not succeeded, reusing the original project, trace ID, and
+span ID. A pass with nothing waiting adds no job.
 Because standard batched OTLP export has no per-span acknowledgement, the first replay pass may
 re-export spans that already arrived; Phoenix ignores duplicate span IDs and keeps the full span
 when present. Replayed spans carry `arno.trace.recovered = true` and

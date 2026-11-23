@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import date, datetime
-from typing import Any, override
+from typing import Any, cast, override
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
@@ -448,7 +448,11 @@ async def test_a_chunk_run_streams_and_carries_the_stall_timeout():
 def test_the_categorizer_agent_catches_a_stall_not_a_total_time():
     model = FunctionModel(lambda *_: _output([]))
     agent = categorizer_mod.build_categorizer_agent(model=model)
-    assert agent.model_settings == MODEL_SETTINGS
+    settings = cast(dict[str, Any], agent.model_settings)
+    assert settings.get("timeout") == MODEL_SETTINGS.get("timeout")
+    # The outer agent asks for no reasoning and has room for the reasoning a provider does anyway.
+    assert settings.get("thinking") is False
+    assert settings.get("max_tokens") == categorizer_mod.OUTER_MAX_OUTPUT_TOKENS
 
 
 async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledger, monkeypatch):
@@ -469,6 +473,7 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
     )
     monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 25)
     monkeypatch.setattr(categorizer_mod, "CHECK_PAYEES", 2)
+    monkeypatch.setattr(categorizer_mod, "MIN_AGREEMENT_CHECKS", 2)
     answers = {
         "swiggy": CATEGORY,
         "zomato": CATEGORY,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -14,6 +15,8 @@ router = APIRouter(tags=["web"])
 
 ASSET_CACHE = "public, max-age=31536000, immutable"
 INDEX_CACHE = "no-store"
+# A process probing this port for a model server asks for these, never for a page.
+NON_APP_ROOTS = frozenset({"health", "v1"})
 
 
 def _index(settings: Settings) -> FileResponse | Any:
@@ -52,4 +55,9 @@ def spa(path: str, request: Request) -> Any:
     if root_dir in candidate.parents and candidate.is_file():
         cache = ASSET_CACHE if path.startswith("assets/") else INDEX_CACHE
         return FileResponse(candidate, headers={"Cache-Control": cache})
+    # Neither a client-side route (no extension) nor a built file: a poller asking for a health
+    # or model endpoint, or a browser asking for an asset that is not there, gets a plain 404
+    # instead of an HTML page that says a server is up.
+    if path.split("/", 1)[0] in NON_APP_ROOTS or PurePosixPath(path).suffix:
+        return problem(404, detail=f"No web page at /{path}.")
     return _index(settings)

@@ -81,7 +81,8 @@ Each import moves through ten stages:
 9. **Commit:** Re-reconciles `new` lines against current ledger movements so items logged while the
    import waited in review merge instead of duplicating. Inside one database transaction, commit
    books the evidenced opening balance at `period_start`, supersedes balance adjustments explained
-   by the statement period, preserves any stated balance dated after `period_end`, writes movements
+   by the statement period, re-places the opening of any later statement whose first day the new
+   rows now explain, preserves any stated balance dated after `period_end`, writes movements
    and `statement_line` captures, records any confirmed closing adjustment, recomputes baselines,
    and saves the passing script as a new active parser version.
 10. **Categorize:** Commit enqueues a background `categorize_import` job that applies rules first
@@ -196,16 +197,26 @@ negative, so card parsers negate printed balances (₹4,450 owed is `-445000`, a
 in credit is positive). Row `debit` and `credit` fields are always non-negative (`debit` leaves the
 account, `credit` arrives).
 
-When a statement omits its opening balance, the review screen asks for the printed figure and
-converts it once by account kind (`stated_opening_to_ledger` in `src/arno/importers/checks.py`).
+When a statement omits its opening balance, `submit_parser` keeps its sound rows, parks the import
+in `needs_input`, and answers `needs_opening` (a finished file, not a failure, so the parser stops
+repairing); other files in the same submit still run. The review screen asks for the printed
+figure and converts it once by account kind (`stated_opening_to_ledger` in
+`src/arno/importers/checks.py`).
 Commit books the evidenced opening at `period_start`, supersedes adjustments inside the statement
 period, and surfaces any remaining closing discrepancy—or any conflict with a balance you manually
 stated for a date inside the statement period—for explicit confirmation (`adjustment_confirmed`)
 before booking.
 
-For ledgers that committed imports prior to opening-at-period-start anchoring, run the idempotent
-CLI command `arno repair-openings --dry-run` followed by `arno repair-openings --yes` once to
-re-anchor historical openings without changing current balances.
+Statements can be committed in any order. When an older statement lands after a newer one, its
+rows already carry the balance to the newer statement's first day, so commit shrinks that later
+opening to what is still unexplained, and recomputes (never stacks) a stated-balance re-anchor
+dated after the period (`rebalance_after` in `src/arno/importers/balance_plan.py`). Undoing the
+older import restores the newer one's opening exactly.
+
+For ledgers that committed imports before these rules, run the idempotent CLI command
+`arno repair-openings --dry-run` followed by `arno repair-openings --yes` once. It books missing
+openings at `period_start`, then re-places every later opening and stated-balance re-anchor that
+an out-of-order commit left stale, without changing current balances.
 
 ## Reconciliation
 
@@ -236,8 +247,11 @@ merges automatically; any newly ambiguous match blocks commit and returns the li
 
 Moving money between your own accounts (credit-card bill payments, ATM withdrawals to cash, or
 self-transfers) is not spending. While parsing, the subagent inspects your active accounts and
-narration clues (account last-four digits, `CC PAYMENT`, `ATM WDL`, self-name transfers) and calls
-`suggest_transfers`. Commit refuses to proceed until you confirm or reject every suggested transfer
+calls `suggest_transfers` for lines whose own text names the destination account: its name or
+institution, its last four digits, or a card-payment phrase (`CC PAYMENT`, `ccrepayment`) when you
+have exactly one card. A payment to your own name alone is not evidence (it may go to a wallet or
+an account the ledger lacks), and the host refuses a suggestion whose line does not name its
+account (`names_account` in `src/arno/agent/parser.py`). Commit refuses to proceed until you confirm or reject every suggested transfer
 on the review screen (`PATCH /api/imports/{id}/lines/{line_id}`). When the counterpart account's
 statement arrives later, its line merges into the transfer rather than booking twice.
 

@@ -37,6 +37,12 @@ export type ChatTransportConfig = {
   storage: ResumableClientStorage;
 };
 
+/**
+ * Consecutive stored assistant messages stay separate. The default merges them,
+ * which folds a wake turn's answer into the next message's activity panel.
+ */
+export const CHAT_JOIN_STRATEGY = "none" as const;
+
 /** The data refs stay in the UI; the model needs a prompt when the turn is only files. */
 function attachmentPrompt(messages: ChatMessage[]): ChatMessage[] {
   const last = messages.at(-1);
@@ -116,7 +122,11 @@ export async function stopChatRun(
  * `fmt.decode` accepts the saved AI SDK message payload directly because the
  * stored content is the message without its id.
  */
-export function createHistoryAdapter(aui: AssistantClient): ThreadHistoryAdapter {
+export function createHistoryAdapter(
+  aui: AssistantClient,
+  /** The server's run state for the loaded thread; null when the read failed. */
+  onRunning?: (running: boolean) => void,
+): ThreadHistoryAdapter {
   return {
     async load() {
       return { headId: null, messages: [] };
@@ -130,11 +140,12 @@ export function createHistoryAdapter(aui: AssistantClient): ThreadHistoryAdapter
         try {
           body = await api<ThreadBody>(`/api/threads/${encodeURIComponent(remoteId)}/messages`);
         } catch (error) {
-          // A thread initialized by a photo or voice note may not have a row
-          // until that request lands; it has no history yet, not an error.
+          // A conversation that has not been created on the server yet has no
+          // history; that is an empty chat, not an error.
           if (error instanceof ApiError && error.status === 404) return { messages: [] };
           throw error;
         }
+        onRunning?.(body.running);
         let parentId: string | null = null;
         let headId: string | null = null;
         const messages = body.messages.map((message) => {
@@ -481,9 +492,14 @@ export function createThreadListAdapter(query: { current: string }): RemoteThrea
       );
       return { threads: result.threads.map(asMetadata) };
     },
-    async initialize(threadId) {
-      // The server creates the row on the first chat, photo, or voice request.
-      return { remoteId: threadId };
+    async initialize() {
+      // The server owns the conversation row; the local placeholder must never
+      // become a stored id.
+      const created = await api<{ id: string; title: string }>("/api/threads", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return { remoteId: created.id, externalId: undefined };
     },
     async rename(remoteId, title) {
       await api(`/api/threads/${encodeURIComponent(remoteId)}`, {

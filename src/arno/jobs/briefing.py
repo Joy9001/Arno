@@ -26,8 +26,12 @@ logger = logging.getLogger("arno.jobs.briefing")
 BRIEFING_INSTRUCTIONS = """You write a short weekly money briefing for one person in India.
 Use only the numbers in the data. Do not calculate, round, convert, or invent a number, and do not
 give advice or recommend a product. Two short paragraphs, plain English, no headings, no markdown
-tables. Say what changed and what is due. If a number is null, say it is unknown, never zero. When
-the spending data says statement coverage is incomplete, say so beside the spend total."""
+tables. Write natural sentences about what changed and what is due; never repeat a field name, a
+JSON key, or a count in parentheses. If a number is null, say it is unknown, never zero. When the
+spending data says statement coverage is incomplete, say so beside the spend total."""
+
+# Two short paragraphs need far less; an uncapped model spent 3,166 output tokens on ~200.
+BRIEFING_MAX_OUTPUT_TOKENS = 600
 
 
 def _sum_paise(value: Any) -> int | None:
@@ -245,8 +249,14 @@ async def write_prose(
 ) -> str:
     """One CHAT call, and only one. The caller falls back to the template on any failure."""
     from pydantic_ai import Agent, UsageLimits
+    from pydantic_ai.settings import ModelSettings, merge_model_settings
 
-    from arno.agent.capabilities import MODEL_SETTINGS, drain_events, spend_limits
+    from arno.agent.capabilities import (
+        MODEL_SETTINGS,
+        RetryTransientModelErrors,
+        drain_events,
+        spend_limits,
+    )
     from arno.agent.spend import spend_store_scope
 
     async with spend_store_scope(spend_store) as store:
@@ -255,13 +265,18 @@ async def write_prose(
             model or primary_model(),
             output_type=str,
             instructions=BRIEFING_INSTRUCTIONS,
-            capabilities=[limits] if limits is not None else None,
+            # A pipeline notification is prose, not a reasoning problem; the cap and the disabled
+            # thinking keep a 200-token brief from spending thousands of output tokens.
+            model_settings=merge_model_settings(
+                MODEL_SETTINGS,
+                ModelSettings(thinking=False, max_tokens=BRIEFING_MAX_OUTPUT_TOKENS),
+            ),
+            capabilities=[RetryTransientModelErrors(), *([limits] if limits is not None else [])],
             name="weekly-briefing",
         )
         result = await agent.run(
             "Write the brief from this JSON. Use only these numbers.\n"
             + json.dumps(numbers, ensure_ascii=False, default=str),
-            model_settings=MODEL_SETTINGS,
             event_stream_handler=drain_events,
             usage_limits=UsageLimits(request_limit=1),
         )

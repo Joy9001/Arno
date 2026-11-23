@@ -135,7 +135,7 @@ The following table lists every job kind, its schedule or trigger, and its timeo
 
 | Job kind | Trigger or schedule (IST) | Timeout (`DEFAULT_TIMEOUTS`) |
 |---|---|---|
-| `cost_replay` | Every 5 minutes (`FREQ=MINUTELY;INTERVAL=5`) | Runner default (no model calls; OTLP replay only) |
+| `cost_replay` | Checked every 5 minutes (`FREQ=MINUTELY;INTERVAL=5`); a job is created only when a finalized call is waiting to export | Runner default (no model calls; OTLP replay only) |
 | `weekly_briefing` | Weekly on `weekly_briefing_dow` at `notification_time` (engine numbers, LLM prose with template fallback) | `None` (unbounded) |
 | `reminders` | Daily at `notification_time` (N days before obligations, EMIs, and card due dates) | `60` s |
 | `recaps` | Daily at `notification_time` (announces new daily, weekly, and monthly recaps) | Runner default |
@@ -156,12 +156,18 @@ Key job-loop properties:
   Handlers raising `JobGaveUp` (including `COST_STOP_ERRORS` and `CommitOutcomeUnknownError`) fail
   immediately without retrying. Failed jobs can be retried from the UI (`POST /api/jobs/{id}/retry`),
   which resets the row and resolves its failure alert.
+- **Idle wait, not a poll:** Schedules are seeded and mirrored at boot and on a five-minute
+  interval (a write that changes one mirrors it itself); each later pass only turns due schedules
+  into jobs and claims what is due. With nothing to do the loop sleeps until the earliest of the
+  next `next_run_at`, the next pending job's `run_at`, and an in-process wake-up that an enqueue
+  sets, capped at 60 seconds for a job another process wrote.
 - **Concurrency and transactional enqueue:** Up to two jobs run concurrently (`FOR UPDATE SKIP
   LOCKED`), coordinating with erase-everything via a shared advisory lock (`ERASE_LOCK_KEY`). Jobs
   can enqueue inside the same database transaction as the write that triggered them.
 - **Notifications and push:** Every alert lands in the in-app inbox. Web push (`pywebpush` with
   first-run VAPID keys) sends contentless pings so no financial data passes through browser push
-  relays. Opening an inbox item in chat seeds a new thread through normal agent write rules.
+  relays. Opening an inbox item in chat seeds a new thread and the server starts the turn, so Arno
+  answers the seeded request instead of waiting for a user message that never comes.
 - **Live progress polling:** The web app polls `GET /api/jobs/activity` every 3 seconds while jobs
   are active and every 30 seconds while idle.
 

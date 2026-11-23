@@ -31,6 +31,7 @@ from arno.agent.categorizer import (
     CategorizerDeps,
     build_categorizer_agent,
     build_labeling_agent,
+    save_held_answers,
 )
 from arno.agent.cost_journal import record_final
 from arno.agent.models import batch_model as configured_batch_model
@@ -79,6 +80,20 @@ async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
         import_id,
     )
     return int(row["labeled"]), int(row["uncategorized"])
+
+
+async def _keep_held_answers(conn: Connection, deps: CategorizerDeps, exc: Exception) -> bool:
+    """Save the answers a failed run already paid for, unless a spend stop ended it.
+
+    Without this a model error after `categorize_now` threw the answers away and the job retry
+    asked the same payees again. True when answers were saved, so the job ends instead of retrying.
+    """
+    if deps.saved or not deps.answers or ceiling_name(exc):
+        return False
+    if isinstance(exc, (SpendStoreError, UnpricedModelError)):
+        return False
+    await save_held_answers(conn, deps)
+    return True
 
 
 async def _finish_run(conn: Connection, run_id: str, import_id: str, deps: CategorizerDeps) -> None:
@@ -206,10 +221,19 @@ async def run_categorize(
                 deps=deps,
                 usage_limits=CATEGORIZE_USAGE_LIMITS,
                 event_stream_handler=drain_events,
+                # One trace session per import, so a retry joins the run it repeats.
+                conversation_id=f"categorize-{import_id}",
             )
         except Exception as exc:
             # The import stays committed either way; this only decides how the job ends.
+            salvaged = await _keep_held_answers(conn, deps, exc)
             await _finish_run(conn, run_id, import_id, deps)
+            if salvaged:
+                logger.warning(
+                    "the categorizer stopped after asking (%s); kept its %d answers",
+                    type(exc).__name__,
+                    len(deps.answers),
+                )
             ceiling = ceiling_name(exc)
             if ceiling:
                 raise JobGaveUp(f"Stopped at the {ceiling} spend ceiling.") from exc
@@ -218,7 +242,8 @@ async def run_categorize(
                 raise JobGaveUp(f"Stopped at the cost ledger: {exc}") from exc
             if isinstance(exc, UsageLimitExceeded):
                 raise JobGaveUp(f"Stopped at the categorizer's step limit: {exc}") from exc
-            raise
+            if not salvaged:
+                raise
 
     if deps.submitted_batch:
         return {"status": "batch_submitted", "batch_id": deps.submitted_batch, "run_id": run_id}

@@ -247,12 +247,12 @@ async def test_one_task_can_carry_two_banks(ledger):
 
 async def test_own_account_suggestions_land_on_the_lines(ledger):
     account = await _sbi_account(ledger)
+    # The suggested row names this account ("AMAZON PAY"), so the host accepts it.
     other = await create_account(
         ledger,
-        kind="bank",
-        name="Axis savings",
-        institution="Axis",
-        last4="1111",
+        kind="wallet",
+        name="Amazon Pay",
+        institution="Amazon",
         opening_balance_paise=100000,
         opening_balance_as_of=date(2026, 3, 31),
     )
@@ -286,6 +286,23 @@ async def test_own_account_suggestions_land_on_the_lines(ledger):
     assert lines[2]["match_detail"]["suggested_transfer_account_id"] == other["id"]
     assert all("suggested_category" not in line["match_detail"] for line in lines)
     assert other["id"] in tool_returns(result.all_messages())
+
+
+def test_a_transfer_suggestion_needs_the_row_to_name_its_account():
+    from arno.agent.parser import names_account
+
+    card = {"name": "Slice Credit card", "institution": None, "kind": "card", "last4": None}
+    repayment = "UPI/DR/1/slice sm/NESF/ccrepaymen/UPI"
+    own_name = "UPI/DR/2/JOY MRIDHA/PPIW/ID-1"
+    assert names_account(repayment, card, only_card=True)
+    # The user's own name names no account: it may be a wallet or a bank the ledger lacks.
+    assert not names_account(own_name, card, only_card=True)
+    # A card-payment phrase alone names a card only when the user has one card.
+    other_card = {"name": "HDFC Regalia", "institution": "HDFC", "kind": "card", "last4": None}
+    assert names_account("CC PAYMENT 1234", other_card, only_card=True)
+    assert not names_account("CC PAYMENT 1234", other_card, only_card=False)
+    bank = {"name": "SBI main", "institution": "SBI", "kind": "bank", "last4": "6789"}
+    assert names_account("NEFT/TRANSFER TO A/C XX6789", bank, only_card=False)
 
 
 async def test_a_restart_resumes_a_cancelled_parser_from_the_step_store(
@@ -1057,3 +1074,14 @@ async def test_a_zip_of_statements_is_refused_rather_than_half_imported(ledger):
         "SELECT status FROM imports WHERE id = $1", opened[0]["import_id"]
     )
     assert status == "failed"
+
+
+def test_header_cells_the_file_never_prints_are_named():
+    from arno.agent.parser import _unprinted
+    from arno.importers.readers import open_documents
+
+    doc = open_documents(sbi_csv())[0]
+
+    assert _unprinted(doc, ["Date", "Narration", "Balance"]) == []
+    # A header copied from an example instead of the file is named, so its fingerprint isn't saved.
+    assert _unprinted(doc, ["Date", "Value Date", "Narration"]) == ["Value Date"]

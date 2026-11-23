@@ -25,7 +25,7 @@ from pydantic_monty import (
 from arno.agent.spend import COST_STOP_ERRORS
 from arno.importers.checks import check_statement as check_rows
 from arno.importers.helpers import PRELUDE
-from arno.importers.readers import Doc, DocError
+from arno.importers.readers import Doc, DocError, in_doc_worker
 from arno.importers.vision import transcribe_page as vision_transcribe
 from arno.ledger.payees import is_placeholder_name
 
@@ -108,21 +108,21 @@ async def run_script(
 
     async def doc_info(*, import_id: Any = None) -> dict[str, Any]:
         accept_import(import_id)
-        return doc.info()
+        return await in_doc_worker(doc.info)
 
     async def doc_words(page: Any = 0, *, import_id: Any = None) -> list[dict[str, Any]]:
         accept_import(import_id)
-        return doc.words(page)
+        return await in_doc_worker(lambda: doc.words(page))
 
     async def doc_words_range(
         first: Any = 0, last: Any = 0, *, import_id: Any = None
     ) -> list[list[dict[str, Any]]]:
         accept_import(import_id)
-        return doc.words_range(first, last)
+        return await in_doc_worker(lambda: doc.words_range(first, last))
 
     async def doc_cells(sheet: Any = 0, *, import_id: Any = None) -> list[list[Any]]:
         accept_import(import_id)
-        return doc.cells(sheet)
+        return await in_doc_worker(lambda: doc.cells(sheet))
 
     async def ledger_opening(
         account: str | None = None, *, import_id: Any = None

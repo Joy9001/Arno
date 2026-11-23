@@ -70,6 +70,7 @@ The following table lists the capabilities active in Arno and where each is conf
 | `CodeModeHints` | Appends the allowed helper and module lists when `run_code` fails with `Type error in code:` or `Runtime error:` | `src/arno/agent/capabilities.py` |
 | `SubAgents` with `TaskControl` | Delegates statement imports to the `parser` subagent (`can_ask_questions=True`, `resumable=True`, `forward_usage=False`, `contain_errors=True`, `auto_background_after=15.0`) backed by `DelegationTasks` and `PostgresStepStore` | `src/arno/agent/builder.py`, `src/arno/api/tasks.py` |
 | `Planning` | Keeps multi-step statement parses on track using `PostgresPlanStore` keyed by task ID (parser subagent only) | `src/arno/agent/parser.py` |
+| `RetryTransientModelErrors` | Asks the same model again (three attempts, growing wait) on a provider 5xx, an overload, a dropped connection, a rate limit, or a stream that fails before its first event; each attempt is metered, then the last error goes to `ModelFallback` or the run. The parser, categorizer, briefing, and photo agents carry it too | `src/arno/agent/capabilities.py` |
 | `ModelFallback` and `WindowLimited` | Falls back to the configured backup model (`sticky=False`) and rejects histories exceeding `CHAT_FALLBACK_CONTEXT_WINDOW` before dispatch; omitted when no backup is set and refused on ChatGPT primaries | `src/arno/agent/capabilities.py`, `src/arno/agent/models.py` |
 | `SpendLimits` | Enforces per-run, scheduled-question, and shared UTC-day USD ceilings through one `spend_limits()` factory over `PostgresSpendStore` | `src/arno/agent/spend.py` |
 | `BatchModelRequests` | Submits and collects provider batch categorization jobs when a `BATCH` model is configured (`max_resubmissions=0`, 30 s flush wait) | `src/arno/agent/categorizer.py`, `src/arno/importers/categorize.py` |
@@ -161,7 +162,12 @@ The prompt assembly splits across two modules:
   active category names from Postgres (falling back to 10 defaults if the database is unavailable),
   `INDIA_NOTES` (rupee formatting, Hinglish mirroring, UPI ID preservation), and conditional blocks
   for uploaded or carried `statement_attachments`, `paused_parser_tasks`, wake-turn guidance
-  (`WOKEN_TEXT` and `WOKEN_NO_RETRY`), and scheduled-question `READ_ONLY_SUFFIX`.
+  (`WOKEN_TEXT`, plus `WOKEN_RETRY` when the wake turn carries the failed imports' files or
+  `WOKEN_NO_RETRY` otherwise), a host-written line per photo the message carried
+  (`photo_outcomes`), and scheduled-question `READ_ONLY_SUFFIX`. A wake turn's one automatic
+  retry gets the attachments of the imports the reported task failed on, because a parser reads
+  only its own turn's files; `ParserNeedsFiles` vetoes any new parser task in a turn with no
+  statement file.
 
 Active user preferences arrive through the pinned thread-start snapshot rather than the static
 prompt, preserving prompt-cache stability across turns. Behavioral invariants that must never fail

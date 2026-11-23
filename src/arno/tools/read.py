@@ -559,6 +559,16 @@ async def get_financial_context(conn: Connection) -> dict[str, Any]:
             FROM imports i
             LEFT JOIN v_accounts acc ON acc.id = i.account_id
             WHERE i.status NOT IN ('committed', 'rejected') AND i.undone_at IS NULL
+              -- A failed attempt a later import of the same file replaced is closed, not open.
+              AND NOT (
+                  i.status = 'failed'
+                  AND EXISTS (
+                      SELECT 1 FROM imports later
+                      WHERE later.file_hash = i.file_hash AND later.id <> i.id
+                        AND later.created_at > i.created_at
+                        AND later.status NOT IN ('failed', 'rejected')
+                  )
+              )
             ORDER BY i.created_at DESC, i.id DESC
             """
         )

@@ -6,6 +6,7 @@ behavior are measured from traces at L2.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterable
 from contextlib import nullcontext
@@ -13,16 +14,24 @@ from dataclasses import replace
 from decimal import Decimal
 from typing import Any, override
 
-from pydantic_ai import ModelSettings, RunContext
+from pydantic import BaseModel
+from pydantic_ai import ModelSettings, RetryModelRequest, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
     Caching,
     ModelFallback,
     WrapRunHandler,
 )
+from pydantic_ai.exceptions import (
+    ModelConnectionError,
+    ModelRateLimitError,
+    ModelServerError,
+    ModelUnavailableError,
+)
 from pydantic_ai.messages import (
     AgentStreamEvent,
     ModelRequest,
+    ModelResponse,
     ToolReturn,
     ToolReturnPart,
     UserPromptPart,
@@ -142,6 +151,10 @@ class RootSpanIO(AbstractCapability[Any]):
             # The API passes the opaque authenticated principal; CLI and scheduled runs use the
             # one local actor this single-user installation has.
             span.set_attribute("user.id", getattr(ctx.deps, "user_id", None) or "local-user")
+            context = span.get_span_context()
+            if isinstance(ctx.deps, AgentDeps) and context.is_valid:
+                # The saved reply carries its trace, so Flag can open the run that wrote it.
+                ctx.deps.trace_id = format(context.trace_id, "032x")
         if ctx.trace_include_content and span.is_recording():
             text = _current_user_text(ctx)
             if text:
@@ -158,8 +171,11 @@ class RootSpanIO(AbstractCapability[Any]):
                 span.set_attribute("arno.approvals.approved", ctx.deps.approvals)
         if ctx.trace_include_content and span.is_recording():
             output = result.output
-            if isinstance(output, str) and output.strip():
-                span.set_attribute("output.value", output)
+            # A background agent's typed report (a parse or categorize report) reads as its own
+            # summary line, so its session shows a last output too.
+            text = str(output) if isinstance(output, BaseModel) else output
+            if isinstance(text, str) and text.strip():
+                span.set_attribute("output.value", text)
                 span.set_attribute("output.mime_type", "text/plain")
         return result
 
@@ -534,12 +550,59 @@ def build_capabilities(
     ]
     if subagents is not None:
         capabilities.append(subagents)
+    # Same model first, then the backup: the retry hands its last error on to the fallback.
+    capabilities.append(RetryTransientModelErrors())
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
     main_limits = spend_limits(spend_store, budgets=budgets)
     if main_limits is not None:
         capabilities.append(main_limits)
     return capabilities
+
+
+TRANSIENT_MODEL_ERRORS = (
+    ModelServerError,
+    ModelUnavailableError,
+    ModelConnectionError,
+    ModelRateLimitError,
+)
+TRANSIENT_ATTEMPTS = 3
+"""Attempts per request step on a transient provider error: the first try and two retries."""
+
+
+class RetryTransientModelErrors(AbstractCapability[Any]):
+    """Ask the same model again when the provider fails for a reason a second try can fix.
+
+    The SDK clients run with `max_retries=0` so every attempt is metered, and a free provider's
+    5xx or a stream that drops before its first event would otherwise end the whole turn or a
+    long parser run. Each retry waits a little longer; after the last one the error goes on to
+    `ModelFallback`, when a backup model is configured, and then to the run.
+    """
+
+    def __init__(self, attempts: int = TRANSIENT_ATTEMPTS, *, base_delay: float = 2.0) -> None:
+        self.attempts = attempts
+        self.base_delay = base_delay
+        self.id = "retry_transient_model_errors"
+
+    @override
+    async def on_model_request_error(
+        self,
+        ctx: RunContext[Any],
+        *,
+        request_context: ModelRequestContext,
+        error: Exception,
+    ) -> ModelResponse:
+        transient = isinstance(error, TRANSIENT_MODEL_ERRORS)
+        if not transient or request_context.attempt >= self.attempts:
+            raise error
+        logger.warning(
+            "model request failed (%s), retrying: attempt %d of %d",
+            type(error).__name__,
+            request_context.attempt + 1,
+            self.attempts,
+        )
+        await asyncio.sleep(self.base_delay * request_context.attempt)
+        raise RetryModelRequest()
 
 
 STALL_SECONDS = 600
@@ -574,6 +637,7 @@ __all__ = [
     "SUMMARY_PROMPT",
     "CodeModeHints",
     "OutsideTextTaint",
+    "RetryTransientModelErrors",
     "RootSpanIO",
     "ToolErrorsToModel",
     "WRITE_TOOLS",

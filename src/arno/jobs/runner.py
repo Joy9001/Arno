@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
@@ -71,6 +72,32 @@ def default_handlers() -> dict[str, Handler]:
 
 DEFAULT_HANDLERS: dict[str, Handler] = {}
 
+# The loop idles until the next due time, capped so a job another process wrote still starts.
+MAX_IDLE_SECONDS = 60.0
+# Schedules are seeded and mirrored at boot and this often, not on every pass: a write that
+# changes one mirrors it itself, and the periodic pass catches settings changed elsewhere.
+SYNC_EVERY_SECONDS = 300.0
+# A wake-up can arrive before its transaction commits, so a wake with nothing to claim re-checks
+# once instead of sleeping to the cap.
+RETRY_SOON_SECONDS = 1.0
+NEXT_DUE_SQL = """
+    SELECT min(due) AS due, now() AS now
+    FROM (
+        SELECT next_run_at AS due FROM job_schedules WHERE active
+        UNION ALL
+        SELECT run_at FROM jobs WHERE status = 'pending'
+    ) AS pending
+"""
+
+# One event per running loop: `enqueue_job` wakes them all, and each runner owns its own.
+_WAKE_TARGETS: set[asyncio.Event] = set()
+
+
+def _notify_enqueued() -> None:
+    """Wake the loop in this process; a job written by another process waits for the timer."""
+    for wake in _WAKE_TARGETS:
+        wake.set()
+
 
 class JobGaveUp(Exception):  # noqa: N818 - it reads as what happened, like `TimeoutError`
     """A failure another attempt cannot fix (a spend ceiling, say): fail now, without retries."""
@@ -108,10 +135,12 @@ async def enqueue_job(
         run_at,
     )
     if row is not None:
+        _notify_enqueued()
         return str(row["id"])
     existing = await conn.fetchrow("SELECT id FROM jobs WHERE key = $1", key)
     if existing is None:  # pragma: no cover - the conflict row vanished
         raise RuntimeError(f"job key {key!r} exists but its row is gone")
+    _notify_enqueued()
     return str(existing["id"])
 
 
@@ -279,25 +308,30 @@ class JobRunner:
         self,
         *,
         concurrency: int = 2,
-        poll_seconds: float = 1.0,
+        max_idle_seconds: float = MAX_IDLE_SECONDS,
         registry: Mapping[str, Handler] | None = None,
         timeouts: Mapping[str, float | None] | None = None,
     ) -> None:
         self.concurrency = max(1, concurrency)
-        self.poll_seconds = poll_seconds
+        self.max_idle_seconds = max_idle_seconds
         self.registry = dict(registry or handlers())
         self.timeouts = {**DEFAULT_TIMEOUTS, **(dict(timeouts or {}))}
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
+        self._wake = asyncio.Event()
+        self._synced_at = 0.0
         self._running: set[asyncio.Task[None]] = set()
 
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._stop = asyncio.Event()
+            self._synced_at = 0.0
+            _WAKE_TARGETS.add(self._wake)
             self._task = asyncio.create_task(self._loop(), name="arno-jobs")
 
     async def stop(self) -> None:
         self._stop.set()
+        _WAKE_TARGETS.discard(self._wake)
         if self._task is not None:
             self._task.cancel()
             try:
@@ -312,35 +346,70 @@ class JobRunner:
         self._running.clear()
 
     async def _loop(self) -> None:
+        await self._sync_schedules(force=True)
         while not self._stop.is_set():
+            woken = self._wake.is_set()
+            self._wake.clear()
             try:
-                await self.tick()
+                claimed = await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - the loop must survive a bad job row
                 logger.exception("job loop tick failed")
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.poll_seconds)
-            except TimeoutError:
-                pass
+                claimed = 0
+            await self._sync_schedules()
+            if claimed:
+                # Another free slot may hold a job already due; fill it before idling.
+                continue
+            await self._wait_for_work(retry_soon=woken)
 
-    async def _prepare_schedules(self) -> int:
-        """Seed and sync the recurring schedules, then turn due ones into jobs."""
-        async with connect() as conn:
-            from arno.jobs.schedules import (
-                enqueue_due_schedules,
-                ensure_builtin_schedules,
-                sync_scheduled_questions,
-            )
+    async def _sync_schedules(self, *, force: bool = False) -> None:
+        """Seed and mirror the recurring schedules, at boot and on the slow interval."""
+        now = time.monotonic()
+        if not force and now - self._synced_at < SYNC_EVERY_SECONDS:
+            return
+        try:
+            async with connect() as conn:
+                from arno.jobs.schedules import (
+                    ensure_builtin_schedules,
+                    sync_scheduled_questions,
+                )
 
-            await ensure_builtin_schedules(conn)
-            await sync_scheduled_questions(conn)
-            return await enqueue_due_schedules(conn)
+                await ensure_builtin_schedules(conn)
+                await sync_scheduled_questions(conn)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a boot without the mirror still runs due jobs
+            logger.exception("job loop could not sync the schedules")
+        # On failure too: a broken mirror waits for the next interval, not every pass.
+        self._synced_at = now
+
+    async def _wait_for_work(self, *, retry_soon: bool = False) -> None:
+        """Sleep until the next due schedule or job, an enqueue, or the idle cap."""
+        wait = self.max_idle_seconds
+        try:
+            async with connect() as conn:
+                row = await conn.fetchrow(NEXT_DUE_SQL)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - a failed read idles to the cap
+            logger.exception("job loop could not read the next due time")
+            row = None
+        if row is not None and row["due"] is not None:
+            wait = min(wait, max(0.05, (row["due"] - row["now"]).total_seconds()))
+        if retry_soon:
+            wait = min(wait, RETRY_SOON_SECONDS)
+        try:
+            await asyncio.wait_for(self._wake.wait(), timeout=wait)
+        except TimeoutError:
+            pass
 
     async def tick(self) -> int:
-        """Claim and run as many jobs as the concurrency limit allows."""
-        await self._prepare_schedules()
+        """Turn due schedules into jobs, then claim up to the free slots."""
         async with connect() as conn:
+            from arno.jobs.schedules import enqueue_due_schedules
+
+            await enqueue_due_schedules(conn)
             free = self.concurrency - len(self._running)
             jobs: list[dict[str, Any]] = []
             if free > 0:
@@ -358,7 +427,7 @@ class JobRunner:
     async def run_once(self) -> int:
         """Claim every currently due job and await it. Tests use this instead of the loop."""
         claimed = 0
-        await self._prepare_schedules()
+        await self._sync_schedules(force=True)
         while True:
             async with connect() as conn:
                 job = await _claim_one(conn)

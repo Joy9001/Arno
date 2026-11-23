@@ -94,9 +94,32 @@ class WakePolicy(AbstractCapability[Any]):
         event.prompt = RETRY_MARK + event.prompt
 
 
+class ParserNeedsFiles(AbstractCapability[Any]):
+    """A new parser task needs this turn's statement files; without them it can only report so.
+
+    A parser reads only the attachments its turn carries. Two runs in one session were started
+    with none (a photo-only message, a retry in a later turn) and each spent four model calls to
+    answer "no files". A resume continues a run that already has its files, so it passes.
+    """
+
+    def __init__(self) -> None:
+        self.id = "parser_needs_files"
+
+    @on_event(TaskAssignedEvent)
+    async def needs_files(self, ctx: Any, event: TaskAssignedEvent) -> None:
+        if getattr(getattr(ctx, "deps", None), "statement_attachments", ()):
+            return
+        event.veto(
+            "This turn has no statement file, so the parser has nothing to read. A photo is not "
+            "a statement. A failed import keeps its file: point the user to Retry on its import "
+            "card instead of asking for the file again."
+        )
+
+
 __all__ = [
     "RETRY_MARK",
     "KeepRetryMark",
+    "ParserNeedsFiles",
     "WakePolicy",
     "may_retry",
     "waiting_reports",

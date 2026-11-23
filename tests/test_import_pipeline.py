@@ -1224,6 +1224,29 @@ async def test_a_card_statement_with_the_ledger_opening_books_no_adjustment(ledg
     assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 155000
 
 
+async def test_every_card_statement_waiting_for_its_opening_is_kept_in_one_submit(ledger):
+    card = await helpers.card(ledger)
+    first = await helpers.upload(
+        ledger,
+        card_statement([("01/04/2026", "BLINKIT", "-428.00")], "1,428.00"),
+        account_id=card["id"],
+    )
+    second = await helpers.upload(
+        ledger,
+        card_statement([("02/05/2026", "SWIGGY", "-200.00")], "1,628.00"),
+        account_id=card["id"],
+    )
+
+    result = await submit_parser_code(ledger, import_ids=[first, second], code=CARD_PARSER)
+
+    # One parked file does not stop the next one: both keep their rows and wait on the card.
+    assert result["status"] == "needs_opening"
+    assert sorted(result["waiting"]) == sorted([first, second])
+    for import_id in (first, second):
+        detail = await import_payload(ledger, import_id)
+        assert detail["status"] == "needs_input" and len(detail["lines"]) == 1
+
+
 async def test_the_amount_owed_answer_unblocks_a_first_card_statement(ledger):
     from arno.importers.pipeline import set_manual_opening
 
@@ -1237,7 +1260,9 @@ async def test_the_amount_owed_answer_unblocks_a_first_card_statement(ledger):
     )
 
     first = await submit_parser_code(ledger, import_ids=[import_id], code=CARD_PARSER)
-    assert first["status"] == "failed"
+    # Not a failure: the rows are kept and the card asks the user, so the parser stops repairing.
+    assert first["status"] == "needs_opening"
+    assert first["waiting"] == [import_id]
     detail = await import_payload(ledger, import_id)
     assert detail["status"] == "needs_input"
     assert detail["opening_required"] is True
@@ -1291,7 +1316,7 @@ async def test_an_overpaid_card_books_a_credit_balance(ledger):
     )
 
     first = await submit_parser_code(ledger, import_ids=[import_id], code=CARD_PARSER)
-    assert first["status"] == "failed"
+    assert first["status"] == "needs_opening"
     await set_manual_opening(ledger, import_id=import_id, opening_paise=100000)
     second = await submit_parser_code(ledger, import_ids=[import_id], code=CARD_PARSER)
     assert second["status"] == "parser_submitted", second

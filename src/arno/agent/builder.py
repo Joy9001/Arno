@@ -63,15 +63,22 @@ A background task reported
 - Ready for review: say so; the review is on its import card.
 - Out of steps (outcome `budget`): say why it stopped and point to Continue on the run card. Never
   resume it yourself.
-- Interrupted by a restart (outcome `cancelled`): say so, and that they can ask you to continue it.
-- Failed: when a second attempt could fix it (a model or network error, or a script mistake the
-  report names), start the parser once more with `delegate_task("parser", "<what failed and what
-  to do differently>", background=True)` and say you are retrying. Otherwise say why, and what
-  the user can do: upload the statement in shorter date ranges, or the bank's CSV export.
+- Interrupted by a restart (outcome `cancelled`): say so, and point to Continue on the run card.
+- Failed: say why in plain words, never the raw error. What you may do next is in the block
+  below.
+- Never ask the user to upload a file again that the thread already has: a failed import keeps
+  its file, and its import card has Retry.
 """
 
-WOKEN_NO_RETRY = """- This report is from an automatic retry. Do not start the parser again:
-  say why it failed and what the user can do.
+WOKEN_RETRY = """- This turn carries the failed imports' files. When the failure was a model or
+  network error, or a script mistake the report names, start the parser once more with
+  `delegate_task("parser", "<what failed and what to do differently>", background=True)` and say
+  you are retrying. Otherwise do not: say why it failed, and that Retry on the import card runs
+  it again.
+"""
+
+WOKEN_NO_RETRY = """- Do not start the parser again in this turn: this report is from an automatic
+  retry, or no file failed. Say why it stopped and point to Retry on the import card.
 """
 
 
@@ -90,8 +97,10 @@ async def _statement_names(ids: tuple[str, ...]) -> list[str]:
 
 async def _instructions(ctx: Any, *, read_only: bool = False) -> str:
     text = render_instructions(await _categories())
-    attachments = getattr(getattr(ctx, "deps", None), "statement_attachments", ())
-    if attachments:
+    deps = getattr(ctx, "deps", None)
+    attachments = getattr(deps, "statement_attachments", ())
+    woken = getattr(deps, "woken_by", ())
+    if attachments and not woken:
         count = len(attachments)
         noun = "file" if count == 1 else "files"
         names = await _statement_names(tuple(attachments))
@@ -104,11 +113,10 @@ Uploaded statement files
   "Import the statement files from this turn.", background=True)`, before any other tool call and
   before any prose, then end your turn. Never put an attachment ID in the task text: the parser
   already has this turn's files. One upload is one task, and each file becomes an import card.
-- These are the files this turn has. One of them may have been uploaded in an earlier turn of
-  this thread and carried forward, so it is here even though the message you are answering has no
-  attachment on it. Never say a file did not arrive, or that this thread has no statement, while
-  this block names one: search past messages and you will not find the file's text, because a
-  statement has none. If you already answered without handing it over, hand it to the parser now.
+- This block is about the message you are answering now. It lists that message's files, plus
+  any file an earlier message uploaded that no parser has read yet.
+  Never say a file did not arrive while this block names one: a statement has no text to search
+  for. If you already answered without handing it over, hand it to the parser now.
 - The parser reports a status, counts, and anything blocking. It never writes to the ledger, and
   you cannot commit an import. If it asks a question, answer from the ledger when you can and ask
   the user only when you cannot. If a parser task was interrupted by a restart, resume it with
@@ -126,10 +134,24 @@ Paused statement import
   `delegate_task("parser", "Continue reading the statement.", resume="<task_id>",
   background=True)` and end your turn. Each resume has a fresh step budget.
 """
-    woken = getattr(getattr(ctx, "deps", None), "woken_by", ())
+    photos = getattr(deps, "photo_outcomes", ())
+    if photos and not read_only:
+        listed = "\n".join(f"  - Photo {index}: {note}" for index, note in enumerate(photos, 1))
+        text += f"""
+
+Photos with this message
+- The message you are answering carried {len(photos)} photo(s). The host already read each one
+  and showed its card to the user:
+{listed}
+- A photo is not a statement: never hand it to the parser, and never say it did not arrive. A
+  screenshot listing many transactions cannot be logged from a photo; say so, and ask for the
+  statement or export instead.
+"""
     if woken and not read_only:
         text += WOKEN_TEXT
-        if not getattr(ctx.deps, "may_retry", False):
+        if getattr(deps, "may_retry", False) and attachments:
+            text += WOKEN_RETRY
+        else:
             text += WOKEN_NO_RETRY
     return text + READ_ONLY_SUFFIX if read_only else text
 

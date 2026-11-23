@@ -118,11 +118,14 @@ def _following_occurrence(
     default_time: time,
     anchor: datetime | None = None,
 ) -> datetime | None:
-    """Advance from the last scheduled occurrence, not from now.
+    """Advance the rule past `now`, keeping its phase.
 
-    Anchoring an INTERVAL=2 rule at today moves its phase (a late biweekly run would fire a week
-    early), so walk the rule's own occurrences until one is in the future.
+    A stored `dtstart` anchors `INTERVAL` and `COUNT`, so one call answers directly; walking
+    every missed occurrence (a laptop asleep for a week runs 2,000 five-minute steps) held the
+    loop before it could claim a job. Only an anchorless row still walks, its phase unset.
     """
+    if anchor is not None:
+        return next_occurrence(rule, after=now, default_time=default_time, anchor=anchor)
     following = next_occurrence(rule, after=occurrence, default_time=default_time, anchor=anchor)
     steps = 0
     while following is not None and following <= now:
@@ -289,6 +292,16 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
     return changed
 
 
+async def _costs_waiting_replay(conn: Connection) -> bool:
+    """Whether a finalized model call has not reached the exporter yet."""
+    return bool(
+        await conn.fetchval(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM llm_calls WHERE status = 'finalized' AND exported_at IS NULL)"
+        )
+    )
+
+
 async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None) -> int:
     """Turn every due schedule into at most one job per period, then move past now."""
     now = now or datetime.now(INDIA)
@@ -315,13 +328,16 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
                 "period": period,
                 "scheduled_for": occurrence.isoformat(),
             }
-            await enqueue_job(
-                conn,
-                key=job_key(kind, period, payload),
-                kind=kind,
-                payload=job_payload,
-                run_at=now,
-            )
+            # An idle instance has nothing to replay, so the tick checks and adds no job.
+            if kind != "cost_replay" or await _costs_waiting_replay(conn):
+                await enqueue_job(
+                    conn,
+                    key=job_key(kind, period, payload),
+                    kind=kind,
+                    payload=job_payload,
+                    run_at=now,
+                )
+                enqueued += 1
             following = _following_occurrence(
                 row["rule"],
                 occurrence,
@@ -340,7 +356,6 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
                 following is not None,
                 row["id"],
             )
-            enqueued += 1
     return enqueued
 
 

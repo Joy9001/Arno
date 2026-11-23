@@ -1,9 +1,11 @@
 import type { AssistantClient } from "@assistant-ui/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CHAT_JOIN_STRATEGY,
   ServerDictationAdapter,
   VoiceAttachments,
   createHistoryAdapter,
+  createThreadListAdapter,
   stopChatRun,
 } from "./runtime";
 import type { StreamCheckpoints } from "./streams";
@@ -109,7 +111,6 @@ describe("reading a thread's history", () => {
   const aui = {
     threadListItem: { getState: () => ({ remoteId: "thread/1" }) },
   } as unknown as AssistantClient;
-
   it("treats a thread without saved history as empty", async () => {
     vi.stubGlobal(
       "fetch",
@@ -147,5 +148,59 @@ describe("reading a thread's history", () => {
     });
 
     await expect(history.load()).rejects.toThrow("The database is unreachable.");
+  });
+
+  it("reports that a finished thread is not running, so a stale resume ends", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          thread: { id: "thread/1", title: "Rent", flagged: false, snapshot_at: null },
+          messages: [],
+          running: false,
+          as_of: "2026-11-23",
+        }),
+      ),
+    );
+    const onRunning = vi.fn();
+    const history = createHistoryAdapter(aui, onRunning).withFormat!({
+      format: "ai-sdk",
+      encode: () => {
+        throw new Error("no message should be encoded");
+      },
+      getId: () => "unused",
+      decode: () => {
+        throw new Error("no message should be decoded");
+      },
+    });
+
+    await history.load();
+
+    expect(onRunning).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("creating a conversation", () => {
+  it("returns the server's id instead of the local placeholder", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ id: "cnv_abc", title: "New chat" }, 201)),
+    );
+    const adapter = createThreadListAdapter({ current: "" });
+
+    await expect(adapter.initialize("__LOCALID_123")).resolves.toEqual({
+      remoteId: "cnv_abc",
+      externalId: undefined,
+    });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/threads");
+    expect((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+  });
+});
+
+describe("stored assistant replies", () => {
+  it("never merge with the reply that follows", () => {
+    // The AI SDK merges consecutive assistant messages by default; a wake
+    // turn's answer then folds into the next message's activity panel.
+    expect(CHAT_JOIN_STRATEGY).toBe("none");
   });
 });

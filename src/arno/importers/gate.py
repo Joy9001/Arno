@@ -15,7 +15,7 @@ from arno.importers.checks import INPUT_REASONS, account_check, worst_status
 from arno.importers.helpers import HELPER_VERSION
 from arno.importers.identifiers import scrub
 from arno.importers.monty import ScriptContext, normalize_accounts, run_script
-from arno.importers.readers import Doc, open_documents
+from arno.importers.readers import Doc, in_doc_worker, open_documents
 
 
 def _sample(accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -206,7 +206,8 @@ async def _replay(
     )
     for row in await _replay_rows(conn, case=case):
         try:
-            docs = open_documents(bytes(row["data"]))
+            data = bytes(row["data"])
+            docs = await in_doc_worker(lambda data=data: open_documents(data))
         except Exception:  # noqa: BLE001 - a stored file that will not open is skipped
             result["skipped"] += 1
             continue

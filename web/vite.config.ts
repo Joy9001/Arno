@@ -15,7 +15,19 @@ export default defineConfig({
       registerType: "autoUpdate",
       injectRegister: "auto",
       injectManifest: {
-        globPatterns: ["**/*.{js,css,html,svg,png,ico,woff2}"],
+        // Only the app shell is precached. Everything else in `assets` is a
+        // lazily loaded Shiki grammar or theme (or mermaid), and precaching the
+        // 14 MB of them downloads the lot after every deploy for code blocks
+        // most people never open.
+        globPatterns: [
+          "index.html",
+          "manifest.webmanifest",
+          "registerSW.js",
+          "favicon.svg",
+          "icons/**/*.{png,svg}",
+          "fonts/**/*.woff2",
+          "assets/index-*.{js,css}",
+        ],
         // The chat runtime bundle is larger than the old 2 MiB precache default.
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },

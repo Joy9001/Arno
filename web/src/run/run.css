@@ -708,14 +708,16 @@
 }
 
 .run-card-body span {
-  display: block;
+  display: -webkit-box;
   margin-top: 2px;
   overflow: hidden;
   color: var(--sub);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .run-card.paused .run-card-body span {

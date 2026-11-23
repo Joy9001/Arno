@@ -75,6 +75,18 @@ async def test_threads_are_searchable_renameable_and_flagable(session_client, de
     assert flagged["flagged_at"]
 
 
+async def test_a_new_thread_gets_a_server_id_before_its_first_message(session_client):
+    created = session_client.post("/api/threads", json={"title": "Budget"})
+
+    assert created.status_code == 201
+    thread = created.json()
+    assert thread["id"].startswith("cnv_")
+    assert thread["title"] == "Budget"
+    messages = session_client.get(f"/api/threads/{thread['id']}/messages")
+    assert messages.status_code == 200
+    assert messages.json()["messages"] == []
+
+
 async def test_the_stream_endpoint_is_204_when_nothing_runs(session_client):
     response = session_client.get("/api/chat/no-such-thread/stream")
     assert response.status_code == 204
@@ -133,6 +145,43 @@ def test_a_stored_approval_merges_into_a_closed_card():
     assert part["state"] == "output-available"
     assert part["toolCallId"] == "call-1"
     assert any(p.get("type") == "data-card" for p in merged[0]["parts"])
+
+
+def test_a_card_an_earlier_reply_shows_is_not_added_to_the_last_reply():
+    from pydantic_ai.messages import (
+        ModelMessage,
+        ModelMessagesTypeAdapter,
+        ModelRequest,
+        ToolReturnPart,
+    )
+    from pydantic_ai.ui.vercel_ai.response_types import DataChunk
+
+    from arno.api.chat import _merge_saved_state
+
+    card = {"card": "setup", "title": "Setup saved", "text": "Added account SBI"}
+    history: list[ModelMessage] = [
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="update_setup",
+                    content={"status": "saved"},
+                    tool_call_id="call-1",
+                    metadata=[DataChunk(type="data-card", data=card)],
+                )
+            ]
+        )
+    ]
+    thread = {"model_history": ModelMessagesTypeAdapter.dump_python(history, mode="json")}
+    messages = [
+        {"id": "msg-1", "role": "assistant", "parts": [{"type": "data-card", "data": card}]},
+        {"id": "msg-2", "role": "user", "parts": [{"type": "text", "text": "next"}]},
+        {"id": "msg-3", "role": "assistant", "parts": [{"type": "text", "text": "Done."}]},
+    ]
+
+    merged = _merge_saved_state(messages, thread)
+
+    assert not any(part.get("type") == "data-card" for part in merged[2]["parts"])
+    assert sum(part.get("type") == "data-card" for part in merged[0]["parts"]) == 1
 
 
 async def test_preferences_can_be_turned_off_and_deleted_for_good(session_client, demo_ledger):

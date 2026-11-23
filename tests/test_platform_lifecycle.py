@@ -309,7 +309,7 @@ async def test_clean_shutdown_leaves_an_interrupted_row_for_boot_recovery(db):
         await resume.wait()
         return {}
 
-    runner = JobRunner(registry={"slow": slow}, concurrency=1, poll_seconds=60)
+    runner = JobRunner(registry={"slow": slow}, concurrency=1, max_idle_seconds=60)
     await db.execute("INSERT INTO jobs (key, kind) VALUES ('stop:1', 'slow')")
     runner.start()
     try:

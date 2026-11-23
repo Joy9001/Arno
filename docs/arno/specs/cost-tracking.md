@@ -207,10 +207,10 @@ is accounted accurately.
   It stores no prompts, replies, documents, or credentials, has no `agent_ro` grant, and is never
   exported in JSON/CSV data dumps. Eval trials route journal rows to the installation database
   (`use_journal_database`) before dropping disposable financial clones.
-- **Cost-only replay:** Finalized rows older than `REPLAY_GRACE_SECONDS = 300` are re-exported
-  every five minutes by the `cost_replay` job (and manually via `arno cost-replay`, with
-  `--finalize-interrupted` and `--attempt <id>`) using the original trace and span IDs over the
-  standard OTLP exporter. See
+- **Cost-only replay:** Every five minutes the scheduler checks for finalized rows older than
+  `REPLAY_GRACE_SECONDS = 300` that have not exported, and creates a `cost_replay` job only when one
+  is waiting (it can be run manually via `arno cost-replay`, with `--finalize-interrupted` and
+  `--attempt <id>`) using the original trace and span IDs over the standard OTLP exporter. See
   [`observability.md#cost-journal-and-replay`](../operations/observability.md#cost-journal-and-replay)
   for operational replay procedures.
 
@@ -230,6 +230,11 @@ application image:
   span, trace, session, project, and time-range views so unpriced calls never render as `$0`.
 - Exclude `logical_request` parent spans and batch collect/decode spans from cost and token
   rollups, and permit audio inference costs without fabricated text tokens.
+
+Phoenix's own per-span token columns sum every span's `llm.token_count.*`, which the patch does
+not change, so Arno's exporter drops token and cost attributes from `logical_request` spans before
+export (`UsageOnceExporter` in `src/arno/observability.py`). The metered attempt span alone carries
+a model call's counts, so trace and session token totals count each call once.
 
 Existing Phoenix tables, GraphQL types, and OTLP ingestion are reused without custom receipt
 endpoints or correction schemas.
