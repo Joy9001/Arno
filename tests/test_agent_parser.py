@@ -301,6 +301,10 @@ def test_a_transfer_suggestion_needs_the_row_to_name_its_account():
     other_card = {"name": "HDFC Regalia", "institution": "HDFC", "kind": "card", "last4": None}
     assert names_account("CC PAYMENT 1234", other_card, only_card=True)
     assert not names_account("CC PAYMENT 1234", other_card, only_card=False)
+    # A UPI narration prints the payee's bank code; it does not name the user's HDFC card.
+    hdfc = {"name": "HDFC Regalia", "institution": "HDFC", "kind": "card", "last4": None}
+    assert not names_account("UPI/DR/1/SWIGGY/HDFC/swiggy@hdfc", hdfc, only_card=False)
+    assert names_account("HDFC CC PAYMENT", hdfc, only_card=False)
     bank = {"name": "SBI main", "institution": "SBI", "kind": "bank", "last4": "6789"}
     assert names_account("NEFT/TRANSFER TO A/C XX6789", bank, only_card=False)
 

@@ -1019,6 +1019,88 @@ async def test_an_agent_failure_reraises_so_the_runner_retries(ledger):
         await run_categorize(ledger, import_id, model=streaming_model(run_agent))
 
 
+async def test_a_chunk_that_runs_out_of_tokens_is_asked_again_in_halves(ledger, monkeypatch):
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger,
+        account,
+        [
+            _row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha"),
+            _row("UPI/DR/2/BETA STORE", debit=2000, day="2026-04-02", counterparty="Beta"),
+        ],
+    )
+    monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 2)
+    asked: list[int] = []
+
+    def chunk(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        items = _chunk_answer(messages)
+        asked.append(len(items))
+        if len(items) > 1:
+            raise UnexpectedModelBehavior("Model token limit (2048) exceeded before any response")
+        answers = [{"key": item["key"], "category": CATEGORY} for item in items]
+        return _output([ToolCallPart(info.output_tools[0].name, {"response": answers})])
+
+    deps = CategorizerDeps(import_id=import_id, run_id="run", model=streaming_model(chunk))
+    ctx = RunContext(deps=deps, model=FunctionModel(lambda *_: _output([])), usage=RunUsage())
+    result = await categorizer_mod.categorize_now(ctx, ["alpha", "beta"])
+
+    assert asked == [2, 1, 1]
+    assert set(result["answers"]) == {"alpha", "beta"} and result["failed"] == []
+
+
+async def test_answers_a_failed_run_paid_for_are_kept_as_hints_not_labels(ledger):
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    account = await _account(ledger)
+    import_id = await _committed(
+        ledger,
+        account,
+        [
+            _row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha"),
+            _row("UPI/DR/2/BETA STORE", debit=2000, day="2026-04-02", counterparty="Beta"),
+        ],
+    )
+
+    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if "pending_payees" not in {tool.name for tool in info.function_tools}:
+            answers = [
+                {"key": item["key"], "category": CATEGORY} for item in _chunk_answer(messages)
+            ]
+            return _output([ToolCallPart(info.output_tools[0].name, {"response": answers})])
+        returns = _outer_returns(messages)
+        if not returns:
+            return _output([ToolCallPart("pending_payees", {"import_id": import_id})])
+        if "categorize_now" not in returns:
+            return _output([ToolCallPart("categorize_now", {"keys": ["alpha", "beta"]})])
+        # The step that would review and save dies, as the session's outer agent did.
+        raise UnexpectedModelBehavior("Model token limit (provider default) exceeded")
+
+    result = await run_categorize(ledger, import_id, model=streaming_model(run_agent))
+
+    # The job ends instead of retrying and asking the same payees again.
+    assert result["run_id"]
+    labeled = await ledger.fetchval(
+        """
+        SELECT count(*) FROM movement_legs ml
+        JOIN statement_lines sl ON sl.movement_id = ml.movement_id
+        WHERE sl.import_id = $1 AND ml.category_id IS NOT NULL
+        """,
+        import_id,
+    )
+    assert labeled == 0
+    hinted = await ledger.fetchval(
+        """
+        SELECT count(*) FROM movements m
+        JOIN statement_lines sl ON sl.movement_id = m.id
+        WHERE sl.import_id = $1 AND m.category_hint IS NOT NULL
+        """,
+        import_id,
+    )
+    assert hinted == 2
+
+
 async def test_a_spend_ceiling_gives_up_at_once(ledger):
     from arno.jobs.runner import JobGaveUp
 

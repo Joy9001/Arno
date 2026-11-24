@@ -309,6 +309,8 @@ async def test_an_older_statement_committed_after_a_newer_one_keeps_every_day_ri
         closing=130_000,
     )
     await commit_import(ledger, newer)
+    # A rename between the two commits must not hide the newer statement's opening.
+    await ledger.execute("UPDATE accounts SET name = 'SBI savings' WHERE id = $1", account["id"])
     account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     after_newer = await _curve(ledger, account)
     older = await _review(

@@ -316,14 +316,21 @@ def _opening_description(account: dict[str, Any]) -> str:
     return f"Opening balance for {account['name']} statement"
 
 
+_OPENING_LIKE = "Opening balance for % statement"
+_REANCHOR_LIKE = "Stated balance re-anchor for % statement"
+
+
 def _reanchor_description(account: dict[str, Any]) -> str:
     return f"Stated balance re-anchor for {account['name']} statement"
 
 
 async def _live_adjustments(
-    conn: Connection, ledger_account_id: str, day: date, description: str
+    conn: Connection, ledger_account_id: str, day: date, like: str
 ) -> list[dict[str, Any]]:
-    """This module's own live adjustments of one kind on one day, with their net on the account."""
+    """This module's own live adjustments of one kind on one day, with their net on the account.
+
+    Matched by the label's shape, not the account's current name, so a rename keeps them found.
+    """
     rows = await conn.fetch(
         """
         SELECT m.id,
@@ -335,14 +342,14 @@ async def _live_adjustments(
         WHERE m.kind = 'adjustment'
           AND ms.is_effective
           AND m.date = $2
-          AND m.description = $3
+          AND m.description LIKE $3
           AND (t.from_account_id = $1 OR t.to_account_id = $1)
         GROUP BY m.id
         ORDER BY m.id
         """,
         ledger_account_id,
         day,
-        description,
+        like,
     )
     return [dict(row) for row in rows]
 
@@ -353,10 +360,11 @@ async def _rebook(
     *,
     day: date,
     description: str,
+    like: str,
     wanted: int,
 ) -> list[str]:
     """Make this day's adjustments of one kind net to `wanted`: reverse them and book it once."""
-    rows = await _live_adjustments(conn, account["ledger_account_id"], day, description)
+    rows = await _live_adjustments(conn, account["ledger_account_id"], day, like)
     if sum(int(row["net"]) for row in rows) == wanted:
         return []
     groups: list[str] = []
@@ -401,7 +409,14 @@ async def _rebalance_later_openings(
         day = row["period_start"]
         before = await _account_balance_at(conn, account["ledger_account_id"], day, before=True)
         groups.extend(
-            await _rebook(conn, account, day=day, description=description, wanted=opening - before)
+            await _rebook(
+                conn,
+                account,
+                day=day,
+                description=description,
+                like=_OPENING_LIKE,
+                wanted=opening - before,
+            )
         )
     return groups
 
@@ -485,11 +500,18 @@ async def _hold_later_anchor(
     held = sum(
         int(row["net"])
         for row in await _live_adjustments(
-            conn, account["ledger_account_id"], anchor_day, description
+            conn, account["ledger_account_id"], anchor_day, _REANCHOR_LIKE
         )
     )
     wanted = int(anchor_paise) - (current - held)
-    groups = await _rebook(conn, account, day=anchor_day, description=description, wanted=wanted)
+    groups = await _rebook(
+        conn,
+        account,
+        day=anchor_day,
+        description=description,
+        like=_REANCHOR_LIKE,
+        wanted=wanted,
+    )
     return groups, (wanted - held) if groups else 0
 
 

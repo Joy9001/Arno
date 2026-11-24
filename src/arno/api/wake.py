@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 from pydantic_ai.ui.vercel_ai import VercelAIAdapter
-from pydantic_ai.ui.vercel_ai.request_types import SubmitMessage
+from pydantic_ai.ui.vercel_ai.request_types import SubmitMessage, TextUIPart, UIMessage
 
 from arno.agent import history as history_mod
 from arno.agent.chatgpt_auth import background_inference
@@ -48,12 +48,14 @@ async def start_server_turn(
     deps: AgentDeps,
     policy: WakePolicy | None = None,
     flagged: bool = False,
+    prompt: tuple[str, str] | None = None,
 ) -> str:
     """Start the turn no user message opened, under the same guards as the chat route.
 
     The thread must have no live turn, and the preparation guard is held until `turns.start`
     registers this one, so a server-started turn cannot overwrite a running turn's run marker.
-    Raises `TurnBusy` or `PreparationBusy` before anything is written.
+    Raises `TurnBusy` or `PreparationBusy` before anything is written. `prompt` is a seeded user
+    message (its client id and text) already stored in the thread, which the model must read.
     """
     turns = app.state.turns
     thread_id = str(thread["id"])
@@ -74,8 +76,17 @@ async def start_server_turn(
         reply_id = f"msg_{uuid.uuid4().hex}"
         adapter = VercelAIAdapter(
             agent=app.state.agent,
-            # No client message: the run continues the stored history.
-            run_input=SubmitMessage(id=thread_id, messages=[], trigger="submit-message"),
+            # A wake turn has no message: the run continues the stored history. A seeded message
+            # (an inbox item) is the turn's prompt, as if the user had sent it.
+            run_input=SubmitMessage(
+                id=thread_id,
+                messages=(
+                    [UIMessage(id=prompt[0], role="user", parts=[TextUIPart(text=prompt[1])])]
+                    if prompt
+                    else []
+                ),
+                trigger="submit-message",
+            ),
             sdk_version=7,
             server_message_id=reply_id,
         )
@@ -83,7 +94,7 @@ async def start_server_turn(
             await turns.start(
                 adapter=adapter,
                 thread_id=thread_id,
-                message_id=f"server_{uuid.uuid4().hex}",
+                message_id=prompt[0] if prompt else f"server_{uuid.uuid4().hex}",
                 history=history,
                 deps=deps,
                 title=thread.get("title"),

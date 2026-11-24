@@ -87,10 +87,12 @@ async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(sessio
 
 async def test_opening_a_notification_starts_arno_s_own_reply(session_client, db, monkeypatch):
     calls: list[tuple[str, bool, bool]] = []
+    prompts: list[str] = []
 
-    async def record(app, conn, *, thread, deps, policy=None, flagged=False):
+    async def record(app, conn, *, thread, deps, policy=None, flagged=False, prompt=None):
         del app, conn, policy
         calls.append((str(thread["id"]), flagged, deps.flagged))
+        prompts.append(prompt[1] if prompt else "")
         return str(thread["id"])
 
     monkeypatch.setattr("arno.api.watch.start_server_turn", record)
@@ -115,6 +117,50 @@ async def test_opening_a_notification_starts_arno_s_own_reply(session_client, db
     )
     assert seeded["role"] == "user"
     assert "Help me with this." in seeded["body_text"]
+    # The seeded message is the turn's prompt, not only a row the UI shows.
+    assert "Help me with this." in prompts[0]
+
+
+async def test_arno_reads_the_seeded_notification_and_answers_it(session_client, db):
+    import asyncio
+
+    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
+
+    from tests.agent_helpers import streaming_model
+
+    seen: list[str] = []
+
+    def answer(messages, info):
+        last = messages[-1]
+        if isinstance(last, ModelRequest):
+            seen.extend(
+                str(part.content) for part in last.parts if isinstance(part, UserPromptPart)
+            )
+        return ModelResponse(parts=[TextPart("Here is what that means.")])
+
+    row = await create_notification(
+        db, kind="risk_warning", title="Riskier", body="The chance is 55%.", data={}
+    )
+    assert row is not None
+    app = session_client.app
+    with app.state.agent.override(model=streaming_model(answer)):
+        opened = session_client.post(f"/api/notifications/{row['id']}/chat")
+        assert opened.status_code == 200, opened.text
+        thread_id = opened.json()["thread_id"]
+        turn = app.state.turns.get(thread_id)
+        assert turn is not None
+        await asyncio.wait_for(turn.done.wait(), timeout=30)
+
+    assert any("The chance is 55%." in text for text in seen)
+    reply = await db.fetchrow(
+        "SELECT body_text FROM messages WHERE conversation_id = $1 AND role = 'assistant'",
+        thread_id,
+    )
+    assert reply is not None and "Here is what that means." in reply["body_text"]
+    users = await db.fetchval(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1 AND role = 'user'", thread_id
+    )
+    assert users == 1
 
 
 async def test_push_subscription_and_a_contentless_ping(session_client, db, monkeypatch):

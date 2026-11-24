@@ -1196,19 +1196,28 @@ _CARD_PAYMENT = re.compile(
 def names_account(text: str, account: dict[str, Any], *, only_card: bool) -> bool:
     """Whether a statement line's own text names this account as its other side.
 
-    A name word, the institution, or the last four digits name it. A card-payment phrase names
-    a card only when the user has one card. The user's own name names no account.
+    A name word or the last four digits name it. The institution alone does not: a UPI narration
+    prints the payee's bank code (`/HDFC/`), so it names a card only beside a card-payment phrase.
+    A card-payment phrase alone names a card only when the user has one card. The user's own
+    name names no account.
     """
     lowered = text.lower()
-    words = re.findall(r"[a-z0-9]+", lowered)
-    for source in (account.get("name"), account.get("institution")):
-        for word in re.findall(r"[a-z0-9]+", str(source or "").lower()):
-            if len(word) >= 3 and word not in _GENERIC_NAME_WORDS and word in words:
-                return True
+    words = set(re.findall(r"[a-z0-9]+", lowered))
+    institution = set(re.findall(r"[a-z0-9]+", str(account.get("institution") or "").lower()))
+    for word in re.findall(r"[a-z0-9]+", str(account.get("name") or "").lower()):
+        if (
+            len(word) >= 3
+            and word not in _GENERIC_NAME_WORDS
+            and word not in institution
+            and word in words
+        ):
+            return True
     last4 = str(account.get("last4") or "")
     if len(last4) == 4 and last4 in lowered:
         return True
-    return account.get("kind") == "card" and only_card and bool(_CARD_PAYMENT.search(text))
+    if account.get("kind") != "card" or not _CARD_PAYMENT.search(text):
+        return False
+    return only_card or bool(institution & words)
 
 
 async def suggest_transfers(

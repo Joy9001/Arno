@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import datetime as dt
+import functools
 import io
 import json
 import re
@@ -208,9 +209,25 @@ def html_tables(text: str) -> list[list[list[str]]]:
     return [table for table in parser.tables if table]
 
 
+# PDFium is not thread-safe, and document work runs on worker threads (`in_doc_worker`) while
+# light reads (page count, period detection) still run on the event loop. Every method that
+# touches PDFium takes this one re-entrant lock.
+_DOC_LOCK = threading.RLock()
+
+
+def _serialized[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+    @functools.wraps(method)
+    def call(*args: P.args, **kwargs: P.kwargs) -> R:
+        with _DOC_LOCK:
+            return method(*args, **kwargs)
+
+    return call
+
+
 class Doc:
     """One opened file: pages for PDF/image, sheets for tabular things, lines for text."""
 
+    @_serialized
     def __init__(self, data: bytes, *, password: str | None = None) -> None:
         self.data = data
         self.password = password
@@ -308,6 +325,7 @@ class Doc:
             self._lines = text.splitlines()
             self._sheets = [("text", self._text_rows(self._lines))]
 
+    @_serialized
     def readable_bytes(self) -> bytes:
         """The bytes a later replay can open without the password.
 
@@ -401,6 +419,7 @@ class Doc:
         return lines
 
     # Host functions -----------------------------------------------------------------------
+    @_serialized
     def info(self) -> dict[str, Any]:
         info: dict[str, Any] = {"kind": self.kind}
         if self._pdf is not None:
@@ -450,6 +469,7 @@ class Doc:
         except (IndexError, TypeError, ValueError) as exc:
             raise DocError("no_such_sheet", str(sheet)) from exc
 
+    @_serialized
     def words(self, page: Any = 0) -> list[dict[str, Any]]:
         page = int(page)
         if page in self._words_cache:
@@ -467,6 +487,7 @@ class Doc:
             raise DocError("bad_range", "last is before first")
         return [self.words(page) for page in range(first, min(last, self.page_count()) + 1)]
 
+    @_serialized
     def page_count(self) -> int:
         if self._pdf is not None:
             return len(self._pdf)
@@ -547,6 +568,7 @@ class Doc:
                 word[key] = round(word[key], 1)
         return out
 
+    @_serialized
     def page_png(self, page: Any = 0) -> bytes:
         """A PNG for the vision role, encoded with the standard library."""
         if self.kind == "image":
@@ -584,9 +606,6 @@ class Doc:
             + chunk(b"IDAT", zlib.compress(raw, 6))
             + chunk(b"IEND", b"")
         )
-
-
-_DOC_LOCK = threading.Lock()
 
 
 async def in_doc_worker[T](fn: Callable[[], T]) -> T:

@@ -17,8 +17,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, cast, override
@@ -26,7 +26,19 @@ from typing import Any, cast, override
 from opentelemetry import trace
 from opentelemetry.trace import Span, Status, StatusCode
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelMessage, ModelResponse, ModelResponseStreamEvent
+from pydantic_ai.exceptions import (
+    ModelConnectionError,
+    ModelRateLimitError,
+    ModelServerError,
+    ModelUnavailableError,
+)
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    ModelResponseStreamEvent,
+    ThinkingPart,
+    ThinkingPartDelta,
+)
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -369,30 +381,51 @@ class MeteredModel(WrapperModel):
         run_context: RunContext[Any] | None = None,
     ) -> AsyncGenerator[StreamedResponse]:
         with provider_usage.capture_context() as metadata:
-            attempt = self._start(mark_parent=True)
-            await attempt.record_intent()
+            attempts = [self._start(mark_parent=True)]
+            await attempts[-1].record_intent()
             try:
-                async with self.wrapped.request_stream(
-                    messages,
-                    self._bounded_settings(model_settings),
-                    model_request_parameters,
-                    run_context,
-                ) as stream:
-                    metered = cast(StreamedResponse, _MeteredStream(stream, self._finish, metadata))
+                async with AsyncExitStack() as streams:
+
+                    async def open_stream() -> StreamedResponse:
+                        return await streams.enter_async_context(
+                            self.wrapped.request_stream(
+                                messages,
+                                self._bounded_settings(model_settings),
+                                model_request_parameters,
+                                run_context,
+                            )
+                        )
+
+                    async def next_attempt(error: BaseException, failed: StreamedResponse) -> None:
+                        # The dropped stream is its own metered attempt, like any other failure.
+                        await attempts[-1].fail(error, self._safe_observation(failed))
+                        attempts.append(self._start(mark_parent=False))
+                        await attempts[-1].record_intent()
+
+                    stream = _MeteredStream(
+                        await open_stream(),
+                        self._finish,
+                        metadata,
+                        reopen=open_stream,
+                        on_retry=next_attempt,
+                    )
+                    metered = cast(StreamedResponse, stream)
                     try:
                         yield metered
                     except BaseException as exc:
-                        await attempt.fail(exc, self._safe_observation(metered))
+                        await attempts[-1].fail(exc, self._safe_observation(metered))
                         raise
                     else:
-                        attempt.served_model(metered.get().model_name or self.wrapped.model_name)
-                        await attempt.finish_ok(
+                        attempts[-1].served_model(
+                            metered.get().model_name or self.wrapped.model_name
+                        )
+                        await attempts[-1].finish_ok(
                             _stream_observation(
                                 metered, provider=self.provider_name, billing_mode=self.billing_mode
                             )
                         )
             except BaseException as exc:
-                await attempt.fail(exc)
+                await attempts[-1].fail(exc)
                 raise
 
     def _safe_observation(self, stream: StreamedResponse) -> CostObservation | None:
@@ -404,11 +437,34 @@ class MeteredModel(WrapperModel):
             return None
 
 
+TRANSIENT_MODEL_ERRORS = (
+    ModelServerError,
+    ModelUnavailableError,
+    ModelConnectionError,
+    ModelRateLimitError,
+)
+"""Provider failures a second try can fix; a rejected request or a bad key is not one."""
+
+STREAM_RETRIES = 2
+STREAM_RETRY_DELAY = 2.0
+
+
+def _answers(event: ModelResponseStreamEvent) -> bool:
+    """Whether the event carries answer text or a tool call, not only reasoning."""
+    part = getattr(event, "part", None) or getattr(event, "delta", None)
+    return part is not None and not isinstance(part, (ThinkingPart, ThinkingPartDelta))
+
+
 class _MeteredStream:
     """A streamed response whose every `get()` carries this request's identity and metadata.
 
     Core reads the stream's response again after the model's context has exited and the capture
     context variable has been reset, so the metadata belongs to the stream itself.
+
+    A provider that drops the stream with a transient error before any answer text or tool call
+    arrives is asked again on a fresh stream. Pydantic AI retries only a stream that fails before
+    its first event, and a reasoning model streams its thinking first, so a drop during the
+    thinking ended the whole turn. The reasoning already shown starts over; nothing else is lost.
     """
 
     def __init__(
@@ -416,16 +472,49 @@ class _MeteredStream:
         wrapped: StreamedResponse,
         finish: Callable[[ModelResponse, dict[str, Any]], ModelResponse],
         metadata: dict[str, Any],
+        *,
+        reopen: Callable[[], Awaitable[StreamedResponse]] | None = None,
+        on_retry: Callable[[BaseException, StreamedResponse], Awaitable[None]] | None = None,
+        retry_delay: float = STREAM_RETRY_DELAY,
     ) -> None:
         self._wrapped = wrapped
         self._finish = finish
         self._metadata = metadata
+        self._reopen = reopen
+        self._on_retry = on_retry
+        self._retry_delay = retry_delay
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
 
     def __aiter__(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        return self._wrapped.__aiter__()
+        if self._reopen is None:
+            return self._wrapped.__aiter__()
+        return self._events()
+
+    async def _events(self) -> AsyncIterator[ModelResponseStreamEvent]:
+        retries = 0
+        while True:
+            answered = False
+            try:
+                async for event in self._wrapped:
+                    answered = answered or _answers(event)
+                    yield event
+                return
+            except TRANSIENT_MODEL_ERRORS as exc:
+                if answered or retries >= STREAM_RETRIES or self._reopen is None:
+                    raise
+                retries += 1
+                logger.warning(
+                    "model stream dropped (%s) before an answer, retrying: attempt %d of %d",
+                    type(exc).__name__,
+                    retries + 1,
+                    STREAM_RETRIES + 1,
+                )
+                if self._on_retry is not None:
+                    await self._on_retry(exc, self._wrapped)
+                await asyncio.sleep(self._retry_delay * retries)
+                self._wrapped = await self._reopen()
 
     def get(self) -> ModelResponse:
         return self._finish(self._wrapped.get(), self._metadata)

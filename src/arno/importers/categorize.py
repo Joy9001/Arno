@@ -83,7 +83,7 @@ async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
 
 
 async def _keep_held_answers(conn: Connection, deps: CategorizerDeps, exc: Exception) -> bool:
-    """Save the answers a failed run already paid for, unless a spend stop ended it.
+    """Keep the answers a failed run already paid for, as hints, unless a spend stop ended it.
 
     Without this a model error after `categorize_now` threw the answers away and the job retry
     asked the same payees again. True when answers were saved, so the job ends instead of retrying.
@@ -92,7 +92,9 @@ async def _keep_held_answers(conn: Connection, deps: CategorizerDeps, exc: Excep
         return False
     if isinstance(exc, (SpendStoreError, UnpricedModelError)):
         return False
-    await save_held_answers(conn, deps)
+    # No agent reviewed these answers, so they are kept as hints only: nothing is labeled and no
+    # rule is learned until a reviewed run or the user confirms them.
+    await save_held_answers(conn, deps, distrust=set(deps.answers))
     return True
 
 

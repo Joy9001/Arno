@@ -151,6 +151,7 @@ async def post_notification_chat(
                     flagged=outside,
                 ),
                 flagged=outside,
+                prompt=(client_id, text),
             )
             started = True
         except TurnBusy, PreparationBusy:

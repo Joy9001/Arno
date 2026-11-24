@@ -392,3 +392,70 @@ async def test_local_profile_is_a_complete_zero_even_without_usage(monkeypatch):
     assert journal.finals[0].source == "local_zero"
     # The native SpendLimits callback reads the stamped profile, not a catalog guess.
     assert price_response(response) == Decimal(0)
+
+
+async def test_a_stream_dropped_during_reasoning_is_asked_again_and_metered_twice(monkeypatch):
+    from pydantic_ai import Agent
+    from pydantic_ai.exceptions import ModelServerError
+    from pydantic_ai.models.function import DeltaThinkingPart
+
+    monkeypatch.setattr(metering, "observe_cost", _observe_returning(KNOWN))
+    monkeypatch.setattr(metering, "STREAM_RETRY_DELAY", 0.0)
+    journal = FakeJournal()
+    opened: list[int] = []
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo):
+        del messages, info
+        opened.append(1)
+        yield {0: DeltaThinkingPart(content="thinking")}
+        if len(opened) == 1:
+            # The provider's "Streaming response failed: [502]" after the reasoning began.
+            raise ModelServerError("fake-model", "Streaming response failed: [502]")
+        yield "Answer."
+
+    model = MeteredModel(
+        FunctionModel(stream_function=stream, model_name="fake-model"),
+        provider="openai",
+        billing_mode="metered",
+        role="chat",
+        journal=journal,
+    )
+    result = await Agent(model).run("hi", event_stream_handler=_drain)
+
+    assert result.output == "Answer."
+    assert len(opened) == 2
+    # Each stream is its own attempt in the journal: the dropped one and the one that answered.
+    assert journal.log.count("intent") == 2 and journal.log.count("final") == 2
+
+
+async def test_a_stream_dropped_after_answer_text_is_not_asked_again(monkeypatch):
+    from pydantic_ai import Agent
+    from pydantic_ai.exceptions import ModelServerError
+
+    monkeypatch.setattr(metering, "observe_cost", _observe_returning(KNOWN))
+    monkeypatch.setattr(metering, "STREAM_RETRY_DELAY", 0.0)
+    opened: list[int] = []
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo):
+        del messages, info
+        opened.append(1)
+        yield "Half an ans"
+        raise ModelServerError("fake-model", "Streaming response failed: [502]")
+
+    model = MeteredModel(
+        FunctionModel(stream_function=stream, model_name="fake-model"),
+        provider="openai",
+        billing_mode="metered",
+        role="chat",
+        journal=FakeJournal(),
+    )
+    with pytest.raises(ModelServerError):
+        await Agent(model).run("hi", event_stream_handler=_drain)
+    # Text the user already saw would repeat, so the error stands.
+    assert len(opened) == 1
+
+
+async def _drain(ctx: Any, events: Any) -> None:
+    del ctx
+    async for _ in events:
+        pass

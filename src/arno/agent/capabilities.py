@@ -22,12 +22,6 @@ from pydantic_ai.capabilities import (
     ModelFallback,
     WrapRunHandler,
 )
-from pydantic_ai.exceptions import (
-    ModelConnectionError,
-    ModelRateLimitError,
-    ModelServerError,
-    ModelUnavailableError,
-)
 from pydantic_ai.messages import (
     AgentStreamEvent,
     ModelRequest,
@@ -62,6 +56,7 @@ from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 from arno.agent.chatgpt_auth import background_inference
 from arno.agent.cost_journal import cost_identity, current_cost_identity
 from arno.agent.deps import AgentDeps
+from arno.agent.metering import TRANSIENT_MODEL_ERRORS
 from arno.agent.models import DEFAULT_CONTEXT_WINDOW
 from arno.agent.redaction import redact_text, redaction_detectors
 from arno.agent.spend import (
@@ -560,12 +555,6 @@ def build_capabilities(
     return capabilities
 
 
-TRANSIENT_MODEL_ERRORS = (
-    ModelServerError,
-    ModelUnavailableError,
-    ModelConnectionError,
-    ModelRateLimitError,
-)
 TRANSIENT_ATTEMPTS = 3
 """Attempts per request step on a transient provider error: the first try and two retries."""
 
