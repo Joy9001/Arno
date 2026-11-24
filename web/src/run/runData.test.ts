@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ImportTask } from "../types";
+import type { ImportTask, ImportTaskImport } from "../types";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -15,6 +15,7 @@ function task(overrides: Partial<ImportTask> = {}): ImportTask {
     agent_name: "parser",
     state: "finished",
     outcome: "ok",
+    interrupted: false,
     started_at: 0,
     finished_at: 1,
     report: null,
@@ -108,6 +109,41 @@ describe("how a run ended", () => {
       "This file isn't a statement, so nothing was imported. Nothing was saved.",
     );
   });
+
+  const file = (status: ImportTaskImport["status"]): ImportTaskImport => ({
+    import_id: `imp_${status}`,
+    filename: "statement.pdf",
+    status,
+    reason: null,
+    progress: null,
+    counts: null,
+  });
+
+  it("offers Continue for a run an app restart cut off", async () => {
+    const { runEnding } = await import("./runData");
+    const ending = runEnding(
+      task({ outcome: "cancelled", interrupted: true, imports: [file("parsing")] }),
+    );
+
+    expect(ending.tone).toBe("paused");
+    expect(ending.title).toBe("Paused: the app restarted");
+  });
+
+  it("calls a cut-off run ready when every file already reached review", async () => {
+    const { runEnding } = await import("./runData");
+    const ending = runEnding(
+      task({ outcome: "cancelled", interrupted: true, imports: [file("review"), file("review")] }),
+    );
+
+    expect(ending.tone).toBe("done");
+  });
+
+  it("does not offer Continue after the user stopped the run", async () => {
+    const { runEnding } = await import("./runData");
+    const ending = runEnding(task({ outcome: "cancelled", imports: [file("failed")] }));
+
+    expect(ending.tone).toBe("failed");
+  });
 });
 
 describe("the shared run store", () => {
@@ -134,27 +170,37 @@ describe("the shared run store", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
   });
 
-  it("reads a finished task once and only refetches on an explicit reload", async () => {
+  it("reads an ended task again when a new card mounts, so a resumed run shows", async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => json(task({ task_id: "read_once", state: "finished" }))),
+      vi
+        .fn()
+        .mockImplementationOnce(async () =>
+          json(task({ task_id: "resumed", outcome: "cancelled", interrupted: true })),
+        )
+        .mockImplementation(async () => json(task({ task_id: "resumed", state: "running" }))),
     );
     const { useRun } = await import("./runData");
-    const first = renderHook(() => useRun("read_once"));
+    const first = renderHook(() => useRun("resumed"));
     await act(async () => {});
+    expect(first.result.current.task?.state).toBe("finished");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
-    first.unmount();
 
-    const second = renderHook(() => useRun("read_once"));
+    // The card for the resumed run mounts; the earlier card shares its entry and updates too.
+    renderHook(() => useRun("resumed"));
     await act(async () => {});
-    expect(second.result.current.task?.task_id).toBe("read_once");
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    expect(first.result.current.task?.state).toBe("running");
 
     await act(async () => {
-      second.result.current.reload();
+      first.result.current.reload();
     });
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);  });
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
+  });
 
   it("keeps polling a running task after a failed read, with backoff", async () => {
     vi.useFakeTimers();

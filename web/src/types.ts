@@ -554,6 +554,8 @@ export type ImportTask = {
   agent_name: string;
   state: "running" | "finished";
   outcome: string | null;
+  /** Cut off by an app restart, not stopped by the user: Continue resumes it. */
+  interrupted: boolean;
   started_at: number;
   finished_at: number | null;
   report: ImportTaskReport | null;

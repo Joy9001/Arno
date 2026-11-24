@@ -232,6 +232,32 @@ async def test_the_chat_agent_is_told_which_parser_task_it_can_continue():
     assert "Paused statement import" not in plain
 
 
+def test_a_restart_cut_off_parser_can_be_continued_but_a_user_stop_cannot():
+    from arno.api.wake import paused_parser_tasks
+
+    def record(task_id: str, outcome: str, **fields: object) -> SimpleNamespace:
+        base = {"resumable": True, "user_stopped": False, "status": "finished"}
+        return SimpleNamespace(
+            id=task_id,
+            conversation_id="thr_1",
+            agent_name="parser",
+            outcome=outcome,
+            **(base | fields),
+        )
+
+    tasks = SimpleNamespace(
+        records={
+            "budget": record("budget", "budget"),
+            "restart": record("restart", "cancelled"),
+            "stopped": record("stopped", "cancelled", user_stopped=True),
+            "one_shot": record("one_shot", "cancelled", resumable=False),
+            "ok": record("ok", "ok"),
+        }
+    )
+
+    assert paused_parser_tasks(tasks, "thr_1") == ("budget", "restart")
+
+
 def test_a_normal_host_outcome_is_not_a_failure():
     from arno.api.run_view import _script_error
 

@@ -20,6 +20,7 @@ from arno.agent.chatgpt_auth import background_inference
 from arno.agent.deps import AgentDeps
 from arno.agent.turns import PreparationBusy, TurnBusy
 from arno.agent.wake import WakePolicy, may_retry, waiting_reports
+from arno.api.tasks import interrupted
 from arno.db.conn import connect
 from arno.tools.mark import flag_outside_text
 
@@ -27,7 +28,8 @@ logger = logging.getLogger("arno.chat")
 
 
 def paused_parser_tasks(tasks: Any, thread_id: str) -> tuple[str, ...]:
-    """This thread's parser tasks that stopped on their step budget, so a reply can continue one."""
+    """This thread's parser tasks that ran out of steps or were cut off by a restart, so a reply
+    can continue one."""
     if tasks is None:
         return ()
     return tuple(
@@ -36,7 +38,7 @@ def paused_parser_tasks(tasks: Any, thread_id: str) -> tuple[str, ...]:
         if record.conversation_id == thread_id
         and record.agent_name == "parser"
         and record.status == "finished"
-        and record.outcome == "budget"
+        and (record.outcome == "budget" or interrupted(record))
     )
 
 

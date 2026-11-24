@@ -118,6 +118,11 @@ class RollbackIn(ApiModel):
     version: int = Field(ge=1)
 
 
+def interrupted(record: Any) -> bool:
+    """Stopped by a process exit, not by the user, so Continue can resume it."""
+    return record.outcome == "cancelled" and record.resumable and not record.user_stopped
+
+
 def _record(tasks: Any, task_id: str) -> Any:
     record = tasks.records.get(task_id)
     if record is None or record.agent_name != "parser":
@@ -304,6 +309,7 @@ async def task_payload(
         "conversation_id": record.conversation_id,
         "state": record.status,
         "outcome": record.outcome,
+        "interrupted": interrupted(record),
         "started_at": record.started_at,
         "finished_at": record.finished_at,
         "report": _report(record.output),

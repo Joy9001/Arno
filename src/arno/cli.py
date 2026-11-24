@@ -6,9 +6,11 @@ Admin commands never go over HTTP. Anyone with a shell on the host already has t
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import logging
 import os
 import secrets
+import signal
 import sys
 import uuid
 from datetime import date
@@ -226,6 +228,11 @@ def serve(
     """Run the API and the static web build."""
     _settings()
     configure_logging()
+    # A native crash (PDFium aborts with SIGTRAP) otherwise leaves no trace in the log; dump
+    # every thread's Python stack first, then die as before.
+    faulthandler.enable(all_threads=True)
+    if hasattr(signal, "SIGTRAP"):
+        faulthandler.register(signal.SIGTRAP, all_threads=True, chain=True)
     uvicorn.run(
         "arno.api.app:create_app",
         factory=True,

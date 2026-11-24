@@ -20,12 +20,11 @@ type RunEntry = {
   timer: number | undefined;
   loading: boolean;
   failures: number;
-  started: boolean;
   listeners: Set<() => void>;
 };
 
-// One entry per task id, shared by every card that mounts it: a finished task
-// is read once, and a running one has a single poller however many cards show it.
+// One entry per task id, shared by every card that mounts it: a running task has a single
+// poller however many cards show it.
 const runs = new Map<string, RunEntry>();
 
 function entryFor(taskId: string): RunEntry {
@@ -38,7 +37,6 @@ function entryFor(taskId: string): RunEntry {
       timer: undefined,
       loading: false,
       failures: 0,
-      started: false,
       listeners: new Set(),
     };
     runs.set(taskId, entry);
@@ -92,8 +90,7 @@ async function load(taskId: string, entry: RunEntry) {
 
 function startRun(taskId: string) {
   const entry = entryFor(taskId);
-  if (entry.started) return;
-  entry.started = true;
+  // A resumed task keeps its id, so a card mounting for the new run reads an ended task again.
   if (entry.timer === undefined && !entry.loading) void load(taskId, entry);
 }
 
@@ -194,8 +191,18 @@ export function runEnding(task: ImportTask): {
     };
   }
   const ready = task.imports.filter((item) => item.status === "review" || item.status === "committed");
-  if (task.outcome === "ok" && ready.length === task.imports.length && ready.length > 0) {
+  // A restart after every file reached review cut off nothing the user needs.
+  const allReady = ready.length > 0 && ready.length === task.imports.length;
+  if (allReady && (task.outcome === "ok" || task.interrupted)) {
     return { tone: "done", line: "Ready for review", title: "Ready for review", body: "" };
+  }
+  if (task.interrupted) {
+    return {
+      tone: "paused",
+      line: "Paused · the app restarted",
+      title: "Paused: the app restarted",
+      body: "The app restarted while the parser was reading. Continue picks up where it stopped; nothing was written to your ledger.",
+    };
   }
   const raw = [report?.reason, ...importReasons, failedStep?.error].filter(Boolean).join(" ");
   const why =

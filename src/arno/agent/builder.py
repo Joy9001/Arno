@@ -129,7 +129,8 @@ Uploaded statement files
         text += f"""
 
 Paused statement import
-- The parser stopped on its step budget in this thread: task {ids}. Nothing reached the ledger.
+- The parser stopped before it finished in this thread (out of steps, or cut off by an app
+  restart): task {ids}. Nothing reached the ledger.
   When the user asks to continue, resume it with
   `delegate_task("parser", "Continue reading the statement.", resume="<task_id>",
   background=True)` and end your turn. Each resume has a fresh step budget.
