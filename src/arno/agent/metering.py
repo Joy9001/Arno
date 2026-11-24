@@ -483,14 +483,19 @@ class _MeteredStream:
         self._reopen = reopen
         self._on_retry = on_retry
         self._retry_delay = retry_delay
+        # The `StreamedResponse` contract: every `__aiter__()` hands out this one iterator. Core
+        # primes a stream by peeking its first event and storing the peekable iterator here.
+        self._event_iterator: AsyncIterator[ModelResponseStreamEvent] | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._wrapped, name)
 
     def __aiter__(self) -> AsyncIterator[ModelResponseStreamEvent]:
-        if self._reopen is None:
-            return self._wrapped.__aiter__()
-        return self._events()
+        if self._event_iterator is None:
+            self._event_iterator = (
+                self._wrapped.__aiter__() if self._reopen is None else self._events()
+            )
+        return self._event_iterator
 
     async def _events(self) -> AsyncIterator[ModelResponseStreamEvent]:
         retries = 0

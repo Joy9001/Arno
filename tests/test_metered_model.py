@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
@@ -453,6 +453,44 @@ async def test_a_stream_dropped_after_answer_text_is_not_asked_again(monkeypatch
         await Agent(model).run("hi", event_stream_handler=_drain)
     # Text the user already saw would repeat, so the error stands.
     assert len(opened) == 1
+
+
+async def test_a_primed_stream_keeps_its_first_event(monkeypatch):
+    # An `on_model_request_error` hook makes core pull the first event, then iterate again.
+    from pydantic_ai import Agent
+    from pydantic_ai.capabilities import AbstractCapability
+    from pydantic_ai.messages import PartStartEvent, ThinkingPart
+    from pydantic_ai.models.function import DeltaThinkingPart
+
+    class Hook(AbstractCapability[Any]):
+        @override
+        async def on_model_request_error(self, ctx, *, request_context, error):
+            raise error
+
+    monkeypatch.setattr(metering, "observe_cost", _observe_returning(KNOWN))
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo):
+        del messages, info
+        yield {0: DeltaThinkingPart(content="thinking")}
+        yield "Answer."
+
+    model = MeteredModel(
+        FunctionModel(stream_function=stream, model_name="fake-model"),
+        provider="openai",
+        billing_mode="metered",
+        role="chat",
+        journal=FakeJournal(),
+    )
+    seen: list[Any] = []
+
+    async def collect(ctx: Any, events: Any) -> None:
+        del ctx
+        async for event in events:
+            seen.append(event)
+
+    await Agent(model, capabilities=[Hook()]).run("hi", event_stream_handler=collect)
+    starts = [event for event in seen if isinstance(event, PartStartEvent)]
+    assert isinstance(starts[0].part, ThinkingPart)
 
 
 async def _drain(ctx: Any, events: Any) -> None:
