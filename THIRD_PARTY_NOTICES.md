@@ -195,9 +195,33 @@ identifier below was checked against the official `LICENSE` file for the pinned 
 | `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
 | `ghcr.io/joy9001/arno` (this repository) | MIT for Arno code; bundled dependencies as listed above |
 
+## Sandbox image
+
+The `sandbox` Compose service is built from `sandbox/Dockerfile` and ships separately from the
+Arno image. It installs pinned PyPI packages, and each carries its own license file under its
+`.dist-info` directory. The direct packages are:
+
+| Package | License |
+|---|---|
+| `fastapi` | MIT |
+| `uvicorn` | BSD-3-Clause |
+| `pdfplumber` | MIT |
+| `python-calamine` | MIT |
+| `python-docx` | MIT |
+| `pypdfium2` | BSD-3-Clause or Apache-2.0 (bundles PDFium and its dependencies under their own permissive licenses) |
+| `numpy` | BSD-3-Clause (bundled parts under 0BSD, MIT, Zlib, and CC0-1.0) |
+
+The transitive packages are all permissive: `annotated-doc`, `annotated-types`, `anyio`,
+`charset-normalizer`, `h11`, `pdfminer.six`, `pydantic`, `pydantic_core`, and `typing-inspection`
+(MIT); `cffi` (MIT-0); `click`, `idna`, `lxml`, `pycparser`, and `starlette` (BSD-3-Clause);
+`cryptography` (Apache-2.0 or BSD-3-Clause); `opentelemetry-api` (Apache-2.0); `pillow`
+(MIT-CMU); and `typing_extensions` (PSF-2.0). The base image is `python:3.14-slim`, listed under
+[Base images and build tools](#base-images-and-build-tools).
+
 ## Base images and build tools
 
-- Python (`python:3.14-slim`) — PSF-2.0, plus Debian packages under their own licenses.
+- Python (`python:3.14-slim`) — PSF-2.0, plus Debian packages under their own licenses. The Arno
+  image and the `sandbox` image both use it.
 - Node (`node:24-alpine`) and pnpm — MIT, used only in the build stage.
 - `uv` — Apache-2.0 or MIT, used only in the build stage.
 - Tailscale is installed on the host, not in the image, under its own license.
