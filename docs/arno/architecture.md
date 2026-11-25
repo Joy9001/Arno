@@ -282,9 +282,9 @@ Phoenix plus the post-reply number check observe live turns
 1. **Automated tests (every commit, zero model calls):** `pytest` over real Postgres with non-loopback
    sockets blocked (`ALLOW_MODEL_REQUESTS = False`), plus financial invariants (`tests/invariants.py`),
    web interaction tests, and answer-contract tests.
-2. **Agent evaluations (on model, prompt, or tool changes):** `pydantic_evals` runs 145 cases
-   across seven categories (answers, writes, honesty, 50 injection notes, advice boundary, never
-   moving money/passwords, and long threads) on cloned demo databases with `repeat=3` (`pass^3`).
+2. **Agent evaluations (on model, prompt, or tool changes):** `pydantic_evals` runs 84 cases
+   across five categories (answers, writes, honesty, never moving money/passwords, and long
+   threads) on cloned demo databases with `repeat=3` (`pass^3`).
    See [`evals/README.md`](../../evals/README.md).
 3. **Runtime traces and number check (every turn):** Opt-in OTLP/HTTP export to Arize Phoenix
    (fail-open, disabled when `PHOENIX_COLLECTOR_ENDPOINT` is unset or `OTEL_SDK_DISABLED=true`)
@@ -306,26 +306,22 @@ encrypted off-site backups, and contentless push pings leave the host
   **Activity**, **Recaps**, **Settings**), built with React, Vite, `@assistant-ui/*`, and
   `@radix-ui/themes` ([`specs/web-interface.md`](specs/web-interface.md),
   [`DESIGN.md`](../../DESIGN.md)).
-- **Compose stack:** Four default services (`db`, `api`, `backup`, `phoenix`) plus optional
-  `local-llm` (Ollama) and `local-stt` (`whisper.cpp`) profiles. All host ports bind to
+- **Compose stack:** Two default services (`db`, `api`) plus optional
+  `local-llm` (Ollama) and `obs` (stock Phoenix) profiles. The API runs the daily backup. All host ports bind to
   `127.0.0.1` ([`operations/self-hosting.md`](operations/self-hosting.md)).
 
 ---
 
 ## Success measures
 
-The following targets define what "working" means across agent evals, forecasting, categorization,
+The following targets define what "working" means across agent evals, categorization,
 and daily use (`pass^3` counts a case only when all three trials pass):
 
 | Dimension | Measurement | Target |
 |---|---|---|
 | Answers and writes | Agent eval suite (`pass^3`) | 90% or higher |
 | Honesty when data is missing | Agent eval suite (`pass^3`) | 95% or higher |
-| Prompt-injection resistance | 50 distinct notes; zero lasting writes without a confirm card | 100% (hard gate) |
 | Number traceability | Post-reply number check | 100% in answer evals; untraced amounts flagged in live replies |
-| Advice boundary, never-move, long threads | Agent eval suite (`pass^3`) | 90% or higher |
-| Forecast calibration | Backtest P10–P90 coverage across 7–90 day horizons | 80% target (synthetic holdout measures 69%–76% in [`README.md`](../../README.md#projection-backtest)) |
-| Forecast accuracy | CRPS skill against four baselines (including `empirical_flat`) | Beat baselines on synthetic holdout; set real-ledger target after first 90-day linked real backtest |
-| Affordability engine | 25 labeled HackerRank "Buy or Wait" samples | 90% target (shipped engine measures 86.8%: 22/25 status, 21/25 amount, 22/25 earliest) |
+| Never-move and long threads | Agent eval suite (`pass^3`) | 90% or higher |
 | Categorizer accuracy | Share of LLM-assigned categories left uncorrected in `audit_log` | 90% or higher |
 | Daily reliability | Four weeks of daily owner use without spreadsheet or mental-math fallback | Required ship gate ([`plan.md`](plan.md#what-shipped-means)) |

@@ -1,7 +1,7 @@
 # Data model and numerical engine
 
 This specification defines Arno's PostgreSQL schema, trust boundaries and write tiers, projection
-and affordability engine, pattern detector, money calculators, recaps, backtesting, and financial
+and affordability engine, pattern detector, money calculators, recaps, and financial
 invariants; for exact tool contracts see [tools.md](tools.md), and for platform architecture and
 deployment see [platform.md](platform.md).
 
@@ -90,8 +90,7 @@ a `goal` account, and `payees.person_account_id` references a `person` account. 
 opening balances and balance adjustments so statement closing discrepancies remain visible without
 counting as spending. Committing a statement books its printed opening balance on the statement's
 first day and supersedes older balance adjustments inside the period so dated balances inside that
-period reflect real bank balances ([import.md](import.md); `arno repair-openings` repairs ledgers
-committed before this rule).
+period reflect real bank balances ([import.md](import.md)).
 
 **`movements`:** One row per real-world money movement, written in one `pgledger_create_transfers`
 batch. The following table lists its fields:
@@ -254,7 +253,7 @@ The following table lists each operational table:
 |---|---|
 | `schema_version` | Applied migration numbers, names, SHA-256 checksums, and timestamps |
 | `users`, `webauthn_credentials`, `webauthn_challenges`, `setup_tokens`, `sessions` | Single-user WebAuthn passkey authentication, enrollment links, challenges, and active sessions ([platform.md](platform.md)) |
-| `backup_runs` | History of backup sidecar executions and verification status |
+| `backup_runs` | History of backup executions and verification status |
 | `notifications`, `push_subscriptions`, `vapid_keys` | In-app inbox items, web-push subscriptions, and VAPID signing keys |
 | `jobs`, `job_schedules` | Persistent job queue (`key`, `kind`, `payload`, `status`, `run_at`, `attempts`, `last_error`) and recurring job schedules (`scheduled_question_id`, `rule`, `next_run_at`, `dtstart`). Never hold statement passwords and stay hidden from `agent_ro` |
 | `risk_state` | Active floor-crossing risk episode tracking and `last_checked_at` timestamp |
@@ -395,7 +394,7 @@ read-only `REPEATABLE READ` transaction:
 
 ### Variable spend model
 
-Everyday spend uses the backtest-admitted configuration:
+Everyday spend uses this configuration:
 
 ```python
 MODEL = Model(
@@ -736,53 +735,10 @@ same payload with outside merchant names marked (flagging the conversation) and 
 
 ---
 
-## Evaluation and backtesting
-
-Engine accuracy is measured with two local verification harnesses rather than claims (see
-[development-operations.md](../operations/development-operations.md) for CLI commands).
-
-### Projection backtest
-
-The backtest replays pattern detection, snapshot loading, and `project()` across up to 52 weekly
-rolling origins per household and seed, scoring end-balance and minimum-balance forecasts at 7, 14,
-30, 60, and 90 days from one projection per origin:
-
-- **Scoring rules:** _Continuous ranked probability score_ (_CRPS_) for the full distribution,
-  pinball loss at the 10th, 50th, and 90th quantiles, P10–P90 coverage with mean band width, Brier
-  score with reliability decomposition for floor breaches, and a calibration rank histogram.
-- **Baselines:** Four baselines run on the same origins—flat balance, schedules only, `schedule_mean`
-  (schedules plus mean daily spend, used as the skill-score reference), and probabilistic
-  `empirical_flat` (schedules plus empirically sampled daily category spend).
-- **Synthetic households and real-ledger policy:** Synthetic personas model heavy tails, multi-day
-  spend runs, payday effects, upward spend drift, rare large expenses, and shifted salary dates
-  (personas under 105 days use a floor cushion when no calibration window fits). Because base-case
-  projections count only confirmed income, realized outcomes exclude later credits that pay no
-  income schedule confirmed by the origin; real-ledger origins with unlinked confirmed income are
-  dropped and counted. Only synthetic holdout runs can update the README scorecard
-  (`arno backtest --source db --publish` is rejected).
-- **Statistical inference:** _Heteroskedasticity and autocorrelation consistent_ (_HAC_) Newey–West
-  confidence intervals and Diebold–Mariano tests account for overlapping rolling origins within each
-  household-seed group (centering each group's losses on its own mean, adding between-group variance
-  once at lag zero, returning `nan` when fewer than two paired observations exist, and counting
-  dropped origins).
-
-### HackerRank affordability adapter
-
-The HackerRank "Buy or Wait" scorer adapts the 25 locally stored sample requests (never committed
-because the source repository has no license) into `Charge` rows and `ProjectionInput` objects.
-Stream inference runs through production `engine/series.py`, and safe amount, earliest date, and
-plan verification run through `project()`, while dataset-specific levers (stopping or trimming one
-named stream and merchant-fixed installment dates) stay in the adapter. The shipped engine scores
-86.8% (22/25 status, 21/25 amount within 5%, 22/25 earliest date within 3 days). Publishing requires
-explicit `--publish` and exits untouched if the local sample files are absent.
-
-### Literature references
+## Literature references
 
 - Steele, Lea, and Flood (2014), "Fast splittable pseudorandom number generators", _OOPSLA_; Salmon,
   Moraes, Dror, and Shaw (2011), "Parallel random numbers: as easy as 1, 2, 3", _SC11_.
-- Gneiting and Raftery (2007), "Strictly proper scoring rules, prediction, and estimation", _JASA_
-  102.
-- Diebold and Mariano (1995), "Comparing predictive accuracy", _JBES_ 13.
 - Needleman and Wunsch (1970), "A general method applicable to the search for similarities in the
   amino acid sequence of two proteins", _Journal of Molecular Biology_ 48.
 - Fader, Hardie, and Lee (2005), "Counting your customers the easy way", _Marketing Science_ 24.

@@ -58,101 +58,6 @@ money, never sees a statement password, and never recommends an investment.
 The [architecture guide](docs/arno/architecture.md) and [tool reference](docs/arno/specs/tools.md)
 go deeper. Decisions live in [`plan.md`](docs/arno/plan.md).
 
-## Results
-
-These sections are written by `arno eval`, `arno backtest`, and `arno hackerrank`, never by hand.
-
-### Agent evals
-
-145 cases against a synthetic persona, three trials each, with a fresh database per trial.
-`pass^3` counts a case only if all three trials pass. The suite and its targets are in
-[`evals/`](evals/README.md).
-
-<!-- eval-scorecard:start -->
-| Model | Answers and what-ifs | Writes | Honesty when data is missing | Injection | Advice boundary | Never moving money / passwords | Long threads after a summary | Injection gate | Fooled | Number flags | Median cost | Median latency |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `deepseek-v4.1-flash` | 100% (31/31) | 95% (21/22) | 100% (14/14) | 100% (50/50) | 100% (11/11) | 100% (10/10) | 100% (4/4) | 100% (150/150) PASS | 8% (13/158) | 14 (13 untraced) | $0.0035 | 23.4s |
-
-`pass^3` is the share of cases that passed in all three trials. The injection gate
-is the share of trials where no lasting write landed without its confirm card; the
-fooled rate is the share where the model acted on the note even when the gate
-stopped it. Percentages use all trials shown in the run.
-
-Run notes:
-- deepseek-v4.1-flash: Full 142-case suite, repeat=3, after the decision tools and the streamed-cost fix. Six injection cases whose trials timed out with no reply, and two answer cases failed only by a number-check fault fixed in 9a421f6, were re-run (24 trials, all passed) and replace the full run's results; the fooled rate counts every trial that produced a reply in either run (158). Median cost and latency are the full run's.
-<!-- eval-scorecard:end -->
-
-### Projection backtest
-
-Each forecaster runs from 52 weekly past origins on ten synthetic households built to break its
-assumptions (`src/arno/engine/personas.py`, which shares no code with the engine). Every forecast
-is scored as a distribution against what happened over the next 7 to 90 days, beside three
-baselines. These numbers come from the held-out seeds; settings are chosen on the tuning seeds. A
-real ledger is scored the same way with `arno backtest --source db` once it has a confirmed
-income schedule with its payments linked. The base case counts only confirmed income, so outcomes
-leave out later income that pays no confirmed schedule.
-
-<!-- backtest:start -->
-Source: synthetic personas, seeds 201, 202. 978 weekly origins scored, 0 dropped for missing setup.
-CRPS is the forecast's distance from the outcome in rupees (lower is better); skill is against `schedule_mean` with its Diebold-Mariano p-value; coverage is how often the outcome fell inside P10-P90, with a 95% interval.
-Outcomes leave out income the forecast was told not to count: a later credit counts only if it pays an income schedule confirmed by the origin.
-
-| Target | Days | Forecaster | CRPS | Skill (p) | P10-P90 coverage | Width | Breach Brier |
-|---|---|---|---|---|---|---|---|
-| end | 7 | flat | ₹52,239.87 | -1378.0% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 7 | schedule | ₹7,244.02 | -105.0% (0.00) | 0% (0%-1%) | ₹0 | - |
-| end | 7 | schedule_mean | ₹3,534.40 | - | 0% (0%-0%) | ₹0 | - |
-| end | 7 | empirical_flat | ₹2,766.75 | +21.7% (0.00) | 42% (39%-45%) | ₹4,308.19 | - |
-| end | 7 | engine | ₹2,504.35 | +29.1% (0.00) | 76% (74%-79%) | ₹8,038.49 | - |
-| lowest | 7 | flat | ₹28,487.15 | -845.6% (0.00) | 3% (2%-4%) | ₹0 | 0.012 |
-| lowest | 7 | schedule | ₹6,032.74 | -100.2% (0.00) | 3% (2%-4%) | ₹0 | 0.012 |
-| lowest | 7 | schedule_mean | ₹3,012.75 | - | 2% (1%-3%) | ₹0 | 0.012 |
-| lowest | 7 | empirical_flat | ₹2,323.10 | +22.9% (0.00) | 42% (39%-46%) | ₹3,876.70 | 0.010 |
-| lowest | 7 | engine | ₹2,062.33 | +31.5% (0.00) | 76% (74%-79%) | ₹7,231.67 | 0.007 |
-| end | 30 | flat | ₹26,627.03 | -192.5% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule | ₹31,791.24 | -249.3% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 30 | schedule_mean | ₹9,102.67 | - | 0% (0%-0%) | ₹0 | - |
-| end | 30 | empirical_flat | ₹7,237.70 | +20.5% (0.00) | 38% (35%-42%) | ₹10,447.47 | - |
-| end | 30 | engine | ₹6,066.42 | +33.4% (0.00) | 76% (72%-79%) | ₹22,351.39 | - |
-| lowest | 30 | flat | ₹56,541.02 | -800.1% (0.00) | 2% (1%-2%) | ₹0 | 0.095 |
-| lowest | 30 | schedule | ₹17,371.32 | -176.5% (0.00) | 2% (1%-2%) | ₹0 | 0.059 |
-| lowest | 30 | schedule_mean | ₹6,281.53 | - | 1% (0%-1%) | ₹0 | 0.059 |
-| lowest | 30 | empirical_flat | ₹5,026.18 | +20.0% (0.00) | 40% (36%-44%) | ₹7,788.15 | 0.052 |
-| lowest | 30 | engine | ₹4,208.98 | +33.0% (0.00) | 74% (71%-78%) | ₹16,063.30 | 0.031 |
-| end | 90 | flat | ₹55,566.22 | -107.7% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule | ₹1,36,563.72 | -410.4% (0.00) | 0% (0%-0%) | ₹0 | - |
-| end | 90 | schedule_mean | ₹26,756.05 | - | 0% (0%-0%) | ₹0 | - |
-| end | 90 | empirical_flat | ₹20,781.94 | +22.3% (0.00) | 35% (30%-39%) | ₹34,307.31 | - |
-| end | 90 | engine | ₹15,660.80 | +41.5% (0.00) | 69% (64%-74%) | ₹57,018.65 | - |
-| lowest | 90 | flat | ₹86,252.14 | -422.2% (0.00) | 1% (0%-1%) | ₹0 | 0.262 |
-| lowest | 90 | schedule | ₹36,613.99 | -121.7% (0.00) | 1% (0%-1%) | ₹0 | 0.170 |
-| lowest | 90 | schedule_mean | ₹16,518.02 | - | 1% (0%-1%) | ₹0 | 0.139 |
-| lowest | 90 | empirical_flat | ₹12,732.61 | +22.9% (0.00) | 40% (35%-45%) | ₹23,647.39 | 0.110 |
-| lowest | 90 | engine | ₹9,644.61 | +41.6% (0.00) | 72% (68%-77%) | ₹38,402.04 | 0.097 |
-<!-- backtest:end -->
-
-### HackerRank "Buy or Wait"
-
-The scorer replays the challenge's 25 labeled samples through the engine. The dataset has no
-license, so it is never committed.
-
-<!-- hackerrank:start -->
-HackerRank 'Buy or Wait' samples: 25 (errors: 0)
-Combined score: 86.80% (95% CI 68.6%-95.2%, n=25)
-Affordability status: 88% (22/25, 95% CI 70.0%-95.8%, n=25)
-amount_safe_to_pay within 5% of requested: 84% (21/25, 95% CI 65.3%-93.6%, n=25)
-Earliest full-payment date within 3 days: 88% (22/25, 95% CI 70.0%-95.8%, n=25)
-
-| Status | Expected | Predicted |
-|---|---:|---:|
-| affordable_now | 3 | 4 |
-| affordable_with_plan | 9 | 6 |
-| affordable_later | 6 | 8 |
-| not_affordable | 7 | 7 |
-
-source: private/hackerrank-orchestrate-september26/dataset (local, not committed)
-<!-- hackerrank:end -->
-
 ## Install
 
 You need Docker with Compose and an encrypted disk (BitLocker, LUKS, or FileVault), which is what
@@ -162,14 +67,14 @@ protects the database at rest. To use Arno from your phone, the host also needs
 ```bash
 git clone https://github.com/Joy9001/Arno.git && cd Arno
 cp .env.example .env      # fill in the secrets and your chat model; .env.example explains each
-docker compose pull api backup db   # the published images
-docker compose up -d      # Phoenix has no published image, so this builds it locally on first start
+docker compose pull api db   # the published images
+docker compose up -d
 docker compose logs api   # prints a one-time enrollment link and a QR code
 ```
 
-Phoenix needs all four of `PHOENIX_PASSWORD`, `PHOENIX_SECRET`, `PHOENIX_ADMIN_SECRET`, and
-`PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD`. Leave one empty and Phoenix restart-loops while the app
-keeps working.
+Tracing is off by default. To turn it on, start the optional Phoenix service with
+`docker compose --profile obs up -d`, fill in the four `PHOENIX_*` secrets in `.env`, and set
+`PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces`.
 
 Open <http://localhost:8000>, follow the link, and create a passkey. Tell Arno your balances,
 salary day, and card dues, and it can answer from the first conversation. To try it on sample data
@@ -194,14 +99,11 @@ default backups volume is root-owned, so it takes the form shown in the list.
 
 ```bash
 arno migrate                    # apply pending SQL migrations
-arno chat                       # chat in the terminal
 arno export --format json       # json, csv, or sql
 arno setup                      # print a fresh enrollment link
 arno passkeys reset             # delete every passkey and session, then reopen setup
 arno demo seed                  # load the synthetic persona into an empty instance
 docker compose run --rm --no-deps --user root api arno restore   # newest backup, verified
-arno repair-openings --dry-run  # for ledgers that imported statements before 0.2.0
-arno eval --model X             # run the agent evals (calls the model, so it costs money)
 ```
 
 </details>
@@ -213,8 +115,8 @@ arno eval --model X             # run the agent evals (calls the model, so it co
 - One user signs in with a passkey. Exports and passkey changes ask for the passkey again.
 - The agent's SQL runs as a read-only database role with a two-second timeout and no access to
   auth tables.
-- There are no analytics. Traces stay on the host in Phoenix. Only the model calls you configure
-  leave the machine, and with local models nothing does.
+- There are no analytics. Traces, when you turn them on, stay on the host in Phoenix. Only the
+  model calls you configure leave the machine, and with local models nothing does.
 
 The [security posture](docs/arno/operations/self-hosting.md#security-and-privacy-posture) and
 [what leaves the host](docs/arno/operations/self-hosting.md#what-leaves-the-host) list what each
@@ -245,8 +147,9 @@ tracks what's left. India is the only country implemented; everything India-spec
 
 ## License
 
-Arno is [MIT licensed](LICENSE). CI audits every shipped dependency's license, and no GPL, AGPL,
-SSPL, or Elastic code ships in the Arno image; Phoenix runs as a separate Elastic 2.0 service.
+Arno is [MIT licensed](LICENSE). Dependency licenses are checked by hand, and no GPL, AGPL,
+SSPL, or Elastic code ships in the Arno image; the optional Phoenix service is Elastic 2.0 and
+runs outside it.
 The double-entry core is [pgledger](https://github.com/pgr0ss/pgledger) (MIT, © 2025 Paul Gross),
 vendored unmodified at commit `fee1aa0`, with ULID helpers from
 [scoville/pgsql-ulid](https://github.com/scoville/pgsql-ulid) (BSD-3-Clause, © 2021 Scoville). No

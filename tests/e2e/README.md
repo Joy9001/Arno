@@ -1,10 +1,10 @@
 # The end-to-end driver
 
 `tests/e2e/driver.py` runs real user journeys against a real API process on a scratch database.
-The terminal `arno chat` runs the agent inside the caller's process, so it cannot do what a
-browser does: upload a statement, answer a confirm card, review and commit an import, or show the
-cards and tool calls a turn produced. This driver speaks the same HTTP the web app speaks, to a
-server it starts itself.
+Unit tests call the agent inside the test process, so they cannot do what a browser does: upload
+a statement, answer a confirm card, review and commit an import, or show the cards and tool calls
+a turn produced. This driver speaks the same HTTP the web app speaks, to a server it starts
+itself.
 
 It is for later end-to-end agents and for a developer checking a change by hand. It is not part of
 `pytest`; the model-free part is `tests/test_e2e_driver.py`.

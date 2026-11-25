@@ -2,7 +2,7 @@
 
 This guide owns the maintainer deployment file map, local development workflow, verification
 commands, triage, and release checklist; use [self-hosting](self-hosting.md) for host installation,
-backups, restore, and updates, [observability](observability.md) for Phoenix tracing and replay,
+backups, restore, and updates, [observability](observability.md) for optional Phoenix tracing,
 and [`AGENTS.md`](../../../AGENTS.md) for contributor rules.
 
 Run all commands from the repository root. Shell examples use POSIX syntax; on Windows PowerShell,
@@ -18,18 +18,17 @@ pipelines.
 
 | File | Responsibility |
 |---|---|
-| [`compose.yaml`](../../../compose.yaml) | Default stack (`db`, `api`, `backup`, `phoenix`), optional `local-llm` and `local-stt` profiles, volumes, health checks, and loopback ports |
-| [`compose.gpu.yaml`](../../../compose.gpu.yaml) | NVIDIA CUDA 13 override for the optional `whisper` service |
-| [`Dockerfile`](../../../Dockerfile) | Builds the static web bundle and Python 3.14 API runtime (including PostgreSQL 18 clients and `restic`) |
-| [`backup/`](../../../backup/) | Backup sidecar image (`pg_dump`, `restic`, `rclone`) and schedule entrypoint |
-| [`deploy/`](../../../deploy/) | Database role provisioning (`app-role.sh`, `phoenix-db.sh`), legacy conversion (`demote-app.sh`), patched Phoenix build (`phoenix-cost/`), and `whisper` image |
+| [`compose.yaml`](../../../compose.yaml) | Default stack (`db`, `api`), optional `local-llm` and `obs` (stock Phoenix) profiles, volumes, health checks, and loopback ports |
+| [`Dockerfile`](../../../Dockerfile) | Builds the static web bundle and Python 3.14 API runtime (including PostgreSQL 18 clients, `restic`, and `rclone`, which `api` uses for backups) |
+| [`deploy/`](../../../deploy/) | Database role provisioning (`app-role.sh`) |
 | [`.env.example`](../../../.env.example) | Configuration template; actual `.env` files stay local and gitignored |
-| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | Python, web, contract, dependency, license, and Compose validation checks |
-| [`.github/workflows/release.yml`](../../../.github/workflows/release.yml) | Tag-triggered image builds, runtime/Phoenix contract checks, and GitHub Release publication |
+| [`.github/workflows/ci.yml`](../../../.github/workflows/ci.yml) | Python, web, contract, dependency, and Compose validation checks |
+| [`.github/workflows/release.yml`](../../../.github/workflows/release.yml) | Tag-triggered image builds, image runtime checks, and GitHub Release publication |
 
-The default stack binds `db` (`5433`), `api` (`8000`), and `phoenix` (`6006`) to loopback only;
-`backup` waits for `api` to become healthy so startup sets the `backup` role password. Named
-volumes (`db-data`, `backup-data`, `pre-migration-data`, `tasks-data`, and `phoenix-data`) hold
+The default stack binds `db` (`5433`) and `api` (`8000`) to loopback only, and the `obs` profile
+binds `phoenix` (`6006`) the same way. `api` runs the daily backup and mounts `backup-data`. Named
+volumes (`db-data`, `backup-data`, `pre-migration-data`, `tasks-data`, `ollama-data`, and
+`phoenix-data`) hold
 persistent state; never run `docker compose down -v` against an instance whose data matters. See
 [install](self-hosting.md#install) for host setup and ports.
 
@@ -78,11 +77,13 @@ pnpm --dir web test:answers && pnpm --dir web test:web && pnpm --dir web build
 # Financial invariants on a scratch _test database (after ledger/, tools/, importers/, engine/ edits)
 uv run arno migrate && uv run arno demo seed && uv run python -m tests.invariants
 
-# Dependencies, licenses, and Compose validation (including GPU override)
-uv lock --check && uv run python scripts/license_audit.py
+# Dependencies and Compose validation
+uv lock --check
 docker compose --env-file .env.example config -q
-docker compose --env-file .env.example -f compose.yaml -f compose.gpu.yaml config -q
 ```
+
+Check licences by hand whenever a dependency changes: only permissive licences ship, and no GPL,
+AGPL, SSPL, or Elastic code enters the Arno image.
 
 Never run two full `uv run pytest` invocations at once: the local default (`-n 4` in
 `pyproject.toml`) spawns four xdist workers against the shared Postgres container (CI overrides
@@ -99,17 +100,12 @@ rm requirements-audit.txt
 pnpm --dir web audit --audit-level high
 ```
 
-### Real-model journeys, evals, and engine scores
+### Real-model journeys and evals
 
 - **HTTP end-to-end driver:** Exercise live API journeys on a scratch `_test` database using
   [`tests/e2e/README.md`](../../../tests/e2e/README.md).
-- **Agent evals:** `uv run arno eval --dry-run` lists cases for free. Live `arno eval` spends money
-  and requires an explicit request; see [`evals/README.md`](../../../evals/README.md).
-- **Engine scores:** Tune forecasts with `uv run arno backtest --source personas --seeds tuning`,
-  publish holdout scores with `--seeds holdout --publish`, or score a local dataset with
-  `uv run arno hackerrank --dataset <folder>`.
-- **Patched Phoenix image:** Test changes to `deploy/phoenix-cost/` against a scratch Phoenix
-  database using [`deploy/phoenix-cost/README.md`](../../../deploy/phoenix-cost/README.md).
+- **Agent evals:** Evals have no command-line entry point. Call `evals.runner.run_eval` from Python;
+  it spends money and requires an explicit request. See [`evals/README.md`](../../../evals/README.md).
 
 ---
 
@@ -141,14 +137,14 @@ Run these checks periodically on a live host with the target Compose project sel
 
 ```bash
 docker compose ps
-docker compose logs --tail=100 api backup phoenix
+docker compose logs --tail=100 api
 curl -fsS http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health
-docker compose run --rm --no-deps --entrypoint restic backup snapshots
+docker compose exec api restic snapshots
 ```
 
-Verify free disk space, the latest off-site snapshot age, and trace delivery in Phoenix
-([find a trace](observability.md#find-a-trace)). Listing snapshots is not a restore test; run the
-[restore drill](self-hosting.md#restore-drill-on-a-fresh-host) periodically on an isolated target.
+Verify free disk space and the latest off-site snapshot age. If you enabled tracing, also check
+trace delivery in Phoenix ([find a trace](observability.md#find-a-trace)). Listing snapshots is not
+a restore test; run the [restore drill](self-hosting.md#restore-drill-on-a-fresh-host) periodically on an isolated target.
 
 ---
 
@@ -159,18 +155,18 @@ The following table lists first checks for common operational failures.
 | Symptom | First checks |
 |---|---|
 | API unhealthy or unreachable | Check `docker compose ps`, `api` and `db` logs, and local `/api/health`. If local health works but a device fails, check `tailscale serve status`, `ARNO_RP_ID`, and `ARNO_RP_ORIGIN`. |
-| Backup missing or stale | Check `backup` logs, disk space, and repository credentials. After changing repositories, seed immediately via [backups](self-hosting.md#backups). |
-| Phoenix restart loop or missing traces | Check `phoenix` and `api` logs, required Phoenix secrets, `OTEL_SDK_DISABLED`, and [Phoenix database recovery](observability.md#phoenix-database-recovery). |
+| Backup missing or stale | Check `api` logs, disk space, and repository credentials. After changing repositories, see [switch or test repositories](self-hosting.md#switch-or-test-repositories). |
+| Phoenix restart loop or missing traces | Tracing is off unless `PHOENIX_COLLECTOR_ENDPOINT` is set and the `obs` profile runs. Check `phoenix` and `api` logs, required Phoenix secrets, and `OTEL_SDK_DISABLED`. |
 | Image build cannot reach a registry | Check builder DNS, proxy, VPN, and network connectivity before changing Dockerfiles. |
 | Migration or startup fails | Preserve logs and backups, inspect the failed migration and `/app/pre-migration` dump, and test recovery on an isolated target first. |
-| Pre-0.3.0 superuser warning on boot | Follow [demote the pre-0.3.0 superuser `app` role](legacy-upgrades.md#demote-the-pre-030-superuser-app-role). |
+| Pre-0.3.0 superuser warning on boot | Follow [replace the pre-0.3.0 superuser `app` role](legacy-upgrades.md#replace-the-pre-030-superuser-app-role). |
 
 ---
 
 ## Release checklist
 
-1. **Bump version mirrors consistently.** Update `pyproject.toml`, `compose.yaml` (`api` and
-   `backup` default tags), `web/package.json`, `src/arno/__init__.py`, `.env.example`, `uv.lock`,
+1. **Bump version mirrors consistently.** Update `pyproject.toml`, `compose.yaml` (the `api`
+   default tag), `web/package.json`, `src/arno/__init__.py`, `.env.example`, `uv.lock`,
    and the version badge in [`README.md`](../../../README.md). Note that `tests/test_release.py`
    enforces `pyproject.toml`, `compose.yaml`, `web/package.json`, `src/arno/__init__.py`, and
    `.env.example`, but does not check `uv.lock` or the `README.md` version badge—verify those two
@@ -180,14 +176,13 @@ The following table lists first checks for common operational failures.
    ```bash
    git status --short
    uv run pytest tests/test_release.py -q -n 0
-   uv lock --check && uv run python scripts/license_audit.py
+   uv lock --check
    docker compose --env-file .env.example config -q
-   docker compose --env-file .env.example -f compose.yaml -f compose.gpu.yaml config -q
    ```
 
-   For direct dependency additions, confirm `THIRD_PARTY_NOTICES.md` is updated. If changing the
-   pinned Phoenix version, complete the contract verification in
-   [`deploy/phoenix-cost/README.md`](../../../deploy/phoenix-cost/README.md) first.
+   For direct dependency additions, confirm `THIRD_PARTY_NOTICES.md` is updated and check the
+   licences by hand. If you change the pinned Phoenix image, update its digest in `compose.yaml` and
+   check that tracing still works with the `obs` profile.
 3. **Tag and push.** Replace `vX.Y.Z` with the version in `pyproject.toml`:
 
    ```bash
@@ -199,9 +194,8 @@ The following table lists first checks for common operational failures.
 4. **Monitor the release workflow.** Pushing a `v*` tag triggers
    [`.github/workflows/release.yml`](../../../.github/workflows/release.yml), which runs three
    sequential stages: `images` (verifies the tag against `pyproject.toml` and pushes
-   `ghcr.io/joy9001/arno` and `ghcr.io/joy9001/arno-backup`), `contracts` (runs
-   `tests/test_image_runtime.py` against the pushed images and builds `deploy/phoenix-cost` to run
-   `tests/test_phoenix_cost_contract.py`), and `publish` (creates a GitHub Release if one does not
+   `ghcr.io/joy9001/arno`), `contracts` (runs `tests/test_image_runtime.py` against the pushed
+   image), and `publish` (creates a GitHub Release if one does not
    already exist). Inspect status with `gh run list --workflow release.yml --limit 5`; never move a
    published tag.
 5. **Publish hand-written release notes.** `release.yml`'s `--generate-notes` fallback lists merged
@@ -217,5 +211,4 @@ The following table lists first checks for common operational failures.
 
    Use `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file release-notes.md` if
    publishing before the workflow creates the release. Publishing images does not update running
-   hosts; update the host separately via [update Arno](self-hosting.md#update-arno) (which also
-   rebuilds the local `phoenix` image).
+   hosts; update the host separately via [update Arno](self-hosting.md#update-arno).

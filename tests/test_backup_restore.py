@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import json
 import os
-import shutil
 import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -15,9 +15,17 @@ from arno.agent.chatgpt_auth import DatabaseChatGPTCredentialSource
 from arno.agent.cost_journal import CostAttempt, record_final, record_intent
 from arno.agent.pricing import CostObservation
 from arno.agent.spend import make_spend_store, post_direct_call
-from arno.backup_restore import RestoreError, prepare_database, restore_from_directory
+from arno.backup_restore import (
+    DUMP_NAME,
+    RestoreError,
+    find_dump_path,
+    prepare_database,
+    restore_from_restic,
+)
 from arno.config import get_settings
 from arno.db.conn import connect, conninfo_to_dict, make_conninfo, quote_ident
+from arno.jobs import backup as backup_job
+from arno.jobs.backup import run_backup
 from arno.ledger.accounts import create_account
 from arno.ledger.export import export_pg_dump
 from arno.ledger.movements import record_expense
@@ -25,6 +33,49 @@ from tests.conftest import cluster_lock, fresh_database
 from tests.fixtures.postgres import binary, client_env, dump_database, missing
 
 CLIENT_SKIP = missing() if binary("PG_DUMP", "pg_dump") else "the PostgreSQL client is missing"
+RESTIC_SKIP = CLIENT_SKIP or (None if binary("RESTIC", "restic") else "restic is not installed")
+PASSWORD = "local-test-password"
+
+
+def _repo_holding(dump: Path, tmp_path: Path) -> str:
+    """A restic repository whose latest snapshot holds `dump` where the backup job stores it."""
+    repo = str(tmp_path / "restic-repo")
+    env = os.environ | {"RESTIC_REPOSITORY": repo, "RESTIC_PASSWORD": PASSWORD}
+    restic = str(binary("RESTIC", "restic"))
+    assert (
+        subprocess.run([restic, "init"], capture_output=True, env=env, check=False).returncode == 0
+    )
+    stored = subprocess.run(
+        [restic, "backup", "--stdin", "--stdin-filename", DUMP_NAME],
+        input=dump.read_bytes(),
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    assert stored.returncode == 0, stored.stderr.decode("utf-8", "replace")
+    return repo
+
+
+def test_find_dump_path_takes_the_current_name_then_the_sidecars():
+    def listing(*paths: str) -> bytes:
+        lines = [{"struct_type": "snapshot"}] + [
+            {"struct_type": "node", "type": "file", "path": path} for path in paths
+        ]
+        return os.linesep.encode().join(json.dumps(line).encode() for line in lines)
+
+    assert find_dump_path(listing("/fin_agent.dump")) == "/fin_agent.dump"
+    assert find_dump_path(listing("/tmp/backup_manifest.json", "/tmp/fin_agent.dump")) == (
+        "/tmp/fin_agent.dump"
+    )
+    assert find_dump_path(listing("/tmp/fin_agent.dump", "/fin_agent.dump")) == "/fin_agent.dump"
+    assert find_dump_path(listing("/other")) is None
+
+
+async def _restore(repo: str, target: str) -> dict[str, bool]:
+    async with cluster_lock():
+        return await restore_from_restic(
+            repository=repo, password=PASSWORD, target_dsn=target, force=True
+        )
 
 
 def _backup_dsn() -> str | None:
@@ -177,59 +228,28 @@ async def test_pg_dump_restore_round_trip(ledger):
 
 
 @pytest.mark.xdist_group("cluster")
-@pytest.mark.skipif(shutil.which("restic") is None, reason="restic is not installed")
-async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
-    settings = get_settings(refresh=True)
-    await ledger.execute(
-        "INSERT INTO scheduled_questions (prompt, rule) VALUES ('Restore question', 'daily')"
-    )
-    await ledger.execute(
-        "INSERT INTO jobs (key, kind) VALUES ('restore-test:1', 'scheduled_question')"
-    )
+@pytest.mark.skipif(RESTIC_SKIP is not None, reason=RESTIC_SKIP or "")
+async def test_the_backup_job_round_trips_through_restic_and_restore(
+    ledger, tmp_path: Path, monkeypatch
+):
+    get_settings(refresh=True)
     await ledger.execute(
         "INSERT INTO preferences (body, created_by) VALUES ('Restore preference', 'user')"
     )
-    dump = export_pg_dump(settings.database_url)
-    source_counts = await _counts(settings.database_url)
-    repo = tmp_path / "restic-repo"
-    env = os.environ | {
-        "RESTIC_REPOSITORY": str(repo),
-        "RESTIC_PASSWORD": "local-test-password",
-    }
+    source_counts = await _counts(os.environ["DATABASE_URL"])
+    repo = str(tmp_path / "restic-repo")
+    monkeypatch.setenv("RESTIC_REPOSITORY", repo)
+    monkeypatch.setenv("RESTIC_PASSWORD", PASSWORD)
 
-    init = subprocess.run(["restic", "init"], capture_output=True, env=env, check=False)
-    assert init.returncode == 0, init.stderr.decode("utf-8", "replace")
-    backup = subprocess.run(
-        # The backup format predates the Arno name; existing archives carry it.
-        ["restic", "backup", "--stdin", "--stdin-filename", "fin_agent.dump"],
-        input=dump,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    assert backup.returncode == 0, backup.stderr.decode("utf-8", "replace")
-    extracted = subprocess.run(
-        ["restic", "dump", "latest", "/fin_agent.dump"],
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    assert extracted.returncode == 0, extracted.stderr.decode("utf-8", "replace")
+    assert await run_backup(ledger) is True
+    run = await ledger.fetchrow_required("SELECT * FROM backup_runs ORDER BY created_at DESC")
+    assert run["status"] == "success" and run["restic_snapshot"] and run["dump_bytes"] > 0
 
     async with fresh_database("arno_restic_restore") as target:
-        await _restore_sql_dump(extracted.stdout, target)
+        checks = await _restore(repo, target)
+        assert checks and all(checks.values())
         assert await _counts(target) == source_counts
         async with connect(target) as restored:
-            assert (
-                await restored.fetchval(
-                    "SELECT count(*) FROM scheduled_questions WHERE prompt = 'Restore question'"
-                )
-                == 1
-            )
-            assert (
-                await restored.fetchval("SELECT count(*) FROM jobs WHERE key = 'restore-test:1'")
-                == 1
-            )
             assert (
                 await restored.fetchval(
                     "SELECT count(*) FROM preferences WHERE body = 'Restore preference'"
@@ -238,18 +258,54 @@ async def test_restic_backup_and_restore_round_trip(ledger, tmp_path: Path):
             )
 
 
+@pytest.mark.skipif(RESTIC_SKIP is not None, reason=RESTIC_SKIP or "")
+async def test_a_failed_backup_is_recorded_without_the_password(ledger, tmp_path, monkeypatch):
+    get_settings(refresh=True)
+    monkeypatch.setenv("RESTIC_REPOSITORY", str(tmp_path / "restic-repo"))
+    monkeypatch.setenv("RESTIC_PASSWORD", PASSWORD)
+    monkeypatch.setenv("PG_DUMP", str(tmp_path / "no-such-pg_dump"))
+
+    assert await run_backup(ledger) is False
+    run = await ledger.fetchrow_required("SELECT * FROM backup_runs ORDER BY created_at DESC")
+    assert run["status"] == "failed" and run["error"]
+    assert PASSWORD not in run["error"]
+    assert run["restic_snapshot"] is None
+
+
+async def test_an_unexpected_backup_error_is_recorded_generically_and_the_alert_still_runs(
+    ledger, monkeypatch
+):
+    get_settings(refresh=True)
+    monkeypatch.setenv("RESTIC_REPOSITORY", "rclone:secret-remote:repo")
+    monkeypatch.setenv("RESTIC_PASSWORD", PASSWORD)
+
+    def explode(*_args):
+        raise KeyError("rclone:secret-remote:repo")
+
+    alerts = []
+
+    async def spy(conn):
+        alerts.append(conn)
+
+    monkeypatch.setattr(backup_job, "_ship", explode)
+    monkeypatch.setattr(backup_job, "backup_alert", spy)
+
+    await backup_job.handle_backup_check({})
+
+    run = await ledger.fetchrow_required("SELECT * FROM backup_runs ORDER BY created_at DESC")
+    assert (run["status"], run["error"]) == ("failed", "backup failed: KeyError")
+    assert len(alerts) == 1
+
+
 @pytest.mark.xdist_group("cluster")
-@pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
+@pytest.mark.skipif(RESTIC_SKIP is not None, reason=RESTIC_SKIP or "")
 async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: Path):
     """Migration 0036's boundary comes from the dump's own grants, not a second copy in code."""
     dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=True)
 
+    repo = _repo_holding(tmp_path / "fin_agent.dump", tmp_path)
     async with fresh_database("arno_restore_grants") as target:
-        async with cluster_lock():
-            report = await restore_from_directory(
-                tmp_path, target, force=True, require_manifest=False
-            )
-        assert report.ok, report.as_dict()
+        await _restore(repo, target)
         async with connect(target) as restored:
             reads = {
                 table: await restored.fetchval(
@@ -317,19 +373,16 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
 
 
 @pytest.mark.xdist_group("cluster")
-@pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
+@pytest.mark.skipif(RESTIC_SKIP is not None, reason=RESTIC_SKIP or "")
 async def test_an_older_dump_without_grants_still_restores(ledger, tmp_path: Path):
     """A dump from an older image still restores and runs; only `agent_ro` stays unprivileged."""
     bank = await create_account(ledger, kind="bank", name="Old dump bank")
     await record_expense(ledger, account_id=bank["id"], amount_paise=5_000, description="Tea")
     dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=False)
 
+    repo = _repo_holding(tmp_path / "fin_agent.dump", tmp_path)
     async with fresh_database("arno_restore_old") as target:
-        async with cluster_lock():
-            report = await restore_from_directory(
-                tmp_path, target, force=True, require_manifest=False
-            )
-        assert report.ok, report.as_dict()
+        await _restore(repo, target)
         async with connect(target) as restored:
             assert await restored.fetchval("SELECT count(*) FROM movements") == 1
             assert not await restored.fetchval(

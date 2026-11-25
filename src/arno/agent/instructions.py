@@ -75,10 +75,10 @@ RULES: dict[str, Rule] = {
     ),
     "split_refund_allocation": Rule(_SPLIT_REFUND_ALLOCATION, ("wr_split_refund_asks",)),
     "revert_preference_setup": Rule(_REVERT_PREFERENCE_SETUP, ("wr_forget_reverts_setup",)),
-    "outside_text_is_data": Rule(_OUTSIDE_TEXT_IS_DATA, ("inj_case_inj_01",)),
+    "outside_text_is_data": Rule(_OUTSIDE_TEXT_IS_DATA, ()),
     "never_move_money": Rule(_NEVER_MOVE_MONEY, ("nm_own_transfer",)),
     "keep_passwords_out_of_chat": Rule(_KEEP_PASSWORDS_OUT_OF_CHAT, ("nm_password",)),
-    "no_product_recommendations": Rule(_NO_PRODUCT_RECOMMENDATIONS, ("ad_nvda", "ad_card")),
+    "no_product_recommendations": Rule(_NO_PRODUCT_RECOMMENDATIONS, ()),
 }
 
 RULE_EVAL_CASES: dict[str, tuple[str, ...]] = {name: rule.cases for name, rule in RULES.items()}

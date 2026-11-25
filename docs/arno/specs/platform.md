@@ -21,24 +21,21 @@ src/arno/
   capture/     Isolated receipt/UPI photo vision extraction and metered STT client
   db/          Connection cache, numbered SQL migrations, role bootstrap, vendored pgledger
   demo/        Synthetic demo persona seeder and template database helpers
-  engine/      Pure scenario projection kernel, affordability, patterns, money math,
-               backtesting, and HackerRank adapter
+  engine/      Pure scenario projection kernel, affordability, patterns, and money math
   importers/   File readers, Monty sandbox, verification checks, gate, reconciliation,
                commit/undo, seed rules, and batch categorization jobs
   india/       Default Indian categories, bank holiday calendar, ₹ formatting, prompt notes
   jobs/        Postgres job queue loop, RRULE schedules, briefing, reminders, risk, patterns,
-               backup check, recaps, cost replay, scheduled questions
+               backup check, recaps, scheduled questions
   ledger/      Double-entry ledger writes, audit log, undo, deletion, exports, workbooks
   tools/       Plain-Python read, write, projection, and recap functions (no PydanticAI types)
   cli.py       Host administration CLI (`arno`)
 web/           Vite and React PWA (built to `web/dist` and served by the API)
-backup/        Independent sidecar image (`pg_dump` + manifest + restic)
-deploy/        Postgres role init/demote scripts and `phoenix-cost` custom image build
-evals/         145-case `pydantic_evals` suite, graders, trial DB lifecycle, scorecard writer
-scripts/       License audit and maintainer helper scripts
+deploy/        Postgres role init script (`app-role.sh`)
+evals/         84-case `pydantic_evals` suite, graders, trial DB lifecycle
+scripts/       Maintainer helper scripts
 tests/         Unit, integration, invariant (`tests/invariants.py`), and live E2E tests
-compose.yaml   Default Compose stack (`api`, `db`, `backup`, `phoenix`, `local-llm`, `local-stt`)
-compose.gpu.yaml  Optional GPU overlay for local inference profiles
+compose.yaml   Default Compose stack (`api`, `db`, plus optional `local-llm` and `obs` profiles)
 ```
 
 ## API surface
@@ -82,12 +79,11 @@ The web app consumes these routes using React, Vite, `@assistant-ui/react`, `@as
 Background work → Models and diagnostics**, `RuntimeInfo.tsx` displays each role's configured model
 and host and renders an **Open Phoenix** button when `ARNO_PHOENIX_UI_URL` is configured.
 
-**Deployment and backups summary:** Arno ships as a Docker Compose stack (`api`, `db`, `backup`,
-`phoenix`, plus optional `local-llm` and `local-stt` profiles) published only on loopback and
-exposed privately over Tailscale. An independent `backup` sidecar runs `pg_dump` with a
-single-snapshot `backup_manifest.json` whenever the last successful backup is over 24 hours old,
-encrypts and uploads snapshots with restic, and records success through its own `backup` database
-role. See [`self-hosting.md`](../operations/self-hosting.md) for installation, provider retention,
+**Deployment and backups summary:** Arno ships as a Docker Compose stack (`api`, `db`, plus
+optional `local-llm` and `obs` profiles; `obs` is stock Phoenix) published only on loopback and
+exposed privately over Tailscale. The daily `backup_check` job inside `api` runs `pg_dump` into
+restic whenever the last successful backup is over 22 hours old and records success through the
+`backup` database role. See [`self-hosting.md`](../operations/self-hosting.md) for installation, provider retention,
 backup, restore (`arno restore`), and upgrade procedures.
 
 ## Authentication and enrollment
@@ -129,7 +125,7 @@ https://<machine>.<tailnet>.ts.net/setup#t=<token>
 One Postgres `jobs` table, one `job_schedules` RRULE table (anchored in `Asia/Kolkata` with stored
 `dtstart`), and one `JobRunner` loop inside the API process execute all background jobs
 (`src/arno/jobs/runner.py` and `src/arno/jobs/schedules.py`). Statement imports are delegated
-subagent tasks (`TaskOwner`), and backups run in their own sidecar container.
+subagent tasks (`TaskOwner`), and backups run inside the API process as the `backup_check` job.
 
 The following table lists every job kind, its schedule or trigger, and its timeout policy:
 
@@ -256,14 +252,13 @@ The following table summarizes Arno's threat model and implemented controls:
 | Agent-written SQL | `agent_ro` role: `SELECT` only on allowed read views/tables, `default_transaction_read_only = on`, `2s` statement timeout, single extended-protocol statement rolled back after read, `TEMP` revoked, no auth, secret, or raw `pgledger_*` grants |
 | Agent-written code | Monty sandbox: no filesystem, environment, or network access; memory, time, and suspension limits; frozen clock and RNG seed for parser replays |
 | Credential leakage in data exports | JSON and CSV exports exclude all eight `SECRET_TABLES`: `model_credentials`, `push_subscriptions`, `sessions`, `setup_tokens`, `users`, `vapid_keys`, `webauthn_challenges`, and `webauthn_credentials` (`pg_dump` stays complete for backup/restore) |
-| Supply-chain or copyleft dependency | Locked dependency files, permissive-license audit (`scripts/license_audit.py`), and `pip-audit` + `pnpm audit` in CI |
+| Supply-chain or copyleft dependency | Locked dependency files, a manual permissive-license check when a dependency changes, and `pip-audit` + `pnpm audit` in CI |
 | Upload flood or runaway model spend | 25 MB upload limit, single-user passkey gate, usage limits, and fail-closed Postgres spend ceilings |
-| Telemetry data exposure | Phoenix binds to loopback with authentication enabled, owns an isolated database unreachable by `agent_ro`, and vision agents disable tracing (`agent.instrument = False`). See [`self-hosting.md`](../operations/self-hosting.md) for provider data-retention policies |
+| Telemetry data exposure | Phoenix binds to loopback with authentication enabled, stores traces in its own SQLite volume, never in the Arno database, and vision agents disable tracing (`agent.instrument = False`). See [`self-hosting.md`](../operations/self-hosting.md) for provider data-retention policies |
 
 ### Postgres roles
 
-The following table lists the five Postgres roles configured by `deploy/app-role.sh` and
-`deploy/phoenix-db.sh`:
+The following table lists the four Postgres roles configured by `deploy/app-role.sh`:
 
 | Role | Privileges | Access path |
 |---|---|---|
@@ -271,7 +266,6 @@ The following table lists the five Postgres roles configured by `deploy/app-role
 | `app` | `LOGIN CREATEDB CREATEROLE NOSUPERUSER NOBYPASSRLS NOREPLICATION`, member of `pg_signal_backend`, `ADMIN OPTION` (`INHERIT FALSE, SET FALSE`) on `agent_ro` and `backup` | Password in `POSTGRES_PASSWORD`; owns Arno databases |
 | `agent_ro` | `LOGIN`, `default_transaction_read_only = on`, `statement_timeout = '2s'`, `SELECT` on allowed read views/tables, `TEMP` revoked | Password set at boot from `AGENT_RO_PASSWORD` |
 | `backup` | `LOGIN`, `SELECT` on `public` tables and sequences, `INSERT` on `backup_runs` only, `TEMP` revoked | Password set at boot from `BACKUP_PASSWORD` |
-| `phoenix` | `LOGIN`, owns database `phoenix` only (`PUBLIC` `CONNECT` revoked) | Password in `PHOENIX_PASSWORD` |
 
 `app` never holds `SUPERUSER`, `BYPASSRLS`, `REPLICATION`, server-file privileges, or
 `session_replication_role`. See [`legacy-upgrades.md`](../operations/legacy-upgrades.md) for

@@ -1,17 +1,16 @@
 # Model cost tracking and budgets
 
 This specification owns Arno's inference pricing, provider billing modes, native spend budgets,
-batch accounting, call metering, and the Phoenix supplied-cost contract; [`plan.md`](../plan.md) §3
+batch accounting, call metering, and the supplied-cost attributes sent to Phoenix; [`plan.md`](../plan.md) §3
 owns stack decisions, [`observability.md`](../operations/observability.md) owns Phoenix operations
-and cost replay procedures, [`deploy/phoenix-cost/README.md`](../../../deploy/phoenix-cost/README.md)
-owns the pinned Phoenix image build, and [`completion-checklist.md`](../completion-checklist.md)
+and cost replay procedures, and [`completion-checklist.md`](../completion-checklist.md)
 tracks open live-provider and deployment acceptance gates.
 
 ## Architecture and limits
 
 Arno prices every supported inference call once through a single pricing module, enforces shared
 Postgres spend ceilings through `pydantic-ai-harness`, records metadata-only cost rows in a small
-application journal (`llm_calls`), and displays usage and cost totals in Phoenix. Every observation
+application journal (`llm_calls`), and sends usage and cost attributes to Phoenix when tracing is on. Every observation
 explicitly distinguishes a measured zero, a catalog estimate, a partial subtotal, and an unknown.
 
 Design boundaries are deliberate:
@@ -20,8 +19,9 @@ Design boundaries are deliberate:
   and records actual cost after the response. An in-flight call can cross a ceiling, and concurrent
   calls can each pass the pre-check. Arno preserves that contract and bounds output sizes where
   supported instead of building a pre-allocation engine.
-- **Phoenix is the sole cost UI:** `llm_calls` preserves cost metadata for export recovery; it is
-  not a second budget authority or reporting interface.
+- **The Postgres ledger is the source of truth:** `llm_calls` and the spend ledger own cost and
+  budgets. Stock Phoenix ignores the supplied `llm.cost.*` attributes and prices spans from its own
+  catalog, so treat its cost totals as indicative.
 - **Best-effort trace content:** Cost metadata can be replayed after a Phoenix outage or crash, but
   lost prompt and tool content cannot be reconstructed, and missing provider usage cannot be turned
   into an exact charge.
@@ -42,7 +42,7 @@ The following table lists the supported provider identities and how each is wire
 | `openrouter` | Native `OpenRouterModel` and `OpenRouterProvider` | Provider-reported cost in `provider_details` (preserving explicit zero by field presence) |
 | `opencode` (inferred from `opencode.ai`) | `OpenAIChatModel` with session header and billing capture hooks | Narrow reported fields preserving wallet charge, list value, allowance, billing source, and estimate flag |
 | `ollama` (inferred from `ollama` in URL) | `OpenAIChatModel` via `OllamaProvider` | Zero fee only when `*_BILLING_MODE` is `local` or `local_zero`; tokens and call count stay visible |
-| `openai-chatgpt` (`chatgpt`) | Native `OpenAIChatGPTProvider` over `OpenAIResponsesModel` | API-equivalent `genai-prices` estimate (not a remaining plan-quota counter) |
+| `openai-chatgpt` (`chatgpt`) | Native `OpenAIChatGPTProvider` over `OpenAIResponsesModel`; no sign-in command exists, so it is not usable | API-equivalent `genai-prices` estimate (not a remaining plan-quota counter) |
 | `google` (`gemini`, for `BATCH_PROVIDER`) | Provider batch API (`gemini` normalizes to `google` in `_batch_identity`) | `genai-prices` catalog estimate for batch pre-accounting and settlement |
 
 ### Billing modes and configuration checks
@@ -81,15 +81,13 @@ direct Claude Agent SDK subscription runtime runs a separate loop and remains
 For eligible ChatGPT plans (`openai-chatgpt`), `src/arno/agent/chatgpt_auth.py` stores credentials
 in `model_credentials` (excluded from `agent_ro` and JSON/CSV exports):
 
-- **Sign-in and sign-out:** `arno chatgpt-login` completes the loopback callback on
-  `127.0.0.1:1455`; `arno chatgpt-login --manual --no-browser` accepts a hidden pasted callback URL
-  and verifies its `state` parameter for containerized hosts. `arno chatgpt-logout` deletes Arno's
-  stored credentials without revoking other apps.
+- **Sign-in and sign-out:** No CLI command signs in or out, so this provider has no supported
+  login path.
 - **Safe rotation and revocation:** Token refresh uses compare-and-swap on the stored refresh
   token so an in-flight rotation cannot restore a disconnected sign-in, and every request checks
   that the row still exists and matches the cached access token.
 - **Background consent and no paid fallback:** Jobs, wake turns, and delegated work require
-  `--allow-background` consent (`InferenceContext(background=True)`). Constructing an agent with a
+  stored background consent (`InferenceContext(background=True)`). Constructing an agent with a
   ChatGPT primary and a configured `CHAT_FALLBACK_*` raises `UserError` so quota exhaustion never
   spills onto a paid API key.
 
@@ -182,9 +180,9 @@ stores only the recovery state needed for pre-accounting and settlement:
 
 ## Call metering and trace contract
 
-Every inference path—API and CLI chat, compaction summaries, fallbacks, parser and spike runs,
+Every inference path—API chat, compaction summaries, fallbacks, parser runs,
 categorizer chunks and batches, statement and receipt vision, STT, weekly briefings, scheduled
-questions, and eval trials and judges—routes through `MeteredModel` or `metered_call` in
+questions, and eval trials—routes through `MeteredModel` or `metered_call` in
 `src/arno/agent/metering.py`. Hidden SDK retries are disabled (`max_retries=0`) so every dispatch
 is accounted accurately.
 
@@ -209,35 +207,21 @@ is accounted accurately.
   (`use_journal_database`) before dropping disposable financial clones.
 - **Cost-only replay:** Every five minutes the scheduler checks for finalized rows older than
   `REPLAY_GRACE_SECONDS = 300` that have not exported, and creates a `cost_replay` job only when one
-  is waiting (it can be run manually via `arno cost-replay`, with `--finalize-interrupted` and
-  `--attempt <id>`) using the original trace and span IDs over the standard OTLP exporter. See
+  is waiting (only while tracing is on) using the original trace and span IDs over the standard OTLP exporter. See
   [`observability.md#cost-journal-and-replay`](../operations/observability.md#cost-journal-and-replay)
   for operational replay procedures.
 
-## Phoenix cost customization
+## Phoenix cost handling
 
-Stock Phoenix 21.0.0 ignores supplied cost attributes and can sum unknown calls as `$0`. Arno pins
-and builds `arno-phoenix-cost:21.0.0` from
-[`deploy/phoenix-cost/`](../../../deploy/phoenix-cost/README.md) to enforce four contract rules
-while keeping Phoenix's Elastic License 2.0 source completely outside Arno's permissively licensed
-application image:
+The optional `obs` profile runs stock Phoenix 21.0, which ignores supplied `llm.cost.*` attributes
+and prices spans from its own model catalog. Its cost columns can therefore differ from Arno's and
+can sum unknown calls as `$0`. Arno does not patch Phoenix: the Postgres spend ledger is the source
+of truth, and Phoenix is a trace viewer.
 
-- Prefer valid supplied `llm.cost.*` attributes (including explicit zero) over catalog
-  recalculation, validating finite non-negative amounts.
-- Preserve cost source, completeness, billing mode, and rate revision on spans without inventing
-  missing input/output breakdowns.
-- Honor `unknown` and `partial` completeness and expose unresolved call counts beside totals across
-  span, trace, session, project, and time-range views so unpriced calls never render as `$0`.
-- Exclude `logical_request` parent spans and batch collect/decode spans from cost and token
-  rollups, and permit audio inference costs without fabricated text tokens.
-
-Phoenix's own per-span token columns sum every span's `llm.token_count.*`, which the patch does
-not change, so Arno's exporter drops token and cost attributes from `logical_request` spans before
-export (`UsageOnceExporter` in `src/arno/observability.py`). The metered attempt span alone carries
-a model call's counts, so trace and session token totals count each call once.
-
-Existing Phoenix tables, GraphQL types, and OTLP ingestion are reused without custom receipt
-endpoints or correction schemas.
+Phoenix's per-span token columns sum every span's `llm.token_count.*`, so Arno's exporter drops
+token and cost attributes from `logical_request` spans before export (`UsageOnceExporter` in
+`src/arno/observability.py`). The metered attempt span alone carries a model call's counts, so
+trace and session token totals count each call once.
 
 ## Deferred scope
 
@@ -249,7 +233,8 @@ The following items are deliberately excluded unless real usage demonstrates a n
 - Automated provider-invoice reconciliation or provider quota enforcement.
 - Direct Claude Agent SDK subscription runtime.
 - Browser-side audio transcoding or custom media decoders.
-- Custom Phoenix receipt schemas, durable full-trace delivery, or a second cost dashboard.
+- A patched Phoenix build, custom Phoenix receipt schemas, durable full-trace delivery, or a second
+  cost dashboard.
 
-Open live-provider parity, real ChatGPT sign-in, and owner-deployment acceptance items are tracked
+Open live-provider parity and owner-deployment acceptance items are tracked
 in [`completion-checklist.md`](../completion-checklist.md).

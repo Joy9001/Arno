@@ -8,7 +8,7 @@ states comes through `project`.
 Money is whole paise. A day's balance is the sum of liquid accounts. Card spend is a liability:
 it is charged up to the card's limit (the rest leaves cash that day) and leaves cash when its
 bill falls due. `Model` says how everyday spend is drawn from history; each of its switches is
-admitted only if it beats the one before it on the backtest. `arno.engine.kernel` does the
+admitted only if it measurably improves the forecast. `arno.engine.kernel` does the
 arithmetic for all scenarios at once.
 """
 
@@ -40,8 +40,8 @@ MAX_HORIZON_DAYS = 3_650
 BASE_HORIZON_DAYS = 90
 MAX_CUT_RATIO = 0.50
 
-# Set-up gaps that leave a projection with nothing to project from. A backtest over a month with
-# one of these measures its own missing setup, not the engine, so it may never be published.
+# Set-up gaps that leave a projection with nothing to project from. A projection with one
+# of these measures its own missing setup, not the engine.
 NO_LIQUID_ACCOUNT = "no liquid account"
 NO_CONFIRMED_INCOME = "no confirmed income schedule"
 UNUSABLE_SETUP_GAPS = (NO_LIQUID_ACCOUNT, NO_CONFIRMED_INCOME)
@@ -622,7 +622,7 @@ def goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
 
 @dataclass(frozen=True, slots=True)
 class Model:
-    """How everyday spend is drawn. Each field is one switch the backtest admits or rejects.
+    """How everyday spend is drawn. Each field is one switch that had to improve the forecast.
 
     The defaults are the walk shipped before the scenario kernel: one independent draw per
     category per day from that category's 90-day pool, weekday and weekend apart, and a flat daily
@@ -646,7 +646,7 @@ LEGACY_MODEL = Model()
 # (3.4%), rare days (1.0%), and spend that keeps its card (1.2%). Blocks, recency weights,
 # and pool resampling did not pass.
 # shortcut: iid daily draws (block_length=1) ignore multi-day spend bursts, revisit when
-# milestone 29 real-ledger backtest shows clustered breaches or CRPS gain at L=2/3
+# a real-ledger check shows clustered breaches or CRPS gain at L=2/3
 MODEL = Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8), limit_spend=False)
 OBLIGATION_THRESHOLD = 0.99
 CROSSING_SHARE = 0.10
@@ -967,7 +967,7 @@ def _day_rows(
 ) -> tuple[Sequence[SpendRow], date | None]:
     """The rows whole-day pools read, and where their history starts when it is not the ledger's.
 
-    Inputs built without spend rows (tests, the HackerRank adapter) carry only each category's
+    Inputs built without spend rows (tests) carry only each category's
     history: it is split into cash and each card the way the category's shares always split it.
     """
     if len(inputs.spend) > 0:

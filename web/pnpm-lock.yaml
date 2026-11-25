@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@ai-sdk/react':
-        specifier: 4.0.163
-        version: 4.0.163(react@19.3.1)(zod@4.6.7)
       '@assistant-ui/ai-sdk':
         specifier: 0.0.17
         version: 0.0.17(@types/react@19.3.0)(ai@7.0.159(zod@4.6.7))(react@19.3.1)(zod@4.6.7)

@@ -164,7 +164,7 @@ class Settings:
     scenarios: int = 16_384
     seed: int = 0
     block_length: int = 1
-    keep_days: int = 0  # keep full paths for the first this many days (the backtest)
+    keep_days: int = 0  # keep full paths for the first this many days (for path-level tests)
     checkpoints: tuple[int, ...] = ()
     # With checkpoints: report the reducible spend through this day that has left cash by each
     # checkpoint, the quantity a spending cut acts on. -1 reports nothing.

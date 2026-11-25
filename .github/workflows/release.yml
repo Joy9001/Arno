@@ -70,7 +70,6 @@ jobs:
       - name: Provision the app role and databases
         run: |
           sh deploy/app-role.sh
-          psql -d postgres -c "CREATE DATABASE phoenix_cost_test"
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -79,44 +78,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: API and backup image smoke checks
+      - name: API image smoke checks
         env:
           ARNO_API_TEST_IMAGE: ghcr.io/joy9001/arno:${{ github.ref_name }}
-          ARNO_BACKUP_TEST_IMAGE: ghcr.io/joy9001/arno-backup:${{ github.ref_name }}
         run: uv run pytest tests/test_image_runtime.py -q -n 0
-
-      - name: Build the Phoenix cost image
-        run: docker build -t arno-phoenix-cost:ci deploy/phoenix-cost
-
-      - name: Start Phoenix on a scratch database
-        run: |
-          docker run -d --name arno-phoenix-cost-test --network host \
-            -e PHOENIX_SQL_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/phoenix_cost_test \
-            -e PHOENIX_ENABLE_AUTH=false \
-            -e PHOENIX_TELEMETRY_ENABLED=False \
-            arno-phoenix-cost:ci
-
-      - name: Wait for Phoenix
-        run: |
-          for _ in $(seq 1 90); do
-            if curl -fsS -X POST http://127.0.0.1:6006/graphql \
-              -H 'content-type: application/json' -d '{"query":"{ __typename }"}' >/dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          docker logs arno-phoenix-cost-test
-          exit 1
-
-      - name: Phoenix cost contract
-        env:
-          PHOENIX_COST_URL: http://127.0.0.1:6006
-          PHOENIX_COST_REQUIRED: "1"
-        run: uv run pytest tests/test_phoenix_cost_contract.py -q -n 0
-
-      - name: Phoenix logs on failure
-        if: failure()
-        run: docker logs arno-phoenix-cost-test || true
 
   images:
     runs-on: ubuntu-latest
@@ -148,16 +113,6 @@ jobs:
           tags: |
             ghcr.io/joy9001/arno:${{ env.VERSION }}
             ghcr.io/joy9001/arno:${{ github.ref_name }}
-
-      - name: Build and push the backup image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: backup/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/joy9001/arno-backup:${{ env.VERSION }}
-            ghcr.io/joy9001/arno-backup:${{ github.ref_name }}
 
   publish:
     runs-on: ubuntu-latest

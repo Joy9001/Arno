@@ -213,11 +213,6 @@ opening to what is still unexplained, and recomputes (never stacks) a stated-bal
 dated after the period (`rebalance_after` in `src/arno/importers/balance_plan.py`). Undoing the
 older import restores the newer one's opening exactly.
 
-For ledgers that committed imports before these rules, run the idempotent CLI command
-`arno repair-openings --dry-run` followed by `arno repair-openings --yes` once. It books missing
-openings at `period_start`, then re-places every later opening and stated-balance re-anchor that
-an out-of-order commit left stale, without changing current balances.
-
 ## Reconciliation
 
 Reconciliation (`src/arno/importers/reconcile.py`) prevents double-counting between statements and
@@ -341,8 +336,8 @@ The main agent reads attached images natively via `ImageAttachments` (`src/arno/
 
 Push-to-talk audio posts to `POST /api/transcribe` (saving the audio first so failures offer
 `POST /api/transcribe/{attachment_id}` retry). `src/arno/capture/transcribe.py` calls
-`POST {STT_BASE_URL}/audio/transcriptions` (either local `whisper.cpp` on the `local-stt` Compose
-profile or a cloud OpenAI-compatible STT endpoint):
+`POST {STT_BASE_URL}/audio/transcriptions` (any OpenAI-compatible STT endpoint, a cloud API or
+a server you run yourself):
 
 - **Configuration:** `STT_LANGUAGE` pins a language code (preventing misdetection on short clips;
   unset keeps auto-detect), `STT_TIMEOUT_SECONDS` sets the HTTP timeout (default `120` seconds),

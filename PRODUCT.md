@@ -47,13 +47,13 @@ probability, and every figure is cited back to ledger rows.
 - Passkey login; one user; sessions in secure cookies. Admin commands run on the host, not over
   HTTP.
 - PostgreSQL holds the ledger, plan, people, categorization, settings, and conversation records.
-  Backups run in a restic sidecar and are restorable with `arno restore`.
+  Daily restic backups run inside the API and are restorable with `arno restore`.
 - Daily capture is chat, voice notes, and photos (receipts, UPI screenshots); monthly statement
   imports reconcile what daily capture missed.
 - The web app is agent-first, with read-only ledger, accounts, schedules, goals, people, timeline,
   recap, and inbox panels. Writes go through chat with undo; imports and settings are the editable screens.
-- A CLI covers administration, evaluation, backtests, and demo seeding.
-- Local model, speech-to-text, and trace profiles are optional Compose profiles for owners who want
+- A CLI covers administration, restore, and demo seeding.
+- The local model and trace profiles are optional Compose profiles for owners who want
   nothing to leave the machine.
 
 ## Capabilities and Constraints
@@ -99,19 +99,13 @@ Durable constraints:
 
 ## Evidence on Hand
 
-- `README.md` carries a real model eval scorecard for `deepseek-v4.1-flash`, a backtest on
-  held-out synthetic households scored against three baselines, and the L4 gate result. These are
-  measurements, not marketing claims; the full-run table and the targeted reruns are labelled
-  separately.
 - `arno demo seed` builds a deterministic synthetic persona for demos and evals.
 - `evals/` holds the pydantic_evals suite and the demo-persona dataset.
 
 Absences future work must not fabricate:
 
-- No real 12-month statement backfill exists on this machine; the published backtest is synthetic
-  and says so.
-- The HackerRank "Buy or Wait" dataset has no license, so it stays in gitignored `private/`; the
-  shipped engine scores 86.8% on its 25 labeled samples, published in the README.
+- No real 12-month statement backfill exists on this machine, and no published forecast backtest
+  or affordability benchmark exists.
 - No customer testimonials, logos, press, case studies, or usage benchmarks exist.
 - No pricing or hosted-service claims apply: the product is self-hosted and MIT licensed.
 

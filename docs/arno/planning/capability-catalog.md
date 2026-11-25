@@ -348,7 +348,7 @@ these rules, with any scope change recorded in [`plan.md`](../plan.md) first:
 - **Credentials:** No password, OTP, or API token ever enters chat (`AGENTS.md` architecture rule
   6). Host secrets stay in environment variables or host-only storage.
 - **Advice boundary and shared gates:** Every changed boundary adds eval cases. New dependencies
-  must pass `scripts/license_audit.py` and update `THIRD_PARTY_NOTICES.md`. Every selected
+  must pass a manual permissive-license check and update `THIRD_PARTY_NOTICES.md`. Every selected
   capability must preserve monetary units, source IDs, truthful failure states, and backup/restore
   round-trips.
 
@@ -374,7 +374,7 @@ The following table maps external tool areas to researched candidates and constr
 | T09 | Regulatory and policy evidence | RBI KFS circular, RBI credit-card directions, Income Tax Department guidance, IRDAI material, DICGC guide | C05, C15, C16. Store source version and statutory effective date with every derived rule. |
 | T10 | Settlements and webhooks | Razorpay reconciliation, Stripe webhooks | Not pursued (C24). Webhooks require public HTTPS ingress; use reviewed settlement files instead if freelance income appears. |
 | T11 | Reference FX | Frankfurter API, ECB reference rates | Parked (C23). Reference rates are informational only and never overwrite bank-charged INR amounts. |
-| T12 | Serving Arno over MCP | `mcp` (MIT) and `fastmcp-slim` (Apache-2.0), already present as transitive dependencies | C31. Expose read-only wrappers over `src/arno/tools/` over Tailscale with token auth; promoting to direct dependency requires license audit and `THIRD_PARTY_NOTICES.md`. |
+| T12 | Serving Arno over MCP | `mcp` (MIT) and `fastmcp-slim` (Apache-2.0), already present as transitive dependencies | C31. Expose read-only wrappers over `src/arno/tools/` over Tailscale with token auth; promoting to direct dependency requires a license check and `THIRD_PARTY_NOTICES.md`. |
 | T13 | Mailbox access | Python stdlib `imaplib` or mail provider API | C32. Host-held app password or OAuth credential; read one folder or sender allowlist and retain matching attachments only. |
 
 **Explicitly excluded MCP servers:** Fi Money (login types a passcode into chat, violating the

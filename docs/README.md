@@ -9,7 +9,7 @@ Arno's documentation lives in three trees with distinct levels of authority.
 | [`archive/`](archive/) | Superseded specs and completed point-in-time records | Not authoritative. Never cite as a decision |
 
 The repository root also holds four concise entry points: [`README.md`](../README.md) (overview,
-live scorecards, and quickstart), [`AGENTS.md`](../AGENTS.md) (contributor workflow and checks),
+features, and quickstart), [`AGENTS.md`](../AGENTS.md) (contributor workflow and checks),
 [`PRODUCT.md`](../PRODUCT.md) (product positioning and principles), and
 [`DESIGN.md`](../DESIGN.md) (visual design tokens and component system).
 
@@ -37,11 +37,11 @@ Technical design and contracts for each subsystem.
 
 | Document | Owns |
 |---|---|
-| [`arno/specs/data-and-engine.md`](arno/specs/data-and-engine.md) | Database schema, trust boundaries and write tiers, projection and affordability engine, pattern detection, money calculators, recaps, backtesting, and financial invariants |
+| [`arno/specs/data-and-engine.md`](arno/specs/data-and-engine.md) | Database schema, trust boundaries and write tiers, projection and affordability engine, pattern detection, money calculators, recaps, and financial invariants |
 | [`arno/specs/tools.md`](arno/specs/tools.md) | Contracts for all 14 read tools, 6 write tools, 5 delegation tools, 13 parser functions, and 5 categorizer functions |
 | [`arno/specs/harness.md`](arno/specs/harness.md) | PydanticAI and `pydantic-ai-harness` capabilities, wake turn, prompt map discipline, context compaction, redaction, and eval harness |
 | [`arno/specs/import.md`](arno/specs/import.md) | Statement readers, parser subagent pipeline, verification checks, reconciliation, transfer and card-credit decisions, post-commit categorization, photos, and voice |
-| [`arno/specs/cost-tracking.md`](arno/specs/cost-tracking.md) | Inference pricing, billing modes, native spend budgets, batch accounting, call metering, and the Phoenix supplied-cost contract |
+| [`arno/specs/cost-tracking.md`](arno/specs/cost-tracking.md) | Inference pricing, billing modes, native spend budgets, batch accounting, call metering, and Phoenix cost handling |
 | [`arno/specs/platform.md`](arno/specs/platform.md) | Repository layout, API surface, authentication and enrollment, scheduler and jobs, database connections and integrity, threat model, and India-specific code |
 | [`arno/specs/web-interface.md`](arno/specs/web-interface.md) | Web navigation, hash routes, page specifications, subagent run views, and frontend stack (visual tokens live in [`DESIGN.md`](../DESIGN.md)) |
 
@@ -53,7 +53,7 @@ Procedures for running, observing, and maintaining an Arno instance.
 |---|---|
 | [`arno/operations/self-hosting.md`](arno/operations/self-hosting.md) | End-to-end installation, model setup, privacy and provider retention, backups, restore drill, updates, security posture, and troubleshooting |
 | [`arno/operations/legacy-upgrades.md`](arno/operations/legacy-upgrades.md) | One-time migrations for pre-0.3.0 installs: upgrading from Fin-Agent and demoting the superuser `app` role |
-| [`arno/operations/observability.md`](arno/operations/observability.md) | Phoenix tracing, span attributes, cost journal and replay, settings, Phoenix database recovery, and Docker logs |
+| [`arno/operations/observability.md`](arno/operations/observability.md) | Turning tracing on, Phoenix span attributes, cost journal and replay, settings, retention, and Docker logs |
 | [`arno/operations/development-operations.md`](arno/operations/development-operations.md) | Maintainer deployment file map, local development, testing, E2E journeys, triage, and release checklist |
 | [`arno/operations/typing.md`](arno/operations/typing.md) | Python type-checking policy with Pyrefly, per-path strictness, diagnostic fixes, and tightening roadmap |
 

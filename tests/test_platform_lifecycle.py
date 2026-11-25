@@ -4,22 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 from datetime import date, datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import asyncpg
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic_ai.models.test import TestModel
 from typer.testing import CliRunner
 
-from arno.agent.builder import build_agent
 from arno.auth.setup import issue_setup_token
-from arno.backup_restore import restore_from_directory
 from arno.cli import app as cli_app
 from arno.config import ConfigurationError, Settings
 from arno.db.conn import connect
@@ -31,20 +26,10 @@ from arno.jobs.runner import (
     recover_interrupted_jobs,
 )
 from arno.jobs.schedules import enqueue_due_schedules
-from arno.ledger.accounts import create_account, list_accounts
-from arno.ledger.movements import record_expense
-from tests.conftest import cluster_lock, fresh_database
+from arno.ledger.accounts import list_accounts
+from tests.conftest import fresh_database
 from tests.fixtures.passkeys import complete_setup
-from tests.fixtures.postgres import dump_database, missing
 from tests.software_authenticator import SoftwareAuthenticator
-
-
-class _SpyStore:
-    def __init__(self) -> None:
-        self.closed = False
-
-    def close(self) -> None:
-        self.closed = True
 
 
 def test_telemetry_is_off_when_no_collector_endpoint_is_configured(monkeypatch, caplog):
@@ -66,40 +51,6 @@ def test_telemetry_is_off_when_no_collector_endpoint_is_configured(monkeypatch, 
 
     assert provider is None
     assert "PHOENIX_COLLECTOR_ENDPOINT" in caplog.text
-
-
-async def test_cli_chat_prints_a_rupee_answer_on_a_cp1252_console(monkeypatch, demo_ledger):
-    """A Windows console whose code page is cp1252 must not lose the reply to a rupee sign."""
-    del demo_ledger
-    model = TestModel(call_tools=[], custom_output_text="That costs \u20b91,234.")
-    store = _SpyStore()
-    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: store)
-    monkeypatch.setattr("arno.cli.build_agent", lambda **_kwargs: build_agent(model=model))
-
-    runner = CliRunner(charset="cp1252")
-    result = await asyncio.to_thread(runner.invoke, cli_app, ["chat", "--message", "hi there"])
-
-    assert result.exit_code == 0, result.output
-    assert "1,234" in result.output
-    assert store.closed
-
-
-async def test_cli_chat_refuses_an_unknown_thread_instead_of_starting_a_new_one(
-    monkeypatch, demo_ledger
-):
-    model = TestModel(call_tools=[], custom_output_text="hello")
-    monkeypatch.setattr("arno.agent.spend.SharedSpendStore", lambda: _SpyStore())
-    monkeypatch.setattr("arno.cli.build_agent", lambda **_kwargs: build_agent(model=model))
-
-    result = await asyncio.to_thread(
-        CliRunner().invoke,
-        cli_app,
-        ["chat", "--thread", "cnv_missing", "--message", "hi"],
-    )
-
-    assert result.exit_code == 2, result.output
-    assert "cnv_missing" in result.output
-    assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 0
 
 
 async def test_export_reports_a_missing_pg_dump_instead_of_a_traceback(monkeypatch, demo_ledger):
@@ -367,48 +318,6 @@ async def test_a_failed_migration_leaves_the_database_unchanged(tmp_path):
             assert await conn.fetchval("SELECT max(version) FROM schema_version") == 1
 
 
-@pytest.mark.xdist_group("cluster")
-@pytest.mark.skipif(missing() is not None, reason=missing() or "")
-async def test_restore_from_an_extracted_dump_directory_into_a_fresh_database(
-    ledger, tmp_path: Path
-):
-    bank = await create_account(ledger, kind="bank", name="Upgrade bank")
-    await record_expense(ledger, account_id=bank["id"], amount_paise=5_000, description="Tea")
-    # The documented major-upgrade path: a manual dump has no manifest.
-    dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=False)
-
-    movements = await ledger.fetchval("SELECT count(*) FROM movements")
-
-    async with fresh_database("arno_platform_restore") as target:
-        async with cluster_lock():
-            report = await restore_from_directory(
-                tmp_path, target, force=True, require_manifest=False
-            )
-        assert report.ok, report.as_dict()
-        assert report.manifest is None
-        assert report.checks["manifest_matches"] is True
-        async with connect(target) as restored:
-            assert await restored.fetchval("SELECT count(*) FROM movements") == movements
-            roles = {
-                row["rolname"]: row
-                for row in await restored.fetch(
-                    """
-                    SELECT rolname, rolcanlogin, rolsuper, rolconfig
-                    FROM pg_roles WHERE rolname IN ('agent_ro', 'backup')
-                    """
-                )
-            }
-            assert set(roles) == {"agent_ro", "backup"}
-            assert all(role["rolcanlogin"] and not role["rolsuper"] for role in roles.values())
-            assert "default_transaction_read_only=on" in (roles["agent_ro"]["rolconfig"] or [])
-            assert await restored.fetchval(
-                "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
-            )
-            assert not await restored.fetchval(
-                "SELECT has_table_privilege('agent_ro', 'users', 'SELECT')"
-            )
-
-
 async def test_app_role_is_not_superuser_and_holds_expected_attributes(db):
     role = await db.fetchrow_required(
         """
@@ -471,16 +380,14 @@ async def test_warn_if_superuser_logs_when_superuser_and_is_silent_for_normal_ro
     monkeypatch.setattr(db, "fetchrow", _fake_fetchrow)
     with caplog.at_level("WARNING"):
         assert await warn_if_superuser(db) is True
-    assert any("deploy/demote-app.sh" in rec.getMessage() for rec in caplog.records)
+    assert any("fresh database volume" in rec.getMessage() for rec in caplog.records)
 
 
-async def test_restore_verification_catches_a_broken_ledger_and_changed_content(demo_ledger):
-    from arno.backup_restore import build_manifest, verify_database
+async def test_restore_verification_catches_a_broken_ledger(demo_ledger):
+    from arno.backup_restore import verify_database
 
-    manifest = await build_manifest(demo_ledger)
-    checks, mismatches = await verify_database(demo_ledger, manifest=manifest, dump_sha256=None)
+    checks = await verify_database(demo_ledger)
     assert checks and all(checks.values())
-    assert mismatches == []
 
     await demo_ledger.execute(
         """
@@ -488,12 +395,10 @@ async def test_restore_verification_catches_a_broken_ledger_and_changed_content(
         WHERE id = (SELECT id FROM pgledger_entries ORDER BY id LIMIT 1)
         """
     )
-    checks, mismatches = await verify_database(demo_ledger, manifest=manifest, dump_sha256=None)
+    checks = await verify_database(demo_ledger)
 
     assert checks["ledger_transfers_balance"] is False
     assert checks["account_balances_match_entries"] is False
-    assert checks["manifest_matches"] is False
-    assert any("pgledger_" in mismatch for mismatch in mismatches)
 
 
 def test_a_bad_number_in_the_environment_names_the_variable(monkeypatch):

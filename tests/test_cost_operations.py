@@ -1,53 +1,13 @@
-"""Owner cost operations: no provider calls, safe login dispatch, and nonretryable accounting."""
+"""Owner cost operations: nonretryable accounting and delegated-inference consent."""
 
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.providers.openai_chatgpt import OpenAIChatGPTCredentials
 from pydantic_ai_harness.spend import UnpricedModelError
-from typer.testing import CliRunner
 
-from arno.cli import app
 from arno.jobs.runner import JobRunner, enqueue_job
-
-
-def test_cost_replay_cli_uses_the_recovery_path_only(monkeypatch):
-    async def replay(limit):
-        assert limit == 7
-        return {"exported": 2, "failed": 1, "pending": 3}
-
-    monkeypatch.setattr("arno.agent.cost_journal.replay_costs", replay)
-    result = CliRunner().invoke(app, ["cost-replay", "--limit", "7"])
-    assert result.exit_code == 0, result.output
-    assert "exported 2; failed 1; pending 3" in result.output
-
-
-async def test_native_login_cli_saves_background_consent_without_printing_credentials(
-    db, monkeypatch
-):
-    class Flow:
-        async def exchange_code_from_callback(self):
-            return OpenAIChatGPTCredentials(
-                client_id="cli-client",
-                access_token="secret-access",
-                refresh_token="secret-refresh",
-                scope="openid chatgpt.tokens.use.direct",
-            )
-
-    monkeypatch.setattr(
-        "arno.agent.chatgpt_auth.chatgpt_sign_in",
-        lambda **kwargs: ("https://auth.example/consent", Flow()),
-    )
-    result = await asyncio.to_thread(
-        CliRunner().invoke, app, ["chatgpt-login", "--no-browser", "--allow-background"]
-    )
-    assert result.exit_code == 0, result.output
-    assert "secret-access" not in result.output
-    assert "secret-refresh" not in result.output
-    assert await db.fetchval("SELECT allow_background FROM model_credentials") is True
 
 
 @pytest.mark.parametrize("error_type", [UnpricedModelError, UserError])
@@ -61,41 +21,6 @@ async def test_jobs_do_not_retry_an_already_spent_unpriced_call(db, error_type):
     row = await db.fetchrow_required("SELECT status,attempts FROM jobs WHERE id=$1", job_id)
     assert row["status"] == "failed"
     assert row["attempts"] == 1
-
-
-@pytest.mark.parametrize("state,success", [("expected-state", True), ("wrong-state", False)])
-async def test_container_login_pastes_a_state_checked_callback(db, monkeypatch, state, success):
-    class Flow:
-        redirect_uri = "http://127.0.0.1:1455/auth/callback"
-        state = "expected-state"
-
-        async def exchange_code(self, code, *, client_id):
-            assert code == "private-code"
-            assert client_id == "issued-client"
-            return OpenAIChatGPTCredentials(
-                client_id=client_id,
-                access_token="private-access",
-                refresh_token="private-refresh",
-                scope="openid chatgpt.tokens.use.direct",
-            )
-
-    monkeypatch.setattr(
-        "arno.agent.chatgpt_auth.chatgpt_sign_in",
-        lambda **kwargs: ("https://auth.example/consent", Flow()),
-    )
-    callback = (
-        f"http://127.0.0.1:1455/auth/callback?state={state}"
-        "&code=private-code&client_id=issued-client\n"
-    )
-    result = await asyncio.to_thread(
-        lambda: CliRunner().invoke(
-            app, ["chatgpt-login", "--no-browser", "--manual"], input=callback
-        )
-    )
-    assert (result.exit_code == 0) is success, result.output
-    assert "private-code" not in result.output
-    assert "private-access" not in result.output
-    assert bool(await db.fetchval("SELECT count(*) FROM model_credentials")) is success
 
 
 async def test_vision_propagates_an_accounting_stop(monkeypatch):

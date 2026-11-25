@@ -9,7 +9,6 @@ import pytest
 
 from arno.engine import series
 from arno.engine.affordability import Hypothetical, afford
-from arno.engine.backtest import Score, format_report, summarize
 from arno.engine.money import amortize
 from arno.engine.patterns import KnownSchedule, family_interval_days, is_covered
 from arno.engine.projection import (
@@ -479,66 +478,6 @@ def test_a_proposed_rule_is_the_rule_the_detector_found():
     }
     _, _, _, data = _new_subscription(proposal)
     assert data["suggested_rule"] == "FREQ=MONTHLY;BYMONTHDAY=1,31"
-
-
-def test_backtest_summary_scores_each_forecaster_with_an_interval():
-    from arno.engine.backtest import Score, summarize
-
-    def score(group: str, day: int, crps: float, covered: bool) -> Score:
-        return Score(
-            group=group,
-            as_of=date(2026, 1, day),
-            forecaster="flat",
-            target="end",
-            horizon=7,
-            crps=crps,
-            pinball=(1.0, 2.0, 3.0),
-            covered=covered,
-            width=100,
-            pit=0.5,
-            breach_probability=None,
-            breached=None,
-        )
-
-    rows = [score("a", 1, 10, True), score("a", 8, 30, False), score("b", 1, 20, True)]
-    result = summarize(rows, source="test", dropped=0, names=["flat"])
-    (row,) = result["metrics"]
-    assert result["cases"] == 3
-    assert row["crps"]["mean"] == 20
-    assert row["crps"]["low"] < 20 < row["crps"]["high"]
-    assert row["coverage"]["mean"] == 2 / 3
-    assert row["width_paise"] == 100
-    assert row["pinball"] == [1.0, 2.0, 3.0]
-
-
-def test_a_month_end_recurrence_keeps_its_day_of_month():
-    from arno.engine.hackerrank import _inputs_for
-
-    def settled(day: str) -> dict[str, str]:
-        return {
-            "event_id": f"ev_{day}",
-            "status": "settled",
-            "direction": "debit",
-            "event_type": "subscription",
-            "category": "Subscriptions",
-            "event_date": day,
-            "settlement_date": "",
-            "amount": "649",
-            "description": "Streaming",
-        }
-
-    inputs = _inputs_for(
-        [settled("2025-11-30"), settled("2025-12-30"), settled("2026-01-30")],
-        date(2026, 2, 1),
-    )
-    # Projected occurrences stop short of the horizon's last days; confirmed ones would not.
-    assert inputs.series == ()
-    assert [event.date.isoformat() for event in inputs.events] == [
-        "2026-02-28",
-        "2026-03-30",
-    ]
-    assert all(event.confirmed for event in inputs.events)
-    assert all(event.amount_paise == -64_900 for event in inputs.events)
 
 
 async def test_a_late_biweekly_run_keeps_its_fourteen_day_phase(db):
@@ -1150,7 +1089,7 @@ async def test_a_projection_as_of_a_past_day_ignores_rows_created_later(ledger):
     assert [event for event in past.events if event.source_id == schedule["id"]] == []
     assert past.goals == ()
 
-    # The same request without the backtest's "only what existed then" reads today's rows.
+    # The same request without the "only what existed then" reads today's rows.
     today_inputs = await load_inputs(ledger, as_of=as_of)
     assert [account.id for account in today_inputs.liquid] == [bank["id"]]
 
@@ -1158,29 +1097,6 @@ async def test_a_projection_as_of_a_past_day_ignores_rows_created_later(ledger):
     assert [account.id for account in now.liquid] == [bank["id"]]
     assert any(event.source_id == schedule["id"] for event in now.events)
     assert [row.id for row in now.goals] == [goal["id"]]
-
-
-def test_a_real_backfill_report_states_what_it_could_not_know():
-    score = Score(
-        group="ledger",
-        as_of=date(2026, 1, 1),
-        forecaster="flat",
-        target="end",
-        horizon=7,
-        crps=0.0,
-        pinball=(0.0, 0.0, 0.0),
-        covered=True,
-        width=0,
-        pit=0.5,
-        breach_probability=None,
-        breached=None,
-    )
-    real = summarize([score], source="real ledger", dropped=0, names=["flat"])
-    report = format_report(real)
-    assert "created after an origin are excluded" in report
-    assert "read in its current form" in report
-    synthetic = summarize([score], source="synthetic personas", dropped=0, names=["flat"])
-    assert "created after an origin" not in format_report(synthetic)
 
 
 @pytest.mark.parametrize("day", [29, 30, 31])

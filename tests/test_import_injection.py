@@ -10,10 +10,10 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from arno.agent.builder import build_agent
 from arno.agent.deps import AgentDeps
-from arno.importers.synthetic import seed_injection_statement
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today as ledger_today
 from arno.tools.read import coverage
+from tests.fixtures.synthetic_statements import seed_injection_statement
 
 
 def _model() -> FunctionModel:

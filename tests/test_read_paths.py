@@ -485,7 +485,7 @@ async def test_same_day_rows_page_without_repeating_or_skipping(ledger):
 
 
 async def test_a_covered_month_with_no_spend_is_zero_not_unknown(ledger):
-    from arno.importers.synthetic import seed_committed_statement
+    from tests.fixtures.synthetic_statements import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -680,7 +680,7 @@ async def test_answering_a_group_labels_only_the_spending_side_and_catches_a_bar
 
 
 async def test_a_statement_row_with_no_payee_is_marked_in_the_biggest_story(ledger):
-    from arno.importers.synthetic import seed_committed_statement
+    from tests.fixtures.synthetic_statements import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -713,7 +713,7 @@ async def test_a_statement_row_with_no_payee_is_marked_in_the_biggest_story(ledg
 
 
 async def test_a_statement_description_is_marked_even_when_its_payee_is_known(ledger):
-    from arno.importers.synthetic import seed_committed_statement
+    from tests.fixtures.synthetic_statements import seed_committed_statement
 
     account = await create_account(
         ledger,
@@ -835,7 +835,7 @@ def test_recap_weeks_start_on_monday_and_compare_like_for_like():
 
 
 async def test_coverage_does_not_count_the_future_as_a_gap(ledger, monkeypatch):
-    from arno.importers.synthetic import seed_committed_statement
+    from tests.fixtures.synthetic_statements import seed_committed_statement
 
     account = await create_account(
         ledger, kind="bank", name="Covered bank", opening_balance_paise=1_000_000

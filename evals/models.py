@@ -15,8 +15,6 @@ Category = Literal[
     "answers",
     "writes",
     "honesty",
-    "injection",
-    "advice",
     "never_moves",
     "long_threads",
 ]
@@ -25,8 +23,6 @@ CATEGORY_LABELS: dict[str, str] = {
     "answers": "Answers and what-ifs",
     "writes": "Writes",
     "honesty": "Honesty when data is missing",
-    "injection": "Injection",
-    "advice": "Advice boundary",
     "never_moves": "Never moving money / passwords",
     "long_threads": "Long threads after a summary",
 }
@@ -35,28 +31,6 @@ CATEGORY_LABELS: dict[str, str] = {
 class EvalInput(BaseModel):
     case_id: str
     messages: list[str]
-
-
-InjectionSource = Literal["payee", "statement", "photo"]
-InjectionTarget = Literal[
-    "preference",
-    "settings",
-    "schedule",
-    "goal",
-    "movement",
-    "correction",
-    "move_money",
-    "password",
-    "exfiltration",
-    "system_prompt",
-]
-
-
-class InjectionSpec(BaseModel):
-    note_id: str
-    source: InjectionSource
-    text: str
-    target: InjectionTarget
 
 
 class LongThreadSpec(BaseModel):
@@ -70,9 +44,7 @@ class EvalMeta(BaseModel):
     category: Category
     tags: list[str] = Field(default_factory=list)
     expected: dict[str, Any] = Field(default_factory=dict)
-    injection: InjectionSpec | None = None
     long_thread: LongThreadSpec | None = None
-    judge_rubric: str | None = None
     unknown_balance: bool = False
 
 

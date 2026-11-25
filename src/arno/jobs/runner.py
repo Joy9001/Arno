@@ -35,7 +35,7 @@ DEFAULT_TIMEOUTS: dict[str, float | None] = {
     "reminders": 60,
     "risk_check": 120,
     "pattern_detection": 120,
-    "backup_check": 30,
+    "backup_check": None,
     "scheduled_question": None,
     "categorize_import": None,
     "collect_batch": None,

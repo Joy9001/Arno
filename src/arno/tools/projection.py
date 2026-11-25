@@ -154,7 +154,7 @@ async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) 
 
 # An account is known on a day when its row existed then, or when the ledger already held an entry
 # for it: a backfill is imported after the history it covers, so `created_at` alone hid a
-# backfilled account from the whole backtest.
+# backfilled account from every as-of read.
 _KNOWN_ON_DAY = """
           AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1
                OR EXISTS (
@@ -545,7 +545,7 @@ async def load_snapshot(
     """Read everything the projection needs from the ledger as of ``as_of``.
 
     ``known_then`` asks for the ledger as it stood on that day: an account, schedule, or goal
-    created later is left out. The backtest uses it; a projection requested "as of" an earlier
+    created later is left out. Nothing in `src/` sets it; a projection requested "as of" an earlier
     date from today's data does not.
     """
     async with conn.transaction(isolation="repeatable_read", readonly=True):

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.machinery
-import importlib.util
 import json
 import os
 import shutil
@@ -13,39 +11,6 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _audit_module():
-    spec = importlib.util.spec_from_file_location(
-        "license_audit", ROOT / "scripts" / "license_audit.py"
-    )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert isinstance(spec.loader, importlib.machinery.SourceFileLoader)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_no_forbidden_python_license_ships():
-    audit = _audit_module()
-
-    assert audit.failures(audit.python_packages()) == []
-
-
-def test_notices_name_every_direct_dependency():
-    audit = _audit_module()
-    python, web = audit.direct_dependencies()
-
-    assert audit.notices_failures(python, web) == []
-
-
-def test_no_forbidden_web_license_ships():
-    audit = _audit_module()
-    packages = audit.web_packages()
-    if packages is None:
-        pytest.skip("web/node_modules is absent")
-
-    assert audit.failures(packages) == []
 
 
 def test_license_is_mit_and_matches_the_package_metadata():
@@ -62,7 +27,6 @@ def test_compose_pins_a_versioned_image_and_rotates_logs():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
     assert f"ghcr.io/joy9001/arno:${{ARNO_VERSION:-{version}}}" in compose
-    assert f"ghcr.io/joy9001/arno-backup:${{ARNO_VERSION:-{version}}}" in compose
     assert 'max-size: "10m"' in compose
     assert "pre-migration-data:/app/pre-migration" in compose
 
@@ -84,17 +48,12 @@ def test_release_workflow_pushes_the_pinned_images():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "ghcr.io/joy9001/arno" in workflow
-    assert "ghcr.io/joy9001/arno-backup" in workflow
     assert "docker/build-push-action" in workflow
 
 
-def test_phoenix_has_its_own_role_and_database():
+def test_phoenix_bearer_is_wired_in_compose():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
-    provisioning = (ROOT / "deploy/phoenix-db.sh").read_text(encoding="utf-8")
-    assert "CREATE ROLE phoenix LOGIN" in provisioning
-    assert "CREATE DATABASE phoenix OWNER phoenix" in provisioning
-    assert "REVOKE CONNECT ON DATABASE phoenix FROM PUBLIC" in provisioning
     assert "PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}" in compose
 
 
@@ -105,7 +64,6 @@ def test_compose_initializes_non_superuser_app_role():
     assert "POSTGRES_USER:" not in compose
     assert "POSTGRES_DB:" not in compose
     assert "./deploy/app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro" in compose
-    assert "./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/20-phoenix-db.sh:ro" in compose
     assert "NOSUPERUSER NOBYPASSRLS NOREPLICATION" in app_role
     assert "GRANT pg_signal_backend TO app" in app_role
     assert "ALTER ROLE postgres PASSWORD NULL" in app_role

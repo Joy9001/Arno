@@ -27,12 +27,12 @@ from arno.agent.presentation import PresentationError, keep_last_answer
 from arno.agent.redaction import redact_text
 from arno.agent.toolset import build_read_toolset, show_chart
 from arno.agent.turns import (
+    _this_turn,
     approval_sentence,
     approval_text,
     encode_saved_turn,
     pending_approvals,
 )
-from arno.cli import _run_cli_turn
 from arno.db.conn import connect
 from arno.jobs.questions import run_scheduled_question
 from evals.graders import grade_writes
@@ -493,7 +493,7 @@ async def test_the_staleness_reminder_counts_writes_since_the_snapshot(demo_ledg
 
     from arno.agent.capabilities import date_and_changes
     from arno.agent.deps import AgentDeps
-    from arno.agent.history import create_thread, ensure_history
+    from arno.agent.history import ensure_history
 
     thread = await create_thread(demo_ledger, title="stale", thread_id="thread-stale")
     await ensure_history(demo_ledger, thread)
@@ -787,7 +787,7 @@ async def test_a_pin_in_the_first_message_is_redacted_in_the_body_and_the_title(
     assert title_for("password: Abc@1234").startswith("[redacted:password]")
 
 
-# --- The CLI saves the same turn the API does, even after compaction ---------------------------
+# --- A turn is found by run id, even after compaction shortened the history --------------------
 
 
 def _an_old_exchange(index: int) -> list[Any]:
@@ -797,7 +797,7 @@ def _an_old_exchange(index: int) -> list[Any]:
     ]
 
 
-async def test_a_cli_turn_saves_its_reply_after_compaction_shortened_the_history(demo_ledger):
+async def test_this_turn_keeps_its_messages_after_compaction_shortened_the_history():
     history = [message for index in range(3) for message in _an_old_exchange(index)]
 
     def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
@@ -812,21 +812,24 @@ async def test_a_cli_turn_saves_its_reply_after_compaction_shortened_the_history
             )
         ],
     )
-    thread = await create_thread(demo_ledger, title="terminal chat")
-    await _run_cli_turn(demo_ledger, agent, thread, history, "and now?")
-
-    assistant = await demo_ledger.fetchrow(
-        "SELECT content FROM messages WHERE conversation_id = $1 AND role = 'assistant'",
-        thread["id"],
+    result = await agent.run(
+        "and now?",
+        message_history=history,
+        deps=AgentDeps(conversation_id="c"),
+        run_id="run_compact",
     )
-    assert assistant is not None, "the reply was never saved"
-    assert "Saved after compaction." in str(assistant["content"])
-    assert (
-        await demo_ledger.fetchval(
-            "SELECT body_text FROM messages WHERE conversation_id = $1 AND role = 'user'",
-            thread["id"],
-        )
-        == "and now?"
+    turn = _this_turn(result.all_messages(), history, "run_compact", "no-ui-id")
+
+    assert len(result.all_messages()) < len(history) + 2, "compaction did not shorten the history"
+    assert any(
+        isinstance(part, UserPromptPart) and part.content == "and now?"
+        for message in turn
+        for part in message.parts
+    )
+    assert any(
+        isinstance(part, TextPart) and part.content == "Saved after compaction."
+        for message in turn
+        for part in message.parts
     )
 
 

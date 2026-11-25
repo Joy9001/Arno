@@ -268,10 +268,4 @@ async def seed_injection_statement(
     )
 
 
-__all__ = [
-    "SYNTHETIC_INSTITUTION",
-    "SYNTHETIC_PARSER",
-    "seed_committed_statement",
-    "seed_injection_statement",
-    "synthetic_statement_csv",
-]
+__all__ = ["seed_committed_statement", "seed_injection_statement"]

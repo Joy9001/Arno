@@ -3,7 +3,7 @@
 This guide owns installation, model setup, privacy and provider retention, backups, restore,
 updates, security posture, and troubleshooting for a single-user Arno instance; see
 [legacy upgrades](legacy-upgrades.md) for pre-0.3.0 migrations,
-[observability](observability.md) for Phoenix tracing and replay details, and
+[observability](observability.md) for optional Phoenix tracing, and
 [development operations](development-operations.md) for maintainer workflows.
 
 `docker compose up` on an x86-64 Linux host, Docker Desktop, or a virtual private server (VPS) is
@@ -19,7 +19,7 @@ The following table lists the host requirements for running Arno.
 | Requirement | Reason |
 |---|---|
 | An x86-64 Linux host, Docker Desktop, or a VPS with Docker Compose | The published images target `amd64` |
-| About 2 GB of free RAM, plus memory for Phoenix and optional profiles | PostgreSQL, the API, Phoenix, and any optional local models |
+| About 2 GB of free RAM, plus memory for optional profiles | PostgreSQL, the API, and any optional Phoenix or local models |
 | Tailscale on the host and on every client device | Provides private HTTPS access from other devices; a host-only setup needs none |
 | Host disk encryption enabled | Protects the database, Docker volumes, and plaintext dumps at rest |
 | A password manager and off-machine storage for `RESTIC_PASSWORD` | Losing `RESTIC_PASSWORD` makes every encrypted backup unreadable |
@@ -54,14 +54,12 @@ git clone https://github.com/Joy9001/Arno.git
 cd Arno
 ```
 
-Release images publish to `ghcr.io/joy9001/arno:<version>` and
-`ghcr.io/joy9001/arno-backup:<version>`. [`compose.yaml`](../../../compose.yaml) pins
+Release images publish to `ghcr.io/joy9001/arno:<version>`. [`compose.yaml`](../../../compose.yaml) pins
 `ARNO_VERSION` to the version in [`pyproject.toml`](../../../pyproject.toml). You can also build
 locally with `docker compose up -d --build`.
 
 On Windows, preserve the `*.sh text eol=lf` rule in `.gitattributes` and avoid CRLF checkouts. The
-backup image entrypoint is a shell script, and CRLF line endings cause it to crash-loop
-(`exec .../arno-backup: no such file or directory`), leaving the instance without backups.
+database init script is a shell script, and CRLF line endings break it.
 
 ### Create `.env`
 
@@ -93,11 +91,10 @@ machine.
 Without Tailscale, set `ARNO_RP_ID=localhost` and `ARNO_RP_ORIGIN=http://localhost:8000` to open
 Arno on the host itself. Passkeys work on `localhost`, though phones cannot reach it.
 
-The default stack also runs Phoenix. Generate four distinct long random values on the host and
-never paste them into chat:
+Tracing is optional. If you enable the `obs` profile (see [Observability](#observability)),
+generate three distinct long random values on the host and never paste them into chat:
 
 ```dotenv
-PHOENIX_PASSWORD=<long random; Phoenix database role>
 PHOENIX_SECRET=<long random; Phoenix auth secret>
 PHOENIX_ADMIN_SECRET=<long random; Phoenix admin secret>
 PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<long random; initial Phoenix login>
@@ -107,8 +104,6 @@ PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<long random; initial Phoenix login>
 and differ from `PHOENIX_SECRET`. Compose also uses it as the default local bearer credential for
 trace export so first start needs no Phoenix API key. If any Phoenix variable is empty, Phoenix
 restart-loops while the API and PostgreSQL keep running; stop it with `docker compose stop phoenix`.
-For existing volumes or password changes, follow
-[Phoenix database recovery](observability.md#phoenix-database-recovery).
 
 Find your tailnet hostname with `tailscale status --json` (read `Self.DNSName`) or in the Tailscale
 admin console. It has the form `mini-pc.tail1234.ts.net`.
@@ -128,9 +123,7 @@ that control security headers, sessions, jobs, backups, and UI links.
 | `ARNO_JOBS_ENABLED` | `1` | Runs the background job loop in `api`. Set to `0` for read-only processes or tests. |
 | `ARNO_VAPID_SUBJECT` | `mailto:arno@localhost` | Contact `mailto:` or `https:` URL sent with web push VAPID headers. |
 | `ARNO_PHOENIX_UI_URL` | Unset | Browser URL for Phoenix (for example, `http://127.0.0.1:6006`). When set, **Settings** displays a link to open Phoenix; Arno never derives this URL from the collector endpoint. |
-| `ARNO_ENV_FILE` | `.env` | Environment file read by `api` and `backup` in Compose. Override only for isolated checks. |
-| `BACKUP_INTERVAL_SECONDS` | `3600` | How often the `backup` sidecar checks whether a backup is due. |
-| `BACKUP_MAX_AGE_SECONDS` | `86400` | Maximum age of the latest successful backup before the sidecar runs a backup. |
+| `ARNO_ENV_FILE` | `.env` | Environment file read by `api` in Compose. Override only for isolated checks. |
 | `PHOENIX_CSRF_TRUSTED_ORIGINS` | `http://127.0.0.1:6006` | Trusted CSRF origin list for the Phoenix UI. |
 
 ### Start the stack
@@ -138,13 +131,12 @@ that control security headers, sessions, jobs, backups, and UI links.
 Pull the published images, start the services, and inspect the API logs:
 
 ```bash
-docker compose pull api backup db
+docker compose pull api db
 docker compose up -d
 docker compose logs -f api
 ```
 
-Phoenix has no published image, so `docker compose up -d` builds `deploy/phoenix-cost` on first
-start. First boot applies migrations and prints a one-time enrollment link and terminal QR code.
+First boot applies migrations and prints a one-time enrollment link and terminal QR code.
 Configure `tailscale serve` first so the origin in `ARNO_RP_ORIGIN` is reachable, then open the
 link (or paste its token) on a tailnet device and register your passkey. Restarts keep an active
 enrollment link; run `docker compose exec api arno setup` to rotate it while setup is open.
@@ -179,21 +171,20 @@ screenshots directly from GPay or PhonePe into Arno.
 If `5433`, `8000`, or `6006` is in use on the host, override `ARNO_DB_PORT`, `ARNO_API_PORT`, or
 `PHOENIX_UI_PORT` in `.env` and point `tailscale serve --bg` at `${ARNO_API_PORT}`. Running a
 second Arno stack on the same host also requires setting `COMPOSE_PROJECT_NAME` (or passing
-`-p <name>` to every command), because `compose.yaml` sets `name: arno`. The optional `ollama` and
-`whisper` profiles bind fixed loopback ports (`11434` and `8001`), so only one stack per host can
-run each profile.
+`-p <name>` to every command), because `compose.yaml` sets `name: arno`. The optional `ollama`
+profile binds a fixed loopback port (`11434`), so only one stack per host can run it.
 
 ---
 
 ## Configure models
 
 Each model role accepts a provider, billing mode, base URL, API key, and exact model ID. Local
-Ollama or whisper.cpp endpoints use the same code path as cloud APIs. `*_BILLING_MODE` accepts
+Ollama endpoints use the same code path as cloud APIs. `*_BILLING_MODE` accepts
 `metered` (default), `local`, or `reported`; there is no subscription billing mode. Paid inference
 refuses to run when a model price is unknown rather than treating it as free, so paid roles must
 name a verified provider or `reported` when the endpoint supplies `usage.cost`. Pin exact, dated
-model IDs instead of floating `latest` aliases, and rerun `arno eval --model <id>` after changing a
-chat model.
+model IDs instead of floating `latest` aliases. Evals have no command-line entry point; see
+[development operations](development-operations.md#real-model-journeys-and-evals).
 
 The following table lists every model role and its environment variables.
 
@@ -246,36 +237,6 @@ LLM_CONTEXT_WINDOW=200000
 
 Do not use free-tier endpoints for real statements: free tiers often train on or retain prompts.
 
-### ChatGPT plan sign-in
-
-Eligible ChatGPT plans use the native `openai-chatgpt` provider with interactive sign-in instead of
-an API key. Arno records an API-equivalent estimate rather than remaining plan quota and refuses to
-fall back to a paid API key.
-
-On the host, where the browser callback reaches `127.0.0.1:1455`, run:
-
-```bash
-uv run arno chatgpt-login --allow-background
-```
-
-Inside Docker, port `1455` is not published, so use the manual callback flow:
-
-```bash
-docker compose exec api arno chatgpt-login --manual --no-browser --allow-background
-```
-
-The manual flow reads the full callback URL with hidden input, verifies scheme, host, path, code,
-and state, and never logs or echoes the code. `--allow-background` records owner consent for
-background jobs, wake turns, and delegated work; without it, background inference refuses requests.
-Run `arno chatgpt-logout` to delete the stored sign-in.
-
-```dotenv
-CHAT_PROVIDER=openai-chatgpt
-CHAT_BILLING_MODE=metered
-CHAT_MODEL=gpt-5.4
-LLM_CONTEXT_WINDOW=<model context window>
-```
-
 ### Local chat with Ollama
 
 Start the optional `local-llm` profile and pull a model:
@@ -296,50 +257,29 @@ LLM_CONTEXT_WINDOW=128000
 
 `OLLAMA_CONTEXT_LENGTH` (derived from `LLM_CONTEXT_WINDOW` in `compose.yaml`) must match the
 context window the server uses, or Ollama truncates long histories silently. Arno works with local
-models, though it is designed for frontier models; check the eval scorecard in
-[`README.md`](../../../README.md) before relying on a local model.
+models, though it is designed for frontier models.
 
-### Local speech-to-text
+### Speech-to-text
 
-Start the optional `local-stt` profile, which runs whisper.cpp's native `whisper-server` (pinned to
-v1.9.5):
-
-```bash
-docker compose --profile local-stt up -d --build whisper
-```
+Arno has no bundled speech-to-text server. Point `STT_BASE_URL` at any OpenAI-compatible
+transcription endpoint: a cloud API or a server you run yourself.
 
 ```dotenv
 STT_PROVIDER=openai
-STT_BILLING_MODE=local
-STT_BASE_URL=http://whisper:8000/v1
-STT_MODEL=small
-STT_API_KEY=not-needed
-STT_PAYEE_CONTEXT=1
-STT_LANGUAGE=en
-STT_TIMEOUT_SECONDS=120
+STT_BILLING_MODE=metered
+STT_BASE_URL=https://api.<provider>.com/v1
+STT_API_KEY=<key>
+STT_MODEL=<exact model id>
 ```
 
-On first start, the container downloads the GGML weights named by `STT_MODEL` (`small` by default,
-or `large-v3-turbo`) and the Silero VAD model into `whisper-data`. Transcriptions fail until the
-download completes. `STT_MODEL` also sets the trace label in the API; after changing `STT_MODEL`,
-recreate both services with `docker compose --profile local-stt up -d whisper api`. `whisper-data`
-and `whisper-cache` (the writable CUDA driver cache) are disposable caches.
+Use `STT_BILLING_MODE=local` for a server on your own hardware, or `reported` when the endpoint
+returns `usage.cost`.
 
 - **`STT_LANGUAGE`:** Pins the spoken language (for example, `en`, which also handles Hinglish
   written in Latin script). Leave unset to auto-detect; short clips often misdetect when unset.
 - **`STT_PAYEE_CONTEXT`:** Sends up to 80 active payee names as a recognition hint (`1` by default).
   Set to `0` when using a cloud transcription endpoint if you want to keep payee names local.
 - **`STT_TIMEOUT_SECONDS`:** Request timeout in seconds (`120` by default).
-
-On an NVIDIA GPU (CUDA 13 requires driver 580 or newer; the image build includes compute capability
-7.5), layer [`compose.gpu.yaml`](../../../compose.gpu.yaml):
-
-```bash
-docker compose -f compose.yaml -f compose.gpu.yaml --profile local-stt up -d --build whisper
-```
-
-A cloud OpenAI-compatible transcription endpoint works with the same variables and
-`STT_BILLING_MODE=metered` (or `reported`).
 
 ### Vision
 
@@ -368,8 +308,7 @@ CHAT_FALLBACK_CONTEXT_WINDOW=128000
 
 `CHAT_FALLBACK_CONTEXT_WINDOW` must match the backup server's real window. If a thread exceeds that
 window, Arno refuses the fallback request rather than silently truncating history. Replies written
-by the fallback display a badge. A `openai-chatgpt` primary refuses a configured fallback so quota
-exhaustion never spills over to a paid key.
+by the fallback display a badge.
 
 ---
 
@@ -388,7 +327,7 @@ The following table summarizes what leaves the host for each configured role or 
 | Backups and push | Encrypted restic archive; contentless web push pings | Scheduled backup; on notification |
 | Never sent | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
 
-Arno collects no analytics, and Phoenix traces stay on the host.
+Arno collects no analytics, and Phoenix traces (when enabled) stay on the host.
 
 ---
 
@@ -404,7 +343,7 @@ defaults.
 | [OpenAI API](https://developers.openai.com/api/docs/guides/your-data) | No, by default | Abuse-monitoring logs up to 30 days, longer if legally required |
 | [Gemini paid](https://ai.google.dev/gemini-api/terms) | No | Limited abuse-monitoring logs |
 | [Gemini unpaid](https://ai.google.dev/gemini-api/terms) | **Yes, with human review.** Google's terms state not to send personal information | Do not use for any role |
-| Local models (Ollama, whisper.cpp) | Nothing leaves the host | |
+| Local models (Ollama or a server you run) | Nothing leaves the host | |
 
 **Warning:** Never use Gemini's unpaid tier for any role. It trains on submitted prompts with human
 review.
@@ -415,18 +354,17 @@ review.
 
 ### Backups
 
-The `backup` sidecar checks every hour (`BACKUP_INTERVAL_SECONDS=3600`) and runs a backup whenever
-the last success is older than 24 hours (`BACKUP_MAX_AGE_SECONDS=86400`), so sleeping laptops catch
-up automatically. It runs `pg_dump`, writes `backup_manifest.json` (row counts and content hashes
-for every table) from the same exported PostgreSQL snapshot, and stores both in restic. Taking both
-from one snapshot prevents mid-backup writes from skewing verification.
+The `api` service runs the backup. A daily scheduled job runs when the last success is missing or at
+least 22 hours old, so a sleeping laptop catches up automatically. It streams
+`pg_dump --no-owner --format=custom` into `restic backup --stdin` (tagged `arno`, stored as
+`/fin_agent.dump`), then prunes with `restic forget --keep-daily 7 --keep-weekly 4 --prune`.
+Each run writes a `backup_runs` row.
 
-The manifest format tag (`fin-agent-backup-manifest`), SQL function
-(`fin_agent_backup_manifest()`), and dump filenames (`fin_agent.dump`, `fin_agent.sql`) predate the
-Arno rename and stay unchanged so older archives restore cleanly.
+The dump filename (`fin_agent.dump`) predates the Arno rename and stays unchanged so older archives
+restore cleanly.
 
 ```dotenv
-BACKUP_PASSWORD=<long random hex>
+BACKUP_PASSWORD=<long random hex; the `backup` database role>
 RESTIC_PASSWORD=<long random, stored off this machine>
 RESTIC_REPOSITORY=/backups/restic
 ```
@@ -434,10 +372,10 @@ RESTIC_REPOSITORY=/backups/restic
 **Important:** Store `RESTIC_PASSWORD` off this machine (for example, in a password manager or
 printed in a safe). Losing it makes every off-site backup permanently unreadable.
 
-The default `/backups/restic` target writes to the local `backup-data` Docker volume, which is not
-off-site. Configure Google Drive through rclone or S3-compatible storage (such as Cloudflare R2,
+The default `/backups/restic` target writes to the local `backup-data` Docker volume, which `api`
+mounts and which is not off-site. Configure Google Drive through rclone or S3-compatible storage (such as Cloudflare R2,
 AWS S3, or Backblaze B2) using environment variables alone. Check attempts in
-`docker compose logs backup` or **Settings > Backup status**. If no backup succeeds for 48 hours,
+`docker compose logs api` or **Settings > Backup status**. If no backup succeeds for 48 hours,
 Arno creates an inbox alert and sends a push notification.
 
 #### Off-site storage on Google Drive
@@ -473,7 +411,7 @@ ID, which is heavily rate-limited:
 
 5. Sign in and copy the resulting JSON token into `RCLONE_CONFIG_GDRIVE_TOKEN` inside single
    quotes. (Host rclone 1.75 prints a base64 blob between arrows; decode it and extract the `token`
-   object. The backup container itself bundles `rclone` 1.71.2.)
+   object.)
 
 Because `drive.file` restricts access to files created by that OAuth client, keep the client ID and
 secret in your off-machine recovery kit. If the OAuth client is lost, download the backup folder
@@ -491,25 +429,25 @@ AWS_DEFAULT_REGION=auto
 ```
 
 Other rclone backends work through `RCLONE_CONFIG_<NAME>_*` variables. SFTP is not supported
-because the backup image includes no SSH client.
+because the `api` image includes no SSH client.
 
 #### Switch or test repositories
 
-The sidecar initializes a new repository automatically with `restic init`. After changing
-`RESTIC_REPOSITORY` or credentials in `.env`, recreate `backup` and force an immediate backup
-because the due check reads `backup_runs` in Postgres rather than inspecting the new repository:
+The backup job initializes a new repository automatically with `restic init`. After changing
+`RESTIC_REPOSITORY` or credentials in `.env`, recreate `api`. The due check reads `backup_runs` in
+Postgres rather than inspecting the new repository, so the next backup runs within a day. To check
+the repository now, list its snapshots:
 
 ```bash
-docker compose up -d backup && docker compose run --rm -e BACKUP_ONCE=1 backup
-docker compose run --rm --no-deps --entrypoint restic backup snapshots
+docker compose up -d api
+docker compose exec api restic snapshots
 ```
 
 Use `restic copy --from-repo <old repository>` if you want to copy older snapshots across.
 
 ### Restore drill on a fresh host
 
-This procedure verifies milestone 37 recovery given only the restic repository and
-`RESTIC_PASSWORD`:
+This procedure recovers the ledger given only the restic repository and `RESTIC_PASSWORD`:
 
 ```bash
 # 1. On a fresh host with the repo and .env configured, start only PostgreSQL.
@@ -524,9 +462,10 @@ docker compose up -d
 ```
 
 `arno restore` creates `arno` if missing, refuses to overwrite a database that already has tables,
-restores the newest snapshot, recomputes every table's row count and content hash against
-`backup_manifest.json`, and checks that every transfer balances and every account balance matches
-its entries. It exits nonzero on any mismatch.
+checks that the snapshot holds `/fin_agent.dump` (or `/tmp/fin_agent.dump` in snapshots from the old sidecar), and pipes `restic dump` into
+`pg_restore --no-owner`. It then restores grants and checks that every transfer balances and every
+account balance matches its entries. It exits nonzero on any mismatch. Snapshots from older
+versions restore too.
 
 The restore runs as `app` (using `CREATEDB`, `CREATEROLE`, and `pg_signal_backend`, never
 `SUPERUSER`), recreates the `agent_ro` and `backup` login roles, restores table grants from the
@@ -534,13 +473,13 @@ dump, and reapplies backup grants. Older dumps created without table grants stil
 though `agent_ro` remains unprivileged for `run_query` until a backup from the current image
 replaces it.
 
-Pass `--force` only when intentionally replacing a populated database (it drops and recreates the
-target database). To pick a specific snapshot or restore extracted files:
+The command takes `--target` (a database URL; defaults to `DATABASE_URL`), `--repository`
+(defaults to `RESTIC_REPOSITORY`), `--snapshot` (an ID; defaults to `latest`), and `--force`. Pass
+`--force` only when intentionally replacing a populated database (it drops and recreates the target
+database):
 
 ```bash
 arno restore --repository "$RESTIC_REPOSITORY" --snapshot <id>
-restic restore <id> --target /restore
-arno restore --from-dir /restore
 ```
 
 ### Pre-migration dump
@@ -552,7 +491,7 @@ Before applying pending migrations to a nonempty database, `api` writes a plaint
 docker compose cp api:/app/pre-migration/. ./pre-migration/
 ```
 
-Treat pre-migration dumps as sensitive plaintext (they include stored ChatGPT sign-in credentials
+Treat pre-migration dumps as sensitive plaintext (they include stored credentials
 and are not encrypted like restic archives). They are a rollback aid, not a backup replacement.
 
 ### Update Arno
@@ -561,21 +500,12 @@ Verify a recent off-site backup exists, update `ARNO_VERSION` in `.env` (or pull
 checkout), and run:
 
 ```bash
-docker compose pull api backup db
+docker compose pull api db
 docker compose up -d
-docker compose up -d --build phoenix
 ```
 
 The API writes a pre-migration dump before applying pending migrations transactionally. If an update
 fails, restore the pre-migration dump or latest restic snapshot.
-
-- **Ledgers imported before 0.2.0:** Run the idempotent opening-balance repair once after migrating
-  so statement periods reflect their printed opening balance:
-
-  ```bash
-  docker compose exec api arno repair-openings --dry-run
-  docker compose exec api arno repair-openings --yes
-  ```
 
 - **Pre-0.3.0 installs (Fin-Agent rename or superuser `app` role):** Follow
   [legacy upgrades](legacy-upgrades.md) before applying routine updates.
@@ -583,13 +513,14 @@ fails, restore the pre-migration dump or latest restic snapshot.
 ### PostgreSQL major upgrade
 
 Never start a new PostgreSQL major version against an existing `db-data` volume. Dump and restore
-into a fresh volume instead. `arno restore --from-dir` requires the dump file to be named
-`fin_agent.dump` (or `fin_agent.sql`):
+into a fresh volume instead. `arno restore` reads from restic, so first load the manual dump into
+the repository under the name it expects:
 
 ```bash
-# 1. Dump the ledger from the running old server into a private folder.
-mkdir -p ./pg-upgrade
-docker compose exec -T db pg_dump -U postgres --format=custom arno > ./pg-upgrade/fin_agent.dump
+# 1. Dump the ledger from the running old server and store it in restic.
+docker compose exec -T db pg_dump -U postgres --no-owner --format=custom arno \
+  | docker compose exec -T api restic backup --stdin --stdin-filename fin_agent.dump \
+      --tag arno --host arno
 docker compose down
 
 # 2. Rename or back up the old db-data volume so Compose creates a fresh volume,
@@ -598,18 +529,15 @@ docker compose down
 docker compose up -d db
 
 # 4. Restore and verify through the standard restore command.
-docker compose run --rm --no-deps -v "$PWD/pg-upgrade:/restore:ro" api \
-  arno restore --from-dir /restore --allow-no-manifest
+docker compose run --rm --no-deps --user root api arno restore
 
 # 5. Start the stack and verify /api/health.
 docker compose up -d
 ```
 
-Keep the old volume until the upgraded instance answers real questions cleanly. Remove
-`./pg-upgrade/fin_agent.dump` once verified, because it is plaintext. A ledger restore does not
-migrate the separate `phoenix` database; reinitialize it with
-[Phoenix database recovery](observability.md#phoenix-database-recovery) or dump and restore it
-separately if you want to retain old traces.
+Keep the old volume until the upgraded instance answers real questions cleanly. If you enabled
+Phoenix, its traces live in the separate `phoenix-data` volume, which a ledger restore does not
+touch.
 
 ---
 
@@ -632,7 +560,7 @@ separately if you want to retain old traces.
   two-second statement timeout; `backup` has `SELECT` for `pg_dump` and `INSERT` on `backup_runs`
   only; `phoenix` owns only the `phoenix` database.
 - **Logs and traces:** Standard Python/Uvicorn stdout stays on the host (10 MB × 3 files per
-  service). Phoenix traces include prompts, replies, and tool returns and stay loopback-only.
+  service). Phoenix traces (when enabled) include prompts, replies, and tool returns and stay loopback-only.
 - **Not defended:** A cloud VPS provider inspecting a running host or a live host compromise.
   In-database encryption remains parked with VPS hosting as its trigger
   ([`parked.md`](../planning/parked.md#encryption-inside-the-database)).
@@ -641,31 +569,25 @@ separately if you want to retain old traces.
 
 ## Observability
 
-The default Compose stack runs Arno's patched Phoenix image (`arno-phoenix-cost:21.0.0`, built from
-[`deploy/phoenix-cost/`](../../../deploy/phoenix-cost/README.md)) on loopback at
-`http://127.0.0.1:6006` with authentication enabled. Native Pydantic AI agent, model, and tool
-spans export directly over OTLP/HTTP; there is no Collector, Loki, Prometheus, or Grafana.
-
-Compose sets `PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces`,
-`PHOENIX_PROJECT_NAME=arno`, and falls back `PHOENIX_API_KEY` to `PHOENIX_ADMIN_SECRET` so trace
-export works on first start without creating a separate key. Set `ARNO_PHOENIX_UI_URL` to surface
-the Phoenix link in **Settings**. Export is fail-open: Arno serves normally when Phoenix is down,
-and `OTEL_SDK_DISABLED=true` disables tracing and agent instrumentation completely.
-
-Phoenix retains traces indefinitely by default unless you configure a policy in Phoenix or set
-`PHOENIX_DEFAULT_RETENTION_POLICY_DAYS`. Ledger backups include the `llm_calls` cost journal but
-exclude Phoenix's database. The `cost_replay` schedule checks every five minutes and re-exports
-finalized cost metadata only when a row is waiting. To finalize interrupted ordinary calls after
-stopping `api`, run a one-off container:
+Tracing is off by default: `PHOENIX_COLLECTOR_ENDPOINT` is empty, so Arno registers and
+instruments nothing. To turn it on, set the Phoenix secrets in `.env`, set
+`PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces`, and start the `obs` profile:
 
 ```bash
-docker compose stop api
-docker compose run --rm --no-deps api arno cost-replay --finalize-interrupted
-docker compose up -d api
+docker compose --profile obs up -d
 ```
 
-See [observability](observability.md) for span attributes, replay behavior, Phoenix database
-recovery, and trace troubleshooting.
+The profile runs stock Phoenix (Elastic License 2.0, outside the Arno image) on loopback at
+`http://127.0.0.1:6006` with authentication enabled and traces stored in SQLite on the
+`phoenix-data` volume. Compose sets `PHOENIX_PROJECT_NAME=arno` and falls back `PHOENIX_API_KEY` to
+`PHOENIX_ADMIN_SECRET` so trace export works on first start. Set `ARNO_PHOENIX_UI_URL` to surface
+the Phoenix link in **Settings**. Export is fail-open: Arno serves normally when Phoenix is down,
+and `OTEL_SDK_DISABLED=true` disables tracing completely.
+
+Phoenix prices calls from its own catalog, so its cost figures can differ from Arno's. The
+PostgreSQL spend ledger (`llm_calls`) is the source of truth for cost, and ledger backups include it
+but exclude Phoenix's data. See [observability](observability.md) and
+[cost tracking](../specs/cost-tracking.md).
 
 ---
 
@@ -679,12 +601,11 @@ The following table lists common failure symptoms and first diagnostic checks.
 | `/api/health` reports the database unreachable | Run `docker compose ps` and `docker compose logs db`; `api` waits for `pg_isready`. |
 | Enrollment link fails | Open it on the exact `ARNO_RP_ORIGIN`; a passkey created on `localhost` fails on `*.ts.net`. |
 | Passkey login fails after a hostname change | Update `ARNO_RP_ID` and `ARNO_RP_ORIGIN`, recreate `api`, run `docker compose exec api arno passkeys reset`, and enroll again. |
-| Backups stopped | Check **Settings > Backup status**, `docker compose logs backup`, and `docker compose run --rm --no-deps --entrypoint restic backup snapshots`. |
+| Backups stopped | Check **Settings > Backup status**, `docker compose logs api`, and `docker compose exec api restic snapshots`. |
 | `arno restore` refuses | The target database has tables. Use a fresh database, or pass `--force` to replace it. |
 | Web UI is blank | Check browser console CSP errors; the production build has no inline scripts. Rebuild with `docker compose build api`. |
-| Traces missing or degraded | Check `docker compose ps`, `docker compose logs api`, `PHOENIX_COLLECTOR_ENDPOINT`, `OTEL_SDK_DISABLED`, and `PHOENIX_API_KEY` / `PHOENIX_ADMIN_SECRET`. Run `arno cost-replay` for journaled costs. |
+| Traces missing | Tracing is off unless `PHOENIX_COLLECTOR_ENDPOINT` is set and the `obs` profile runs. Check `docker compose ps`, `docker compose logs api`, `OTEL_SDK_DISABLED`, and `PHOENIX_API_KEY` / `PHOENIX_ADMIN_SECRET`. |
 | Paid inference refuses with unknown price | Set `*_PROVIDER` to a verified provider or `*_BILLING_MODE=reported` when the endpoint returns `usage.cost`; use `local` only for local servers. |
-| ChatGPT refuses background work | Sign in again with `arno chatgpt-login --allow-background`. |
 
 ### Host CLI reference
 
@@ -698,14 +619,6 @@ arno <command>`), never over HTTP. The following table lists every `arno` subcom
 | `arno setup` / `arno setup-token` | Rotate and print a fresh first-run enrollment link and QR code while setup is open |
 | `arno passkeys list` | List registered passkeys and last-used timestamps |
 | `arno passkeys reset` | Delete all passkeys and sessions, then print a fresh enrollment link |
-| `arno chat` | Run an interactive or single-message (`--message`) terminal chat turn |
-| `arno chatgpt-login` | Sign in to an eligible ChatGPT plan (`--manual --no-browser` in Docker, `--allow-background` for jobs) |
-| `arno chatgpt-logout` | Remove stored ChatGPT sign-in credentials |
-| `arno cost-replay` | Replay finalized `llm_calls` metadata to Phoenix (`--finalize-interrupted`, `--attempt`) |
 | `arno export` | Export the ledger as `json`, `csv` (zip), or `sql` (`pg_dump`) |
-| `arno restore` | Restore and verify a restic snapshot or `--from-dir` directory |
-| `arno repair-openings` | One-time idempotent opening-balance repair for statements imported before `0.2.0` |
+| `arno restore` | Restore and verify a restic snapshot (`--target`, `--repository`, `--snapshot`, `--force`) |
 | `arno demo seed` | Seed the synthetic demo persona into a scratch database (`demo template` clones an eval template) |
-| `arno eval` | Run the agent eval suite against a configured model (`--dry-run` lists cases without model calls) |
-| `arno backtest` | Score forecasts against synthetic personas or a local `db` ledger |
-| `arno hackerrank` | Score the engine on a local HackerRank dataset folder |

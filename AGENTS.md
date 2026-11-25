@@ -13,8 +13,6 @@ this file holds only what you can't read off the code.
   wins and the other doc is stale. Read the owning spec before changing its area.
 - `docs/archive/` is superseded. Never cite it as a decision. `docs/research/` describes the
   outside world, not this project.
-- Never hand-edit the README blocks between `<!-- eval-scorecard -->`, `<!-- backtest -->`, and
-  `<!-- hackerrank -->` markers. `arno eval`, `backtest`, and `hackerrank` write them.
 
 ## Architecture rules (plan.md §4) that code must not break
 
@@ -39,11 +37,11 @@ this file holds only what you can't read off the code.
   applied migration**, add the next one.
 - `src/arno/db/vendor/pgledger/` is vendored unmodified at a pinned commit. Don't edit it; its
   licence notice is in `THIRD_PARTY_NOTICES.md`.
-- Five roles: `postgres` (bootstrap superuser, password `NULL`, local socket only), `app`
+- Four roles: `postgres` (bootstrap superuser, password `NULL`, local socket only), `app`
   (database owner, `CREATEDB CREATEROLE`, `pg_signal_backend`, no superuser), `agent_ro` (agent's
-  `run_query`: SELECT only on ledger-side tables and views, no auth tables, 2 s timeout), `backup`,
-  and `phoenix` (owns only the `phoenix` database). A new table the agent should see needs a grant
-  in a migration; auth and secrets tables must stay out of `agent_ro`.
+  `run_query`: SELECT only on ledger-side tables and views, no auth tables, 2 s timeout), and
+  `backup`. Phoenix keeps its traces in SQLite and has no database role. A new table the agent
+  should see needs a grant in a migration; auth and secrets tables must stay out of `agent_ro`.
 
 ## Commands
 
@@ -87,11 +85,12 @@ full set.
   green.
 - Real journeys: [`tests/e2e/`](tests/e2e/README.md) drives a live API process with the real model
   and the real HTTP the web app sends. Use it to check a change by hand.
-- Dependency change: `uv lock --check`, `uv run python scripts/license_audit.py`, and
-  `THIRD_PARTY_NOTICES.md` if a direct dependency is added. Only permissive licences ship; no GPL,
-  AGPL, SSPL, or Elastic code in the image. `pydantic-ai-harness` is 0.x: keep it pinned.
-- Release: the git tag must equal the `pyproject.toml` version, and `compose.yaml`'s default image
-  tags (`api` and `backup`) must carry the same version (`tests/test_release.py` fails otherwise).
+- Dependency change: `uv lock --check`, and `THIRD_PARTY_NOTICES.md` if a direct
+  dependency is added. No script audits licences: check them by hand against the permissive-only
+  rule (no GPL, AGPL, SSPL, or Elastic code in the image). `pydantic-ai-harness` is 0.x: keep it
+  pinned.
+- Release: the git tag must equal the `pyproject.toml` version, and `compose.yaml`'s default `api`
+  image tag must carry the same version (`tests/test_release.py` fails otherwise).
 - Release notes: write them yourself; `release.yml`'s `--generate-notes` fallback lists merged PRs
   and this repo has none. Read `git log <previous-tag>..<new-tag>` and the diff, then write plain
   prose for the owner in `##` sections that apply: Highlights (what changed and why it matters),
@@ -107,12 +106,13 @@ full set.
 ## Agent behavior changes
 
 - The prompt in `agent/instructions.py` is a short map. Each fixed rule in it has an eval case in
-  `evals/cases.py`. Change a rule, change its case.
+  `evals/cases.py`, except `outside_text_is_data` and `no_product_recommendations`. Change a rule,
+  change its case.
 - Before designing a new agent mechanism, check the current PydanticAI and `pydantic-ai-harness`
   docs and source for a built-in (the `pydantic-*` skills in `.agents/skills/` cover this). Likewise
   read assistant-ui's docs before any chat UI work (the `assistant-ui` skill in `.claude/skills/`).
-- `arno eval` is the only path that enables real model requests and it spends money. Don't run
-  it unless asked; `--dry-run` lists cases for free.
+- `evals.runner.run_eval` is the only path that enables real model requests and it spends money.
+  Don't run it unless asked; `evals.runner.dry_run` lists cases for free.
 
 ## assistant-ui
 
@@ -128,9 +128,9 @@ Key patterns:
 
 ## Local-only data
 
-`private/`, `statements/`, `.env`, `evals/results/`, and the HackerRank dataset are real or
-unlicensed data and are gitignored. Don't commit, quote, or paste their contents into docs, tests,
-or fixtures; use the synthetic demo persona (`src/arno/demo/`) and `tests/fixtures/` instead.
+`private/`, `statements/`, `.env`, and `evals/results/` are real data and are gitignored. Don't
+commit, quote, or paste their contents into docs, tests, or fixtures; use the synthetic demo persona
+(`src/arno/demo/`) and `tests/fixtures/` instead.
 
 ## Working conventions
 

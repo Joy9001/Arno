@@ -39,8 +39,8 @@ async def warn_if_superuser(conn: Connection) -> bool:
     )
     if bool(row["rolsuper"]):
         logger.warning(
-            "Database role %r is a PostgreSQL superuser; run deploy/demote-app.sh to convert "
-            "it to a normal owner role.",
+            "Database role %r is a PostgreSQL superuser; PostgreSQL cannot demote the bootstrap "
+            "superuser in place, so restore a backup into a fresh database volume.",
             row["role"],
         )
         return True

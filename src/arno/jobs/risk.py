@@ -47,7 +47,7 @@ async def _record_risk(conn: Connection, projection: Projection) -> dict[str, An
         await conn.execute("UPDATE risk_state SET last_checked_at = now() WHERE id = 1")
         return None
     # A projection with no income or liquid account measures its own missing setup, not danger,
-    # so onboarding must not open with a warning. The same gaps make a backtest unpublishable.
+    # so onboarding must not open with a warning.
     if any(gap in UNUSABLE_SETUP_GAPS for gap in data_quality.get("setup_gaps") or []):
         await conn.execute("UPDATE risk_state SET last_checked_at = now() WHERE id = 1")
         return None

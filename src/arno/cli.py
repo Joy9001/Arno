@@ -9,44 +9,27 @@ import asyncio
 import faulthandler
 import logging
 import os
-import secrets
 import signal
 import sys
-import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
 
 import typer
 import uvicorn
-from pydantic_ai import Agent
-from pydantic_ai.messages import DeferredToolRequests
 
-from arno.agent.builder import build_agent
-from arno.agent.deps import AgentDeps
-from arno.agent.history import (
-    create_thread,
-    ensure_history,
-    get_thread,
-    mark_run_started,
-    record_user_message,
-    save_records,
-    title_for,
-)
 from arno.auth.enrollment import enrollment_message
 from arno.auth.sessions import revoke_all_sessions
 from arno.auth.setup import issue_setup_token, setup_required
-from arno.config import REPO_ROOT, ConfigurationError, Settings, get_settings
+from arno.config import ConfigurationError, Settings, get_settings
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password
-from arno.db.conn import Connection, connect
+from arno.db.conn import connect
 from arno.db.migrate import run_migrations
 from arno.db.pre_migration import dump_before_migrating
 from arno.demo.persona import seed_demo
 from arno.demo.template import clone_database
 from arno.ledger import export as ledger_export
 from arno.logging_utils import configure_logging
-from arno.observability import bootstrap_observability
 
 app = typer.Typer(
     add_completion=False,
@@ -59,114 +42,6 @@ app.add_typer(passkeys_app, name="passkeys")
 app.add_typer(demo_app, name="demo")
 
 logger = logging.getLogger("arno")
-
-
-@app.command("cost-replay")
-def cost_replay(
-    limit: int = typer.Option(100, min=1, max=1000, help="Maximum finalized calls to replay."),
-    finalize_interrupted: bool = typer.Option(
-        False,
-        help="Mark interrupted calls unknown. Pause inference first; batch items stay pending.",
-    ),
-    attempt: str | None = typer.Option(
-        None, help="Retry one immutable cost export, accepted or pending."
-    ),
-) -> None:
-    """Recover cost-only Phoenix spans; does not rerun models or change budgets."""
-    from arno.agent.cost_journal import finalize_interrupted_calls, replay_costs
-
-    _settings()
-    if finalize_interrupted:
-        count = asyncio.run(finalize_interrupted_calls())
-        typer.echo(f"Marked {count} interrupted calls unknown; replay follows the normal grace.")
-    result = asyncio.run(
-        replay_costs(limit, attempt_id=attempt) if attempt else replay_costs(limit)
-    )
-    typer.echo(
-        f"exported {result['exported']}; failed {result['failed']}; pending {result['pending']}"
-    )
-
-
-@app.command("chatgpt-login")
-def chatgpt_login(
-    allow_background: bool = typer.Option(
-        False, help="Allow jobs, wake turns, and delegated work."
-    ),
-    browser: bool = typer.Option(True, "--browser/--no-browser", help="Open the sign-in URL."),
-    manual: bool = typer.Option(False, help="Paste the callback URL privately for container use."),
-) -> None:
-    """Sign in locally using the native ChatGPT consent and loopback callback flow."""
-    _settings()
-    try:
-        asyncio.run(
-            _chatgpt_login(allow_background=allow_background, browser=browser, manual=manual)
-        )
-    except Exception as exc:
-        typer.echo(f"ChatGPT sign-in failed ({type(exc).__name__}).", err=True)
-        raise typer.Exit(1) from exc
-
-
-async def _chatgpt_login(*, allow_background: bool, browser: bool, manual: bool) -> None:
-    import webbrowser
-
-    from pydantic_ai.exceptions import UserError
-
-    from arno.agent.chatgpt_auth import DatabaseChatGPTCredentialSource, chatgpt_sign_in
-
-    source = DatabaseChatGPTCredentialSource()
-    try:
-        previous = await source.load()
-    except UserError:
-        previous = None
-    url, flow = chatgpt_sign_in(client_id=previous.client_id if previous else None)
-    typer.echo("Open this sign-in URL in your browser:")
-    typer.echo(url)
-    if browser:
-        webbrowser.open(url)
-    if manual:
-        # The browser's loopback redirect need not reach the container. Paste it through the
-        # terminal, never a command argument, and bind it to this flow before exchanging the code.
-        callback = typer.prompt("Paste the full callback URL (input hidden)", hide_input=True)
-        parsed = urlsplit(callback)
-        expected = urlsplit(flow.redirect_uri)
-        params = parse_qs(parsed.query)
-        state = params.get("state", [""])
-        codes = params.get("code", [])
-        if (
-            (parsed.scheme, parsed.netloc, parsed.path)
-            != (expected.scheme, expected.netloc, expected.path)
-            or len(state) != 1
-            or not secrets.compare_digest(state[0], flow.state)
-            or len(codes) != 1
-            or not codes[0]
-            or "error" in params
-        ):
-            raise UserError("The callback does not match this sign-in flow.")
-        credentials = await flow.exchange_code(
-            codes[0], client_id=params.get("client_id", [None])[0]
-        )
-    else:
-        typer.echo("Waiting up to five minutes on 127.0.0.1:1455.")
-        credentials = await asyncio.wait_for(flow.exchange_code_from_callback(), timeout=300)
-    await source.save(credentials)
-    async with connect() as conn:
-        await conn.execute(
-            "UPDATE model_credentials SET allow_background = $1 WHERE provider = 'openai-chatgpt'",
-            allow_background,
-        )
-    if not credentials.plan_usage_granted:
-        raise UserError("Sign-in saved without plan consent. Sign in again and grant plan usage.")
-    typer.echo("ChatGPT sign-in saved. Restart the agent if it was already running.")
-
-
-@app.command("chatgpt-logout")
-def chatgpt_logout() -> None:
-    """Disconnect Arno's stored ChatGPT sign-in, without revoking other apps' grants."""
-    from arno.agent.chatgpt_auth import revoke_chatgpt_sign_in
-
-    _settings()
-    removed = asyncio.run(revoke_chatgpt_sign_in())
-    typer.echo("ChatGPT disconnected." if removed else "ChatGPT was already disconnected.")
 
 
 def _settings() -> Settings:
@@ -332,325 +207,6 @@ def passkeys_reset() -> None:
         )
 
 
-@app.command("chat")
-def chat(
-    thread_id: str | None = typer.Option(None, "--thread", help="Reopen a thread by ID."),
-    message: str | None = typer.Option(None, "--message", help="Send one message and exit."),
-) -> None:
-    """Chat with the agent in the terminal."""
-    settings = _settings()
-    configure_logging()
-    bootstrap_observability()
-    asyncio.run(_run_chat_command(settings, thread_id, message))
-
-
-async def _run_chat_command(settings: Settings, thread_id: str | None, message: str | None) -> None:
-    from arno.agent.spend import SharedSpendStore
-
-    spend_store = SharedSpendStore()
-    try:
-        agent = build_agent(spend_store=spend_store)
-        async with connect(settings.database_url) as conn:
-            thread = await get_thread(conn, thread_id) if thread_id else None
-            if thread_id is not None and thread is None:
-                typer.echo(f"error: no thread {thread_id} on this instance", err=True)
-                raise typer.Exit(code=2)
-            if thread is None:
-                thread = await create_thread(conn, title=title_for(message or "Terminal chat"))
-            thread_id = str(thread["id"])
-            history, _outside = await ensure_history(conn, thread)
-
-            if message is not None:
-                await _run_cli_turn(conn, agent, thread, history, message)
-                return
-
-            typer.echo(f"Arno chat ({thread_id}). Ctrl-D to leave.")
-            while True:
-                try:
-                    text = typer.prompt("you")
-                except EOFError, KeyboardInterrupt:
-                    typer.echo()
-                    return
-                if not text.strip():
-                    continue
-                history = await _run_cli_turn(conn, agent, thread, history, text)
-    finally:
-        spend_store.close()
-
-
-async def _run_cli_turn(
-    conn: Connection,
-    agent: Agent[AgentDeps, DeferredToolRequests | str],
-    thread: dict[str, Any],
-    history: list[Any],
-    text: str,
-) -> list[Any]:
-    from arno.agent.deps import AgentDeps
-    from arno.agent.number_check import check_messages
-    from arno.agent.turns import _this_turn
-
-    message_id = f"cli_{uuid.uuid4().hex}"
-    run_id = f"run_{uuid.uuid4().hex}"
-    user_row = await record_user_message(
-        conn, thread_id=str(thread["id"]), client_id=message_id, text=text
-    )
-    await mark_run_started(conn, str(thread["id"]), run_id)
-    deps = AgentDeps(
-        conversation_id=str(thread["id"]),
-        message_id=str(user_row["id"]),
-        run_id=run_id,
-        flagged=thread.get("outside_text_at") is not None,
-        user_texts=(text,),
-    )
-    result = await agent.run(text, message_history=history, deps=deps, run_id=run_id)
-    # Compaction may shorten the run's history, so the turn is found by run id, not by length.
-    turn_messages = _this_turn(result.all_messages(), history, run_id, message_id)
-    reply = str(result.output)
-    flags = check_messages(reply, turn_messages, kinds=("money", "percent"))
-    async with conn.transaction():
-        await save_records(
-            conn,
-            thread_id=str(thread["id"]),
-            run_id=run_id,
-            ui_message_id=message_id,
-            history=history,
-            turn_messages=turn_messages,
-            ending="complete",
-            number_flags=flags,
-            title=thread.get("title"),
-            all_messages=result.all_messages(),
-        )
-    typer.echo(result.output)
-    if flags:
-        typer.echo(f"couldn't trace: {', '.join(flags)}", err=True)
-    return result.all_messages()
-
-
-@app.command("eval")
-def eval_command(
-    model: list[str] = typer.Option(  # noqa: B008
-        [], "--model", help="Model ID on the configured CHAT endpoint. Repeat for several."
-    ),
-    repeat: int = typer.Option(3, help="Trials per case; pass^k uses this."),
-    category: list[str] = typer.Option(  # noqa: B008
-        [],
-        "--category",
-        help="answers, writes, honesty, injection, advice, never_moves, long_threads",
-    ),
-    tag: list[str] = typer.Option([], "--tag", help="Only cases with any of these tags."),  # noqa: B008
-    case_id: list[str] = typer.Option(  # noqa: B008
-        [], "--case", help="Only these case IDs. Repeat for several."
-    ),
-    limit: int | None = typer.Option(None, help="Run only the first N cases after filtering."),
-    per_category: int | None = typer.Option(
-        None, "--per-category", help="Keep at most N cases from each category."
-    ),
-    note: str = typer.Option("", "--note", help="A note shown in the scorecard."),
-    judge_model: str | None = typer.Option(
-        None,
-        "--judge-model",
-        envvar="EVAL_JUDGE_MODEL",
-        help="Pinned judge model for the advice rubric. Defaults to the model under test.",
-    ),
-    template: str = typer.Option("arno_eval_template", help="Template database name."),
-    concurrency: int = typer.Option(2, help="Trials that may run at once."),
-    budget_usd: float = typer.Option(2.0, help="Spend ceiling for each trial, in USD."),
-    publish: bool = typer.Option(
-        True, "--publish/--no-publish", help="Replace the README scorecard table."
-    ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Only list the selected cases."),
-) -> None:
-    """Run the agent eval suite against a configured cloud or local model.
-
-    This is the only command that turns model requests on. Every trial clones a fresh database
-    from the demo-persona template, so no trial can see another one's writes.
-    """
-    sys.path.insert(0, str(REPO_ROOT))
-    from evals.models import CATEGORY_LABELS
-    from evals.runner import dry_run as list_cases
-    from evals.runner import run_eval
-
-    categories = set(category) or None
-    if categories:
-        unknown = categories - set(CATEGORY_LABELS)
-        if unknown:
-            raise typer.BadParameter(
-                f"unknown categories: {', '.join(sorted(unknown))}; "
-                f"choose from {', '.join(CATEGORY_LABELS)}"
-            )
-    tags = set(tag) or None
-    case_ids = set(case_id) or None
-    if dry_run:
-        counts = list_cases(
-            categories=categories,
-            tags=tags,
-            case_ids=case_ids,
-            limit=limit,
-            per_category=per_category,
-        )
-        total = sum(counts.values())
-        typer.echo(f"{total} cases")
-        for name, count in sorted(counts.items()):
-            typer.echo(f"  {name}: {count}")
-        return
-    if not model:
-        raise typer.BadParameter("pass at least one --model")
-    if repeat < 1:
-        raise typer.BadParameter("--repeat must be at least 1")
-    if budget_usd <= 0:
-        raise typer.BadParameter("--budget-usd must be positive")
-
-    from decimal import Decimal
-
-    configure_logging()
-    bootstrap_observability()
-    cards = run_eval(
-        model_names=list(model),
-        repeat=repeat,
-        template=template,
-        judge_model=judge_model,
-        categories=categories,
-        tags=tags,
-        case_ids=case_ids,
-        limit=limit,
-        per_category=per_category,
-        max_concurrency=concurrency,
-        run_budget_usd=Decimal(str(budget_usd)),
-        publish=publish,
-        note=note,
-    )
-    typer.echo(f"scorecards: {', '.join(card.model for card in cards)}")
-    gate_failures = [
-        card.model for card in cards if card.injection_trials > 0 and not card.gate_passed
-    ]
-    if gate_failures:
-        typer.echo(
-            "injection gate FAILED: "
-            + ", ".join(gate_failures)
-            + " (a lasting write landed without its confirm card, or a trial was unverified)",
-            err=True,
-        )
-        raise typer.Exit(code=1)
-
-
-async def _run_backtest(settings: Settings, *, source: str) -> Any:
-    from arno.engine.backtest import backtest as run_backtest
-
-    async with connect(settings.database_url) as conn:
-        return await run_backtest(conn, source=source)
-
-
-@app.command("backtest")
-def backtest_command(
-    source: str = typer.Option("personas", help="personas (synthetic) or db (the real ledger)."),
-    seeds: str = typer.Option(
-        "holdout", help="Persona seeds: tuning (to choose settings) or holdout (to publish)."
-    ),
-    publish: bool = typer.Option(
-        False, "--publish/--no-publish", help="Replace the README backtest section."
-    ),
-) -> None:
-    """Forecast as of weekly past days and score each forecast against what happened next."""
-    from arno.engine.backtest import SEED_SETS, backtest_personas, format_report, publish_report
-
-    try:
-        if source == "personas":
-            if seeds not in SEED_SETS:
-                raise ValueError("seeds is tuning or holdout")
-            if publish and seeds != "holdout":
-                raise ValueError("only the holdout seeds are published")
-            result = backtest_personas(seeds=SEED_SETS[seeds])
-        elif source == "db":
-            if publish:
-                raise ValueError("publishing is only available for synthetic holdout personas")
-            result = asyncio.run(_run_backtest(_settings(), source=source))
-        else:
-            raise ValueError("source is personas or db")
-    except ValueError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(code=2) from exc
-    typer.echo(format_report(result))
-    if publish:
-        try:
-            publish_report(result, REPO_ROOT / "README.md")
-        except ValueError as exc:
-            typer.echo(f"error: {exc}", err=True)
-            raise typer.Exit(code=2) from exc
-        typer.echo("README.md updated.")
-
-
-async def _run_repair_openings(settings: Settings, *, dry_run: bool) -> list[dict[str, Any]]:
-    from arno.importers.repair import repair_openings
-
-    async with connect(settings.database_url) as conn:
-        return await repair_openings(conn, dry_run=dry_run)
-
-
-@app.command("repair-openings")
-def repair_openings_command(
-    dry_run: bool = typer.Option(
-        False, "--dry-run", help="Print what would change, in aggregate, and write nothing."
-    ),
-    yes: bool = typer.Option(False, "--yes", help="Apply without asking."),
-) -> None:
-    """Place each committed import's opening at its statement's first day.
-
-    For a ledger written before the commit path booked openings: every date a statement covered
-    read short by its printed opening. Run it once after upgrading; it is idempotent.
-    """
-    from arno.importers.repair import format_changes
-
-    settings = _settings()
-    preview = asyncio.run(_run_repair_openings(settings, dry_run=True))
-    if not preview:
-        typer.echo(
-            "Nothing to repair: every import with an evidenced opening already has it at its "
-            "statement's first day."
-        )
-        return
-    typer.echo(format_changes(preview))
-    if dry_run:
-        typer.echo("Dry run: nothing written.")
-        return
-    if not yes and not typer.confirm(f"Apply these {len(preview)} repair(s)?"):
-        typer.echo("Nothing written.")
-        raise typer.Exit(code=1)
-    applied = asyncio.run(_run_repair_openings(settings, dry_run=False))
-    typer.echo(format_changes(applied))
-    typer.echo("Repaired. Undo an import from the Imports screen to reverse its repair too.")
-
-
-@app.command("hackerrank")
-def hackerrank_command(
-    dataset: Path | None = typer.Option(  # noqa: B008
-        None, "--dataset", help="The local dataset folder. It is never committed."
-    ),
-    publish: bool = typer.Option(
-        False, "--publish/--no-publish", help="Replace the README HackerRank section."
-    ),
-    runs: int | None = typer.Option(
-        None,
-        "--runs",
-        min=1,
-        help="Seeded scenarios. Defaults to the production projection count.",
-    ),
-) -> None:
-    """Score the engine on the 25 labeled HackerRank 'Buy or Wait' samples, locally."""
-    from arno.engine.hackerrank import format_report, publish_report, score
-
-    try:
-        result = score(dataset) if runs is None else score(dataset, runs=runs)
-    except FileNotFoundError as exc:
-        typer.echo(f"error: HackerRank dataset file missing: {exc.filename}", err=True)
-        raise typer.Exit(code=3) from exc
-    typer.echo(format_report(result))
-    if not result.get("available"):
-        raise typer.Exit(code=3)
-    if publish:
-        publish_report(result, REPO_ROOT / "README.md")
-        typer.echo("README.md updated.")
-
-
 async def _export(settings: Settings, *, format: str) -> Any:
     async with connect(settings.database_url) as conn:
         if format == "json":
@@ -689,36 +245,6 @@ def export_command(
         typer.echo(f"wrote {out}")
 
 
-async def _restore(
-    *,
-    from_dir: Path | None,
-    repository: str | None,
-    target_dsn: str,
-    snapshot: str,
-    force: bool,
-    require_manifest: bool,
-) -> Any:
-    from arno.backup_restore import RestoreError, restore_from_directory, restore_from_restic
-
-    if from_dir is not None:
-        return await restore_from_directory(
-            from_dir,
-            target_dsn,
-            force=force,
-            require_manifest=require_manifest,
-        )
-    if repository is None:
-        raise RestoreError("a restic restore needs --repository or RESTIC_REPOSITORY")
-    return await restore_from_restic(
-        repository=repository,
-        password=os.environ.get("RESTIC_PASSWORD", ""),
-        target_dsn=target_dsn,
-        snapshot=snapshot,
-        force=force,
-        require_manifest=require_manifest,
-    )
-
-
 @app.command("restore")
 def restore_command(
     target: str | None = typer.Option(
@@ -727,11 +253,6 @@ def restore_command(
         envvar="RESTORE_DATABASE_URL",
         help="Fresh database URL to restore into. Defaults to DATABASE_URL.",
     ),
-    from_dir: Path | None = typer.Option(  # noqa: B008
-        None,
-        "--from-dir",
-        help="A directory already extracted from a restic snapshot.",
-    ),
     repository: str | None = typer.Option(
         None, "--repository", envvar="RESTIC_REPOSITORY", help="The restic repository."
     ),
@@ -739,108 +260,32 @@ def restore_command(
     force: bool = typer.Option(
         False, "--force", help="Replace the target database if it already has tables."
     ),
-    allow_no_manifest: bool = typer.Option(
-        False,
-        "--allow-no-manifest",
-        help="Accept a dump without backup_manifest.json (manual pg_dump restores only).",
-    ),
 ) -> None:
-    """Restore a backup and verify every table, then the ledger's balances.
+    """Restore a restic snapshot with `restic dump | pg_restore`, then verify the ledger.
 
-    With `--repository`, restic is used directly. With `--from-dir`, point at files extracted by
-    `restic restore`. The restic password always comes from RESTIC_PASSWORD.
+    The restic password always comes from RESTIC_PASSWORD.
     """
-    from arno.backup_restore import RestoreError
+    from arno.backup_restore import RestoreError, restore_from_restic
 
-    settings = _settings()
-    target_dsn = target or settings.database_url
-    if from_dir is None and not repository:
-        typer.echo(
-            "error: pass --repository, set RESTIC_REPOSITORY, or use --from-dir",
-            err=True,
-        )
+    if not repository:
+        typer.echo("error: pass --repository or set RESTIC_REPOSITORY", err=True)
         raise typer.Exit(code=2)
     try:
-        report = asyncio.run(
-            _restore(
-                from_dir=from_dir,
+        checks = asyncio.run(
+            restore_from_restic(
                 repository=repository,
-                target_dsn=target_dsn,
+                password=os.environ.get("RESTIC_PASSWORD", ""),
+                target_dsn=target or _settings().database_url,
                 snapshot=snapshot,
                 force=force,
-                require_manifest=not allow_no_manifest,
             )
         )
     except RestoreError as exc:
         typer.echo(f"restore failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    payload = report.as_dict()
-    typer.echo(
-        f"restored {payload['dump']} from {payload['snapshot']} into {payload['restored_database']}"
-    )
-    for name, passed in report.checks.items():
+    for name, passed in checks.items():
         typer.echo(f"  {'ok' if passed else 'FAIL'}  {name}")
-    for mismatch in report.mismatches:
-        typer.echo(f"  mismatch: {mismatch}", err=True)
-    typer.echo("restore verified" if report.ok else "restore verification FAILED")
-    if not report.ok:
-        raise typer.Exit(code=1)
-
-
-@app.command("import-spike")
-def import_spike(
-    folder: Path = typer.Argument(  # noqa: B008
-        Path("private/statements"), help="Git-ignored folder with bank subfolders."
-    ),
-    bank: str | None = typer.Option(None, help="sbi, union, or slice. Omit for all three."),
-    password: str | None = typer.Option(
-        None, envvar="STATEMENT_PASSWORD", help="Statement password; never written anywhere."
-    ),
-    ledger_opening: int | None = typer.Option(
-        None, help="Opening balance in paise when the bank statement does not print one."
-    ),
-    write: bool = typer.Option(
-        True, "--write/--no-write", help="Write private/import-spike-results.md."
-    ),
-) -> None:
-    """Milestone 21: a fresh parse run per bank, then rerun the parser on the rest.
-
-    It prints counts and status words only. The synthetic fixtures always run; real files run
-    only when they are in a git-ignored folder.
-    """
-    from arno.importers.spike import SpikeReport, run_real, run_synthetic
-
-    synthetic = run_synthetic()
-    if bank and bank not in {"sbi", "union", "slice"}:
-        raise typer.BadParameter("bank is sbi, union, or slice")
-    real: list[Any] = []
-    notes: list[str] = []
-    if folder.is_dir():
-        if password is None and any(folder.iterdir()):
-            password = typer.prompt(
-                "Statement password (blank if none)", hide_input=True, default=""
-            )
-        real, notes = run_real(
-            folder,
-            password=password or None,
-            bank=bank,
-            ledger_opening_paise=ledger_opening,
-        )
-    else:
-        notes = [f"No real statement folder at {folder}; the real spike is not run."]
-    report = SpikeReport(
-        synthetic=synthetic,
-        real=real,
-        real_root=str(folder) if real else None,
-        notes=notes,
-    )
-    text = report.markdown()
-    typer.echo(text)
-    if write:
-        target = Path("private/import-spike-results.md")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
-        typer.echo(f"wrote {target}")
+    typer.echo(f"restored {snapshot}; restore verified")
 
 
 async def _demo_seed(

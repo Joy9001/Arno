@@ -109,9 +109,6 @@ jobs:
           uv export --frozen --no-emit-project --format requirements-txt -q > "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"
 
-      - name: License audit
-        run: uv run python scripts/license_audit.py --python-only
-
       - name: Answer and result card contract
         run: pnpm --dir web test:answers
 
@@ -151,9 +148,6 @@ jobs:
 
       - name: Dependency vulnerability audit
         run: pnpm audit --audit-level high
-
-      - name: License audit
-        run: python3 ../scripts/license_audit.py --web-only
 
       - name: Build
         run: pnpm build

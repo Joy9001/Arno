@@ -60,7 +60,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## restic
 
-The backup sidecar image ships restic.
+The Arno image ships restic.
 
 BSD 2-Clause License
 
@@ -103,8 +103,7 @@ These are installed from PyPI and carry their own license files in the image:
 ## Python runtime dependencies
 
 Every Python distribution installed by `uv sync` ships its own license file in the image, under
-its `.dist-info` directory. The direct dependencies below are the ones Arno chooses; the
-audit in `scripts/license_audit.py` covers every transitive package too.
+its `.dist-info` directory. The direct dependencies below are the ones Arno chooses.
 
 | Package | License |
 |---|---|
@@ -171,9 +170,9 @@ The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix 
 
 The build writes the complete license text of every resolved web package to
 `/THIRD_PARTY_NOTICES.txt`, which the app serves at that path and which ships in the image.
-`scripts/license_audit.py` fails the build on a GPL, AGPL, SSPL, Elastic, or unknown license in
-the application's Python and web dependencies. It does not audit the base image's Debian
-packages or the separate container images.
+Only permissive licenses ship: no GPL, AGPL, SSPL, or Elastic code is in the application's
+Python and web dependencies, checked by hand when a dependency changes. This does not cover the
+base image's Debian packages or the separate container images.
 
 ## Web fonts
 
@@ -193,35 +192,16 @@ identifier below was checked against the official `LICENSE` file for the pinned 
 
 | Image | License |
 |---|---|
-| `postgres:18.6` (database, Phoenix init, API tools) | PostgreSQL License |
-| `arno-phoenix-cost:21.0.0`, based on pinned `arizephoenix/phoenix:21.0` | Elastic License 2.0 (ELv2); source, patch, and license stay in the separate service image |
+| `postgres:18.6` (database) | PostgreSQL License |
+| `arizephoenix/phoenix:21.0` (optional `obs` profile, stock image) | Elastic License 2.0 (ELv2); stays in the separate service image, outside the Arno image |
 | `ollama/ollama:0.12.6` (optional `local-llm` profile) | MIT |
-| `arno-whisper:1.9.5-cpu` and `arno-whisper:1.9.5-gpu` (optional `local-stt` profile) | MIT for Arno packaging and whisper.cpp; `ffmpeg` LGPL-2.1-or-later, built from source without GPL parts; CUDA libraries retain NVIDIA licenses |
 | `ghcr.io/joy9001/arno` (this repository) | MIT for Arno code; bundled dependencies as listed above |
-| `ghcr.io/joy9001/arno-backup` (this repository) | MIT for Arno code; `restic` BSD-2-Clause, `jq` MIT |
-
-## Local speech-to-text
-
-The optional `local-stt` profile copies a prebuilt native server and its ggml/Whisper libraries
-from the pinned official whisper.cpp images, builds FFmpeg from the official release tarball, then
-downloads the weights and VAD model on first start. None of these are part of the Arno application
-image.
-
-| Component | License |
-|---|---|
-| `ghcr.io/ggml-org/whisper.cpp` at commit `d1be6fd` (v1.9.5), CPU and CUDA images | MIT |
-| Whisper small and large-v3-turbo GGML weights from `ggerganov/whisper.cpp` at revision `5359861` | MIT (OpenAI Whisper) |
-| Silero VAD `ggml-silero-v5.1.2.bin` from `ggml-org/whisper-vad` | MIT (Silero VAD) |
-| `nvidia/cuda:13.0.0-base-ubuntu22.04` and cuBLAS libraries copied from the pinned upstream CUDA image | NVIDIA CUDA Toolkit license; full EULA in `/usr/share/doc/cuda-cudart-13-0/copyright`, container license in `/NGC-DL-CONTAINER-LICENSE` |
-| NCCL libraries copied from the pinned upstream CUDA image | BSD-3-Clause; package notices ship in `/licenses/nccl/` |
-| `ffmpeg` 9.0.2 built from the official `https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz` (SHA-256 `8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e`), shared build with `--disable-autodetect` and no `--enable-gpl`, `--enable-version3`, `--enable-nonfree`, or `--enable-lib*` | LGPL-2.1-or-later; `COPYING.LGPLv2.1` and the build configuration ship in `/licenses/ffmpeg/` |
 
 ## Base images and build tools
 
 - Python (`python:3.14-slim`) — PSF-2.0, plus Debian packages under their own licenses.
 - Node (`node:24-alpine`) and pnpm — MIT, used only in the build stage.
 - `uv` — Apache-2.0 or MIT, used only in the build stage.
-- `jq` in the backup image — MIT.
 - Tailscale is installed on the host, not in the image, under its own license.
 
 ## XlsxWriter

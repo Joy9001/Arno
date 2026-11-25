@@ -12,12 +12,12 @@ import pytest
 
 from arno.importers.baselines import recompute_baselines
 from arno.importers.commit import undo_import
-from arno.importers.synthetic import seed_committed_statement
 from arno.ledger.accounts import create_account
 from arno.ledger.movements import correct_movement, record_expense
 from arno.ledger.payees import create_payee
 from arno.tools import periods
 from arno.tools import read as read_tools
+from tests.fixtures.synthetic_statements import seed_committed_statement
 
 # 2026-11-11 is a Wednesday, so the open week has run for three days and last week is whole.
 WEDNESDAY = date(2026, 11, 11)

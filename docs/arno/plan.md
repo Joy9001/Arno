@@ -150,11 +150,11 @@ The following table states the non-functional targets:
 | Scale | One user for each instance; see [scale assumptions](architecture.md#scale-assumptions) |
 | Latency | Backend trace targets are about 2 s to first streamed output, about 5 s for a single-lookup answer, and about 15 s for a multistep what-if on a cloud model (current measured eval median is 23.4 s; tracked in [`completion-checklist.md`](completion-checklist.md)) |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or VPS |
-| Durability | Daily encrypted off-site `pg_dump` through restic with a verified restore drill |
+| Durability | Daily encrypted `pg_dump` through restic, run inside the API, with off-site targets and a verified `arno restore` drill |
 | Security | Private Tailscale network only, WebAuthn passkey login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an access-restricted table for native ChatGPT sign-in tokens |
 | Privacy | Per-role provider switch; only configured inference requests, encrypted backups, and contentless push pings leave the host |
 | Honesty | Tools distinguish zero from unknown and report data age, coverage gaps, and source IDs |
-| Measured quality | Published agent eval `pass^3` scorecards, synthetic projection backtests, and HackerRank "Buy or Wait" scores ([success measures](architecture.md#success-measures)) |
+| Measured quality | The agent eval suite with `pass^3` grading ([success measures](architecture.md#success-measures)) |
 | Autonomy | The agent starts no write on its own except saving visible, undoable memories, and never moves money |
 
 ### Constraints
@@ -183,13 +183,13 @@ The following table records the build-versus-buy decision for each component:
 | Agent loop, tool calling, streaming | Buy: PydanticAI + `pydantic-ai-harness` | Harness capabilities, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
 | Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
 | Statement layout parsing | Build: agent-written Monty parsers saved per layout | Avoids maintaining bank-specific scrapers ([`specs/import.md`](specs/import.md)) |
-| Speech-to-text | Buy: OpenAI-compatible STT endpoint | Local `whisper.cpp` server (`local-stt` profile) or cloud API |
+| Speech-to-text | Buy: OpenAI-compatible STT endpoint | Cloud API, or any self-hosted OpenAI-compatible server you run yourself (`STT_BASE_URL`); no bundled server |
 | Textless-page PDF vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role for scanned PDF pages during statement imports |
 | Passkeys and web push | Buy: `py_webauthn`, `pywebpush` | Standard cryptographic and WebAuthn protocols |
 | Private HTTPS access | Buy: Tailscale (`tailscale serve`) | End-to-end encrypted tailnet access with zero public exposure |
 | Off-site backups | Buy: restic (with rclone) | Encrypted, deduplicated backups to S3-compatible or cloud targets |
 | Agent evaluations | Buy: `pydantic_evals` | Runs the production agent directly against cloned test databases |
-| Observability | Buy: Arize Phoenix + OpenTelemetry SDK | Native PydanticAI spans export over OTLP/HTTP to a pinned supplied-cost Phoenix build ([`operations/observability.md`](operations/observability.md)) |
+| Observability | Buy: Arize Phoenix + OpenTelemetry SDK | Native PydanticAI spans export over OTLP/HTTP to stock Phoenix on SQLite (`--profile obs`, off by default); the Postgres cost journal stays the cost source of truth ([`operations/observability.md`](operations/observability.md)) |
 | Double-entry ledger core | Buy: vendored `pgledger` | MIT-licensed pure Postgres SQL with idempotency keys |
 | Ledger mapping, projection engine, patterns | Build | Core product differentiator ([`specs/data-and-engine.md`](specs/data-and-engine.md)) |
 
@@ -209,20 +209,20 @@ The following table records the stack for each layer:
 | Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
 | Background jobs | Plain `jobs` table + single API-process loop | Zero broker overhead; jobs persist in every `pg_dump` |
 | Web interface | Vite, React, `@assistant-ui/*`, `@radix-ui/themes`, Radix Primitives, `motion`, `Recharts`, `zustand` | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
-| Deployment | Docker Compose (`db`, `api`, `backup`, `phoenix`; optional `local-llm` and `local-stt`) | Single host deployment; loopback-only ports behind Tailscale |
-| License | MIT (application code) | Separate Phoenix image carries Elastic License 2.0 outside the Arno image; all direct dependencies audited in CI |
+| Deployment | Docker Compose (`db`, `api`; optional `local-llm` and `obs`) | Single host deployment; loopback-only ports behind Tailscale |
+| License | MIT (application code) | Stock Phoenix (`obs` profile) carries Elastic License 2.0 outside the Arno image; direct dependencies are checked by hand against the permissive-only rule |
 
 ### Provider switch and inference accounting
 
 Every model role (`CHAT`, `PARSE`, `BATCH`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses
 environment variables for endpoint, model ID, provider, and billing mode (`metered`, `local`, or
 `reported`). Exact dated model IDs are pinned rather than floating aliases, and model changes
-re-run the eval scorecard.
+re-run the eval suite.
 
-The design target is a frontier model; local models (such as Ollama and `whisper.cpp`) remain
-supported through the same code path, with their capabilities measured on the eval scorecard.
+The design target is a frontier model; local models (such as Ollama) remain
+supported through the same code path, with their capabilities measured by the eval suite.
 Cost accounting uses native PydanticAI usage, `genai-prices`, narrow reported-billing adapters,
-explicit zero for local models, and the pinned Phoenix build as the sole cost dashboard
+explicit zero for local models, and the Postgres spend ledger as the cost source of truth
 ([`specs/cost-tracking.md`](specs/cost-tracking.md)).
 
 ---
@@ -241,7 +241,7 @@ CLI (on host) ──┴── HTTPS over tailnet ──>   FastAPI: static web, 
                                              job loop: briefings, reminders, patterns, risk, recaps, replay
                                                    │  └── native OTLP spans ──> [Phoenix]
                                                    v
-                                             [Postgres 18] ── pg_dump ──> [backup sidecar] ── restic ──> off-site
+                                             [Postgres 18] <── pg_dump | restic (daily job in API) ──> off-site
 ```
 
 ### Architecture rules
@@ -274,14 +274,14 @@ owner-setup, and human ship gates are tracked in
 ### L0: Foundations
 
 1. Repository layout, `pyproject.toml`, `src/arno/`, `web/`, and `compose.yaml`.
-2. PostgreSQL 18 with numbered transactional SQL migrations (`schema_version`) and five isolated
-   roles (`postgres`, `app`, `agent_ro`, `backup`, `phoenix`), with `app` demoted to non-superuser.
+2. PostgreSQL 18 with numbered transactional SQL migrations (`schema_version`) and four isolated
+   roles (`postgres`, `app`, `agent_ro`, `backup`), with `app` demoted to non-superuser.
 3. Vendored `pgledger` core with `THIRD_PARTY_NOTICES.md` and integer-paise schema.
 4. Static web shell and `/api/health` served behind `tailscale serve` under a strict content
    security policy.
 5. Passkey authentication: first-run enrollment link and terminal QR code, WebAuthn sessions,
    device management in Settings, and host-CLI passkey reset.
-6. CI pipeline: Ruff, Pyrefly, pytest against Postgres with model requests blocked, license audit,
+6. CI pipeline: Ruff, Pyrefly, pytest against Postgres with model requests blocked,
    web lint/typecheck/build, and answer-contract tests.
 
 ### L1: Ledger
@@ -294,7 +294,8 @@ owner-setup, and human ship gates are tracked in
 10. Goals with fenced savings, reducible categories, and learned categorization rules.
 11. Audit log with undo for every write and full data export (CSV, JSON excluding secrets, and
     `pg_dump`).
-12. Encrypted off-site backup sidecar (`pg_dump` + manifest + restic) and verified `arno restore`.
+12. Encrypted daily backup inside the API (`pg_dump` piped to restic, off-site targets through
+    `RESTIC_*`) and verified `arno restore`.
 13. Deterministic synthetic demo persona (`arno demo seed`) for demos, tests, and eval templates.
 
 ### L2: Agent
@@ -310,7 +311,7 @@ owner-setup, and human ship gates are tracked in
 18. Agent-managed typed memories (`preference`, `fact`, `rule`) with inline undo cards and Settings
     management.
 19. Agent-led setup conversation for accounts, income, obligations, goals, floor, and baselines.
-20. Host CLI (`arno`) for chat, migrations, setup, exports, backups, and diagnostics.
+20. Host CLI (`arno`) for migrations, setup, exports, restore, passkeys, and demo seeding.
 
 ### L3: Import and recaps
 
@@ -327,9 +328,8 @@ owner-setup, and human ship gates are tracked in
 
 ### L4: Evals
 
-25. `pydantic_evals` suite (145 cases on the demo persona, cloned database per trial, `pass^3`
-    grading, 50 injection notes, Hindi/Hinglish/voice tags).
-26. Published model scorecards in [`README.md`](../../README.md#agent-evals) via `arno eval`.
+25. `pydantic_evals` suite (84 cases on the demo persona, cloned database per trial, `pass^3`
+    grading, Hindi/Hinglish/voice tags), run from Python through `evals.runner.run_eval`.
 
 ### L5: Projection and pattern engine
 
@@ -337,11 +337,6 @@ owner-setup, and human ship gates are tracked in
     cycles, fenced goals, high-confidence detected series, and whole-day resampled spend.
 28. Critical-value affordability verdicts (`yes`, `yes-but`, `no`) with up to four minimal
     same-date tradeoff plans verified on the same scenarios.
-29. Synthetic holdout backtest against four baselines (including `empirical_flat`) published in
-    `README.md`, plus local `arno backtest --source db` once the real ledger has 90 days of linked
-    confirmed income.
-30. HackerRank "Buy or Wait" adapter over the shipped engine (86.8% on 25 labeled local samples,
-    published in `README.md`).
 31. Inline projection and verdict chart cards with source citations and a Timeline view.
 
 ### L6: Watch
@@ -354,15 +349,15 @@ owner-setup, and human ship gates are tracked in
 
 ### L7: Capture
 
-35. Push-to-talk voice notes through OpenAI-compatible STT (local `whisper.cpp` with Silero VAD or
-    cloud) into chat.
+35. Push-to-talk voice notes through OpenAI-compatible STT (a cloud API or a self-hosted
+    server you run) into chat.
 36. Isolated vision extraction for receipts and UPI screenshots (instant undoable transaction with
     stored image) and Android PWA share-target support.
 
 ### L8: Ship
 
 37. Fresh-machine off-site restore drill using only the recovery kit and `RESTIC_PASSWORD`.
-38. Security pass: threat model, dependency and license audits, strict CSP, and secret redaction.
+38. Security pass: threat model, dependency and license review, strict CSP, and secret redaction.
 39. Complete self-hosting guide, MIT license, and versioned GHCR container images.
 40. Second-person installation from [`operations/self-hosting.md`](operations/self-hosting.md) alone.
 41. Four weeks of daily use by the owner without falling back to mental math or a spreadsheet.
@@ -407,11 +402,11 @@ specifications under [`specs/`](specs/) and [`operations/`](operations/).
   check quiet enough to keep visible (or turn into tappable citations), what are real token counts
   and prompt-cache hit rates, how often do confirm cards appear, and should the 5 s / 15 s latency
   targets be revised against measured cloud-model latency?
-- **Local chat models (L2/L4):** Which local Ollama models pass the eval scorecard on practical
+- **Local chat models (L2/L4):** Which local Ollama models pass the eval suite on practical
   hardware?
 - **Union Bank statements (L3):** What file format and layout does Union Bank export, and does a
   saved Monty parser handle it cleanly?
-- **Hinglish speech recognition (L7):** How does local `whisper.cpp` compare against cloud STT (or
+- **Hinglish speech recognition (L7):** How does a self-hosted Whisper-class server compare against cloud STT (or
   Qwen3-ASR) on real owner Hinglish audio, and does `STT_PAYEE_CONTEXT=1` measurably improve
   merchant recognition?
 

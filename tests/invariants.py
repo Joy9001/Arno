@@ -264,9 +264,7 @@ async def _load_ledger(
 
 async def _check_balances(conn: Connection) -> None:
     """Reuse the restore drill's two ledger checks, then confirm entries match their transfer."""
-    checks, mismatches = await verify_database(
-        conn, manifest=None, dump_sha256=None, require_manifest=False
-    )
+    checks = await verify_database(conn)
     _expect(
         checks.get("ledger_transfers_balance", False),
         "ledger_transfer_unbalanced",
@@ -279,8 +277,6 @@ async def _check_balances(conn: Connection) -> None:
         "pgledger_accounts.balance differs from the sum of that account's entries",
         await _drifted_account_ids(conn),
     )
-    if mismatches:
-        _expect(False, "backup_verification", "; ".join(mismatches))
 
     rows = await conn.fetch(
         """

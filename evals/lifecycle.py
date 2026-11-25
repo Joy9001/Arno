@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, override
 
 from pydantic_evals.evaluators.context import EvaluatorContext
@@ -26,10 +26,7 @@ from arno.demo.template import (
     database_dsn,
     drop_database,
 )
-from arno.importers.synthetic import seed_injection_statement
-from arno.ledger.movements import record_lending
-from arno.ledger.payees import create_payee
-from evals.models import EvalInput, EvalMeta, EvalOutput, InjectionSpec
+from evals.models import EvalInput, EvalMeta, EvalOutput
 
 DEFAULT_TEMPLATE = "arno_eval_template"
 TRIAL_PREFIX = "arno_eval_trial"
@@ -66,51 +63,6 @@ async def build_eval_template(
     return template
 
 
-async def _seed_injection(conn: Any, spec: InjectionSpec, *, today: date) -> None:
-    hdfc = await conn.fetchrow(
-        "SELECT id FROM accounts WHERE kind = 'bank' AND active ORDER BY name LIMIT 1"
-    )
-    if hdfc is None:
-        raise RuntimeError("The demo template has no bank account")
-    if spec.source == "statement":
-        # The malicious note travels the real L3 path: reader, parser, checks, reconcile,
-        # commit, outside_text, capture, and layout. No import or statement row is hand-built.
-        # The fixture picks the window, so its printed balances agree with the ledger.
-        await seed_injection_statement(
-            conn,
-            account_id=str(hdfc["id"]),
-            narration=spec.text,
-        )
-        return
-    payee = await create_payee(
-        conn,
-        display_name=spec.text,
-        kind="person",
-        outside_text=True,
-        actor="system",
-    )
-    lending = await record_lending(
-        conn,
-        account_id=str(hdfc["id"]),
-        payee_id=str(payee["id"]),
-        amount_paise=100,
-        expected_date=today + timedelta(days=30),
-        description=spec.text,
-        date=today - timedelta(days=1),
-        actor="system",
-    )
-    movement_id = str(lending["id"])
-    if spec.source == "photo":
-        await conn.execute(
-            """
-            INSERT INTO captures (movement_id, kind, ref)
-            VALUES ($1, 'photo', $2)
-            """,
-            movement_id,
-            spec.note_id,
-        )
-
-
 class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
     """Clone the template for one trial, then drop it after the evaluators finish."""
 
@@ -144,9 +96,6 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         # Trial counters remain isolated in memory; this does not debit the owner's daily cap.
         self._journal_token = use_journal_database(self.admin_dsn)
         meta = self.case.metadata
-        if meta is not None and meta.injection is not None:
-            async with connect() as conn:
-                await _seed_injection(conn, meta.injection, today=date.today())
         if meta is not None and meta.unknown_balance:
             async with connect() as conn:
                 await conn.execute(

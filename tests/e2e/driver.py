@@ -1,10 +1,10 @@
 """A reusable driver for real user journeys against a real, running Arno.
 
-The terminal `arno chat` runs the agent in the caller's process, so it cannot do what a
-browser does: upload a statement, answer a confirm card, review and commit an import, or show the
-cards and tool calls a turn produced. This driver speaks the same HTTP the web app speaks, to a
-server it starts itself on a scratch database, and keeps its session in a small state file so
-separate shell invocations continue the same conversation.
+Unit tests call the agent in the test process, so they cannot do what a browser does: upload a
+statement, answer a confirm card, review and commit an import, or show the cards and tool calls a
+turn produced. This driver speaks the same HTTP the web app speaks, to a server it starts itself
+on a scratch database, and keeps its session in a small state file so separate shell invocations
+continue the same conversation.
 
     uv run python -m tests.e2e.driver up --port 8123 --seed demo
     uv run python -m tests.e2e.driver chat "How much did I spend on food last month?"

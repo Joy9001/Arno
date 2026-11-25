@@ -2,23 +2,16 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import date
 from typing import Any
 
-from typer.testing import CliRunner
-
-from arno.cli import app as cli_app
 from arno.importers.balance_plan import (
     BalanceReviewSnapshot,
-    adjust_closing,
     plan_balances,
     resolve_balance_window,
 )
 from arno.importers.commit import commit_import, undo_import
-from arno.ledger import movements as movements_mod
 from arno.ledger.accounts import create_account, set_statement_balance
-from arno.ledger.audit import new_id
 from arno.ledger.common import ledger_balance
 from arno.tools.projection import _balance_at
 from tests.fixtures.import_review import review_statement
@@ -443,182 +436,6 @@ async def test_a_card_backfill_keeps_the_ledger_sign(ledger):
     assert await check_ledger(ledger) == []
 
 
-# --- the repair for ledgers written before the fix --------------------------------------------
-
-
-async def _legacy_import(
-    conn,
-    account: dict[str, Any],
-    *,
-    start: date,
-    end: date,
-    opening: int,
-    rows: list[dict[str, Any]],
-    closing: int,
-) -> str:
-    """The state the old commit path left: the opening absorbed into the adjustment at the end.
-
-    Rows and a closing adjustment only; nothing places the printed opening.
-    """
-    groups: list[str] = []
-    for row in rows:
-        day = date.fromisoformat(str(row["date"]))
-        if row["debit"]:
-            record = await movements_mod.record_expense(
-                conn,
-                account_id=account["id"],
-                amount_paise=int(row["debit"]),
-                description=str(row["description"]),
-                date=day,
-                apply_rules=False,
-            )
-        else:
-            record = await movements_mod.record_income(
-                conn,
-                account_id=account["id"],
-                amount_paise=int(row["credit"]),
-                description=str(row["description"]),
-                date=day,
-            )
-        groups.append(str(record["undo_id"]))
-    adjustment_group, _difference = await adjust_closing(
-        conn, account=account, closing=closing, day=end
-    )
-    if adjustment_group:
-        groups.append(adjustment_group)
-    import_id = await new_id(conn, "imp")
-    await conn.execute(
-        """
-        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
-                             opening_balance_paise, closing_balance_paise, check_result,
-                             check_status, review, commit_groups, committed_at)
-        VALUES ($1, $2, 'committed', $3, $4, $5, $6, $7, $8, 'VERIFIED', '{}'::jsonb, $9,
-                now())
-        """,
-        import_id,
-        f"hash-{import_id}",
-        account["id"],
-        start,
-        end,
-        opening,
-        closing,
-        {
-            "opening_source": "printed",
-            "opening_paise": opening,
-            "closing_paise": closing,
-        },
-        groups,
-    )
-    return import_id
-
-
-async def test_the_repair_dry_run_writes_nothing_and_the_apply_fixes_the_history(ledger):
-    from arno.importers.repair import repair_openings
-
-    account = await _stated_bank(ledger)
-    before_import = await _curve(ledger, account)
-    import_id = await _legacy_import(
-        ledger,
-        account,
-        start=BANK_START,
-        end=BANK_END,
-        opening=BANK_OPENING,
-        rows=BANK_ROWS,
-        closing=BANK_CLOSING,
-    )
-    broken = await _curve(ledger, account)
-    # The bug: the first year is short by the printed opening.
-    assert await _balance_on(ledger, account, date(2026, 1, 15)) == 100_000
-
-    preview = await repair_openings(ledger, dry_run=True)
-    assert await _curve(ledger, account) == broken
-    assert [row["import_id"] for row in preview] == [import_id]
-    assert preview[0]["account"] == "SBI savings"
-    assert preview[0]["opening_paise"] == BANK_OPENING
-    assert preview[0]["period_start"] == BANK_START
-    assert preview[0]["period_end"] == BANK_END
-
-    applied = await repair_openings(ledger, dry_run=False)
-    assert applied == preview
-    for day in (BANK_START, date(2026, 1, 15), BANK_END):
-        assert await _balance_on(ledger, account, day) == _running(BANK_ROWS, BANK_OPENING, day)
-    assert await _balance_on(ledger, account, BANK_END) == BANK_CLOSING
-
-    # Idempotent: a second run finds nothing left to move.
-    assert await repair_openings(ledger, dry_run=False) == []
-
-    # Undoing the repaired import puts the ledger back exactly as it was before the import.
-    await undo_import(ledger, import_id)
-    assert await _curve(ledger, account) == before_import
-    assert await check_ledger(ledger) == []
-
-
-async def test_the_repair_walks_a_chain_of_imports_in_statement_order(ledger):
-    from arno.importers.repair import repair_openings
-
-    account = await _stated_bank(ledger)
-    first_rows = [
-        _row("2025-12-15", "NEFT CR/SALARY", credit=80_000, balance=280_000),
-        _row("2026-01-20", "UPI/DR/9/RENT", debit=30_000, balance=250_000),
-    ]
-    second_rows = [
-        _row("2026-05-10", "UPI/DR/8/BILL", debit=20_000, balance=230_000),
-    ]
-    await _legacy_import(
-        ledger,
-        account,
-        start=date(2025, 12, 1),
-        end=date(2026, 2, 28),
-        opening=BANK_OPENING,
-        rows=first_rows,
-        closing=250_000,
-    )
-    await _legacy_import(
-        ledger,
-        account,
-        start=date(2026, 3, 1),
-        end=date(2026, 6, 30),
-        opening=250_000,
-        rows=second_rows,
-        closing=230_000,
-    )
-
-    await repair_openings(ledger, dry_run=False)
-
-    assert await _balance_on(ledger, account, date(2025, 12, 1)) == BANK_OPENING
-    assert await _balance_on(ledger, account, date(2026, 1, 20)) == 250_000
-    assert await _balance_on(ledger, account, date(2026, 3, 1)) == 250_000
-    assert await _balance_on(ledger, account, date(2026, 5, 10)) == 230_000
-    # The stated balance was dated after both statements, so it still holds.
-    assert await _balance_on(ledger, account, BANK_END) == BANK_CLOSING
-    assert await check_ledger(ledger) == []
-
-
-async def test_the_repair_command_prints_what_it_would_change(ledger):
-    from arno.importers.repair import repair_openings
-
-    account = await _stated_bank(ledger)
-    await _legacy_import(
-        ledger,
-        account,
-        start=BANK_START,
-        end=BANK_END,
-        opening=BANK_OPENING,
-        rows=BANK_ROWS,
-        closing=BANK_CLOSING,
-    )
-    broken = await _curve(ledger, account)
-
-    result = await asyncio.to_thread(CliRunner().invoke, cli_app, ["repair-openings", "--dry-run"])
-
-    assert result.exit_code == 0, result.output
-    assert "SBI savings" in result.output
-    assert f"{BANK_START.isoformat()} to {BANK_END.isoformat()}" in result.output
-    assert "nothing written" in result.output.lower()
-    assert await _curve(ledger, account) == broken
-    assert await repair_openings(ledger, dry_run=False) != []
-
-
 # --- the shared balance plan -------------------------------------------------------------------
 
 
@@ -696,41 +513,3 @@ async def test_plan_uses_one_closing_and_period_end_for_review_and_commit(ledger
     assert plan.period_end == date(2026, 1, 15)
     assert plan.closing_adjustment_paise == 10_000
     assert plan.stated_balance is None
-
-
-async def test_repair_books_nonzero_closing_difference_and_skips_undone(ledger):
-    from arno.importers.repair import _repair_one, repair_openings
-    from arno.ledger.movements import record_expense
-
-    account = await _stated_bank(ledger)
-    import_id = await _legacy_import(
-        ledger,
-        account,
-        start=BANK_START,
-        end=BANK_END,
-        opening=BANK_OPENING,
-        rows=BANK_ROWS,
-        closing=BANK_CLOSING,
-    )
-    # A manual expense dated inside the statement period creates a non-zero closing difference.
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=50_000,
-        description="Cash ATM fee",
-        date=date(2026, 1, 20),
-    )
-
-    preview = await repair_openings(ledger, dry_run=True)
-    assert len(preview) == 1
-    assert preview[0]["replaced_adjustment_paise"] == 50_000
-
-    applied = await repair_openings(ledger, dry_run=False)
-    assert applied == preview
-    assert await _balance_on(ledger, account, BANK_END) == BANK_CLOSING
-
-    # Re-calling _repair_one on an already-repaired or undone import is a no-op under the lock.
-    assert await _repair_one(ledger, {"id": import_id}) is None
-    await undo_import(ledger, import_id)
-    assert await _repair_one(ledger, {"id": import_id}) is None
-    assert await check_ledger(ledger) == []

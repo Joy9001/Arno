@@ -78,7 +78,7 @@ def _rebuilt_counts() -> dict[str, int]:
 
 BACKUP_POLICY = (
     "restic keeps 7 daily and 4 weekly snapshots: "
-    "`restic forget --keep-daily 7 --keep-weekly 4 --prune` (backup/backup.sh)."
+    "`restic forget --keep-daily 7 --keep-weekly 4 --prune` (jobs/backup.py)."
 )
 BACKUP_NOTE = (
     "A failed or delayed backup or prune means there is no guaranteed purge date. Deleted data "
@@ -120,8 +120,8 @@ _EVERYTHING_RETAINS: tuple[dict[str, str], ...] = (
     },
     {
         "what": "Model traces in the observability store, when one is configured",
-        "why": "Phoenix keeps every run for debugging in its own database; erase everything does "
-        "not reach it",
+        "why": "Phoenix keeps every run for debugging in its own `phoenix-data` volume; erase "
+        "everything does not reach it, so stop it and run `docker volume rm arno_phoenix-data`",
     },
 )
 

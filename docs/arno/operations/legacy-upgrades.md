@@ -1,7 +1,7 @@
 # Legacy upgrades
 
 This guide owns one-time migration procedures for pre-0.3.0 installations: moving from the
-Fin-Agent project name and demoting the pre-0.3.0 superuser `app` database role. For routine
+Fin-Agent project name and replacing the pre-0.3.0 superuser `app` database role. For routine
 version updates and PostgreSQL major upgrades, see [self-hosting](self-hosting.md#update-arno).
 
 ---
@@ -15,7 +15,7 @@ repository checkout containing `compose.yaml`.
 
 ### 1. Back up and verify a snapshot
 
-Run this on the old checkout before pulling changes:
+Run this on the old checkout before pulling changes. It uses the old `backup` sidecar:
 
 ```bash
 docker compose run --rm -e BACKUP_ONCE=1 backup
@@ -54,8 +54,7 @@ done
 
 Those five volumes hold the ledger, local restic repository, pre-migration dumps, parser task
 records, and Phoenix traces. `cp -a` preserves file ownership, permissions, and timestamps so
-PostgreSQL can read the copied cluster. Optional model caches (`ollama-data`, `whisper-data`, and
-`whisper-cache`) do not need copying; their profiles re-download or rebuild them.
+PostgreSQL can read the copied cluster. The optional model cache (`ollama-data`) does not need copying; its profile re-downloads it.
 
 ### 5. Rename `.env` variables and the database path
 
@@ -89,7 +88,7 @@ curl -s http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health
 docker compose exec api arno migrate
 ```
 
-Confirm `api`, `db`, `backup`, and `phoenix` are healthy and `arno migrate` reports no pending
+Confirm `api` and `db` are healthy and `arno migrate` reports no pending
 migrations. Open Arno in your browser and sign in once on each device: the session cookie name
 changed from `fin_agent_session` to `arno_session`, while existing passkeys keep working because
 `ARNO_RP_ID` did not change.
@@ -109,64 +108,20 @@ Backups created before the rename continue to restore unchanged; see
 
 ---
 
-## Demote the pre-0.3.0 superuser `app` role
+## Replace the pre-0.3.0 superuser `app` role
 
-PostgreSQL volumes initialized before November 14, 2026 made `app` the bootstrap superuser. Until
-the cluster is converted, `api` logs a startup warning referencing
-[`deploy/demote-app.sh`](../../../deploy/).
+PostgreSQL volumes initialized before November 14, 2026 made `app` the bootstrap superuser.
+PostgreSQL cannot demote the bootstrap superuser in place, so `api` logs a startup warning telling
+you to restore a backup into a fresh database volume. The supported path is:
 
-`deploy/demote-app.sh` converts the existing cluster in place without deleting volumes, keeps the
-`app` password unchanged, verifies every table, content hash, `schema_version` row, and grant
-before swapping databases, and leaves a rollback copy named `arno__pre_demote`.
+1. Confirm a recent backup exists with `docker compose exec api restic snapshots`.
+2. Stop the stack and rename or back up the old `db-data` volume so Compose creates an empty one.
+   Never run `docker compose down -v`.
+3. Start only the new database with `docker compose up -d db`. Its init script creates `app` as a
+   non-superuser owner.
+4. Restore with `docker compose run --rm --no-deps --user root api arno restore`. See
+   [restore drill](self-hosting.md#restore-drill-on-a-fresh-host).
+5. Start the stack with `docker compose up -d` and confirm the warning is gone in
+   `docker compose logs api`.
 
-### 1. Stop clients while leaving PostgreSQL running
-
-```bash
-docker compose stop api backup phoenix
-```
-
-### 2. Run the conversion script inside `db`
-
-```bash
-docker compose exec -T db bash -s -- arno < deploy/demote-app.sh
-```
-
-If the cluster holds additional Arno databases (for example, a scratch or demo database), list all
-of them after `arno` or pass `--leave-others` to leave unlisted databases owned by `postgres`. If
-the script is interrupted, run the exact same command again to resume.
-
-### 3. Start the stack and confirm the warning is gone
-
-```bash
-docker compose up -d
-curl -s http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health
-docker compose logs api | tail -n 20
-```
-
-### 4. Drop the rollback copy
-
-Once you verify the instance works cleanly, remove the rollback database:
-
-```bash
-docker compose exec db psql -U postgres -d postgres -c 'DROP DATABASE "arno__pre_demote";'
-```
-
-### Roll back a conversion
-
-- **Before the database swap:** Remove the staging database and restart the stack:
-
-  ```bash
-  docker compose exec db psql -U postgres -d postgres -c 'DROP DATABASE IF EXISTS "arno__converted" WITH (FORCE);'
-  docker compose up -d
-  ```
-
-- **After the swap (while `arno__pre_demote` still exists):** Stop clients, restore the original
-  database name and superuser privilege, and start the stack:
-
-  ```bash
-  docker compose stop api backup phoenix
-  docker compose exec db psql -U postgres -d postgres \
-    -c 'ALTER DATABASE arno RENAME TO arno__failed; ALTER DATABASE arno__pre_demote RENAME TO arno;'
-  docker compose exec db psql -U postgres -d postgres -c 'ALTER ROLE app WITH SUPERUSER;'
-  docker compose up -d
-  ```
+Keep the old volume until the restored instance answers real questions cleanly.

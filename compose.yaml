@@ -17,13 +17,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       APP_PASSWORD: ${POSTGRES_PASSWORD}
       APP_DB: arno
-      PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-}
     volumes:
       # Postgres 18 images store data under /var/lib/postgresql/<major>/; mounting data/ is
       # rejected at boot.
       - db-data:/var/lib/postgresql
       - ./deploy/app-role.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
-      - ./deploy/phoenix-db.sh:/docker-entrypoint-initdb.d/20-phoenix-db.sh:ro
     # Published on loopback for development (tests, psql). Not reachable from the tailnet.
     ports:
       - "127.0.0.1:${ARNO_DB_PORT:-5433}:5432"
@@ -51,10 +49,10 @@ services:
       ARNO_PRE_MIGRATION_DIR: /app/pre-migration
       ARNO_TASKS_DIR: /app/tasks
       # Native Pydantic AI traces go straight to Phoenix over OTLP/HTTP. This Compose Phoenix
-      # requires authentication. By default the local Phoenix admin secret is the bearer token,
-      # so a normal start exports with no extra provisioning step. PHOENIX_API_KEY overrides it
-      # when the operator has a real Phoenix API key.
-      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-http://phoenix:6006/v1/traces}
+      # requires authentication, and the local Phoenix admin secret is the bearer token unless
+      # PHOENIX_API_KEY overrides it.
+      # Empty means tracing is off. `--profile obs` plus the endpoint in .env.example turns it on.
+      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-}
       PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-arno}
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}
       OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
@@ -62,16 +60,17 @@ services:
       # bearer credential above, never these Phoenix values under their own names.
       PHOENIX_SECRET: ""
       PHOENIX_ADMIN_SECRET: ""
-      PHOENIX_PASSWORD: ""
       PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ""
+      # Daily backup (jobs/backup.py) and arno restore.
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backups/restic}
+      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
     volumes:
       # A dump from before each migration. The image creates this path owned by the API user.
       - pre-migration-data:/app/pre-migration
       # The parser subagent's task records. The step store in Postgres holds each run's steps.
       - tasks-data:/app/tasks
-      # Read-only access to the default restic repository so `arno restore` works with the
-      # local volume. Off-site repositories are read through restic directly.
-      - backup-data:/backups:ro
+      # The default local restic repository for the daily backup and `arno restore`.
+      - backup-data:/backups
     ports:
       # Loopback only. `tailscale serve --bg` proxies HTTPS on the tailnet to this port.
       - "127.0.0.1:${ARNO_API_PORT:-8000}:8000"
@@ -92,33 +91,6 @@ services:
       retries: 3
       start_period: 20s
 
-  backup:
-    build:
-      context: .
-      dockerfile: backup/Dockerfile
-    image: ghcr.io/joy9001/arno-backup:${ARNO_VERSION:-0.4.2}
-    restart: unless-stopped
-    logging: *default-logging
-    env_file:
-      - path: ${ARNO_ENV_FILE:-.env}
-        required: false
-    environment:
-      # Its own role: SELECT for pg_dump, INSERT into backup_runs only.
-      DATABASE_URL: postgresql://backup:${BACKUP_PASSWORD:?set BACKUP_PASSWORD in .env}@db:5432/arno
-      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-/backups/restic}
-      RESTIC_PASSWORD: ${RESTIC_PASSWORD:?set RESTIC_PASSWORD in .env}
-      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-3600}
-      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-86400}
-    volumes:
-      - backup-data:/backups
-    depends_on:
-      db:
-        condition: service_healthy
-      api:
-        # The API boot sets the backup role's password from BACKUP_PASSWORD.
-        condition: service_healthy
-    stop_grace_period: 30s
-
   # `docker compose --profile local-llm up`: local inference for the CHAT role.
   ollama:
     image: ollama/ollama:0.12.6
@@ -133,53 +105,14 @@ services:
     ports:
       - "127.0.0.1:11434:11434"
 
-  # `docker compose --profile local-stt up`: native whisper.cpp server for the STT role.
-  # The entrypoint downloads the GGML weights and Silero VAD model into `whisper-data` on first
-  # start, so the service is not ready until that finishes. `whisper-cache` gives the CUDA driver
-  # a writable cache location; it can stay empty when the GPU uses precompiled kernels.
-  whisper:
-    build:
-      context: ./deploy/whisper
-      target: cpu
-    image: arno-whisper:1.9.5-cpu
-    profiles: ["local-stt"]
-    restart: unless-stopped
-    logging: *default-logging
-    environment:
-      # `small` or `large-v3-turbo`. This is also the API's trace label; the native server ignores
-      # the multipart model field.
-      STT_MODEL: ${STT_MODEL:-small}
-      CUDA_CACHE_PATH: /cache/cuda
-    volumes:
-      - whisper-data:/models
-      - whisper-cache:/cache
-    ports:
-      # Host development only. The API inside Compose reaches it at http://whisper:8000/v1.
-      - "127.0.0.1:8001:8000"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      # First boot can download the large model before the server binds its port.
-      start_period: 30m
-    stop_grace_period: 30s
-
+  # `docker compose --profile obs up`: stock Phoenix (Elastic License 2.0, not part of the Arno
+  # image) with its default local SQLite store.
   phoenix:
-    # Arno builds this one from deploy/phoenix-cost: stock Phoenix 21.0 ignores
-    # a supplied llm.cost.*, prices from its own catalog, and reports an
-    # unknown cost as $0. The patch keeps the supplied observation, its source
-    # and revision, and an unresolved count beside every total. Phoenix is
-    # Elastic License 2.0 and is not part of the Arno image.
-    build:
-      context: ./deploy/phoenix-cost
-    image: arno-phoenix-cost:21.0.0
+    image: arizephoenix/phoenix:21.0@sha256:1f9a144a5357b4973e93a15718f050247cb7a4ee7b7c6c06ecb91b5eed3fbaad
+    profiles: ["obs"]
     restart: unless-stopped
     logging: *default-logging
     environment:
-      PHOENIX_SQL_DATABASE_URL: postgresql://phoenix:${PHOENIX_PASSWORD:-}@db:5432/phoenix
-      PHOENIX_PASSWORD: ${PHOENIX_PASSWORD:-}
-      # Auth is explicit; the startup guard rejects missing credentials.
       PHOENIX_HOST: "::"
       PHOENIX_ENABLE_AUTH: "true"
       PHOENIX_SECRET: ${PHOENIX_SECRET:-}
@@ -193,30 +126,6 @@ services:
     ports:
       # Loopback only. Reaching it over the tailnet needs a deliberate change and its login.
       - "127.0.0.1:${PHOENIX_UI_PORT:-6006}:6006"
-    entrypoint: ["/usr/bin/python3.13", "-c"]
-    command:
-      - |
-        import os, sys
-        required = ("PHOENIX_PASSWORD", "PHOENIX_SECRET", "PHOENIX_ADMIN_SECRET", "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD")
-        missing = [name for name in required if not os.environ.get(name)]
-        if missing:
-            sys.exit("Phoenix cannot start: missing " + ", ".join(missing))
-        os.execv(sys.executable, [sys.executable, "-m", "phoenix.server.main", "serve"])
-    depends_on:
-      db:
-        condition: service_healthy
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:6006/healthz', timeout=3)",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
     stop_grace_period: 30s
 
 volumes:
@@ -225,6 +134,4 @@ volumes:
   pre-migration-data:
   tasks-data:
   ollama-data:
-  whisper-data:
-  whisper-cache:
   phoenix-data:

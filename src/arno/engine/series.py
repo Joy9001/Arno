@@ -38,7 +38,7 @@ _MIN_FIXED_RUN = 3
 _LEVEL_TOLERANCE = 50
 _E = 2.718281828459045
 UNRELATED_SHARE: float = 0.1
-# Set from precision on the synthetic households' tuning seeds (arno.engine.personas).
+# Tuned on synthetic households.
 PROPOSE_CONFIDENCE: float = 0.9
 # A pattern that stopped matched its own expected dates perfectly, so a proposal also needs the
 # series to still be alive: alive is the probability the pattern has not ended.

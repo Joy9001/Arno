@@ -5,7 +5,7 @@ import type {
   ToolCallMessagePart,
   ToolCallMessagePartStatus,
 } from "@assistant-ui/react";
-import { useIsomorphicLayoutEffect } from "./useIsomorphicLayoutEffect";
+import { useIsomorphicLayoutEffect } from "../../useIsomorphicLayoutEffect";
 
 export type TaskViewState =
   | "working"

@@ -7,45 +7,10 @@ from typer.testing import CliRunner
 
 from arno.auth.setup import setup_required
 from arno.cli import app as cli_app
-from arno.engine import hackerrank
 from tests.fixtures.passkeys import complete_setup
 from tests.software_authenticator import SoftwareAuthenticator
 
 TOKEN_RE = re.compile(r"/setup#t=([A-Za-z0-9_\-]+)")
-
-
-def test_backtest_refuses_to_publish_real_ledger(monkeypatch):
-    def unexpected_settings():
-        raise AssertionError("must reject publishing before opening the ledger")
-
-    monkeypatch.setattr("arno.cli._settings", unexpected_settings)
-    result = CliRunner().invoke(cli_app, ["backtest", "--source", "db", "--publish"])
-    assert result.exit_code == 2
-    assert "only available for synthetic holdout personas" in result.output
-
-
-def test_hackerrank_only_writes_when_requested_and_available(tmp_path, monkeypatch):
-    readme = tmp_path / "README.md"
-    readme.write_text("existing results", encoding="utf-8")
-    monkeypatch.setattr("arno.cli.REPO_ROOT", tmp_path)
-    runner = CliRunner()
-    result = runner.invoke(
-        cli_app, ["hackerrank", "--dataset", str(tmp_path / "missing"), "--publish"]
-    )
-    assert result.exit_code == 3
-    assert readme.read_text(encoding="utf-8") == "existing results"
-
-    monkeypatch.setattr(hackerrank, "score", lambda dataset: {"available": True})
-    monkeypatch.setattr(hackerrank, "format_report", lambda result: "local results")
-
-    def publish(result, path):
-        path.write_text("updated", encoding="utf-8")
-
-    monkeypatch.setattr(hackerrank, "publish_report", publish)
-    assert runner.invoke(cli_app, ["hackerrank"]).exit_code == 0
-    assert readme.read_text(encoding="utf-8") == "existing results"
-    assert runner.invoke(cli_app, ["hackerrank", "--publish"]).exit_code == 0
-    assert readme.read_text(encoding="utf-8") == "updated"
 
 
 async def test_passkeys_reset_reopens_setup_with_a_fresh_enrollment_link(
@@ -112,3 +77,14 @@ def test_cli_requires_a_database_url(monkeypatch):
 
     assert result.exit_code == 2
     assert "DATABASE_URL is not set" in result.output
+
+
+async def test_cli_export_writes_a_json_file(tmp_path, demo_ledger):
+    runner = CliRunner()
+    out = tmp_path / "export.json"
+    result = await asyncio.to_thread(
+        runner.invoke, cli_app, ["export", "--format", "json", "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    assert "accounts" in out.read_text(encoding="utf-8")

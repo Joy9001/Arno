@@ -1,8 +1,7 @@
 """From a ledger snapshot to the projection's inputs, with no database.
 
-`arno.tools.projection` reads the ledger into a `LedgerSnapshot`; the backtest builds the same
-snapshot from a synthetic household. Both go through `build_inputs`, so the backtest measures the
-production input path, not a copy of it.
+`arno.tools.projection` reads the ledger into a `LedgerSnapshot`, and `build_inputs` turns it into
+the projection's inputs.
 """
 
 from __future__ import annotations

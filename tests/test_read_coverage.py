@@ -5,9 +5,9 @@ from __future__ import annotations
 import calendar
 from datetime import date
 
-from arno.importers.synthetic import seed_committed_statement
 from arno.ledger.accounts import create_account
 from arno.tools.read import coverage
+from tests.fixtures.synthetic_statements import seed_committed_statement
 
 
 async def _account(conn, name: str) -> dict:

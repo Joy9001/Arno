@@ -1,30 +1,40 @@
-"""The milestone 37 restore drill: restic repository + password -> a verified database.
+"""Restore a restic snapshot into a fresh database, then verify the ledger.
 
-The backup sidecar writes two files into every snapshot: the `pg_dump` and
-`backup_manifest.json`, a row count and content hash for every table. Restoring into a fresh
-database and recomputing the same manifest proves the ledger, balances, schedules, goals,
-preferences, conversations, attachments, and audit history all came back.
+The backup job writes one `pg_dump` custom-format file per snapshot, stored as `DUMP_NAME`. Older
+snapshots hold it at `/tmp/fin_agent.dump` and also hold a `backup_manifest.json`, which is ignored.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from asyncpg import PostgresError
 
 from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo, quote_ident
 
-MANIFEST_NAME = "backup_manifest.json"
 # The backup format predates the Arno name; existing archives carry it.
-DUMP_NAMES = ("fin_agent.dump", "fin_agent.sql")
+DUMP_NAME = "fin_agent.dump"  # stored at `/fin_agent.dump`: restic 0.18 rejects a directory
+# The old sidecar's snapshots hold the dump here, so a restore tries it too.
+_SIDECAR_DUMP_PATH = "/tmp/fin_agent.dump"  # noqa: S108 - a path inside the snapshot
+
+
+def find_dump_path(listing: bytes) -> str | None:
+    """The dump's path in a `restic ls --json` listing: the current one, else the sidecar's."""
+    paths = set()
+    for line in listing.decode("utf-8", "replace").splitlines():
+        try:
+            node = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if node.get("type") == "file":
+            paths.add(node.get("path"))
+    return next((p for p in (f"/{DUMP_NAME}", _SIDECAR_DUMP_PATH) if p in paths), None)
+
 
 REQUIRED_TABLES = {
     "accounts",
@@ -67,8 +77,6 @@ BACKUP_GRANTS = (
     "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO backup",
     "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON SEQUENCES TO backup",
     "GRANT INSERT ON backup_runs TO backup",
-    # The backup format predates the Arno name; existing archives carry it.
-    "GRANT EXECUTE ON FUNCTION fin_agent_backup_manifest() TO backup",
 )
 
 
@@ -76,115 +84,14 @@ class RestoreError(RuntimeError):
     """The restore could not run, or the restored database failed verification."""
 
 
-@dataclass
-class RestoreReport:
-    snapshot: str
-    dump: Path
-    manifest: dict[str, Any] | None
-    checks: dict[str, bool] = field(default_factory=dict)
-    mismatches: list[str] = field(default_factory=list)
-    restored_database: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return bool(self.checks) and all(self.checks.values()) and not self.mismatches
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "snapshot": self.snapshot,
-            "dump": str(self.dump),
-            "restored_database": self.restored_database,
-            "manifest_present": self.manifest is not None,
-            "checks": self.checks,
-            "mismatches": self.mismatches,
-        }
-
-
-async def build_manifest(conn: Connection) -> dict[str, Any]:
-    # The backup format predates the Arno name; existing archives carry it.
-    row = await conn.fetchrow_required("SELECT fin_agent_backup_manifest() AS manifest")
-    return dict(row["manifest"])
-
-
-def _binary(env_name: str, name: str) -> str:
+def find_binary(env_name: str, name: str) -> str:
     executable = os.environ.get(env_name) or shutil.which(name)
     if executable is None:
         raise RestoreError(
-            f"{name} is not installed. Run the drill where restic and the PostgreSQL 18 client "
-            "are available, or restore the snapshot to a directory and pass --from-dir."
+            f"{name} is not installed. Run the restore where restic and the PostgreSQL 18 client "
+            "are available."
         )
     return executable
-
-
-def _restic(repository: str, password: str) -> tuple[str, dict[str, str]]:
-    return _binary("RESTIC", "restic"), os.environ | {
-        "RESTIC_REPOSITORY": repository,
-        "RESTIC_PASSWORD": password,
-    }
-
-
-def extract_snapshot(
-    repository: str,
-    password: str,
-    target: Path,
-    *,
-    snapshot: str = "latest",
-) -> Path:
-    """Dump the dump and manifest out of one snapshot into `target`.
-
-    `restic dump` is used rather than a full tree restore: on Windows a full restore tries to set
-    timestamps on directories it creates outside the target, which fails. The two files are all the
-    drill needs.
-    """
-    restic, env = _restic(repository, password)
-    target.mkdir(parents=True, exist_ok=True)
-    listing = subprocess.run(
-        [restic, "ls", "--no-lock", "--json", snapshot],
-        capture_output=True,
-        env=env,
-        check=False,
-    )
-    if listing.returncode != 0:
-        raise RestoreError(
-            "restic ls failed: " + listing.stderr.decode("utf-8", "replace").strip()[-1000:]
-        )
-    wanted = {*DUMP_NAMES, MANIFEST_NAME}
-    found = False
-    for line in listing.stdout.decode("utf-8", "replace").splitlines():
-        try:
-            node = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if node.get("struct_type") != "node" or node.get("type") != "file":
-            continue
-        if node.get("name") not in wanted:
-            continue
-        extracted = subprocess.run(
-            [restic, "dump", "--no-lock", snapshot, node["path"]],
-            capture_output=True,
-            env=env,
-            check=False,
-        )
-        if extracted.returncode != 0:
-            raise RestoreError(
-                "restic dump failed: " + extracted.stderr.decode("utf-8", "replace").strip()[-1000:]
-            )
-        (target / node["name"]).write_bytes(extracted.stdout)
-        found = True
-    if not found:
-        raise RestoreError(f"Snapshot {snapshot} has no Arno dump or manifest.")
-    return target
-
-
-def find_backup_files(root: Path) -> tuple[Path, Path | None]:
-    dumps = [path for path in root.rglob("*") if path.is_file() and path.name in DUMP_NAMES]
-    if not dumps:
-        dumps = [path for path in root.rglob("*.dump") if path.is_file()]
-    if not dumps:
-        raise RestoreError(f"No pg_dump file found under {root}")
-    manifests = [path for path in root.rglob(MANIFEST_NAME) if path.is_file()]
-    return dumps[0], manifests[0] if manifests else None
 
 
 def _admin_dsn(target_dsn: str) -> tuple[str, dict[str, Any]]:
@@ -285,9 +192,10 @@ async def grant_backup_reader(target_dsn: str) -> None:
             await conn.execute(statement)
 
 
-def _restore_dump(dump: Path, target_dsn: str) -> None:
+def pg_env(dsn: str) -> dict[str, str]:
+    """The libpq environment for one DSN, so no password reaches a command line."""
     env = os.environ.copy()
-    info = conninfo_to_dict(target_dsn)
+    info = conninfo_to_dict(dsn)
     for source, target in (
         ("host", "PGHOST"),
         ("port", "PGPORT"),
@@ -298,47 +206,11 @@ def _restore_dump(dump: Path, target_dsn: str) -> None:
     ):
         if source in info:
             env[target] = str(info[source])
-
-    dbname = str(info.get("dbname", ""))
-    if dump.suffix == ".sql":
-        executable = _binary("PSQL", "psql")
-        command = [executable, "-v", "ON_ERROR_STOP=1", "-d", dbname, "-f", str(dump)]
-    else:
-        # The dump's GRANTs are applied: `ensure_roles` has already created the roles they name,
-        # and `agent_ro`'s SELECT list is the migrations', not a second copy in this file.
-        executable = _binary("PG_RESTORE", "pg_restore")
-        command = [
-            executable,
-            "--no-owner",
-            "-d",
-            dbname,
-            str(dump),
-        ]
-    result = subprocess.run(command, capture_output=True, env=env, check=False)
-    if result.returncode != 0:
-        raise RestoreError(
-            f"{Path(executable).name} failed: "
-            + result.stderr.decode("utf-8", "replace").strip()[-2000:]
-        )
+    return env
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-async def verify_database(
-    conn: Connection,
-    *,
-    manifest: dict[str, Any] | None,
-    dump_sha256: str | None,
-    require_manifest: bool = True,
-) -> tuple[dict[str, bool], list[str]]:
+async def verify_database(conn: Connection) -> dict[str, bool]:
     checks: dict[str, bool] = {}
-    mismatches: list[str] = []
 
     tables = await conn.fetch(
         """
@@ -381,83 +253,7 @@ async def verify_database(
         """
     )
     checks["account_balances_match_entries"] = drifted == 0
-
-    if manifest is None:
-        checks["manifest_present"] = not require_manifest
-        checks["manifest_matches"] = not require_manifest
-        if require_manifest:
-            mismatches.append(
-                "No backup_manifest.json in the snapshot; content could not be compared."
-            )
-        return checks, mismatches
-
-    checks["manifest_matches"] = True
-    if dump_sha256 and manifest.get("dump_sha256") and manifest["dump_sha256"] != dump_sha256:
-        checks["manifest_matches"] = False
-        mismatches.append("The dump's SHA-256 does not match the manifest.")
-
-    actual = await build_manifest(conn)
-    expected_tables = manifest.get("tables") or {}
-    actual_tables = actual.get("tables") or {}
-    for table in sorted(set(expected_tables) | set(actual_tables)):
-        expected = expected_tables.get(table)
-        found = actual_tables.get(table)
-        if expected is None:
-            checks["manifest_matches"] = False
-            mismatches.append(f"{table}: present after restore but missing from the manifest")
-        elif found is None:
-            checks["manifest_matches"] = False
-            mismatches.append(f"{table}: in the manifest but missing after restore")
-        elif expected != found:
-            checks["manifest_matches"] = False
-            mismatches.append(
-                f"{table}: manifest {expected.get('rows')} rows/{expected.get('md5')}, "
-                f"restored {found.get('rows')} rows/{found.get('md5')}"
-            )
-    return checks, mismatches
-
-
-async def restore_from_directory(
-    directory: Path,
-    target_dsn: str,
-    *,
-    force: bool = False,
-    require_manifest: bool = True,
-    snapshot_name: str = "local",
-) -> RestoreReport:
-    dump, manifest_path = find_backup_files(directory)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path else None
-    # The backup format predates the Arno name; existing archives carry it.
-    if manifest is not None and manifest.get("format") != "fin-agent-backup-manifest":
-        raise RestoreError(f"{manifest_path} is not an Arno backup manifest.")
-    dump_hash = _sha256(dump)
-
-    name = await prepare_database(target_dsn, force=force)
-    _restore_dump(dump, target_dsn)
-    try:
-        await grant_backup_reader(target_dsn)
-    except PostgresError as exc:
-        raise RestoreError(f"Could not restore the backup role's grants: {exc}") from exc
-    async with connect(target_dsn) as conn:
-        checks, mismatches = await verify_database(
-            conn,
-            manifest=manifest,
-            dump_sha256=dump_hash,
-            require_manifest=require_manifest,
-        )
-    report = RestoreReport(
-        snapshot=snapshot_name,
-        dump=dump,
-        manifest=manifest,
-        checks=checks,
-        mismatches=mismatches,
-        restored_database=name,
-    )
-    if not report.ok:
-        raise RestoreError(
-            "Restore verification failed: " + "; ".join(mismatches or ["a check did not pass"])
-        )
-    return report
+    return checks
 
 
 async def restore_from_restic(
@@ -467,28 +263,60 @@ async def restore_from_restic(
     target_dsn: str,
     snapshot: str = "latest",
     force: bool = False,
-    require_manifest: bool = True,
-    keep_directory: Path | None = None,
-) -> RestoreReport:
+) -> dict[str, bool]:
+    """Pipe `restic dump` into `pg_restore`, then verify; raise unless every check passes."""
     if not password:
         raise RestoreError(
             "RESTIC_PASSWORD is not set; the off-site copies are unreadable without it."
         )
-    if keep_directory is not None:
-        directory = extract_snapshot(repository, password, keep_directory, snapshot=snapshot)
-        return await restore_from_directory(
-            directory,
-            target_dsn,
-            force=force,
-            require_manifest=require_manifest,
-            snapshot_name=snapshot,
+    restic = find_binary("RESTIC", "restic")
+    pg_restore = find_binary("PG_RESTORE", "pg_restore")
+    env = os.environ | {"RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password}
+    # Look before dropping anything: an unreadable snapshot must not cost the target database.
+    listing = subprocess.run(
+        [restic, "ls", "--no-lock", "--json", snapshot],
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+    dump_path = find_dump_path(listing.stdout) if listing.returncode == 0 else None
+    if dump_path is None:
+        raise RestoreError(
+            f"Snapshot {snapshot} has no Arno dump: "
+            + listing.stderr.decode("utf-8", "replace").strip()[-1000:]
         )
-    with tempfile.TemporaryDirectory(prefix="arno-restore-", ignore_cleanup_errors=True) as tmp:
-        directory = extract_snapshot(repository, password, Path(tmp), snapshot=snapshot)
-        return await restore_from_directory(
-            directory,
-            target_dsn,
-            force=force,
-            require_manifest=require_manifest,
-            snapshot_name=snapshot,
+    dump = [restic, "dump", "--no-lock", snapshot, dump_path]
+    await prepare_database(target_dsn, force=force)
+    # stderr goes to a file, not a pipe: an unread full pipe would block the dump forever.
+    with (
+        tempfile.TemporaryFile() as src_stderr,
+        subprocess.Popen(dump, stdout=subprocess.PIPE, stderr=src_stderr, env=env) as src,
+    ):
+        assert src.stdout  # a PIPE
+        # The dump's GRANTs are applied: `ensure_roles` has already created the roles they name,
+        # and `agent_ro`'s SELECT list is the migrations', not a second copy in this file.
+        loaded = subprocess.run(
+            [pg_restore, "--no-owner", "-d", str(conninfo_to_dict(target_dsn)["dbname"])],
+            stdin=src.stdout,
+            capture_output=True,
+            env=pg_env(target_dsn),
+            check=False,
         )
+        src.stdout.close()
+        src.wait()
+        src_stderr.seek(0)
+        dump_error = src_stderr.read().decode("utf-8", "replace")
+    if src.returncode != 0 or loaded.returncode != 0:
+        raise RestoreError(
+            "restore failed: " + (dump_error + loaded.stderr.decode("utf-8", "replace"))[-2000:]
+        )
+    try:
+        await grant_backup_reader(target_dsn)
+    except PostgresError as exc:
+        raise RestoreError(f"Could not restore the backup role's grants: {exc}") from exc
+    async with connect(target_dsn) as conn:
+        checks = await verify_database(conn)
+    if not all(checks.values()):
+        failed = ", ".join(name for name, ok in checks.items() if not ok)
+        raise RestoreError(f"Restore verification failed: {failed}")
+    return checks
