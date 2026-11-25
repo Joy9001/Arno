@@ -86,7 +86,7 @@ The following table lists all 11 Settings sections:
 | Everyday | **Categories** (`categories`) | Active and archived categories (create, rename, archive/restore, toggle `reducible` for affordability tradeoffs) and paginated merchant rules (add, promote `llm` rules to user rules, delete) |
 | Everyday | **Notifications** (`notifications`) | Briefing day, notification time, reminder lead days, and Web Push browser permission and subscription toggle (`PushStatus`) |
 | Everyday | **Passkeys** (`passkeys`) | Registered passkeys, current session info, rename/delete controls (protecting the last passkey), and **Add a device** QR enrollment flow |
-| Everyday | **Scheduled questions** (`questions`) | Paginated user-defined recurring questions with RRULE schedules, active toggle, and per-run USD spend limit |
+| Everyday | **Scheduled questions** (`questions`) | Paginated user-defined recurring questions with RRULE schedules and an active toggle |
 | Everyday | **Agent memory** (`memory`) | Saved memories across all three live kinds (`preference`, `fact`, `rule`) with kind chips, editable body text, source, scope, enable/disable toggle, and permanent delete with deletion preview |
 | Everyday | **History** (`history`) | Cursor-paginated audit log (`HistoryPanel`) of write groups with actor, timestamp, summary, and undo action |
 | Advanced | **Background work** (`jobs`) | Live and recent job statuses with retry controls for failed jobs, plus **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |

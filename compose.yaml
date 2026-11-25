@@ -48,13 +48,16 @@ services:
       ARNO_AUTO_MIGRATE: "1"
       ARNO_PRE_MIGRATION_DIR: /app/pre-migration
       ARNO_TASKS_DIR: /app/tasks
-      # Native Pydantic AI traces go straight to Phoenix over OTLP/HTTP. This Compose Phoenix
-      # requires authentication, and the local Phoenix admin secret is the bearer token unless
-      # PHOENIX_API_KEY overrides it.
-      # Empty means tracing is off. `--profile obs` plus the endpoint in .env.example turns it on.
-      PHOENIX_COLLECTOR_ENDPOINT: ${PHOENIX_COLLECTOR_ENDPOINT:-}
-      PHOENIX_PROJECT_NAME: ${PHOENIX_PROJECT_NAME:-arno}
-      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}
+      ARNO_SANDBOX_URL: http://sandbox:8001
+      # Traces go to Phoenix over OTLP/HTTP via the stock OpenTelemetry SDK. The base URL is the
+      # Phoenix address (the exporter appends /v1/traces); empty means tracing is off. This Compose
+      # Phoenix requires authentication, so the headers carry its admin secret as the bearer
+      # unless OTEL_EXPORTER_OTLP_HEADERS overrides it. `--profile obs` plus the endpoint in
+      # .env.example turns tracing on.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-Authorization=Bearer%20${PHOENIX_ADMIN_SECRET:-}}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-openinference.project.name=arno}
+      OTEL_SERVICE_NAME: arno
       OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
       # The shared env_file also contains backend credentials. The app gets only the single
       # bearer credential above, never these Phoenix values under their own names.
@@ -74,6 +77,7 @@ services:
     ports:
       # Loopback only. `tailscale serve --bg` proxies HTTPS on the tailnet to this port.
       - "127.0.0.1:${ARNO_API_PORT:-8000}:8000"
+    networks: [default, sandbox-net]
     depends_on:
       db:
         condition: service_healthy
@@ -90,6 +94,18 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # Runs model-written code. Isolated on an internal network (no internet, no route to the
+  # database), read-only, resource-capped, and given no secrets.
+  sandbox:
+    build: ./sandbox
+    restart: unless-stopped
+    logging: *default-logging
+    read_only: true
+    tmpfs: ["/tmp:size=128m"]
+    mem_limit: "512m"
+    cpus: "1.0"
+    networks: [sandbox-net]
 
   # `docker compose --profile local-llm up`: local inference for the CHAT role.
   ollama:
@@ -127,6 +143,11 @@ services:
       # Loopback only. Reaching it over the tailnet needs a deliberate change and its login.
       - "127.0.0.1:${PHOENIX_UI_PORT:-6006}:6006"
     stop_grace_period: 30s
+
+networks:
+  default: {}
+  sandbox-net:
+    internal: true
 
 volumes:
   db-data:

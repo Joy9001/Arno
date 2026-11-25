@@ -1,19 +1,15 @@
-"""Rules, the categorizer agent, batches, and the Uncategorized list."""
+"""Rules, the categorizer agent, and the Uncategorized list."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from dataclasses import replace
-from datetime import date, datetime
-from typing import Any, cast, override
+from datetime import date
+from typing import Any, cast
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from pydantic_ai import Agent, InstrumentationSettings, RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -23,13 +19,12 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.usage import RunUsage
-from pydantic_ai_harness.spend import InMemorySpendStore
 
 from arno.agent import categorizer as categorizer_mod
 from arno.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS
 from arno.agent.categorizer import CategorizerDeps
 from arno.importers import rules as rules_mod
-from arno.importers.categorize import collect_batch, run_categorize
+from arno.importers.categorize import run_categorize
 from arno.importers.commit import commit_import
 from arno.importers.reconcile import insert_lines, reconcile
 from arno.importers.seed_rules import ensure_seed_rules
@@ -435,7 +430,7 @@ async def test_a_chunk_run_streams_and_carries_the_stall_timeout():
     }
     # Four text chunks, a beat apart: a slow but steady stream, not a stall.
     model = streaming_model(respond, text_chunks=4, delay=0.02)
-    answers = await categorizer_mod._ask_chunk(payload, model=model, spend_store=None)
+    answers = await categorizer_mod._ask_chunk(payload, model=model)
 
     assert answers == [{"key": "alpha", "category": CATEGORY, "guess_reason": "name"}]
     settings = categorizer_mod._chunk_agent(model).model_settings
@@ -582,203 +577,6 @@ async def test_agreement_is_saved_on_the_run_and_one_undo_reverts_the_save(ledge
     assert [row["category_id"] for row in rows].count(None) == 4
     assert all(row["category_hint"] is None for row in rows)
     assert await ledger.fetchval("SELECT count(*) FROM category_rules WHERE source = 'llm'") == 0
-
-
-class SlowBatchModel(FunctionModel):
-    """A FunctionModel whose batch stays in progress until `pending` is cleared."""
-
-    def __init__(self, function, *, model_name: str | None = None):  # noqa: ANN001
-        super().__init__(function, model_name=model_name)
-        self.pending = True
-
-    @override
-    async def batch_create(self, requests):  # noqa: ANN001 - the tested signature
-        batch = await super().batch_create(requests)
-        return replace(batch, status="in_progress")
-
-    @override
-    async def batch_status(self, batch):  # noqa: ANN001 - the tested signature
-        stored = await super().batch_status(batch)
-        return replace(stored, status="in_progress") if self.pending else stored
-
-
-def _batch_fake() -> SlowBatchModel:
-    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        answers = [
-            {"key": item["key"], "category": CATEGORY, "guess_reason": "name"}
-            for item in _chunk_answer(messages)
-        ]
-        return _output([ToolCallPart(info.output_tools[0].name, {"response": answers})])
-
-    # A priced identity: batch estimates and actuals use genai-prices, not a made-up rate.
-    return SlowBatchModel(respond, model_name="gpt-4o-mini")
-
-
-@pytest.fixture
-def batch_spans(monkeypatch):
-    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    Agent.instrument_all(InstrumentationSettings(tracer_provider=provider))
-    try:
-        yield exporter
-    finally:
-        Agent.instrument_all(False)
-        provider.shutdown()
-
-
-async def test_submit_batch_saves_runs_queues_and_a_pending_batch_requeues(
-    ledger, monkeypatch, batch_spans
-):
-    account = await _account(ledger)
-    import_id = await _committed(
-        ledger,
-        account,
-        [
-            _row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha"),
-            _row("UPI/DR/2/BETA STORE", debit=2000, day="2026-04-02", counterparty="Beta"),
-            _row("UPI/DR/3/GAMMA STORE", debit=3000, day="2026-04-03", counterparty="Gamma"),
-        ],
-    )
-    monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 1)
-    monkeypatch.setenv("BATCH_PROVIDER", "openai")
-    fake = _batch_fake()
-    store = InMemorySpendStore()
-    run_id = await new_id(ledger, "cat")
-    await ledger.execute(
-        "INSERT INTO categorize_runs (id, import_id, mode) VALUES ($1, $2, 'now')",
-        run_id,
-        import_id,
-    )
-    deps = CategorizerDeps(import_id=import_id, run_id=run_id, batch_model=fake, spend_store=store)
-    ctx = RunContext(deps=deps, model=fake, usage=RunUsage())
-
-    submitted = await categorizer_mod.submit_batch(ctx, ["alpha", "beta", "gamma"])
-    submit_spans = [
-        span for span in batch_spans.get_finished_spans() if span.name.startswith("chat ")
-    ]
-    assert submit_spans
-    assert all(
-        (span.attributes or {}).get("arno.cost.role") == "logical_request" for span in submit_spans
-    )
-
-    assert submitted["requests"] == 3
-    saved = await ledger.fetchrow("SELECT * FROM categorize_runs WHERE id = $1", run_id)
-    assert saved["mode"] == "batch"
-    assert len(saved["batch_runs"]) == 3
-    assert saved["accounting"]["estimate_applied"] is True
-    assert saved["accounting"]["phase"] == "submitted"
-    attempts = [entry["attempt"] for entry in saved["batch_runs"]]
-    assert {attempt["workload"] for attempt in attempts} == {f"categorizer_batch:{run_id}"}
-    assert len({attempt["trace_id"] for attempt in attempts}) == 1
-    assert len(attempts[0]["trace_id"]) == 32
-    assert await ledger.fetchval("SELECT count(*) FROM jobs WHERE kind = 'collect_batch'") == 1
-
-    first = await collect_batch(ledger, run_id, batch=fake, spend_store=store)
-    assert first["status"] == "pending"
-    requeued = await ledger.fetchrow(
-        "SELECT * FROM jobs WHERE kind = 'collect_batch' ORDER BY id DESC LIMIT 1"
-    )
-    assert requeued["status"] == "pending"
-    assert requeued["run_at"] > datetime.now(requeued["run_at"].tzinfo)
-
-    fake.pending = False
-    second = await collect_batch(ledger, run_id, batch=fake, spend_store=store)
-    assert second["status"] == "collected"
-    assert second["answers"] == 3
-    model_spans = [
-        span for span in batch_spans.get_finished_spans() if span.name.startswith("chat ")
-    ]
-    assert len(model_spans) > len(submit_spans)
-    assert all(
-        (span.attributes or {}).get("arno.cost.role") == "logical_request" for span in model_spans
-    )
-    stored = await ledger.fetchrow("SELECT * FROM categorize_runs WHERE id = $1", run_id)
-    assert len(stored["batch_answers"]) == 3
-    assert (
-        await ledger.fetchval(
-            "SELECT count(*) FROM jobs WHERE kind = 'categorize_import' "
-            "AND payload ->> 'batch_id' = $1",
-            run_id,
-        )
-        == 1
-    )
-
-
-async def test_a_finished_batch_starts_a_fresh_run_that_saves(ledger, monkeypatch):
-    account = await _account(ledger)
-    import_id = await _committed(
-        ledger,
-        account,
-        [_row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha")],
-    )
-    monkeypatch.setattr(categorizer_mod, "CHUNK_PAYEES", 25)
-    monkeypatch.setenv("BATCH_PROVIDER", "openai")
-    fake = _batch_fake()
-    store = InMemorySpendStore()
-    run_id = await new_id(ledger, "cat")
-    await ledger.execute(
-        "INSERT INTO categorize_runs (id, import_id, mode) VALUES ($1, $2, 'now')",
-        run_id,
-        import_id,
-    )
-    await categorizer_mod.submit_batch(
-        RunContext(
-            deps=CategorizerDeps(
-                import_id=import_id,
-                run_id=run_id,
-                batch_model=fake,
-                spend_store=store,
-            ),
-            model=fake,
-            usage=RunUsage(),
-        ),
-        ["alpha"],
-    )
-    fake.pending = False
-    await collect_batch(ledger, run_id, batch=fake, spend_store=store)
-
-    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        returns = [
-            part.tool_name
-            for message in messages
-            for part in message.parts
-            if isinstance(part, ToolReturnPart)
-        ]
-        if "batch_results" not in returns:
-            return _output([ToolCallPart("batch_results", {"batch_id": run_id})])
-        if "save_categories" not in returns:
-            return _output([ToolCallPart("save_categories", {"distrust": []})])
-        return _output(
-            [
-                ToolCallPart(
-                    info.output_tools[0].name,
-                    {"status": "saved", "labeled": 1, "uncategorized": 0},
-                )
-            ]
-        )
-
-    result = await run_categorize(
-        ledger,
-        import_id,
-        batch_id=run_id,
-        model=streaming_model(run_agent),
-        spend_store=store,
-    )
-    assert result["status"] == "done"
-    label = await ledger.fetchval(
-        """
-        SELECT c.name
-        FROM statement_lines sl
-        JOIN movement_legs tl ON tl.movement_id = sl.movement_id
-        JOIN categories c ON c.id = tl.category_id
-        WHERE sl.import_id = $1
-        """,
-        import_id,
-    )
-    assert label == CATEGORY
-    assert await ledger.fetchval("SELECT count(*) FROM category_rules WHERE source = 'llm'") == 1
 
 
 # The Uncategorized list -------------------------------------------------------------------
@@ -1102,10 +900,8 @@ async def test_answers_a_failed_run_paid_for_are_kept_as_hints_not_labels(ledger
 
 
 async def test_a_spend_ceiling_gives_up_at_once(ledger):
+    from arno.agent.usage import DailyBudgetExceeded
     from arno.jobs.runner import JobGaveUp
-
-    class SpendLimitExceeded(Exception):
-        """Named like the harness error `ceiling_name` recognizes."""
 
     account = await _account(ledger)
     import_id = await _committed(
@@ -1114,19 +910,19 @@ async def test_a_spend_ceiling_gives_up_at_once(ledger):
 
     def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
         del messages, info
-        raise SpendLimitExceeded("Budget 'daily' exceeded")
+        raise DailyBudgetExceeded("Paused at the daily spend limit")
 
     with pytest.raises(JobGaveUp, match="daily"):
         await run_categorize(ledger, import_id, model=streaming_model(run_agent))
 
 
-@pytest.mark.parametrize("kind", ["ledger", "price", "tokens"])
+@pytest.mark.parametrize("kind", ["budget", "tokens"])
 async def test_chunk_accounting_stops_escape_instead_of_becoming_retryable_keys(monkeypatch, kind):
-    from pydantic_ai.exceptions import UsageLimitExceeded, UserError
+    from pydantic_ai.exceptions import UsageLimitExceeded
 
-    from arno.agent.spend import SpendStoreError
+    from arno.agent.usage import DailyBudgetExceeded
 
-    error = {"ledger": SpendStoreError, "price": UserError, "tokens": UsageLimitExceeded}[kind]
+    error = {"budget": DailyBudgetExceeded, "tokens": UsageLimitExceeded}[kind]
 
     calls = []
 
@@ -1139,53 +935,6 @@ async def test_chunk_accounting_stops_escape_instead_of_becoming_retryable_keys(
     monkeypatch.setattr(categorizer_mod, "_ask_chunk", fail)
     with pytest.raises(error):
         await categorizer_mod._categorize_payloads(
-            [{"keys": ["payee"], "prompt": "synthetic"}] * 3, model=None, spend_store=None
+            [{"keys": ["payee"], "prompt": "synthetic"}] * 3, model=None
         )
     assert len(calls) == 1
-
-
-async def test_an_ambiguous_batch_is_never_submitted_again_in_run_or_after_restart(
-    ledger, monkeypatch
-):
-    from arno.jobs.runner import JobGaveUp
-
-    account = await _account(ledger)
-    import_id = await _committed(
-        ledger, account, [_row("UPI/DR/1/ALPHA STORE", debit=1000, counterparty="Alpha")]
-    )
-    monkeypatch.setenv("BATCH_PROVIDER", "openai")
-    fake = _batch_fake()
-    submissions = []
-
-    async def fail_create(requests):
-        submissions.append(requests)
-        raise RuntimeError("acknowledgement lost after acceptance")
-
-    monkeypatch.setattr(fake, "batch_create", fail_create)
-    store = InMemorySpendStore()
-    run_id = await new_id(ledger, "cat")
-    await ledger.execute(
-        "INSERT INTO categorize_runs (id,import_id,mode) VALUES ($1,$2,'now')", run_id, import_id
-    )
-    ctx = RunContext(
-        deps=CategorizerDeps(
-            import_id=import_id, run_id=run_id, batch_model=fake, spend_store=store
-        ),
-        model=fake,
-        usage=RunUsage(),
-    )
-    with pytest.raises(JobGaveUp, match="uncertain submission"):
-        await categorizer_mod.submit_batch(ctx, ["alpha"])
-    accounting = await ledger.fetchval("SELECT accounting FROM categorize_runs WHERE id=$1", run_id)
-    assert accounting["phase"] == "submit_ambiguous"
-    assert accounting["estimate_applied"] is True
-    for _ in range(2):
-        with pytest.raises(JobGaveUp):
-            await categorizer_mod.submit_batch(ctx, ["alpha"])
-    with pytest.raises(JobGaveUp, match="uncertain accounting"):
-        await run_categorize(ledger, import_id, batch=fake, spend_store=store)
-    assert len(submissions) == 1
-    counter = (await store.get_many(accounting["keys"]))[accounting["keys"][0]]
-    from decimal import Decimal
-
-    assert counter.usd == Decimal(accounting["estimate_usd"])

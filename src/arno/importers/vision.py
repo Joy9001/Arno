@@ -61,56 +61,53 @@ def configured() -> bool:
     return bool(base_url and model and not closed and not model.endswith("-unconfigured"))
 
 
-async def transcribe_page(doc: Doc, page: int = 0, *, spend_store: Any = None) -> dict[str, Any]:
+async def transcribe_page(doc: Doc, page: int = 0) -> dict[str, Any]:
     """No tools, no history, no ledger access. Returns plain JSON-native data."""
-    from arno.agent.capabilities import spend_limits
-    from arno.agent.spend import COST_STOP_ERRORS, spend_store_scope
+    from arno.agent.usage import COST_STOP_ERRORS, usage_hooks
 
-    async with spend_store_scope(spend_store) as store:
-        limits = spend_limits(store)
-        try:
-            image = doc.page_png(page)
-            media_type = "image/png"
-            if image[:3] == b"\xff\xd8\xff":
-                media_type = "image/jpeg"
-            elif image[:4] == b"RIFF":
-                media_type = "image/webp"
-            agent = Agent(
-                vision_model(),
-                output_type=TranscribedPage,
-                instructions=INSTRUCTIONS,
-                capabilities=[limits] if limits is not None else None,
-                name="statement-vision",
-            )
-            # An image cannot be text-redacted, so this run is not traced at all.
-            agent.instrument = False
-            result = await agent.run(
-                [
-                    "Transcribe this statement page into the typed structure.",
-                    BinaryContent(data=image, media_type=media_type),
-                ]
-            )
-            transcribed = result.output.model_dump()
-            # The image itself cannot be text-redacted, and this output also feeds the parser's
-            # sandbox, which bypasses the tool wrapper: redact the page's text here.
-            for row in transcribed["rows"]:
-                row["description"] = redact_text(row["description"])
-                if row["upi_ref"]:
-                    row["upi_ref"] = redact_text(row["upi_ref"])
-            if transcribed["note"]:
-                transcribed["note"] = redact_text(transcribed["note"])
-            return transcribed
-        except COST_STOP_ERRORS:
-            raise
-        except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
-            logger.warning("vision transcription failed: %s", type(exc).__name__)
-            return {
-                "is_statement": False,
-                "rows": [],
-                "note": (
-                    "vision failed: " + type(exc).__name__ if configured() else VISION_UNAVAILABLE
-                ),
-            }
+    try:
+        image = doc.page_png(page)
+        media_type = "image/png"
+        if image[:3] == b"\xff\xd8\xff":
+            media_type = "image/jpeg"
+        elif image[:4] == b"RIFF":
+            media_type = "image/webp"
+        agent = Agent(
+            vision_model(),
+            output_type=TranscribedPage,
+            instructions=INSTRUCTIONS,
+            capabilities=[usage_hooks("vision")],
+            name="statement-vision",
+        )
+        # An image cannot be text-redacted, so this run is not traced at all.
+        agent.instrument = False
+        result = await agent.run(
+            [
+                "Transcribe this statement page into the typed structure.",
+                BinaryContent(data=image, media_type=media_type),
+            ]
+        )
+        transcribed = result.output.model_dump()
+        # The image itself cannot be text-redacted, and this output also feeds the parser's
+        # sandbox, which bypasses the tool wrapper: redact the page's text here.
+        for row in transcribed["rows"]:
+            row["description"] = redact_text(row["description"])
+            if row["upi_ref"]:
+                row["upi_ref"] = redact_text(row["upi_ref"])
+        if transcribed["note"]:
+            transcribed["note"] = redact_text(transcribed["note"])
+        return transcribed
+    except COST_STOP_ERRORS:
+        raise
+    except Exception as exc:  # noqa: BLE001 - a failed vision call leaves the card usable
+        logger.warning("vision transcription failed: %s", type(exc).__name__)
+        return {
+            "is_statement": False,
+            "rows": [],
+            "note": (
+                "vision failed: " + type(exc).__name__ if configured() else VISION_UNAVAILABLE
+            ),
+        }
 
 
 __all__ = [

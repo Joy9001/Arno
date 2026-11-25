@@ -33,7 +33,7 @@ DECISION = "We agreed to keep the floor at ₹25,000 and not add a new subscript
 
 def _production_summarizer(model: Model) -> SummarizingCompaction[None]:
     """The summarizer the production capability list actually builds."""
-    capabilities = build_capabilities(primary=model, spend_store=None, context_window=1_000)
+    capabilities = build_capabilities(primary=model, context_window=1_000)
     tiered = next(item for item in capabilities if isinstance(item, TieredCompaction))
     fallback = next(item for item in tiered.tiers if isinstance(item, FallbackCompaction))
     return next(item for item in fallback.fallback_chain if isinstance(item, SummarizingCompaction))

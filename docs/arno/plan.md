@@ -111,7 +111,7 @@ enough for answers and affordability verdicts on day one.
 - **Proactive monitoring:** Fixed-code jobs generate bill, EMI, and card-due reminders, projection
   risk warnings, weekly briefings, and recurring-charge or price-change proposals into the inbox
   and web push. Because these run as code, they work even when the LLM is unavailable.
-- **User-scheduled questions:** Read-only prompts run on your schedule with per-run spend ceilings
+- **User-scheduled questions:** Read-only prompts run on your schedule with a per-run request limit
   and deliver answers to the inbox.
 - **Write discipline:** Everyday chat writes, photos, and memory saves land immediately with an
   inline undo card. Statement imports wait for the review screen. Lasting or wide writes (memory,
@@ -151,7 +151,7 @@ The following table states the non-functional targets:
 | Latency | Backend trace targets are about 2 s to first streamed output, about 5 s for a single-lookup answer, and about 15 s for a multistep what-if on a cloud model (current measured eval median is 23.4 s; tracked in [`completion-checklist.md`](completion-checklist.md)) |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or VPS |
 | Durability | Daily encrypted `pg_dump` through restic, run inside the API, with off-site targets and a verified `arno restore` drill |
-| Security | Private Tailscale network only, WebAuthn passkey login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an access-restricted table for native ChatGPT sign-in tokens |
+| Security | Private Tailscale network only, WebAuthn passkey login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an isolated `sandbox` service for model-written Python |
 | Privacy | Per-role provider switch; only configured inference requests, encrypted backups, and contentless push pings leave the host |
 | Honesty | Tools distinguish zero from unknown and report data age, coverage gaps, and source IDs |
 | Measured quality | The agent eval suite with `pass^3` grading ([success measures](architecture.md#success-measures)) |
@@ -166,7 +166,8 @@ The following table states the non-functional targets:
   ([Sahamati](https://sahamati.org.in/financial-information-user-fiu)), so data comes from
   statements and user capture.
 - **Permissive licenses only:** MIT application code and permissive runtime dependencies.
-- **Modest hardware:** Runs on a laptop, mini PC, or small VPS; inference spend is metered.
+- **Modest hardware:** Runs on a laptop, mini PC, or small VPS; inference spend is logged and
+  capped daily.
 
 ---
 
@@ -189,7 +190,9 @@ The following table records the build-versus-buy decision for each component:
 | Private HTTPS access | Buy: Tailscale (`tailscale serve`) | End-to-end encrypted tailnet access with zero public exposure |
 | Off-site backups | Buy: restic (with rclone) | Encrypted, deduplicated backups to S3-compatible or cloud targets |
 | Agent evaluations | Buy: `pydantic_evals` | Runs the production agent directly against cloned test databases |
-| Observability | Buy: Arize Phoenix + OpenTelemetry SDK | Native PydanticAI spans export over OTLP/HTTP to stock Phoenix on SQLite (`--profile obs`, off by default); the Postgres cost journal stays the cost source of truth ([`operations/observability.md`](operations/observability.md)) |
+| Observability | Buy: Arize Phoenix + stock OpenTelemetry SDK | FastAPI, asyncpg, and PydanticAI spans export over OTLP/HTTP to stock Phoenix on SQLite (`--profile obs`, off by default); no custom span, exporter, or replay code ([`operations/observability.md`](operations/observability.md)) |
+| Model cost | Build: `llm_usage` table + one shared daily cap | One row per model response, priced by `genai-prices` through PydanticAI; $20 a day shared by every role, reset at midnight IST; unpriced models count as $0. Replaces the spend ledger, cost journal, pricing and metering modules, and per-run budgets ([`specs/cost-tracking.md`](specs/cost-tracking.md)) |
+| Model-written Python | Build: isolated `sandbox` service | Stateless container on an internal network with no internet or database route, read-only, resource-capped, and given no secrets; `api` reaches it at `ARNO_SANDBOX_URL` |
 | Double-entry ledger core | Buy: vendored `pgledger` | MIT-licensed pure Postgres SQL with idempotency keys |
 | Ledger mapping, projection engine, patterns | Build | Core product differentiator ([`specs/data-and-engine.md`](specs/data-and-engine.md)) |
 
@@ -200,7 +203,7 @@ The following table records the stack for each layer:
 | Layer | Choice | Rationale |
 |---|---|---|
 | Backend language | Python 3.14 (`uv`) | Primary ecosystem for PydanticAI and numerical tooling |
-| Agent framework | PydanticAI + `pydantic-ai-harness` (pinned) | Native Code Mode, compaction, delegation, and spend limits |
+| Agent framework | PydanticAI + `pydantic-ai-harness` (pinned) | Native Code Mode, compaction, and delegation |
 | API server | FastAPI + Uvicorn | Pydantic-native OpenAPI contracts; also serves the static web build |
 | Database | PostgreSQL 18 (pinned) | Enforces the `agent_ro` read-only role and 2-second timeout natively; supports real date/numeric types and `pgvector` if needed |
 | Data access | Plain SQL over `asyncpg` + per-loop idle connection cache (up to 8 connections) | Schema stays transparent for `run_query`; never-wait cache avoids pool deadlocks on long chat streams ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
@@ -214,15 +217,15 @@ The following table records the stack for each layer:
 
 ### Provider switch and inference accounting
 
-Every model role (`CHAT`, `PARSE`, `BATCH`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses
-environment variables for endpoint, model ID, provider, and billing mode (`metered`, `local`, or
-`reported`). Exact dated model IDs are pinned rather than floating aliases, and model changes
-re-run the eval suite.
+Every model role (`CHAT`, `PARSE`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses environment
+variables for endpoint, model ID, and provider. The ChatGPT-plan provider and the provider Batch API
+categorizer are removed; categorizing always runs through the `CHAT` role. Exact dated model IDs are
+pinned rather than floating aliases, and model changes re-run the eval suite.
 
-The design target is a frontier model; local models (such as Ollama) remain
-supported through the same code path, with their capabilities measured by the eval suite.
-Cost accounting uses native PydanticAI usage, `genai-prices`, narrow reported-billing adapters,
-explicit zero for local models, and the Postgres spend ledger as the cost source of truth
+The design target is a frontier model; local models (such as Ollama) remain supported through the
+same code path, with their capabilities measured by the eval suite. Cost accounting uses native
+PydanticAI usage and `genai-prices`. A core `Hooks` capability writes one `llm_usage` row per model
+response and enforces one shared daily cap; a model the catalog cannot price counts as $0
 ([`specs/cost-tracking.md`](specs/cost-tracking.md)).
 
 ---
@@ -261,7 +264,7 @@ Code must never violate these four rules:
    any future MCP server wrap the same functions in `src/arno/tools/` and `src/arno/ledger/`.
    Framework adapters belong strictly in `src/arno/agent/`.
 4. **The database is the whole state.** Attachments, ledger entries, schedules, memories, jobs, and
-   cost journals live in PostgreSQL so `pg_dump` produces a complete backup and export.
+   the model-usage log live in PostgreSQL so `pg_dump` produces a complete backup and export.
 
 ---
 
@@ -302,8 +305,8 @@ owner-setup, and human ship gates are tracked in
 
 14. Streaming web chat with persistent searchable threads, pinned financial snapshot, per-turn
     reminders, compaction, prompt caching, and detached turns that survive disconnects.
-15. Environment-driven provider switching (cloud and local), Postgres spend limits, fallback model,
-    inference cost metering, and native Phoenix OTLP tracing.
+15. Environment-driven provider switching (cloud and local), a Postgres model-usage log with a
+    shared daily spend cap, fallback model, and stock OpenTelemetry tracing to Phoenix.
 16. Orthogonal read tools (including `run_query`, `amortize`, `compound`, `show_chart`) behind Code
     Mode, structured result cards, post-reply number check, and reply flagging.
 17. Direct write tools with inline undo cards, outside-text taint tracking, and confirm cards for
@@ -344,7 +347,7 @@ owner-setup, and human ship gates are tracked in
 32. Built-in job schedules, notification inbox, web push notifications, and 48-hour stale-backup
     alerts.
 33. Weekly briefings, bill/EMI/card-due reminders (3-day lead), projection risk episodes, and
-    user-scheduled read-only questions with per-run spend limits.
+    user-scheduled read-only questions with a per-run request limit.
 34. Calendar-rule recurring-charge detection (new, missed, and price-change proposals).
 
 ### L7: Capture

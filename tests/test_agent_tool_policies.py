@@ -1257,8 +1257,8 @@ def _run_ctx(conn: Any) -> Any:
 async def _question(conn: Any, question_id: str = "sq_number_note") -> str:
     await conn.execute(
         """
-        INSERT INTO scheduled_questions (id, prompt, rule, active, spend_limit_cents)
-        VALUES ($1, 'What did I spend on food last week?', 'FREQ=WEEKLY;BYDAY=MO', true, 100)
+        INSERT INTO scheduled_questions (id, prompt, rule, active)
+        VALUES ($1, 'What did I spend on food last week?', 'FREQ=WEEKLY;BYDAY=MO', true)
         ON CONFLICT (id) DO NOTHING
         """,
         question_id,

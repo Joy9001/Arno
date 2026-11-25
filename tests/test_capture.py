@@ -90,7 +90,6 @@ async def test_a_failed_transcription_keeps_the_audio_and_leaves_a_retry_card(
 ):
     monkeypatch.setenv("STT_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("STT_MODEL", "blocked-in-tests")
-    monkeypatch.setenv("STT_BILLING_MODE", "local")
     response = session_client.post(
         "/api/transcribe",
         files={"file": ("voice.webm", WEBM, "audio/webm")},
@@ -136,8 +135,6 @@ async def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_
     monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
     monkeypatch.setenv("STT_MODEL", "stub-whisper")
     monkeypatch.setenv("STT_API_KEY", "secret")
-    # A loopback stub is an explicit local endpoint, not a priced cloud provider.
-    monkeypatch.setenv("STT_BILLING_MODE", "local")
 
     response = session_client.post(
         "/api/transcribe",
@@ -181,75 +178,81 @@ async def test_transcription_reaches_the_endpoint_with_the_model_file_and_payee_
     assert b'name="language"' in calls[2]["body"]
 
 
-async def test_a_paid_stt_endpoint_without_a_price_is_refused_before_the_request(
-    session_client, stt_stub, monkeypatch
+async def test_a_transcript_without_usage_is_returned_and_logged_at_zero(
+    session_client, ledger, monkeypatch
 ):
-    calls, port = stt_stub
-    monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
-    monkeypatch.setenv("STT_MODEL", "stub-whisper")
-    monkeypatch.delenv("STT_BILLING_MODE", raising=False)
-
-    response = session_client.post(
-        "/api/transcribe",
-        files={"file": ("voice.webm", WEBM, "audio/webm")},
-        data={"thread_id": "cnv_voice_unpriced"},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "failed"
-    assert "pricing is not configured" in payload["note"]
-    assert calls == []
-
-
-@pytest.mark.parametrize(
-    ("usage", "charge"),
-    [
-        ({"type": "duration", "seconds": 12}, Decimal("0.0012")),
-        (None, None),
-    ],
-    ids=["duration", "missing-usage"],
-)
-async def test_metered_stt_accepts_duration_pricing_and_stops_if_usage_is_missing(
-    session_client, ledger, monkeypatch, usage, charge
-):
+    """A 200 with only `text` is a valid transcript; a missing `usage` never discards it."""
     calls: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(200, json={"text": "Synthetic transcript", "usage": usage})
+        return httpx.Response(200, json={"text": "Synthetic transcript"})
 
     async_client = httpx.AsyncClient
     transport = httpx.MockTransport(respond)
     monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: async_client(transport=transport, **kw))
     monkeypatch.setenv("STT_BASE_URL", "https://api.openai.com/v1")
-    monkeypatch.setenv("STT_PROVIDER", "openai")
     monkeypatch.setenv("STT_MODEL", "whisper-1")
-    monkeypatch.setenv("STT_BILLING_MODE", "metered")
 
     response = session_client.post(
         "/api/transcribe",
         files={"file": ("voice.webm", WEBM, "audio/webm")},
-        data={"thread_id": "cnv_voice_duration"},
+        data={"thread_id": "cnv_voice_no_usage"},
     )
 
     assert response.status_code == 200
+    assert response.json()["status"] == "transcribed"
+    assert response.json()["transcript"] == "Synthetic transcript"
     assert [call.url.path for call in calls] == ["/v1/audio/transcriptions"]
-    row = await ledger.fetchrow_required(
-        "SELECT usd, complete, source FROM llm_calls WHERE role = 'stt'"
+    row = await ledger.fetchrow_required("SELECT * FROM llm_usage WHERE role = 'stt'")
+    assert (row["model"], row["input_tokens"], row["usd"]) == ("whisper-1", 0, 0)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [["not", "an", "object"], {"text": "ok", "usage": {"input_tokens": "lots", "cost": "x"}}],
+)
+async def test_untrusted_stt_json_shapes_never_crash_the_transcript(
+    session_client, ledger, monkeypatch, payload
+):
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    async_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: async_client(transport=transport, **kw))
+    monkeypatch.setenv("STT_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("STT_MODEL", "whisper-1")
+
+    response = session_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_voice_junk"},
     )
-    assert row["usd"] == charge
-    if charge is None:
-        assert response.json()["status"] == "failed"
-        assert "no usage" in response.json()["note"]
-        assert row["complete"] is False
-        assert row["source"] == "unknown"
-    else:
-        assert response.json()["status"] == "transcribed"
-        assert response.json()["transcript"] == "Synthetic transcript"
-        assert row["complete"] is True
-        assert row["source"] == "genai-prices"
-        assert await ledger.fetchval("SELECT sum(usd_nanos) FROM spend_counters") == 1_200_000
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "transcribed"
+    row = await ledger.fetchrow_required("SELECT * FROM llm_usage WHERE role = 'stt'")
+    assert (row["input_tokens"], row["usd"]) == (0, 0)
+
+
+async def test_stt_is_refused_at_the_daily_limit_without_calling_the_endpoint(
+    session_client, ledger, stt_stub, monkeypatch
+):
+    calls, port = stt_stub
+    await ledger.execute(
+        "INSERT INTO llm_usage (role, model, input_tokens, output_tokens, usd)"
+        " VALUES ('chat', 'm', 0, 0, 20)"
+    )
+    monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
+    monkeypatch.setenv("STT_MODEL", "stub-whisper")
+
+    response = session_client.post(
+        "/api/transcribe",
+        files={"file": ("voice.webm", WEBM, "audio/webm")},
+        data={"thread_id": "cnv_voice_capped"},
+    )
+
+    assert response.json()["status"] == "failed"
+    assert "daily spend limit" in response.json()["note"]
+    assert calls == []
 
 
 async def test_a_voice_transcript_takes_the_chat_path_without_flagging_the_thread(
@@ -326,16 +329,12 @@ async def test_photo_upload_rejects_a_file_that_is_not_an_image(session_client):
 
 
 @pytest.mark.parametrize("text", ["synthetic transcript", ""])
-async def test_reported_stt_posts_the_charge_even_when_the_transcript_is_empty(
+async def test_reported_stt_logs_the_charge_even_when_the_transcript_is_empty(
     session_client, ledger, stt_stub, monkeypatch, text
 ):
-    from decimal import Decimal
-
     calls, port = stt_stub
     monkeypatch.setenv("STT_BASE_URL", f"http://127.0.0.1:{port}/v1")
     monkeypatch.setenv("STT_MODEL", "custom-stt")
-    monkeypatch.setenv("STT_PROVIDER", "custom")
-    monkeypatch.setenv("STT_BILLING_MODE", "reported")
     monkeypatch.setattr(_SttHandler, "response_text", text)
     monkeypatch.setattr(_SttHandler, "response_usage", {"cost": 0.006})
     response = session_client.post(
@@ -346,10 +345,8 @@ async def test_reported_stt_posts_the_charge_even_when_the_transcript_is_empty(
     assert response.status_code == 200
     assert response.json()["status"] == ("transcribed" if text else "failed")
     assert len(calls) == 1
-    call = await ledger.fetchrow_required("SELECT * FROM llm_calls WHERE role='stt'")
-    assert call["usd"] == Decimal("0.006")
-    assert call["source"] == "provider_reported"
-    assert await ledger.fetchval("SELECT sum(usd_nanos) FROM spend_counters") == 6_000_000
+    row = await ledger.fetchrow_required("SELECT * FROM llm_usage WHERE role = 'stt'")
+    assert row["usd"] == Decimal("0.006")
 
 
 def test_a_upi_reference_printed_with_spaces_is_accepted_and_cleaned():
@@ -376,42 +373,6 @@ async def test_capture_size_and_media_type_limits(session_client, monkeypatch):
 
 
 # A billed STT call uses the audio seconds it reports, and the prompt is capped -----------------
-
-
-async def test_audio_seconds_are_priced_from_the_registry():
-    """A Whisper-style `seconds` field is billable usage, priced per audio hour."""
-    from pydantic_ai.messages import ModelResponse
-
-    from arno.agent.pricing import observe_cost
-    from arno.capture.transcribe import _usage
-
-    usage = _usage({"usage": {"type": "duration", "seconds": 12}})
-    assert usage is not None
-    assert usage.audio_seconds == 12
-    response = ModelResponse(
-        parts=[],
-        usage=usage,
-        model_name="whisper-1",
-        provider_name="openai",
-        provider_url=None,
-    )
-    observation = observe_cost(response, provider="openai", billing_mode="metered")
-    assert observation.complete is True
-    assert observation.source == "genai-prices"
-    assert observation.usage == {"audio_seconds": 12.0}
-    assert observation.usd is not None and observation.usd > 0
-
-
-async def test_a_stt_usage_with_no_units_is_unknown():
-    from pydantic_ai.usage import RequestUsage
-
-    from arno.capture.transcribe import _usage
-
-    assert _usage({"usage": {"seconds": -1}}) is None
-    assert _usage({"usage": {"seconds": True}}) is None
-    assert _usage({"usage": {"input_tokens": 12, "input_token_details": {"audio_tokens": 5}}}) == (
-        RequestUsage(input_tokens=12, input_audio_tokens=5)
-    )
 
 
 async def test_the_payee_prompt_is_names_only_and_capped(ledger):

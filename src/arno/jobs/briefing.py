@@ -244,46 +244,37 @@ def render_template(numbers: dict[str, Any]) -> str:
     )
 
 
-async def write_prose(
-    numbers: dict[str, Any], *, model: Any = None, spend_store: Any = None
-) -> str:
+async def write_prose(numbers: dict[str, Any], *, model: Any = None) -> str:
     """One CHAT call, and only one. The caller falls back to the template on any failure."""
     from pydantic_ai import Agent, UsageLimits
     from pydantic_ai.settings import ModelSettings, merge_model_settings
 
-    from arno.agent.capabilities import (
-        MODEL_SETTINGS,
-        RetryTransientModelErrors,
-        drain_events,
-        spend_limits,
-    )
-    from arno.agent.spend import spend_store_scope
+    from arno.agent.capabilities import MODEL_SETTINGS, drain_events
+    from arno.agent.usage import usage_hooks
 
-    async with spend_store_scope(spend_store) as store:
-        limits = spend_limits(store)
-        agent = Agent(
-            model or primary_model(),
-            output_type=str,
-            instructions=BRIEFING_INSTRUCTIONS,
-            # A pipeline notification is prose, not a reasoning problem; the cap and the disabled
-            # thinking keep a 200-token brief from spending thousands of output tokens.
-            model_settings=merge_model_settings(
-                MODEL_SETTINGS,
-                ModelSettings(thinking=False, max_tokens=BRIEFING_MAX_OUTPUT_TOKENS),
-            ),
-            capabilities=[RetryTransientModelErrors(), *([limits] if limits is not None else [])],
-            name="weekly-briefing",
-        )
-        result = await agent.run(
-            "Write the brief from this JSON. Use only these numbers.\n"
-            + json.dumps(numbers, ensure_ascii=False, default=str),
-            event_stream_handler=drain_events,
-            usage_limits=UsageLimits(request_limit=1),
-        )
-        text = str(result.output or "").strip()
-        if not text:
-            raise ValueError("the briefing model returned no prose")
-        return text
+    agent = Agent(
+        model or primary_model(),
+        output_type=str,
+        instructions=BRIEFING_INSTRUCTIONS,
+        # A pipeline notification is prose, not a reasoning problem; the cap and the disabled
+        # thinking keep a 200-token brief from spending thousands of output tokens.
+        model_settings=merge_model_settings(
+            MODEL_SETTINGS,
+            ModelSettings(thinking=False, max_tokens=BRIEFING_MAX_OUTPUT_TOKENS),
+        ),
+        capabilities=[usage_hooks("briefing")],
+        name="weekly-briefing",
+    )
+    result = await agent.run(
+        "Write the brief from this JSON. Use only these numbers.\n"
+        + json.dumps(numbers, ensure_ascii=False, default=str),
+        event_stream_handler=drain_events,
+        usage_limits=UsageLimits(request_limit=1),
+    )
+    text = str(result.output or "").strip()
+    if not text:
+        raise ValueError("the briefing model returned no prose")
+    return text
 
 
 async def compose_briefing(conn: Connection, *, as_of: date | None = None) -> dict[str, Any]:
@@ -297,7 +288,6 @@ async def send_weekly_briefing(
     as_of: date | None = None,
     period: str | None = None,
     model: Any = None,
-    spend_store: Any = None,
 ) -> dict[str, Any] | None:
     day = as_of or ledger_today()
     period = period or day.strftime("%G-W%V")
@@ -310,7 +300,7 @@ async def send_weekly_briefing(
     body = template
     prose_error = None
     try:
-        prose = await write_prose(numbers, model=model, spend_store=spend_store)
+        prose = await write_prose(numbers, model=model)
         flagged = check_numbers(prose, numbers, kinds=("money", "percent"))
         if flagged:
             # The template already carries exactly the computed numbers, so a prose number
@@ -323,7 +313,7 @@ async def send_weekly_briefing(
         else:
             body = prose
     except Exception as exc:  # noqa: BLE001 - ordinary prose failures use computed numbers
-        from arno.agent.spend import COST_STOP_ERRORS
+        from arno.agent.usage import COST_STOP_ERRORS
 
         if isinstance(exc, COST_STOP_ERRORS):
             raise

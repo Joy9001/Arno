@@ -6,16 +6,13 @@ behavior are measured from traces at L2.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterable
-from contextlib import nullcontext
 from dataclasses import replace
-from decimal import Decimal
 from typing import Any, override
 
 from pydantic import BaseModel
-from pydantic_ai import ModelSettings, RetryModelRequest, RunContext
+from pydantic_ai import ModelSettings, RunContext
 from pydantic_ai.capabilities import (
     AbstractCapability,
     Caching,
@@ -25,7 +22,6 @@ from pydantic_ai.capabilities import (
 from pydantic_ai.messages import (
     AgentStreamEvent,
     ModelRequest,
-    ModelResponse,
     ToolReturn,
     ToolReturnPart,
     UserPromptPart,
@@ -42,7 +38,6 @@ from pydantic_ai_harness.compaction import (
     is_pinned,
 )
 from pydantic_ai_harness.guardrails import InputGuardrail
-from pydantic_ai_harness.spend import Budget
 from pydantic_ai_harness.subagents import is_task_report
 from pydantic_ai_harness.system_reminders import SystemReminders
 from pydantic_ai_harness.tool_output_limits import (
@@ -53,20 +48,11 @@ from pydantic_ai_harness.tool_output_limits import (
 )
 from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 
-from arno.agent.chatgpt_auth import background_inference
-from arno.agent.cost_journal import cost_identity, current_cost_identity
 from arno.agent.deps import AgentDeps
 from arno.agent.images import ImageAttachments
-from arno.agent.metering import TRANSIENT_MODEL_ERRORS
 from arno.agent.models import DEFAULT_CONTEXT_WINDOW
 from arno.agent.redaction import redact_text, redaction_detectors
-from arno.agent.spend import (
-    COST_STOP_ERRORS,
-    DAILY_CEILING_USD,
-    SHARED_DAILY_BUDGET,
-    shared_daily_budget,
-    spend_limits,
-)
+from arno.agent.usage import COST_STOP_ERRORS, usage_hooks
 from arno.db.conn import connect
 from arno.ledger.common import today as ledger_today
 from arno.tools.mark import contains_outside, flag_outside_text
@@ -178,26 +164,18 @@ class RootSpanIO(AbstractCapability[Any]):
 
 
 class InferenceContext(AbstractCapability[Any]):
-    """Carry conversation attribution and consent through summaries and delegated work."""
-
-    def __init__(self, *, background: bool = False) -> None:
-        self.background = background
+    """Stamp the conversation id on the run span, so a summary shares its conversation's session."""
 
     @override
     async def wrap_run(self, ctx: RunContext[Any], *, handler: WrapRunHandler) -> Any:
-        session_id = getattr(ctx.deps, "conversation_id", None) or ctx.conversation_id
-        consent = background_inference() if self.background else nullcontext()
-        with consent, cost_identity(session_id=session_id):
-            from opentelemetry.trace import get_current_span
+        from opentelemetry.trace import get_current_span
 
-            session_id, workload = current_cost_identity()
+        session_id = getattr(ctx.deps, "conversation_id", None) or ctx.conversation_id
+        if session_id:
             span = get_current_span()
-            if session_id:
-                span.set_attribute("session.id", session_id)
-                span.set_attribute("gen_ai.conversation.id", session_id)
-            if workload:
-                span.set_attribute("arno.cost.workload", workload)
-            return await handler()
+            span.set_attribute("session.id", session_id)
+            span.set_attribute("gen_ai.conversation.id", session_id)
+        return await handler()
 
 
 class ToolErrorsToModel(AbstractCapability[AgentDeps]):
@@ -455,9 +433,6 @@ def build_capabilities(
     *,
     primary: Model,
     backup: Model | None = None,
-    spend_store: Any = None,
-    run_budget_usd: Decimal | None = None,
-    question_budget_usd: Decimal | None = None,
     context_window: int | None = None,
     subagents: AbstractCapability[Any] | None = None,
 ) -> list[AbstractCapability[Any]]:
@@ -467,40 +442,10 @@ def build_capabilities(
     target = min(100_000, window // 2)
     keep = max(target // 5, 1)
 
-    budgets: list[Budget] | None = None
-    if spend_store is not None:
-        if run_budget_usd is not None:
-            # An eval trial is one conversation and may have several turns. A conversation
-            # budget is the only window that caps the whole trial, not each turn in it.
-            budgets = [
-                Budget(
-                    usd=run_budget_usd,
-                    tokens=1_000_000,
-                    window="conversation",
-                    name="trial",
-                )
-            ]
-        elif question_budget_usd is not None:
-            # A scheduled question has its own small run ceiling, while the daily ceiling is
-            # shared with chat and every other agent run.
-            budgets = [
-                Budget(usd=question_budget_usd, window="run", name="scheduled question"),
-                shared_daily_budget(),
-            ]
-        else:
-            budgets = [
-                Budget(usd=Decimal("5"), window="run", name="turn"),
-                shared_daily_budget(),
-            ]
-
-    # The summary runs on its own Agent, so it needs its own SpendLimits. Only windows keyed by
-    # the day or the conversation share the outer ledger; a `run` window would key a fresh
-    # summarizer run and charge a second budget instead of the outer one.
-    summary_budgets = [budget for budget in budgets or [] if budget.window != "run"]
-    summary_limits = spend_limits(spend_store, budgets=summary_budgets)
-    summarization_capabilities: list[AbstractCapability[Any]] = [InferenceContext()]
-    if summary_limits is not None:
-        summarization_capabilities.append(summary_limits)
+    summarization_capabilities: list[AbstractCapability[Any]] = [
+        InferenceContext(),
+        usage_hooks("summary"),
+    ]
 
     summary_model: Model = FallbackModel(primary, backup) if backup is not None else primary
     capabilities: list[AbstractCapability[Any]] = [
@@ -548,53 +493,10 @@ def build_capabilities(
     ]
     if subagents is not None:
         capabilities.append(subagents)
-    # Same model first, then the backup: the retry hands its last error on to the fallback.
-    capabilities.append(RetryTransientModelErrors())
     if backup is not None:
         capabilities.append(ModelFallback(backup, sticky=False))
-    main_limits = spend_limits(spend_store, budgets=budgets)
-    if main_limits is not None:
-        capabilities.append(main_limits)
+    capabilities.append(usage_hooks("chat"))
     return capabilities
-
-
-TRANSIENT_ATTEMPTS = 3
-"""Attempts per request step on a transient provider error: the first try and two retries."""
-
-
-class RetryTransientModelErrors(AbstractCapability[Any]):
-    """Ask the same model again when the provider fails for a reason a second try can fix.
-
-    The SDK clients run with `max_retries=0` so every attempt is metered, and a free provider's
-    5xx or a stream that drops before its first event would otherwise end the whole turn or a
-    long parser run. Each retry waits a little longer; after the last one the error goes on to
-    `ModelFallback`, when a backup model is configured, and then to the run.
-    """
-
-    def __init__(self, attempts: int = TRANSIENT_ATTEMPTS, *, base_delay: float = 2.0) -> None:
-        self.attempts = attempts
-        self.base_delay = base_delay
-        self.id = "retry_transient_model_errors"
-
-    @override
-    async def on_model_request_error(
-        self,
-        ctx: RunContext[Any],
-        *,
-        request_context: ModelRequestContext,
-        error: Exception,
-    ) -> ModelResponse:
-        transient = isinstance(error, TRANSIENT_MODEL_ERRORS)
-        if not transient or request_context.attempt >= self.attempts:
-            raise error
-        logger.warning(
-            "model request failed (%s), retrying: attempt %d of %d",
-            type(error).__name__,
-            request_context.attempt + 1,
-            self.attempts,
-        )
-        await asyncio.sleep(self.base_delay * request_context.attempt)
-        raise RetryModelRequest()
 
 
 STALL_SECONDS = 600
@@ -619,17 +521,14 @@ def turn_limits() -> Any:
 
 
 __all__ = [
-    "DAILY_CEILING_USD",
     "MODEL_SETTINGS",
     "SANDBOX_ERRORS",
     "SANDBOX_HELPERS",
     "SANDBOX_MODULES",
-    "SHARED_DAILY_BUDGET",
     "STALL_SECONDS",
     "SUMMARY_PROMPT",
     "CodeModeHints",
     "OutsideTextTaint",
-    "RetryTransientModelErrors",
     "RootSpanIO",
     "ToolErrorsToModel",
     "WRITE_TOOLS",
@@ -638,7 +537,5 @@ __all__ = [
     "drain_events",
     "redaction_guardrail",
     "sandbox_help",
-    "shared_daily_budget",
-    "spend_limits",
     "turn_limits",
 ]

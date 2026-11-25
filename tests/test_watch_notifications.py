@@ -220,13 +220,11 @@ async def test_settings_scheduled_questions_and_job_status_round_trip(session_cl
         json={
             "prompt": "Every Sunday, what did I spend on food?",
             "rule": "FREQ=WEEKLY;BYDAY=SU",
-            "spend_limit_usd": 1.5,
         },
     )
     assert created.status_code == 201, created.text
     question = created.json()
     assert question["next_run_at"] is not None
-    assert question["spend_limit_usd"] == "1.50"
 
     listed = session_client.get("/api/scheduled-questions")
     assert listed.status_code == 200

@@ -20,7 +20,6 @@ from arno import __version__
 from arno.agent.builder import build_agent
 from arno.agent.history import recover_crashed_runs
 from arno.agent.parser import build_parser_agent
-from arno.agent.spend import make_spend_store
 from arno.agent.turns import TurnManager
 from arno.agent.wake import waiting_threads
 from arno.api import (
@@ -110,7 +109,6 @@ async def _bootstrap(settings: Settings) -> list[int]:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     db_cache: ConnectionCache | None = None
-    pool = None
     tasks_pool = None
     await _bootstrap(app.state.settings)
     async with connect(app.state.settings.database_url) as conn:
@@ -121,9 +119,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         if interrupted:
             logger.warning("requeued %d interrupted job(s)", interrupted)
     db_cache = bind_connection_cache(app.state.settings.database_url)
-    spend_store, pool = await make_spend_store(app.state.settings.database_url)
-    app.state.spend_store = spend_store
-    app.state.spend_pool = pool
     try:
         tasks_pool = await asyncpg.create_pool(
             app.state.settings.database_url, min_size=1, max_size=4, command_timeout=30
@@ -143,7 +138,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     tasks = TaskOwner(
         directory=app.state.settings.tasks_dir, step_store=step_store, observer=observe
     )
-    parser = build_parser_agent(plan_pool=tasks_pool, spend_store=spend_store)
+    parser = build_parser_agent(plan_pool=tasks_pool)
     app.state.tasks = tasks
     try:
         async with tasks.opened():
@@ -153,7 +148,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
                         logger.warning("settled %d import(s) left parsing", settled)
             except Exception:  # noqa: BLE001 - a stale status must not stop the app
                 logger.exception("import status reconcile failed")
-            app.state.agent = build_agent(spend_store=spend_store, parser_agent=parser)
+            app.state.agent = build_agent(parser_agent=parser)
             app.state.turns = TurnManager(app.state.agent, tasks=tasks)
 
             async def wake_thread(thread_id: str) -> None:
@@ -178,8 +173,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         finally:
             if db_cache is not None:
                 await close_connection_cache(db_cache)
-            if pool is not None:
-                await pool.close()
             if tasks_pool is not None:
                 await tasks_pool.close()
             shutdown_observability()
@@ -200,7 +193,6 @@ async def _settle_parser(event: Any) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging()
-    bootstrap_observability()
 
     app = FastAPI(
         title="Arno",
@@ -211,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    bootstrap_observability(app)
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
     # Added last, so it wraps the host check and every response carries the policy.

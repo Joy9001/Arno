@@ -33,7 +33,6 @@ from arno.agent.history import (
     save_records,
     without_empty_responses,
 )
-from arno.agent.models import opencode_conversation
 from arno.agent.number_check import check_messages
 from arno.agent.presentation import keep_last_answer
 from arno.agent.wake import KeepRetryMark, ParserNeedsFiles, WakePolicy
@@ -625,7 +624,7 @@ class TurnManager:
                 if turn.wake is not None:
                     reports.append(turn.wake)
                 bound = self.tasks.bind() if self.tasks is not None else nullcontext()
-                with bound, opencode_conversation(turn.thread_id):
+                with bound:
                     stream = adapter.run_stream(
                         message_history=turn.history,
                         conversation_id=turn.thread_id,

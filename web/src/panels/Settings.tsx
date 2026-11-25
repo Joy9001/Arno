@@ -386,20 +386,6 @@ function floorToPaise(raw: string): { paise: number } | { error: string } {
   return { paise };
 }
 
-/** Blank means the server default; anything else must be a readable dollar amount. */
-function spendLimitError(raw: string): string | null {
-  const value = raw.trim();
-  if (!value) return null;
-  if (!/^\d+(?:\.\d{1,2})?$/.test(value) || !Number.isFinite(Number(value))) {
-    return "Enter a dollar amount of 0 or more, with up to two decimals.";
-  }
-  return null;
-}
-
-function usd(value: string | number): string {
-  return `$${Number(value).toFixed(2)}`;
-}
-
 function ProfileSection({ settings }: { settings: ApiState<SettingsPayload> }) {
   return (
     <SettingsSection
@@ -1448,13 +1434,9 @@ function ScheduledQuestionsCard({
 }) {
   const [prompt, setPrompt] = useState("");
   const [rule, setRule] = useState("FREQ=WEEKLY;BYDAY=SU");
-  const [spend, setSpend] = useState("");
-  const [spendError, setSpendError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [editRule, setEditRule] = useState("");
-  const [editSpend, setEditSpend] = useState("");
-  const [editSpendError, setEditSpendError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1472,12 +1454,6 @@ function ScheduledQuestionsCard({
   async function add(event: FormEvent) {
     event.preventDefault();
     if (!prompt.trim() || !rule.trim()) return;
-    const invalidSpend = spendLimitError(spend);
-    if (invalidSpend) {
-      setSpendError(invalidSpend);
-      return;
-    }
-    setSpendError(null);
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -1487,7 +1463,6 @@ function ScheduledQuestionsCard({
         body: JSON.stringify({
           prompt: prompt.trim(),
           rule: rule.trim(),
-          spend_limit_usd: spend.trim() === "" ? null : Number(spend),
         }),
       });
       setPrompt("");
@@ -1504,19 +1479,12 @@ function ScheduledQuestionsCard({
     setEditingId(question.id);
     setEditPrompt(question.prompt);
     setEditRule(question.rule);
-    setEditSpend(question.spend_limit_usd ?? "");
-    setEditSpendError(null);
     setError(null);
     setMessage(null);
   }
 
   async function saveEdit(question: ScheduledQuestion) {
     if (!editPrompt.trim() || !editRule.trim()) return;
-    const invalidSpend = spendLimitError(editSpend);
-    if (invalidSpend) {
-      setEditSpendError(invalidSpend);
-      return;
-    }
     setBusyId(question.id);
     setError(null);
     setMessage(null);
@@ -1526,7 +1494,6 @@ function ScheduledQuestionsCard({
         body: JSON.stringify({
           prompt: editPrompt.trim(),
           rule: editRule.trim(),
-          ...(editSpend.trim() === "" ? {} : { spend_limit_usd: Number(editSpend) }),
         }),
       });
       setEditingId(null);
@@ -1561,13 +1528,11 @@ function ScheduledQuestionsCard({
     }
   }
 
-  const spendDescriptionIds = spendError ? "stg-spend-hint stg-spend-error" : "stg-spend-hint";
-
   return (
     <div className="stg-card">
       <p className="stg-hint">
         Each run is read-only, uses the pinned financial snapshot, and stops after 20 model
-        requests or its spend limit. The instance also shares a $20 daily model ceiling.
+        requests. The instance also shares a $20 daily model ceiling.
       </p>
 
       <div className="stg-subhead">
@@ -1614,36 +1579,10 @@ function ScheduledQuestionsCard({
                               onChange={(event) => setEditRule(event.target.value)}
                             />
                           </label>
-                          <label>
-                            Spend limit per run (USD)
-                            <input
-                              inputMode="decimal"
-                              value={editSpend}
-                              placeholder={data.default_spend_limit_usd}
-                              aria-invalid={Boolean(editSpendError)}
-                              aria-describedby={`stg-edit-spend-hint-${question.id}`}
-                              onChange={(event) => {
-                                setEditSpend(event.target.value);
-                                if (editSpendError) {
-                                  setEditSpendError(spendLimitError(event.target.value));
-                                }
-                              }}
-                              onBlur={() => setEditSpendError(spendLimitError(editSpend))}
-                            />
-                          </label>
                         </div>
                         <p id={`stg-edit-rule-hint-${question.id}`} className="stg-hint">
-                          Times follow your notification time. Blank spend keeps the current limit.
+                          Times follow your notification time.
                         </p>
-                        {editSpendError && (
-                          <p
-                            id={`stg-edit-spend-hint-${question.id}`}
-                            className="error"
-                            role="alert"
-                          >
-                            {editSpendError}
-                          </p>
-                        )}
                       </div>
                     ) : (
                       <>
@@ -1656,10 +1595,6 @@ function ScheduledQuestionsCard({
                           {question.last_run_at
                             ? formatMoment(question.last_run_at)
                             : "never run"}{" "}
-                          · limit{" "}
-                          {question.spend_limit_usd != null
-                            ? usd(question.spend_limit_usd)
-                            : `default ${usd(data.default_spend_limit_usd)}`}
                         </p>
                       </>
                     )}
@@ -1755,35 +1690,11 @@ function ScheduledQuestionsCard({
               onChange={(event) => setRule(event.target.value)}
             />
           </label>
-          <label>
-            Spend limit per run (USD)
-            <input
-              inputMode="decimal"
-              value={spend}
-              placeholder={data.default_spend_limit_usd}
-              aria-invalid={Boolean(spendError)}
-              aria-describedby={spendDescriptionIds}
-              onChange={(event) => {
-                setSpend(event.target.value);
-                if (spendError) setSpendError(spendLimitError(event.target.value));
-              }}
-              onBlur={() => setSpendError(spendLimitError(spend))}
-            />
-          </label>
         </div>
         <p id="stg-rule-hint" className="stg-hint">
           Use an RRULE such as <code>FREQ=WEEKLY;BYDAY=SU</code>. Times follow your notification
           time.
         </p>
-        <p id="stg-spend-hint" className="stg-hint">
-          Leave blank to use the default ${data.default_spend_limit_usd} per run. A blank field
-          means the default, not zero. Enter 0 or more with up to two decimals.
-        </p>
-        {spendError && (
-          <p id="stg-spend-error" className="error" role="alert">
-            {spendError}
-          </p>
-        )}
         <div className="stg-actions">
           <button type="submit" disabled={saving || !prompt.trim() || !rule.trim()}>
             {saving ? (

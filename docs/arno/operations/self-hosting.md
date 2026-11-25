@@ -178,48 +178,43 @@ profile binds a fixed loopback port (`11434`), so only one stack per host can ru
 
 ## Configure models
 
-Each model role accepts a provider, billing mode, base URL, API key, and exact model ID. Local
-Ollama endpoints use the same code path as cloud APIs. `*_BILLING_MODE` accepts
-`metered` (default), `local`, or `reported`; there is no subscription billing mode. Paid inference
-refuses to run when a model price is unknown rather than treating it as free, so paid roles must
-name a verified provider or `reported` when the endpoint supplies `usage.cost`. Pin exact, dated
-model IDs instead of floating `latest` aliases. Evals have no command-line entry point; see
+Each model role accepts a provider, base URL, API key, and exact model ID. Local Ollama endpoints
+use the same code path as cloud APIs. The SDK clients retry transient errors twice. Pin exact,
+dated model IDs instead of floating `latest` aliases. Evals have no command-line entry point; see
 [development operations](development-operations.md#real-model-journeys-and-evals).
 
 The following table lists every model role and its environment variables.
 
 | Role | Variables | Used for |
 |---|---|---|
-| Chat | `CHAT_PROVIDER`, `CHAT_BILLING_MODE`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer agent, and summary prose |
-| Batch | `BATCH_PROVIDER`, `BATCH_API_KEY`, `BATCH_MODEL` | Optional cloud-only batch API (`anthropic`, `openai`, or `google`/`gemini`) for large categorization backfills at lower cost; leave unset for local-only setups |
-| Parse | `PARSE_PROVIDER`, `PARSE_BILLING_MODE`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional parser subagent model; falls back to Chat when unset |
-| Vision | `VISION_PROVIDER`, `VISION_BILLING_MODE`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Receipt or UPI photos and statement pages with no text layer |
-| Speech-to-text | `STT_PROVIDER`, `STT_BILLING_MODE`, `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE`, `STT_PAYEE_CONTEXT`, `STT_TIMEOUT_SECONDS` | Voice-note transcription |
-| Chat fallback | `CHAT_FALLBACK_PROVIDER`, `CHAT_FALLBACK_BILLING_MODE`, `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL`, `CHAT_FALLBACK_CONTEXT_WINDOW` | Optional backup endpoint when the primary chat endpoint fails |
+| Chat | `CHAT_PROVIDER`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer agent, and summary prose |
+| Parse | `PARSE_PROVIDER`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional parser subagent model; falls back to Chat when unset |
+| Vision | `VISION_PROVIDER`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Receipt or UPI photos and statement pages with no text layer |
+| Speech-to-text | `STT_PROVIDER`, `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE`, `STT_PAYEE_CONTEXT`, `STT_TIMEOUT_SECONDS` | Voice-note transcription |
+| Chat fallback | `CHAT_FALLBACK_PROVIDER`, `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL`, `CHAT_FALLBACK_CONTEXT_WINDOW` | Optional backup endpoint when the primary chat endpoint fails |
 
-Every paid path shares a $20 UTC-day ceiling and a $5 interactive-run ceiling; each scheduled
-question has a $1 default ceiling. These limits act as runaway brakes rather than an invoice cap;
-see [cost tracking](../specs/cost-tracking.md).
+Every model call is logged to the `llm_usage` table, and all roles share a $20 daily cap that
+resets at midnight India time. The cap is a runaway brake rather than an invoice limit. Models the
+price catalog does not know, including OpenCode-routed models, count as $0 toward it; see
+[cost tracking](../specs/cost-tracking.md).
 
 ### Cloud chat providers
 
-Arno supports OpenAI-compatible Chat Completions (`openai`, `opencode`), OpenAI Responses
+Arno supports OpenAI-compatible Chat Completions (`openai`), OpenAI Responses
 (`openai-responses`), OpenRouter (`openrouter`), and native Anthropic Messages (`anthropic`).
 
 For an OpenAI-compatible endpoint (or OpenAI Responses with `CHAT_PROVIDER=openai-responses`):
 
 ```dotenv
 CHAT_PROVIDER=openai
-CHAT_BILLING_MODE=metered
 CHAT_BASE_URL=https://api.<provider>.com/v1
 CHAT_API_KEY=<key>
 CHAT_MODEL=<exact, dated model id>
 LLM_CONTEXT_WINDOW=<server context window>
 ```
 
-For OpenCode Go (`CHAT_PROVIDER=opencode`), point `CHAT_BASE_URL` at the OpenCode endpoint. Chat
-conversations send a stable per-conversation `x-opencode-session` header automatically; set
-optional `OPENCODE_SESSION_ID` to pin the routing session for calls outside a chat thread.
+For OpenCode Go, point `CHAT_BASE_URL` at the OpenCode endpoint with the default OpenAI-compatible
+adapter.
 
 For OpenRouter (`CHAT_PROVIDER=openrouter`), leave `CHAT_BASE_URL` unset or set it to
 `https://openrouter.ai/api/v1` to use the native OpenRouter adapter.
@@ -229,7 +224,6 @@ Console API keys and eligible plan-funded Console credits use this route:
 
 ```dotenv
 CHAT_PROVIDER=anthropic
-CHAT_BILLING_MODE=metered
 CHAT_API_KEY=<Console API key>
 CHAT_MODEL=<exact Claude model id>
 LLM_CONTEXT_WINDOW=200000
@@ -248,7 +242,6 @@ docker compose exec ollama ollama pull qwen3:4b
 
 ```dotenv
 CHAT_PROVIDER=ollama
-CHAT_BILLING_MODE=local
 CHAT_BASE_URL=http://ollama:11434/v1
 CHAT_API_KEY=ollama
 CHAT_MODEL=qwen3:4b
@@ -266,14 +259,10 @@ transcription endpoint: a cloud API or a server you run yourself.
 
 ```dotenv
 STT_PROVIDER=openai
-STT_BILLING_MODE=metered
 STT_BASE_URL=https://api.<provider>.com/v1
 STT_API_KEY=<key>
 STT_MODEL=<exact model id>
 ```
-
-Use `STT_BILLING_MODE=local` for a server on your own hardware, or `reported` when the endpoint
-returns `usage.cost`.
 
 - **`STT_LANGUAGE`:** Pins the spoken language (for example, `en`, which also handles Hinglish
   written in Latin script). Leave unset to auto-detect; short clips often misdetect when unset.
@@ -285,7 +274,6 @@ returns `usage.cost`.
 
 ```dotenv
 VISION_PROVIDER=openai
-VISION_BILLING_MODE=metered
 VISION_BASE_URL=https://api.<provider>.com/v1
 VISION_API_KEY=<key>
 VISION_MODEL=<exact, dated model id>
@@ -299,7 +287,6 @@ working.
 
 ```dotenv
 CHAT_FALLBACK_PROVIDER=ollama
-CHAT_FALLBACK_BILLING_MODE=local
 CHAT_FALLBACK_BASE_URL=http://ollama:11434/v1
 CHAT_FALLBACK_API_KEY=ollama
 CHAT_FALLBACK_MODEL=qwen3:4b
@@ -322,7 +309,6 @@ The following table summarizes what leaves the host for each configured role or 
 | Chat | Financial snapshot (balances, account names, preferences), thread history, and tool returns | Every chat turn or scheduled question |
 | Parser subagent | Sample statement rows, including payee names and narrations | Each statement import; only sample rows when a saved parser replays cleanly |
 | Vision | Receipt or UPI photo, or statement pages with no text layer | Each photo or textless statement page |
-| Batch (`BATCH_*` set) | Payee names, one sample narration per payee, and category names | Large categorization backfills (cloud-only; unset uses Chat) |
 | Speech-to-text | Recorded audio and, when `STT_PAYEE_CONTEXT=1`, active payee names | Each voice note |
 | Backups and push | Encrypted restic archive; contentless web push pings | Scheduled backup; on notification |
 | Never sent | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
@@ -507,6 +493,14 @@ docker compose up -d
 The API writes a pre-migration dump before applying pending migrations transactionally. If an update
 fails, restore the pre-migration dump or latest restic snapshot.
 
+- **Upgrading from a build with metering or Phoenix SDK settings:** Rename
+  `PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces` to
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006` in `.env`, and delete `PHOENIX_PROJECT_NAME` and
+  `PHOENIX_API_KEY` (use `OTEL_EXPORTER_OTLP_HEADERS` for a custom bearer token). Delete every
+  `*_BILLING_MODE`, `BATCH_*`, and `OPENCODE_SESSION_ID` line, and any ChatGPT-provider settings:
+  those settings and the ChatGPT-plan provider and Batch API categorizer no longer exist. Run
+  `docker compose up -d --build` so Compose builds the new isolated `sandbox` service and recreates
+  `api` onto the internal `sandbox-net` network.
 - **Pre-0.3.0 installs (Fin-Agent rename or superuser `app` role):** Follow
   [legacy upgrades](legacy-upgrades.md) before applying routine updates.
 
@@ -569,9 +563,9 @@ touch.
 
 ## Observability
 
-Tracing is off by default: `PHOENIX_COLLECTOR_ENDPOINT` is empty, so Arno registers and
+Tracing is off by default: `OTEL_EXPORTER_OTLP_ENDPOINT` is empty, so Arno registers and
 instruments nothing. To turn it on, set the Phoenix secrets in `.env`, set
-`PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces`, and start the `obs` profile:
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006`, and start the `obs` profile:
 
 ```bash
 docker compose --profile obs up -d
@@ -579,15 +573,15 @@ docker compose --profile obs up -d
 
 The profile runs stock Phoenix (Elastic License 2.0, outside the Arno image) on loopback at
 `http://127.0.0.1:6006` with authentication enabled and traces stored in SQLite on the
-`phoenix-data` volume. Compose sets `PHOENIX_PROJECT_NAME=arno` and falls back `PHOENIX_API_KEY` to
-`PHOENIX_ADMIN_SECRET` so trace export works on first start. Set `ARNO_PHOENIX_UI_URL` to surface
-the Phoenix link in **Settings**. Export is fail-open: Arno serves normally when Phoenix is down,
-and `OTEL_SDK_DISABLED=true` disables tracing completely.
+`phoenix-data` volume. Compose sets the `arno` Phoenix project through `OTEL_RESOURCE_ATTRIBUTES`
+and sends `PHOENIX_ADMIN_SECRET` as the bearer token in `OTEL_EXPORTER_OTLP_HEADERS`, so trace
+export works on first start. Set `ARNO_PHOENIX_UI_URL` to surface the Phoenix link in **Settings**.
+Export is fail-open: Arno serves normally when Phoenix is down, and `OTEL_SDK_DISABLED=true`
+disables tracing completely.
 
-Phoenix prices calls from its own catalog, so its cost figures can differ from Arno's. The
-PostgreSQL spend ledger (`llm_calls`) is the source of truth for cost, and ledger backups include it
-but exclude Phoenix's data. See [observability](observability.md) and
-[cost tracking](../specs/cost-tracking.md).
+Phoenix prices calls from its own catalog, so its cost figures are indicative. The `llm_usage`
+table is the source of truth for cost, and ledger backups include it but exclude Phoenix's data.
+See [observability](observability.md) and [cost tracking](../specs/cost-tracking.md).
 
 ---
 
@@ -604,8 +598,8 @@ The following table lists common failure symptoms and first diagnostic checks.
 | Backups stopped | Check **Settings > Backup status**, `docker compose logs api`, and `docker compose exec api restic snapshots`. |
 | `arno restore` refuses | The target database has tables. Use a fresh database, or pass `--force` to replace it. |
 | Web UI is blank | Check browser console CSP errors; the production build has no inline scripts. Rebuild with `docker compose build api`. |
-| Traces missing | Tracing is off unless `PHOENIX_COLLECTOR_ENDPOINT` is set and the `obs` profile runs. Check `docker compose ps`, `docker compose logs api`, `OTEL_SDK_DISABLED`, and `PHOENIX_API_KEY` / `PHOENIX_ADMIN_SECRET`. |
-| Paid inference refuses with unknown price | Set `*_PROVIDER` to a verified provider or `*_BILLING_MODE=reported` when the endpoint returns `usage.cost`; use `local` only for local servers. |
+| Traces missing | Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set and the `obs` profile runs. Check `docker compose ps`, `docker compose logs api`, `OTEL_SDK_DISABLED`, and `OTEL_EXPORTER_OTLP_HEADERS` / `PHOENIX_ADMIN_SECRET`. |
+| Chat stops with "Paused at the daily spend limit" | The shared $20 daily cap is reached. It resets at midnight India time. |
 
 ### Host CLI reference
 

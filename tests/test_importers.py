@@ -303,14 +303,14 @@ async def test_monty_has_no_file_access():
 async def test_a_caught_cost_stop_still_escapes_the_sandbox(monkeypatch):
     """The spend ceiling ends the run even when the script swallows the error and moves on."""
     import arno.importers.monty as monty
-    from arno.agent.spend import SpendStoreError
+    from arno.agent.usage import DailyBudgetExceeded
 
     calls = {"n": 0}
 
     async def stop(doc, page):
         del doc, page
         calls["n"] += 1
-        raise SpendStoreError("shared day is spent")
+        raise DailyBudgetExceeded("shared day is spent")
 
     monkeypatch.setattr(monty, "vision_transcribe", stop)
     script = (
@@ -325,7 +325,7 @@ async def test_a_caught_cost_stop_still_escapes_the_sandbox(monkeypatch):
         "result = 1\n"
     )
 
-    with pytest.raises(SpendStoreError):
+    with pytest.raises(DailyBudgetExceeded):
         await run_script(
             Doc(minimal_pdf(["Date Narration"])),
             script,

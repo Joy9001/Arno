@@ -419,8 +419,6 @@ export type ScheduledQuestion = {
   id: string;
   prompt: string;
   rule: string;
-  spend_limit_usd: string | null;
-  default_spend_limit_usd: string;
   last_run_at: string | null;
   next_run_at: string | null;
   active: boolean;
@@ -429,7 +427,6 @@ export type ScheduledQuestion = {
 
 export type ScheduledQuestionList = {
   questions: ScheduledQuestion[];
-  default_spend_limit_usd: string;
   as_of: string;
 };
 

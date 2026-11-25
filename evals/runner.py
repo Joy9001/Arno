@@ -35,13 +35,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import Model
 from pydantic_ai.tools import DeferredToolResults
-from pydantic_ai_harness.spend import InMemorySpendStore
 from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import EvaluationReason, Evaluator, EvaluatorContext
 from pydantic_evals.reporting import EvaluationReport, ReportCase
 
 from arno.agent.builder import build_agent
-from arno.agent.cost_journal import cost_identity
 from arno.agent.deps import AgentDeps
 from arno.agent.history import (
     create_thread,
@@ -172,19 +170,12 @@ async def run_turn(
     model_factory: Callable[[], Model] | None = None,
     model_name: str,
     project_name: str | None = None,
-    run_budget_usd: Decimal = Decimal("2"),
 ) -> EvalOutput:
     """One eval trial. Native Pydantic AI spans come from the process bootstrap."""
     del project_name
-    with cost_identity(workload=f"eval:{inp.case_id}"):
-        return await _run_turn(
-            inp,
-            meta=meta,
-            model=model,
-            model_factory=model_factory,
-            model_name=model_name,
-            run_budget_usd=run_budget_usd,
-        )
+    return await _run_turn(
+        inp, meta=meta, model=model, model_factory=model_factory, model_name=model_name
+    )
 
 
 async def _run_turn(
@@ -194,13 +185,12 @@ async def _run_turn(
     model: Model | None = None,
     model_factory: Callable[[], Model] | None = None,
     model_name: str,
-    run_budget_usd: Decimal = Decimal("2"),
 ) -> EvalOutput:
     """Run one trial and return what the graders need.
 
     The database context variable is already set by the lifecycle. The agent is built per
-    trial so the spend counter and context window belong to this trial alone. A factory builds
-    a fresh model, and therefore a fresh provider session, for each trial. Instrumentation is
+    trial so the context window belongs to this trial alone. A factory builds a fresh model for
+    each trial. Instrumentation is
     the process bootstrap's one provider and eval project, not one provider per trial.
     """
     if model_factory is not None:
@@ -228,12 +218,9 @@ async def _run_turn(
     # last message, not since the case began.
     last_turn_at = ""
 
-    spend_store = InMemorySpendStore()
     agent = build_agent(
         model=model,
         backup=None,
-        spend_store=spend_store,
-        run_budget_usd=run_budget_usd,
         context_window=meta.long_thread.context_window if meta.long_thread else None,
     )
 
@@ -430,7 +417,6 @@ async def evaluate_model(
     case_ids: set[str] | None = None,
     limit: int | None = None,
     per_category: int | None = None,
-    run_budget_usd: Decimal = Decimal("2"),
     task_timeout: float = 300,
 ) -> EvaluationReport[EvalInput, EvalOutput, EvalMeta]:
     dataset, meta_by_id = build_dataset(
@@ -449,7 +435,6 @@ async def evaluate_model(
             model=model,
             model_factory=model_factory,
             model_name=model_name,
-            run_budget_usd=run_budget_usd,
         )
 
     return await dataset.evaluate(
@@ -777,7 +762,6 @@ def run_eval(
     limit: int | None = None,
     per_category: int | None = None,
     max_concurrency: int = 2,
-    run_budget_usd: Decimal = Decimal("2"),
     results_dir: Path = RESULTS_DIR,
     note: str = "",
 ) -> list[Scorecard]:
@@ -794,7 +778,6 @@ def run_eval(
             limit=limit,
             per_category=per_category,
             max_concurrency=max_concurrency,
-            run_budget_usd=run_budget_usd,
             results_dir=results_dir,
             note=note,
         )
@@ -812,7 +795,6 @@ async def _run_eval(
     limit: int | None = None,
     per_category: int | None = None,
     max_concurrency: int = 2,
-    run_budget_usd: Decimal = Decimal("2"),
     results_dir: Path = RESULTS_DIR,
     note: str = "",
 ) -> list[Scorecard]:
@@ -833,9 +815,8 @@ async def _run_eval(
             name = model_name
 
             def fresh_model(model_name: str = name) -> Model:
-                # Each trial gets its own provider session so one trial's wording cannot leak
-                # into the next, and the pass^3 trials stay independent.
-                return model_for(model_name, session_id=f"arno-eval-{model_name}-{uuid.uuid4()}")
+                # Each trial gets its own model object, so the pass^3 trials stay independent.
+                return model_for(model_name)
 
             report = await evaluate_model(
                 model_factory=fresh_model,
@@ -849,7 +830,6 @@ async def _run_eval(
                 case_ids=case_ids,
                 limit=limit,
                 per_category=per_category,
-                run_budget_usd=run_budget_usd,
             )
             finished = datetime.now(UTC).isoformat()
             card = aggregate(

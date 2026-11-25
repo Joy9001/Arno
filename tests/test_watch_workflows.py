@@ -11,7 +11,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from arno.agent.builder import build_agent
 from arno.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
-from arno.jobs.questions import run_scheduled_question, spend_budget
+from arno.jobs.questions import run_scheduled_question
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
 from arno.ledger.accounts import create_account
@@ -794,10 +794,10 @@ async def test_missed_detection_finds_a_late_schedule_and_preserves_the_flag(db)
     assert proposals[0]["days_late"] >= 3
 
 
-async def test_handle_scheduled_question_builds_a_read_only_agent_with_a_scoped_ceiling(
+async def test_handle_scheduled_question_builds_a_read_only_agent_that_logs_its_usage(
     db, monkeypatch
 ):
-    """The real job handler builds the agent; only the model is substituted, never the store."""
+    """The real job handler builds the agent; only the model is substituted."""
     from arno.agent import builder as builder_mod
     from arno.agent.capabilities import WRITE_TOOLS
     from arno.jobs.questions import handle_scheduled_question
@@ -806,10 +806,7 @@ async def test_handle_scheduled_question_builds_a_read_only_agent_with_a_scoped_
         db,
         prompt="What did I spend on food this week?",
         rule="FREQ=WEEKLY;BYDAY=SU",
-        spend_limit_usd="2.50",
     )
-    assert spend_budget({"spend_limit_cents": 250}) == 2.5
-    assert str(spend_budget({"spend_limit_cents": None})) == "1.00"
 
     seen_tools: set[str] = set()
 
@@ -819,8 +816,8 @@ async def test_handle_scheduled_question_builds_a_read_only_agent_with_a_scoped_
         return ModelResponse(parts=[TextPart("You spent a small amount on food.")])
 
     model = streaming_model(script)
-    # The only substitution is the model factory: build_agent, the real spend store and the
-    # whole handle_scheduled_question path stay untouched.
+    # The only substitution is the model factory: build_agent and the whole
+    # handle_scheduled_question path stay untouched.
     monkeypatch.setattr(builder_mod, "primary_model", lambda: model)
     monkeypatch.setattr(builder_mod, "backup_model", lambda: None)
 
@@ -829,24 +826,17 @@ async def test_handle_scheduled_question_builds_a_read_only_agent_with_a_scoped_
     )
 
     assert result["notification_id"]
-    assert result["spend_limit_usd"] == "2.50"
     assert seen_tools, "the model must see the read toolset"
     assert seen_tools & WRITE_TOOLS == set()
     row = await db.fetchrow("SELECT * FROM notifications WHERE id = $1", result["notification_id"])
     assert row["kind"] == "scheduled_question"
     assert row["title"] == question["prompt"]
     assert "small amount" in row["body"]
-    assert row["data"]["spend_limit_usd"] == "2.50"
     answer = await db.fetchrow(
         "SELECT last_run_at FROM scheduled_questions WHERE id = $1", question["id"]
     )
     assert answer["last_run_at"] is not None
-    # The real spend store carries a run-scoped "scheduled question" ceiling for this run.
-    keys = [
-        item["key"].decode("utf-8") if isinstance(item["key"], bytes) else item["key"]
-        for item in await db.fetch("SELECT key FROM spend_counters")
-    ]
-    assert any(key.startswith("scheduled question|run|") for key in keys)
+    assert await db.fetchval("SELECT count(*) FROM llm_usage WHERE role = 'chat'") == 1
 
 
 def test_question_budget_defaults_and_ceiling_constants():
@@ -993,7 +983,7 @@ async def test_briefing_carries_complete_statement_coverage(ledger):
 
 async def test_a_scheduled_question_ceiling_is_plain_and_marked(ledger):
     question = await create_question(
-        ledger, prompt="What did I spend?", rule="FREQ=WEEKLY;BYDAY=SU", spend_limit_usd="2"
+        ledger, prompt="What did I spend?", rule="FREQ=WEEKLY;BYDAY=SU"
     )
 
     class CeilingAgent:
@@ -1012,7 +1002,6 @@ async def test_a_scheduled_question_ceiling_is_plain_and_marked(ledger):
     assert result["ceiling"] is True
     assert row["data"]["ceiling"] is True
     assert "per-run ceiling" in row["body"]
-    assert "2.00" in row["body"]
 
 
 async def test_scheduled_question_runs_once_per_period(db):

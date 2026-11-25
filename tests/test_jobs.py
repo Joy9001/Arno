@@ -8,7 +8,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import cast
 
-from arno.agent.spend import SpendStoreError
+from arno.agent.usage import DailyBudgetExceeded
 from arno.jobs.runner import (
     Handler,
     JobGaveUp,
@@ -241,7 +241,7 @@ async def test_an_enqueue_wakes_an_idle_loop_without_waiting_for_the_cap(db):
 async def test_a_cost_stop_fails_the_job_at_once_without_retrying(db):
     def handler(payload):
         del payload
-        raise SpendStoreError("the spend ledger is down")
+        raise DailyBudgetExceeded("the daily limit is spent")
 
     runner = JobRunner(registry={"cost": cast(Handler, handler)}, timeouts={"cost": 5})
     job = await db.fetchrow("INSERT INTO jobs (key, kind) VALUES ('cost:1', 'cost') RETURNING id")
@@ -249,7 +249,7 @@ async def test_a_cost_stop_fails_the_job_at_once_without_retrying(db):
     await runner.run_once()
     row = await _job(db, "cost:1")
     assert row["status"] == "failed" and row["attempts"] == 1
-    assert row["last_error"] == "SpendStoreError"
+    assert row["last_error"] == "DailyBudgetExceeded"
     notice = await db.fetchrow("SELECT * FROM notifications WHERE kind = 'job_failed'")
     assert notice["data"] == {"job_id": job["id"], "kind": "cost"}
     assert "without retrying" in notice["body"]

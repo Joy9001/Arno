@@ -95,13 +95,11 @@ for _role in ("CHAT", "VISION", "STT"):
 os.environ.setdefault("ARNO_JOBS_ENABLED", "0")
 
 # Tests never export ambient telemetry. The standard SDK kill switch stops the process
-# bootstrap from installing Phoenix; a smoke test uses its own isolated process.
+# bootstrap from installing tracing; a smoke test uses its own isolated process.
 for _otel_name in (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
     "OTEL_EXPORTER_OTLP_HEADERS",
-    "PHOENIX_COLLECTOR_ENDPOINT",
-    "PHOENIX_API_KEY",
 ):
     os.environ.pop(_otel_name, None)
 os.environ["OTEL_SDK_DISABLED"] = "true"
@@ -145,6 +143,7 @@ models.ALLOW_MODEL_REQUESTS = False  # pyrefly: ignore[bad-assignment]
 RESET_TABLES = (
     "model_credentials",
     "llm_calls",
+    "llm_usage",
     "schedule_payments",
     "schedule_occurrences",
     "users",
@@ -353,8 +352,6 @@ async def _mutable_reset(*, api: bool) -> None:
     """Empty dynamic tables in place and reapply the deterministic baseline."""
     async with connect(_dsn()) as conn, conn.transaction():
         await conn.execute(_TRUNCATE_API if api else _TRUNCATE)
-        if await conn.fetchval("SELECT to_regclass('public.spend_counters')"):
-            await conn.execute("TRUNCATE spend_counters, spend_dedup")
         # `settings` is not in RESET_TABLES; clear it before restoring its baseline row.
         await conn.execute("DELETE FROM settings")
         # Both rows come from the migrations, so every test kind needs them.

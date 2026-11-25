@@ -312,7 +312,6 @@ class SettingsSetup(WriteModel):
 class ScheduledQuestionSetup(WriteModel):
     prompt: str | None = None
     rule: str | None = None
-    spend_limit_usd: Decimal | None = None
     id: str | None = None
 
 

@@ -112,42 +112,6 @@ def test_builtin_rules_are_valid_rrules():
         assert next_occurrence(rule, after=now) is not None
 
 
-async def test_cost_replay_is_not_enqueued_when_nothing_waits_to_export(db):
-    await ensure_builtin_schedules(db)
-    await db.execute(
-        "UPDATE job_schedules SET next_run_at = now() - interval '1 minute' "
-        "WHERE kind = 'cost_replay'"
-    )
-
-    assert await enqueue_due_schedules(db) == 0
-    assert await _job_count(db, "cost_replay") == 0
-    # The schedule still moved on, so the next check happens instead of repeating this one.
-    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'cost_replay'")
-    assert schedule["next_run_at"] > datetime.now(INDIA)
-
-
-async def test_cost_replay_gets_a_distinct_job_for_each_five_minute_occurrence(db):
-    await ensure_builtin_schedules(db)
-    # A finalized call the exporter has not accepted is what makes a replay job worth creating.
-    await db.execute(
-        """
-        INSERT INTO llm_calls
-            (attempt_id, trace_id, span_id, role, provider, model, billing_mode, status,
-             started_at, finished_at, source, complete, price_revision)
-        VALUES ('att_replay', 'trace', 'span', 'chat', 'openai', 'gpt-5', 'metered', 'finalized',
-                now() - interval '10 minutes', now() - interval '6 minutes', 'provider', true, 'v1')
-        """
-    )
-    first = datetime(2026, 11, 12, 8, 0, tzinfo=INDIA)
-    for offset in (0, 5):
-        at = first + timedelta(minutes=offset)
-        await db.execute("UPDATE job_schedules SET next_run_at=$1 WHERE kind='cost_replay'", at)
-        await enqueue_due_schedules(db, now=at + timedelta(seconds=1))
-    jobs = await db.fetch("SELECT key FROM jobs WHERE kind='cost_replay'")
-    assert len(jobs) == 2
-    assert len({job["key"] for job in jobs}) == 2
-
-
 async def test_deleting_scheduled_question_cascades_and_missing_question_id_is_rejected(db):
     import asyncpg
     import pytest

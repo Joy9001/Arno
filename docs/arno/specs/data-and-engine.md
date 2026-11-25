@@ -171,7 +171,7 @@ non-liquid `goal` account holding real fenced ledger savings), `contribution_sch
 `status` (`active`, `achieved`, `paused`, `abandoned`).
 
 **`scheduled_questions`:** Stores user-scheduled read-only prompts: `prompt`, `rule` (iCalendar
-RRULE), `spend_limit_cents` (US cents, defaulting to 100), `last_run_at`, and `active`. Answers land
+RRULE), `last_run_at`, and `active`. Answers land
 in the notification inbox.
 
 **Schedule payment evidence (`schedule_occurrences` and `schedule_payments`):** Following
@@ -258,11 +258,10 @@ The following table lists each operational table:
 | `jobs`, `job_schedules` | Persistent job queue (`key`, `kind`, `payload`, `status`, `run_at`, `attempts`, `last_error`) and recurring job schedules (`scheduled_question_id`, `rule`, `next_run_at`, `dtstart`). Never hold statement passwords and stay hidden from `agent_ro` |
 | `risk_state` | Active floor-crossing risk episode tracking and `last_checked_at` timestamp |
 | `recap_views` | Period IDs opened by the owner to drive the **New** badge on recaps |
-| `categorize_runs` | Post-commit categorization runs, batch request payloads, rule-agreement metrics, and batch spend-accounting state |
+| `categorize_runs` | Post-commit categorization runs and rule-agreement metrics |
 | `series_detections` | Nightly and post-import recurring spend and income detections (rewritten atomically per run, `agent_ro`-readable) |
-| `spend_counters`, `spend_dedup` | Native spend-ceiling counters owned by `PostgresSpendStore` ([cost-tracking.md](cost-tracking.md)) |
-| `llm_calls` | Durable per-attempt inference cost journal powering replay and accounting ([cost-tracking.md](cost-tracking.md)) |
-| `model_credentials` | Access-restricted storage for native ChatGPT sign-in credentials ([platform.md](platform.md)) |
+| `llm_usage` | One row per model response (role, model, tokens, USD) that drives the shared daily spend cap; no `agent_ro` grant ([cost-tracking.md](cost-tracking.md)) |
+| `spend_counters`, `spend_dedup`, `llm_calls`, `model_credentials` | Legacy tables that no code reads or writes; the next schema squash drops them. `scheduled_questions.spend_limit_cents` is unused the same way |
 
 ---
 

@@ -15,7 +15,6 @@ from typing import Any, override
 from pydantic_evals.evaluators.context import EvaluatorContext
 from pydantic_evals.lifecycle import CaseLifecycle
 
-from arno.agent.cost_journal import reset_journal_database, use_journal_database
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password
 from arno.db.conn import connect, reset_database_url, use_database_url
 from arno.db.migrate import run_migrations
@@ -81,7 +80,6 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         self.database = ""
         self.dsn = ""
         self._token: Any = None
-        self._journal_token: Any = None
 
     @override
     async def setup(self) -> None:
@@ -92,9 +90,6 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
         )
         self.dsn = database_dsn(self.admin_dsn, self.database)
         self._token = use_database_url(self.dsn)
-        # Keep cost-only receipts recoverable after this trial's financial clone is dropped.
-        # Trial counters remain isolated in memory; this does not debit the owner's daily cap.
-        self._journal_token = use_journal_database(self.admin_dsn)
         meta = self.case.metadata
         if meta is not None and meta.unknown_balance:
             async with connect() as conn:
@@ -113,9 +108,6 @@ class TrialDatabase(CaseLifecycle[EvalInput, EvalOutput, EvalMeta]):
 
     @override
     async def teardown(self, result: Any) -> None:
-        if self._journal_token is not None:
-            reset_journal_database(self._journal_token)
-            self._journal_token = None
         if self._token is not None:
             reset_database_url(self._token)
             self._token = None

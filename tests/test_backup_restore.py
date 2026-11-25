@@ -3,18 +3,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import asyncpg
 import pytest
-from pydantic_ai.providers.openai_chatgpt import OpenAIChatGPTCredentials
+from pydantic_ai.usage import RequestUsage
 
-from arno.agent.chatgpt_auth import DatabaseChatGPTCredentialSource
-from arno.agent.cost_journal import CostAttempt, record_final, record_intent
-from arno.agent.pricing import CostObservation
-from arno.agent.spend import make_spend_store, post_direct_call
+from arno.agent.usage import record_usage
 from arno.backup_restore import (
     DUMP_NAME,
     RestoreError,
@@ -114,8 +110,7 @@ async def _counts(dsn: str) -> dict[str, int]:
 async def _cost_state(dsn: str) -> dict[str, list[dict]]:
     async with connect(dsn) as conn:
         return {
-            table: await conn.fetch(f"SELECT * FROM {table} ORDER BY 1")
-            for table in ("llm_calls", "model_credentials", "spend_counters", "spend_dedup")
+            table: await conn.fetch(f"SELECT * FROM {table} ORDER BY 1") for table in ("llm_usage",)
         }
 
 
@@ -177,47 +172,15 @@ async def test_prepare_database_fails_closed_when_it_cannot_inspect_the_target()
 @pytest.mark.skipif(CLIENT_SKIP is not None, reason=CLIENT_SKIP or "")
 async def test_pg_dump_restore_round_trip(ledger):
     settings = get_settings(refresh=True)
-    # A real restore must preserve accounting and sign-in state, including an unfinished call.
-    now = datetime.now(UTC)
-    for suffix in ("1", "2"):
-        attempt = CostAttempt(
-            attempt_id=suffix * 32,
-            trace_id="b" * 32,
-            span_id=suffix * 16,
-            role="chat",
-            provider="openai",
-            model="gpt-test",
-            billing_mode="metered",
-            workload="test-restore",
-            session_id="opaque-session",
-            started_at=now,
+    # A real restore must preserve the usage log.
+    for model in ("gpt-test", "gpt-other"):
+        await record_usage(
+            ledger,
+            "chat",
+            model,
+            RequestUsage(input_tokens=10, output_tokens=5),
+            Decimal("0.012345"),
         )
-        await record_intent(ledger, attempt)
-        if suffix == "1":
-            await record_final(
-                ledger,
-                attempt,
-                CostObservation(Decimal("0.012345678"), "test", True, "restore/v1"),
-                now,
-            )
-    await DatabaseChatGPTCredentialSource().save(
-        OpenAIChatGPTCredentials(
-            client_id="restore-client",
-            access_token="synthetic-access",
-            refresh_token="synthetic-refresh",
-            scope="openid chatgpt.tokens.use.direct",
-        )
-    )
-    store, pool = await make_spend_store(settings.database_url)
-    try:
-        await post_direct_call(
-            store,
-            CostObservation(Decimal("0.012345678"), "test", True, "restore/v1"),
-            token="restore-attempt",
-        )
-    finally:
-        if pool is not None:
-            await pool.close()
     source_cost_state = await _cost_state(settings.database_url)
     dump = export_pg_dump(settings.database_url)
     source_counts = await _counts(settings.database_url)

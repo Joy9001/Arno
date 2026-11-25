@@ -213,6 +213,7 @@ async def _transcribe_saved(
     prompt = await payee_names_prompt(conn) if with_payee_context else None
     try:
         transcript = await transcribe_audio(
+            conn,
             bytes(row["data"]),
             content_type=str(row["content_type"] or "application/octet-stream"),
             filename=str(row["filename"] or "voice.webm"),

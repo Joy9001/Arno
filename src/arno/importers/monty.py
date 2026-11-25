@@ -22,7 +22,7 @@ from pydantic_monty import (
     OSPolicy,
 )
 
-from arno.agent.spend import COST_STOP_ERRORS
+from arno.agent.usage import COST_STOP_ERRORS
 from arno.importers.checks import check_statement as check_rows
 from arno.importers.helpers import PRELUDE
 from arno.importers.readers import Doc, DocError, in_doc_worker

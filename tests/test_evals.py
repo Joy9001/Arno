@@ -27,7 +27,6 @@ from pydantic_evals import Case, Dataset
 from pydantic_evals.reporting import EvaluationReport
 
 from arno.agent.instructions import RULE_EVAL_CASES, RULES, render_instructions
-from arno.agent.metering import MeteredModel
 from arno.db.conn import connect
 from arno.demo.template import database_dsn, drop_database
 from arno.ledger.common import today as ledger_today
@@ -531,16 +530,11 @@ async def test_case_lifecycle_clones_a_fresh_database_and_drops_it(eval_template
         return ModelResponse(parts=[TextPart("No data for that period.")])
 
     metadata = EvalMeta(category="honesty", expected={"must_say": ["no data"]})
-    model = MeteredModel(FunctionModel(script), provider="test", billing_mode="local", role="eval")
-    report = await _run_case(model=model, metadata=metadata, repeat=1)
+    report = await _run_case(model=FunctionModel(script), metadata=metadata, repeat=1)
     assert len(report.cases) == 1
     assert all(bool(result.value) for result in report.cases[0].assertions.values())
     assert report.cases[0].output.trial_db
     assert await _admin_count(PREFIX) == 0
-    call = await db.fetchrow_required("SELECT * FROM llm_calls")
-    assert call["status"] == "finalized"
-    assert call["usd"] == 0
-    assert call["session_id"]
 
 
 @pytest.mark.xdist_group("cluster")

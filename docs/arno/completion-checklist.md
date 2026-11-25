@@ -14,9 +14,9 @@ These items verify live provider parity and current-release cutover on the owner
 
 - [ ] **Deploy `v0.4.2` to the owner instance.** Pull the `0.4.2` API image, verify
       health and schema version `44`, and confirm normal operation over the tailnet.
-- [ ] **Live inference-accounting parity.** Verify real provider-reported billing parity on
-      OpenCode, OpenRouter, and Anthropic (including plan-funded Anthropic Console API credits)
-      against actual provider debits or invoices.
+- [ ] **Live daily-cap check.** Confirm `llm_usage` rows for chat on the owner's chosen provider
+      carry a nonzero `usd` when the price catalog knows the model, and that the $20 cap pauses the
+      next request. OpenCode-routed models are unpriced and log `$0`, so they never count.
 - [ ] **Real-statement UI import pass.** Run a full real-bank import through the browser UI with a
       passkey (upload, responsive chat during parse, review, commit, saved-parser replay, and
       post-commit categorization).

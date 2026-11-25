@@ -33,24 +33,19 @@ from tests.software_authenticator import SoftwareAuthenticator
 
 
 def test_telemetry_is_off_when_no_collector_endpoint_is_configured(monkeypatch, caplog):
-    """`register()` with no endpoint targets gRPC localhost:4317 and blocks a host CLI."""
+    """An unset endpoint would make the exporter retry against localhost and stall a host CLI."""
     import arno.observability as observability
 
     monkeypatch.setattr(observability, "_started", False)
     monkeypatch.setattr(observability, "_provider", None)
-    for name in (
-        "PHOENIX_COLLECTOR_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    ):
-        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
     monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
 
     with caplog.at_level(logging.INFO):
         provider = observability.bootstrap_observability()
 
     assert provider is None
-    assert "PHOENIX_COLLECTOR_ENDPOINT" in caplog.text
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in caplog.text
 
 
 async def test_export_reports_a_missing_pg_dump_instead_of_a_traceback(monkeypatch, demo_ledger):

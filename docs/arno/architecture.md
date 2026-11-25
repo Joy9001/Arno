@@ -50,14 +50,14 @@ built-in alerts, reminders, recaps, and briefings run as deterministic code
   briefings run as fixed code. At most one optional LLM call drafts briefing prose, with a template
   fallback so monitoring continues when the LLM is unreachable.
 - **User-scheduled questions run the agent read-only:** Scheduled prompts execute with the pinned
-  financial snapshot, read-only Code Mode tools, and a per-run spend ceiling, delivering answers to
+  financial snapshot, read-only Code Mode tools, and a per-run request limit, delivering answers to
   the **Inbox**.
 - **Statement imports run a background parser subagent:** Uploads enter through chat, and the main
   agent delegates parsing to the `parser` subagent with no write tools. Code owns verification
   checks, regression replay, reconciliation, review, and commit ([`specs/import.md`](specs/import.md)).
 - **Categorization runs post-commit:** Deterministic merchant rules run first. A background
-  categorizer agent handles remaining payees in chunks or via provider batch APIs, leaving low-trust
-  matches uncategorized with a hint.
+  categorizer agent handles remaining payees in chunks, leaving low-trust matches uncategorized
+  with a hint.
 
 ### Control inside a chat turn
 
@@ -75,7 +75,7 @@ The following table defines who decides each action:
 | How to phrase explanations and tradeoffs | Affordability verdict (`yes`, `yes-but`, `no`) | Confirming a lasting or wide write in a tainted chat |
 | Whether to propose or save a memory | Write tier and confirm-card gating | Approving or rejecting an import review |
 | When to ask a clarifying question | Duplicate-write protection and idempotency | Accepting a recurring-charge proposal |
-| | Run budgets, timeouts, and spend ceilings | Undoing any committed write |
+| | Run request limits, timeouts, and the daily spend cap | Undoing any committed write |
 
 ### Autonomy by action
 
@@ -104,7 +104,7 @@ rigid wizard. When data is missing, the agent states what is absent instead of g
 ![The agent loop and its guards](diagrams/sd-agent-loop.png)
 
 _Figure: One primary agent loops between the model and tools, bounded by compaction, tool output
-caps, model fallback, and spend limits ([note](diagrams/sd-agent-loop.md))._
+caps, model fallback, and the daily spend cap ([note](diagrams/sd-agent-loop.md))._
 
 - **Single primary agent:** Interactive financial questions are sequential and state-dependent, so
   one main agent owns chat. Two isolated specialists handle long untrusted work outside the main
@@ -287,10 +287,12 @@ Phoenix plus the post-reply number check observe live turns
    threads) on cloned demo databases with `repeat=3` (`pass^3`).
    See [`evals/README.md`](../../evals/README.md).
 3. **Runtime traces and number check (every turn):** Opt-in OTLP/HTTP export to Arize Phoenix
-   (fail-open, disabled when `PHOENIX_COLLECTOR_ENDPOINT` is unset or `OTEL_SDK_DISABLED=true`)
-   with a Postgres cost journal and replay job ([`operations/observability.md`](operations/observability.md)).
-   After each reply, `agent/number_check.py` compares every stated money amount and percentage
-   against tool outputs, the snapshot, and user messages, flagging untraced figures.
+   (fail-open, disabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset or `OTEL_SDK_DISABLED=true`)
+   through the stock OpenTelemetry SDK
+   ([`operations/observability.md`](operations/observability.md)). Model cost is a separate Postgres
+   usage log with one shared daily cap ([`specs/cost-tracking.md`](specs/cost-tracking.md)). After
+   each reply, `agent/number_check.py` compares every stated money amount and percentage against
+   tool outputs, the snapshot, and user messages, flagging untraced figures.
 
 ---
 
@@ -306,9 +308,11 @@ encrypted off-site backups, and contentless push pings leave the host
   **Activity**, **Recaps**, **Settings**), built with React, Vite, `@assistant-ui/*`, and
   `@radix-ui/themes` ([`specs/web-interface.md`](specs/web-interface.md),
   [`DESIGN.md`](../../DESIGN.md)).
-- **Compose stack:** Two default services (`db`, `api`) plus optional
-  `local-llm` (Ollama) and `obs` (stock Phoenix) profiles. The API runs the daily backup. All host ports bind to
-  `127.0.0.1` ([`operations/self-hosting.md`](operations/self-hosting.md)).
+- **Compose stack:** Three default services (`db`, `api`, and `sandbox`) plus optional `local-llm`
+  (Ollama) and `obs` (stock Phoenix) profiles. The `sandbox` runs model-written Python on an
+  internal network with no internet and no database route, reachable only from `api`. The API runs
+  the daily backup. All host ports bind to `127.0.0.1`
+  ([`operations/self-hosting.md`](operations/self-hosting.md)).
 
 ---
 

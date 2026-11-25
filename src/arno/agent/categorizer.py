@@ -11,54 +11,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, override
 
-from opentelemetry import trace
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, ModelSettings, RunContext
-from pydantic_ai.capabilities import AbstractCapability, BatchModelRequests, WrapModelRequestHandler
 from pydantic_ai.exceptions import UnexpectedModelBehavior
-from pydantic_ai.messages import ModelMessagesTypeAdapter, ModelResponse
-from pydantic_ai.models import ModelRequestContext
-from pydantic_ai.output import PendingModelResponse
 from pydantic_ai.settings import merge_model_settings
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import UsageLimits
-from pydantic_ai_harness.spend import SpendEntry, SpendLimitExceeded
 
-from arno.agent.capabilities import (
-    MODEL_SETTINGS,
-    RetryTransientModelErrors,
-    RootSpanIO,
-    ToolErrorsToModel,
-    drain_events,
-    spend_limits,
-)
-from arno.agent.cost_journal import CostAttempt, current_cost_identity, record_intent
+from arno.agent.capabilities import MODEL_SETTINGS, RootSpanIO, ToolErrorsToModel, drain_events
 from arno.agent.models import primary_model
-from arno.agent.spend import (
-    COST_STOP_ERRORS,
-    SHARED_DAILY_BUDGET,
-    SpendStoreError,
-    shared_daily_budget,
-)
+from arno.agent.usage import COST_STOP_ERRORS, usage_hooks
 from arno.db.conn import connect
 from arno.importers import rules as rules_mod
-from arno.importers.batch_accounting import (
-    BATCH_MAX_OUTPUT_TOKENS,
-    BatchAccounting,
-    attempt_to_record,
-    batch_identity,
-    batch_model_name,
-    ensure_no_pending_batch,
-    estimate_batch_usd,
-    estimate_token,
-    settle_token,
-    trace_id,
-)
 from arno.importers.rules import normalize_pattern
 
 logger = logging.getLogger("arno.agent.categorizer")
@@ -73,7 +40,6 @@ MIN_AGREEMENT_CHECKS = 3
 """Fewer answered check payees than this give no agreement rate: one sample is not a rate."""
 CHUNK_CONCURRENCY = 8
 CHECK_PAYEES = 5
-BATCH_MAX_WAIT = timedelta(seconds=30)
 CATEGORIZE_USAGE_LIMITS = UsageLimits(request_limit=40, tool_calls_limit=80)
 
 
@@ -82,8 +48,6 @@ class CategorizerDeps:
     import_id: str
     run_id: str
     model: Any = None
-    batch_model: Any = None
-    spend_store: Any = None
     # Payee keys sampled from rows a rule already covers, and the category each one has.
     check_answers: dict[str, str] = field(default_factory=dict)
     agreement_rate: float | None = None
@@ -91,10 +55,6 @@ class CategorizerDeps:
     # Every answer the host holds for this run, by payee key: (category, guess_reason). The
     # agent never sees the reasons, so they stay off the context; `save_categories` reads them.
     answers: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
-    # Set when this run reads a finished batch, and when a batch was submitted.
-    batch_id: str | None = None
-    batch_answers: list[dict[str, Any]] | None = None
-    submitted_batch: str | None = None
     # Payee keys the model gave no answer for, after any re-ask. They stay uncategorized.
     failed_keys: set[str] = field(default_factory=set)
     # Set once this run's answers are saved, so a failed run knows whether to keep them.
@@ -109,7 +69,7 @@ class KeyChoice(BaseModel):
 
 
 class CategorizeReport(BaseModel):
-    status: Literal["saved", "batch_submitted", "nothing_to_do"]
+    status: Literal["saved", "nothing_to_do"]
     labeled: int = 0
     uncategorized: int = 0
     note: str | None = None
@@ -130,12 +90,11 @@ Work in this order:
 1. `pending_payees` with the import id from your task lists what no rule covers, with each
    payee's count, total, a sample narration, and direction. It also lists the user's category
    names.
-2. Ask the model. Normally call `categorize_now` once with every key. When `submit_batch` is
-   offered and this is a big backfill, call it instead; the run ends there and a later run reads
-   `batch_results`. The host adds a few payees a rule already covers, without their category,
-   and returns how often the model agreed with them: that agreement is how much of the model's
-   judgement to keep. If `categorize_now` returns `failed` keys, call it once more with just
-   those; keys that fail again have no answer and stay uncategorized.
+2. Ask the model: call `categorize_now` once with every key. The host adds a few payees a rule
+   already covers, without their category, and returns how often the model agreed with them: that
+   agreement is how much of the model's judgement to keep. If `categorize_now` returns `failed`
+   keys, call it once more with just those; keys that fail again have no answer and stay
+   uncategorized.
 3. Review the answers against what `pending_payees` showed: `{"answers": {key: category or
    null}, "agreement": {...}, "failed": [keys]}`. The host keeps the full answer, including the
    reason, so you never see one. Then call `save_categories` once, with `distrust` holding only
@@ -200,21 +159,13 @@ def _chunk_agent(model: Any) -> Agent[None, list[KeyChoice]]:
         # A reply that breaks the output schema (malformed tool-call markup, say) is usually a
         # one-off; one retry left whole chunks unanswered.
         retries={"output": 3},
-        capabilities=[RetryTransientModelErrors()],
+        capabilities=[usage_hooks("categorize")],
         name="categorizer-chunk",
     )
 
 
-async def _ask_chunk(
-    payload: dict[str, Any], *, model: Any, spend_store: Any
-) -> list[dict[str, Any]]:
-    agent = _chunk_agent(model)
-    limits = spend_limits(spend_store)
-    result = await agent.run(
-        payload["prompt"],
-        capabilities=[limits] if limits is not None else None,
-        event_stream_handler=drain_events,
-    )
+async def _ask_chunk(payload: dict[str, Any], *, model: Any) -> list[dict[str, Any]]:
+    result = await _chunk_agent(model).run(payload["prompt"], event_stream_handler=drain_events)
     keys = set(payload["keys"])
     return [
         answer.model_dump() for answer in result.output if normalize_pattern(answer.key) in keys
@@ -237,23 +188,21 @@ def _halves(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-async def _ask_or_split(
-    payload: dict[str, Any], *, model: Any, spend_store: Any
-) -> list[dict[str, Any]]:
+async def _ask_or_split(payload: dict[str, Any], *, model: Any) -> list[dict[str, Any]]:
     """Ask one chunk; when the reply runs out of tokens, ask each half once instead."""
     try:
-        return await _ask_chunk(payload, model=model, spend_store=spend_store)
+        return await _ask_chunk(payload, model=model)
     except Exception as exc:
         if not _ran_out_of_tokens(exc) or len(payload["keys"]) < 2:
             raise
     answers: list[dict[str, Any]] = []
     for half in _halves(payload):
-        answers.extend(await _ask_chunk(half, model=model, spend_store=spend_store))
+        answers.extend(await _ask_chunk(half, model=model))
     return answers
 
 
 async def _categorize_payloads(
-    payloads: list[dict[str, Any]], *, model: Any, spend_store: Any
+    payloads: list[dict[str, Any]], *, model: Any
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Ask every chunk at the same time, never one after another.
 
@@ -269,7 +218,7 @@ async def _categorize_payloads(
             if stop_error is not None:
                 raise stop_error
             try:
-                return await _ask_or_split(payload, model=model, spend_store=spend_store)
+                return await _ask_or_split(payload, model=model)
             except COST_STOP_ERRORS as exc:
                 # Already-dispatched siblings settle normally; queued chunks never dispatch.
                 stop_error = exc
@@ -368,234 +317,13 @@ async def _payloads_for(
 
 async def categorize_now(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dict[str, Any]:
     """Ask the model now, in chunks sent at the same time. Returns the answers and agreement."""
-    async with connect() as conn:
-        await ensure_no_pending_batch(conn, ctx.deps.import_id)
     payloads, _categories_list = await _payloads_for(ctx, keys)
-    answers, failed = await _categorize_payloads(
-        payloads, model=ctx.deps.model, spend_store=ctx.deps.spend_store
-    )
+    answers, failed = await _categorize_payloads(payloads, model=ctx.deps.model)
     agreement = _measure(ctx, answers)
     held = _hold(ctx, answers)
     ctx.deps.failed_keys.update(failed)
     ctx.deps.failed_keys.difference_update(held)
     return {"answers": held, "agreement": agreement, "failed": failed}
-
-
-async def batch_results(ctx: RunContext[CategorizerDeps], batch_id: str) -> dict[str, Any]:
-    """The ended batch's answers, in the run started for it, in the same shape as categorize_now."""
-    if not ctx.deps.batch_id or batch_id != ctx.deps.batch_id:
-        raise ModelRetry("That batch is not the one this run was started for.")
-    async with connect() as conn:
-        row = await conn.fetchrow(
-            "SELECT import_id, batch_answers FROM categorize_runs WHERE id = $1", batch_id
-        )
-    if row is None or str(row["import_id"]) != ctx.deps.import_id:
-        raise ModelRetry("That batch is not for this import.")
-    if row["batch_answers"] is None:
-        raise ModelRetry("That batch has not finished yet; the job runner checks it.")
-    answers = [dict(answer) for answer in row["batch_answers"]]
-    ctx.deps.batch_answers = answers
-    agreement = _measure(ctx, answers)
-    return {"answers": _hold(ctx, answers), "agreement": agreement, "failed": []}
-
-
-def _batch_attempt(
-    *,
-    provider: str,
-    model: str,
-    billing_mode: str,
-    started_at: datetime,
-    batch_id: str,
-    trace_id: str,
-) -> CostAttempt:
-    """A stable journal identity for one batch item, retained until collection."""
-    return CostAttempt(
-        attempt_id=secrets.token_hex(16),
-        trace_id=trace_id,
-        span_id=secrets.token_hex(8),
-        role="batch_item",
-        provider=provider,
-        model=model,
-        billing_mode=billing_mode,
-        workload=f"categorizer_batch:{batch_id}",
-        session_id=current_cost_identity()[0],
-        started_at=started_at,
-    )
-
-
-async def submit_batch(ctx: RunContext[CategorizerDeps], keys: list[str]) -> dict[str, Any]:
-    """Submit the keys as one batch, after pre-accounting its priced estimate.
-
-    The estimate is posted to the same native counters before any request can auto-submit. The
-    posting intent, keys, and replay tokens live in `categorize_runs.accounting`, so a crash
-    between the counter write and the batch row reuses the same token rather than charging twice.
-    """
-    if ctx.deps.batch_model is None:
-        raise ModelRetry("No batch model is configured.")
-    store = ctx.deps.spend_store
-    if store is None:
-        raise SpendStoreError("Categorizing a batch needs the shared spend store.")
-
-    batch_id = ctx.deps.run_id
-    async with connect() as conn:
-        row = await conn.fetchrow("SELECT accounting FROM categorize_runs WHERE id = $1", batch_id)
-    existing = dict(row["accounting"] or {}) if row is not None else {}
-    if existing:
-        from arno.jobs.runner import JobGaveUp
-
-        raise JobGaveUp(
-            f"Batch {batch_id} already has a posting intent. Inspect its saved accounting before "
-            "retrying; the estimate and provider submission were not repeated."
-        )
-    payloads, _categories_list = await _payloads_for(ctx, keys)
-    agent = build_labeling_agent(ctx.deps.batch_model)
-    estimate = estimate_batch_usd(payloads, model=ctx.deps.batch_model)
-    provider, billing = batch_identity(ctx.deps.batch_model)
-    model_name = batch_model_name(ctx.deps.batch_model)
-
-    limits = spend_limits(store, budgets=[shared_daily_budget()])
-    if limits is None:
-        raise SpendStoreError("Categorizing a batch needs the shared spend store.")
-    status = next(
-        (item for item in await limits.status() if item.budget.name == SHARED_DAILY_BUDGET),
-        None,
-    )
-    if status is None:
-        raise SpendStoreError("The shared daily budget could not be resolved.")
-    remaining = status.remaining_usd
-    if remaining is None or estimate > remaining:
-        raise SpendLimitExceeded(
-            f"Budget {SHARED_DAILY_BUDGET!r} exhausted for this day: the batch estimate "
-            f"${estimate} exceeds ${remaining} remaining."
-        )
-
-    now = datetime.now(UTC)
-    submission_trace = trace_id()
-    attempts = [
-        _batch_attempt(
-            provider=provider,
-            model=model_name,
-            billing_mode=billing,
-            started_at=now,
-            batch_id=batch_id,
-            trace_id=submission_trace,
-        )
-        for _payload in payloads
-    ]
-    accounting = BatchAccounting(
-        phase="estimate_pending",
-        keys=[status.key],
-        items=len(payloads),
-        provider=provider,
-        model=model_name,
-        billing_mode=billing,
-        estimate_usd=str(estimate),
-        estimate_token=estimate_token(batch_id),
-        settle_token=settle_token(batch_id),
-        estimate_at=now,
-        estimate_applied=False,
-        settle_applied=False,
-        provisional=False,
-    )
-    # The intention reaches Postgres before the counter write, so a crash leaves a visible row
-    # rather than an unexplained charge.
-    async with connect() as conn, conn.transaction():
-        await conn.fetchval("SELECT id FROM imports WHERE id=$1 FOR UPDATE", ctx.deps.import_id)
-        await ensure_no_pending_batch(conn, ctx.deps.import_id)
-        await conn.execute(
-            "UPDATE categorize_runs SET accounting = $1, updated_at = now() WHERE id = $2",
-            accounting.to_record(),
-            batch_id,
-        )
-        for attempt in attempts:
-            await record_intent(conn, attempt)
-
-    try:
-        await store.add_many(
-            [
-                SpendEntry(
-                    key=status.key,
-                    usd=estimate,
-                    requests=len(payloads),
-                    ttl=status.budget.ttl,
-                    token=accounting.estimate_token,
-                )
-            ]
-        )
-        accounting.phase = "estimate_applied"
-        accounting.estimate_applied_at = datetime.now(UTC)
-        accounting.estimate_applied = True
-        async with connect() as conn:
-            await conn.execute(
-                "UPDATE categorize_runs SET accounting = $1, updated_at = now() WHERE id = $2",
-                accounting.to_record(),
-                batch_id,
-            )
-
-        batching = BatchModelRequests(
-            max_requests=len(payloads), max_wait=BATCH_MAX_WAIT, max_resubmissions=0
-        )
-        runs = await asyncio.gather(
-            *(agent.run(payload["prompt"], capabilities=[batching]) for payload in payloads)
-        )
-        await batching.flush()
-
-        saved: list[dict[str, Any]] = []
-        for payload, result, attempt in zip(payloads, runs, attempts, strict=True):
-            if not isinstance(result.output, PendingModelResponse):
-                raise RuntimeError("The batch model answered immediately; submission is ambiguous.")
-            saved.append(
-                {
-                    "keys": payload["keys"],
-                    "history": ModelMessagesTypeAdapter.dump_python(
-                        result.all_messages(), mode="json"
-                    ),
-                    "attempt": attempt_to_record(attempt),
-                }
-            )
-        accounting.phase = "submitted"
-        from arno.jobs.runner import enqueue_job
-
-        async with connect() as conn, conn.transaction():
-            await conn.execute(
-                """
-                UPDATE categorize_runs
-                SET mode = 'batch', batch_id = $1, batch_runs = $2, batch_checks = $3,
-                    accounting = $4, updated_at = now()
-                WHERE id = $1
-                """,
-                batch_id,
-                saved,
-                ctx.deps.check_answers,
-                accounting.to_record(),
-            )
-            await enqueue_job(
-                conn,
-                key=f"collect_batch:{batch_id}",
-                kind="collect_batch",
-                payload={"run_id": batch_id, "import_id": ctx.deps.import_id, "polls": 0},
-            )
-    except Exception as exc:
-        from arno.jobs.runner import JobGaveUp
-
-        accounting.phase = "submit_ambiguous"
-        try:
-            async with connect() as conn:
-                await conn.execute(
-                    "UPDATE categorize_runs SET accounting=$1, updated_at=now() WHERE id=$2",
-                    accounting.to_record(),
-                    batch_id,
-                )
-        except Exception:
-            # The original posting intent is already durable and blocks another submission.
-            logger.exception("could not mark ambiguous batch %s", batch_id)
-        raise JobGaveUp(
-            f"Batch {batch_id} stopped with an uncertain submission. Inspect the saved batch and "
-            "provider before retrying; it was not resubmitted."
-        ) from exc
-
-    ctx.deps.submitted_batch = batch_id
-    return {"batch_id": batch_id, "requests": len(saved), "status": "pending"}
 
 
 async def save_categories(
@@ -633,57 +361,12 @@ async def save_held_answers(
     return result
 
 
-class _BatchRequestSpans(AbstractCapability[Any]):
-    """Submit/collect model steps are context; retained batch-item spans own the cost."""
-
-    @override
-    async def wrap_model_request(
-        self,
-        ctx: RunContext[Any],
-        *,
-        request_context: ModelRequestContext,
-        handler: WrapModelRequestHandler,
-    ) -> ModelResponse:
-        trace.get_current_span().set_attribute("arno.cost.role", "logical_request")
-        return await handler(request_context)
-
-
-def build_labeling_agent(model: Any) -> Agent[None, Any]:
-    """The batch labeling agent: one structured answer per chunk, and it can end suspended."""
-    return Agent(
-        model,
-        output_type=[list[KeyChoice], PendingModelResponse],
-        instructions=LABEL_INSTRUCTIONS,
-        model_settings=merge_model_settings(
-            MODEL_SETTINGS,
-            ModelSettings(thinking=False, max_tokens=BATCH_MAX_OUTPUT_TOKENS),
-        ),
-        name="categorizer-batch",
-        capabilities=[_BatchRequestSpans()],
-    )
-
-
 def build_categorizer_agent(
     *,
     model: Any = None,
-    batch_model: Any = None,
-    spend_store: Any = None,
-    with_batch_results: bool = False,
 ) -> Agent[CategorizerDeps, CategorizeReport]:
-    if spend_store is None and model is None:
-        from arno.agent.spend import SharedSpendStore
-
-        spend_store = SharedSpendStore()
-    tools: list[Any] = [pending_payees, categorize_now, save_categories]
-    if batch_model is not None and not with_batch_results:
-        tools.append(submit_batch)
-    if with_batch_results:
-        tools.append(batch_results)
-    toolset = FunctionToolset(tools=tools)
-    capabilities: list[Any] = [RootSpanIO(), ToolErrorsToModel(), RetryTransientModelErrors()]
-    limits = spend_limits(spend_store)
-    if limits is not None:
-        capabilities.append(limits)
+    toolset = FunctionToolset(tools=[pending_payees, categorize_now, save_categories])
+    capabilities: list[Any] = [RootSpanIO(), ToolErrorsToModel(), usage_hooks("categorize")]
     return Agent(
         model or primary_model(),
         deps_type=CategorizerDeps,
@@ -706,6 +389,5 @@ __all__ = [
     "CategorizerDeps",
     "KeyChoice",
     "build_categorizer_agent",
-    "build_labeling_agent",
     "save_held_answers",
 ]

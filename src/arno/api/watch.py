@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -68,13 +67,11 @@ class PushUnsubscribe(ApiModel):
 class QuestionCreate(ApiModel):
     prompt: str = Field(min_length=1, max_length=2000)
     rule: str = Field(min_length=1, max_length=500)
-    spend_limit_usd: Decimal | None = Field(default=None, ge=Decimal(0))
 
 
 class QuestionUpdate(ApiModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=2000)
     rule: str | None = Field(default=None, min_length=1, max_length=500)
-    spend_limit_usd: Decimal | None = Field(default=None, ge=Decimal(0))
     active: bool | None = None
 
 
@@ -205,7 +202,6 @@ async def get_scheduled_questions(
 ) -> dict[str, Any]:
     return {
         "questions": await questions_mod.list_questions(conn, include_inactive=include_inactive),
-        "default_spend_limit_usd": str(questions_mod.DEFAULT_SPEND_LIMIT_USD),
         "as_of": ledger_today().isoformat(),
     }
 
@@ -216,7 +212,6 @@ async def post_scheduled_question(body: QuestionCreate, conn: Database) -> dict[
         conn,
         prompt=body.prompt,
         rule=body.rule,
-        spend_limit_usd=body.spend_limit_usd,
     )
 
 
@@ -229,7 +224,6 @@ async def patch_scheduled_question(
         question_id,
         prompt=body.prompt,
         rule=body.rule,
-        spend_limit_usd=body.spend_limit_usd,
         active=body.active,
     )
 

@@ -5,7 +5,7 @@ reconciliation, own-account transfer and card-credit decisions, post-commit cate
 undo, receipt photo extraction, voice transcription, and bank format findings; [`plan.md`](../plan.md)
 §2 owns product decisions, [`tools.md`](tools.md) owns parser and categorizer function contracts,
 [`data-and-engine.md`](data-and-engine.md) owns write tiers and ledger invariants, and
-[`cost-tracking.md`](cost-tracking.md) owns batch and direct-call metering.
+[`cost-tracking.md`](cost-tracking.md) owns the usage log and daily spend cap.
 
 ## Architecture: Readers and saved parsers
 
@@ -264,7 +264,7 @@ classify it on the review screen as:
 ![Rules label most rows, and the model labels the rest](../diagrams/sd-categorize.png)
 
 _Figure: After commit, deterministic rules label every matching row. The background categorizer
-agent sends remaining payees to the model directly or as a batch, checks calibration agreement,
+agent sends remaining payees to the model, checks calibration agreement,
 saves trusted answers as rules, and leaves unsure rows uncategorized with a hint
 ([diagram notes](../diagrams/sd-categorize.md))._
 
@@ -278,11 +278,10 @@ and `src/arno/agent/categorizer.py`) and never starts a chat conversation.
   inserted idempotently at boot. Eight payment aggregators in `PAYMENT_APPS` (`one97`, `paytm`,
   `phonepe`, `google pay`, `gpay`, `cred`, `amazon pay`, and `razorpay`) are excluded from
   name-only matching so their rows go to the model with amount and narration context.
-- **Direct or batch execution:** The categorizer agent (`CATEGORIZE_USAGE_LIMITS`: 40 requests, 80
-  tool calls) groups payees into chunks of 12 (`CHUNK_PAYEES = 12`). For ordinary imports it calls
-  `categorize_now` (up to 8 concurrent chunks with thinking disabled). For large backfills when a
-  `BATCH` model is configured, it calls `submit_batch`, which uses `BatchModelRequests`
-  (`max_resubmissions=0`, 30-second flush wait) and enqueues `collect_batch`.
+- **Direct execution:** The categorizer agent (`CATEGORIZE_USAGE_LIMITS`: 40 requests, 80 tool
+  calls) groups payees into chunks of 12 (`CHUNK_PAYEES = 12`) and calls `categorize_now` (up to 8
+  concurrent chunks with thinking disabled). There is no provider Batch API path, so categorizing
+  always runs through the `CHAT` role.
 - **Empirical calibration:** The host injects up to 5 already-ruled payees (`CHECK_PAYEES = 5`)
   without their labels and measures the model's agreement rate instead of trusting self-reported
   confidence. Low agreement causes the agent to distrust more keys.
@@ -343,10 +342,10 @@ a server you run yourself):
   unset keeps auto-detect), `STT_TIMEOUT_SECONDS` sets the HTTP timeout (default `120` seconds),
   and `STT_PAYEE_CONTEXT` (enabled by default; `0` disables) passes up to 80 active payee names
   (capped at 500 characters) as a recognition hint.
-- **Cost metering:** Because transcription is not an `Agent` run, `transcribe_audio` preflights
-  token and audio-duration pricing, checks the shared daily budget, wraps the request in
-  `metered_call`, and posts the priced `CostObservation` through `post_direct_call`
-  ([`cost-tracking.md`](cost-tracking.md)).
+- **Usage log:** Because transcription is not an `Agent` run, `transcribe_audio` checks the shared
+  daily cap, posts the multipart request with `httpx`, and records the usage the endpoint reported
+  (zero when it reports none) in `llm_usage`. A reply without `usage` or with malformed `usage`
+  still returns its transcript ([`cost-tracking.md`](cost-tracking.md)).
 - **Trust tier:** Transcripts are your own speech, so they enter chat without setting
   `outside_text_at`.
 

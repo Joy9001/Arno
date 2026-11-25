@@ -16,7 +16,6 @@ from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai.ui.vercel_ai.request_types import SubmitMessage, TextUIPart, UIMessage
 
 from arno.agent import history as history_mod
-from arno.agent.chatgpt_auth import background_inference
 from arno.agent.deps import AgentDeps
 from arno.agent.turns import PreparationBusy, TurnBusy
 from arno.agent.wake import WakePolicy, may_retry, waiting_reports
@@ -92,18 +91,17 @@ async def start_server_turn(
             sdk_version=7,
             server_message_id=reply_id,
         )
-        with background_inference():
-            await turns.start(
-                adapter=adapter,
-                thread_id=thread_id,
-                message_id=prompt[0] if prompt else f"server_{uuid.uuid4().hex}",
-                history=history,
-                deps=deps,
-                title=thread.get("title"),
-                run_id=run_id,
-                reply_id=reply_id,
-                wake=policy,
-            )
+        await turns.start(
+            adapter=adapter,
+            thread_id=thread_id,
+            message_id=prompt[0] if prompt else f"server_{uuid.uuid4().hex}",
+            history=history,
+            deps=deps,
+            title=thread.get("title"),
+            run_id=run_id,
+            reply_id=reply_id,
+            wake=policy,
+        )
     except BaseException:
         # The run never started, so the thread must not look busy until the next boot.
         if run_id is not None:

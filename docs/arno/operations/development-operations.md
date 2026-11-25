@@ -18,7 +18,7 @@ pipelines.
 
 | File | Responsibility |
 |---|---|
-| [`compose.yaml`](../../../compose.yaml) | Default stack (`db`, `api`), optional `local-llm` and `obs` (stock Phoenix) profiles, volumes, health checks, and loopback ports |
+| [`compose.yaml`](../../../compose.yaml) | Default stack (`db`, `api`, and the isolated `sandbox` on the internal `sandbox-net`), optional `local-llm` and `obs` (stock Phoenix) profiles, volumes, health checks, and loopback ports |
 | [`Dockerfile`](../../../Dockerfile) | Builds the static web bundle and Python 3.14 API runtime (including PostgreSQL 18 clients, `restic`, and `rclone`, which `api` uses for backups) |
 | [`deploy/`](../../../deploy/) | Database role provisioning (`app-role.sh`) |
 | [`.env.example`](../../../.env.example) | Configuration template; actual `.env` files stay local and gitignored |
@@ -26,10 +26,11 @@ pipelines.
 | [`.github/workflows/release.yml`](../../../.github/workflows/release.yml) | Tag-triggered image builds, image runtime checks, and GitHub Release publication |
 
 The default stack binds `db` (`5433`) and `api` (`8000`) to loopback only, and the `obs` profile
-binds `phoenix` (`6006`) the same way. `api` runs the daily backup and mounts `backup-data`. Named
-volumes (`db-data`, `backup-data`, `pre-migration-data`, `tasks-data`, `ollama-data`, and
-`phoenix-data`) hold
-persistent state; never run `docker compose down -v` against an instance whose data matters. See
+binds `phoenix` (`6006`) the same way. `sandbox` publishes no port: it runs model-written Python on
+an internal network with no internet or database route, and only `api` reaches it. `api` runs the
+daily backup and mounts `backup-data`. Named volumes (`db-data`, `backup-data`,
+`pre-migration-data`, `tasks-data`, `ollama-data`, and `phoenix-data`) hold persistent state; never
+run `docker compose down -v` against an instance whose data matters. See
 [install](self-hosting.md#install) for host setup and ports.
 
 ---
@@ -156,7 +157,7 @@ The following table lists first checks for common operational failures.
 |---|---|
 | API unhealthy or unreachable | Check `docker compose ps`, `api` and `db` logs, and local `/api/health`. If local health works but a device fails, check `tailscale serve status`, `ARNO_RP_ID`, and `ARNO_RP_ORIGIN`. |
 | Backup missing or stale | Check `api` logs, disk space, and repository credentials. After changing repositories, see [switch or test repositories](self-hosting.md#switch-or-test-repositories). |
-| Phoenix restart loop or missing traces | Tracing is off unless `PHOENIX_COLLECTOR_ENDPOINT` is set and the `obs` profile runs. Check `phoenix` and `api` logs, required Phoenix secrets, and `OTEL_SDK_DISABLED`. |
+| Phoenix restart loop or missing traces | Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set and the `obs` profile runs. Check `phoenix` and `api` logs, required Phoenix secrets, and `OTEL_SDK_DISABLED`. |
 | Image build cannot reach a registry | Check builder DNS, proxy, VPN, and network connectivity before changing Dockerfiles. |
 | Migration or startup fails | Preserve logs and backups, inspect the failed migration and `/app/pre-migration` dump, and test recovery on an isolated target first. |
 | Pre-0.3.0 superuser warning on boot | Follow [replace the pre-0.3.0 superuser `app` role](legacy-upgrades.md#replace-the-pre-030-superuser-app-role). |

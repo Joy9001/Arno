@@ -54,7 +54,7 @@ def test_release_workflow_pushes_the_pinned_images():
 def test_phoenix_bearer_is_wired_in_compose():
     compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
 
-    assert "PHOENIX_API_KEY: ${PHOENIX_API_KEY:-${PHOENIX_ADMIN_SECRET:-}}" in compose
+    assert "Authorization=Bearer%20${PHOENIX_ADMIN_SECRET:-}" in compose
 
 
 def test_compose_initializes_non_superuser_app_role():
@@ -69,14 +69,14 @@ def test_compose_initializes_non_superuser_app_role():
     assert "ALTER ROLE postgres PASSWORD NULL" in app_role
 
 
-def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
+def _compose_config(overrides: dict[str, str]) -> dict:
     if shutil.which("docker") is None:
         pytest.skip("docker compose is unavailable")
     with tempfile.TemporaryDirectory() as tmp:
         env_file = Path(tmp) / "empty.env"
         env_file.write_text("", encoding="utf-8")
         env = os.environ.copy()
-        env.pop("PHOENIX_API_KEY", None)
+        env.pop("OTEL_EXPORTER_OTLP_HEADERS", None)
         env.pop("PHOENIX_ADMIN_SECRET", None)
         env.update(
             {
@@ -108,16 +108,29 @@ def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
     if result.returncode != 0 and "is not a docker command" in result.stderr:
         pytest.skip(f"docker compose config is unavailable: {result.stderr.strip()[:200]}")
     assert result.returncode == 0, result.stderr.strip()[:300]
-    return json.loads(result.stdout)["services"]["api"]["environment"]
+    return json.loads(result.stdout)
 
 
-def test_compose_phoenix_bearer_falls_back_and_allows_override():
+def _compose_api_environment(overrides: dict[str, str]) -> dict[str, str]:
+    return _compose_config(overrides)["services"]["api"]["environment"]
+
+
+def test_compose_otlp_bearer_falls_back_and_allows_override():
     admin_secret = "dummy-admin-secret-for-test"
     fallback = _compose_api_environment({"PHOENIX_ADMIN_SECRET": admin_secret})
-    assert fallback["PHOENIX_API_KEY"] == admin_secret
+    assert fallback["OTEL_EXPORTER_OTLP_HEADERS"] == f"Authorization=Bearer%20{admin_secret}"
     assert fallback["PHOENIX_ADMIN_SECRET"] == ""
 
     override = _compose_api_environment(
-        {"PHOENIX_ADMIN_SECRET": admin_secret, "PHOENIX_API_KEY": "dummy-explicit-api-key"}
+        {"PHOENIX_ADMIN_SECRET": admin_secret, "OTEL_EXPORTER_OTLP_HEADERS": "x=dummy"}
     )
-    assert override["PHOENIX_API_KEY"] == "dummy-explicit-api-key"
+    assert override["OTEL_EXPORTER_OTLP_HEADERS"] == "x=dummy"
+
+
+def test_compose_sandbox_is_isolated_and_api_reaches_it():
+    config = _compose_config({})
+    sandbox, api = config["services"]["sandbox"], config["services"]["api"]
+    assert list(sandbox["networks"]) == ["sandbox-net"]
+    assert config["networks"]["sandbox-net"]["internal"] is True
+    assert sandbox["read_only"] is True
+    assert set(api["networks"]) == {"default", "sandbox-net"}

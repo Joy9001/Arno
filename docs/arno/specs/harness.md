@@ -1,10 +1,10 @@
 # Harness layer
 
 This specification owns Arno's PydanticAI and `pydantic-ai-harness` capability stack, wake turns,
-prompt-map discipline, context compaction, redaction, and test and eval harness; [`plan.md`](../plan.md)
-§3 owns stack decisions, [`tools.md`](tools.md) owns tool contracts, [`cost-tracking.md`](cost-tracking.md)
-owns pricing and budgets, and [`observability.md`](../operations/observability.md) owns tracing
-operations.
+prompt-map discipline, context compaction, redaction, and test and eval harness;
+[`plan.md`](../plan.md) §3 owns stack decisions, [`tools.md`](tools.md) owns tool contracts,
+[`cost-tracking.md`](cost-tracking.md) owns the usage log and daily spend cap, and
+[`observability.md`](../operations/observability.md) owns tracing operations.
 
 ## Why PydanticAI
 
@@ -22,15 +22,14 @@ mechanism that provides it:
 | Large tool output control | `ToolOutputLimits` (truncates wide `run_code` returns) |
 | Long-thread compaction | `TieredCompaction`, `ClearToolResults`, `SummarizingCompaction`, and `SlidingWindowCompaction` |
 | Deterministic input guardrails | `InputGuardrail` (redacts secrets before model dispatch and storage) |
-| Spend ceilings | `SpendLimits` and `PostgresSpendStore` (USD and token ceilings per run and shared UTC day) |
+| Usage log and daily spend cap | Core `Hooks` (`usage_hooks(role)` checks the cap before each model request and records the response) |
 | Human-in-the-loop approval | Core `ApprovalRequired` and `DeferredToolRequests` |
 | Sandboxed code execution | `CodeMode` (runs one model-written script over read helpers in Monty) |
 | Cache-safe dynamic reminders | `SystemReminders` (injects date and write-count reminders after the cached prefix) |
 | Durable background delegation | `SubAgents`, `TaskControl`, `DelegationTasks`, `PostgresStepStore`, and `PostgresPlanStore` |
-| Batch model requests | `BatchModelRequests` (submits and collects provider batch categorization jobs) |
 
 Provider portability is built into PydanticAI: `OllamaProvider`, `OpenAIProvider`,
-`AnthropicProvider`, `OpenRouterProvider`, and `OpenAIChatGPTProvider` share one agent loop,
+`AnthropicProvider`, and `OpenRouterProvider` share one agent loop,
 keeping local and cloud endpoints on a single code path (`plan.md` §3).
 
 PydanticAI also provides `VercelAIAdapter`, which streams text, tool calls, custom card data parts,
@@ -71,10 +70,8 @@ The following table lists the capabilities active in Arno and where each is conf
 | `ImageAttachments` | Hydrates raw `BinaryContent` from `attachments` onto outgoing requests for uncompacted image turns without storing base64 in `model_history` | `src/arno/agent/capabilities.py`, `src/arno/agent/images.py` |
 | `SubAgents` with `TaskControl` | Delegates statement imports to the `parser` subagent (`can_ask_questions=True`, `resumable=True`, `forward_usage=False`, `contain_errors=True`, `auto_background_after=15.0`) backed by `DelegationTasks` and `PostgresStepStore` | `src/arno/agent/builder.py`, `src/arno/api/tasks.py` |
 | `Planning` | Keeps multi-step statement parses on track using `PostgresPlanStore` keyed by task ID (parser subagent only) | `src/arno/agent/parser.py` |
-| `RetryTransientModelErrors` | Asks the same model again (three attempts, growing wait) on a provider 5xx, an overload, a dropped connection, a rate limit, or a stream that fails before its first event; each attempt is metered, then the last error goes to `ModelFallback` or the run. The parser, categorizer, and briefing agents carry it too | `src/arno/agent/capabilities.py` |
-| `ModelFallback` and `WindowLimited` | Falls back to the configured backup model (`sticky=False`) and rejects histories exceeding `CHAT_FALLBACK_CONTEXT_WINDOW` before dispatch; omitted when no backup is set and refused on ChatGPT primaries | `src/arno/agent/capabilities.py`, `src/arno/agent/models.py` |
-| `SpendLimits` | Enforces per-run, scheduled-question, and shared UTC-day USD ceilings through one `spend_limits()` factory over `PostgresSpendStore` | `src/arno/agent/spend.py` |
-| `BatchModelRequests` | Submits and collects provider batch categorization jobs when a `BATCH` model is configured (`max_resubmissions=0`, 30 s flush wait) | `src/arno/agent/categorizer.py`, `src/arno/importers/categorize.py` |
+| `ModelFallback` | Falls back to the configured backup model (`sticky=False`) when the primary fails after the SDK's own retries (`max_retries=2`); omitted when no backup is set | `src/arno/agent/capabilities.py`, `src/arno/agent/models.py` |
+| `Hooks` (`usage_hooks`) | Core PydanticAI hooks that refuse a request once the shared daily cap is reached and write one `llm_usage` row per model response; attached to the chat, summary, parser, categorizer, vision, and briefing agents | `src/arno/agent/usage.py` |
 | Conditional tool approval | Core `ApprovalRequired` / `DeferredToolRequests` gates lasting or wide writes in flagged conversations (`plan.md` §4 rule 2) | `src/arno/agent/toolset.py`, `src/arno/api/chat.py` |
 
 ### Deferred capabilities and triggers
@@ -277,19 +274,19 @@ Key harness properties in `evals/runner.py`:
   `CREATE DATABASE ... TEMPLATE` from the demo persona and dropped on teardown.
 - **Reliability metric:** Default runs use `repeat=3` (`pass^3`—a case passes only when all three
   trials pass) and `max_concurrency=2`.
-- **Budget and cost routing:** Each trial uses an `InMemorySpendStore` with a conversation-scoped
-  `run_budget_usd` ceiling (default `$2`), while `llm_calls` journal rows route to the installation
-  database before the disposable trial database is dropped.
+- **Usage and cost:** Each trial writes its `llm_usage` rows into its own cloned database, so evals
+  never debit the owner's daily cap, and the runner sums `usage.cost` from each result.
 - **Outcome grading:** Graders inspect database state after the last user message rather than
   grading trajectories; non-injection categories simulate user approval on confirm cards while
   injection and never-moves-money categories keep confirm cards pending.
 
 ### Tracing and spend accounting
 
-Tracing is opt-in through `PHOENIX_COLLECTOR_ENDPOINT` (`src/arno/observability.py`); when set,
-`bootstrap_observability()` registers Phoenix OTLP export and calls
+Tracing is opt-in through `OTEL_EXPORTER_OTLP_ENDPOINT` (`src/arno/observability.py`); when set,
+`bootstrap_observability(app)` installs a stock OpenTelemetry tracer provider, instruments FastAPI
+and asyncpg, and calls
 `Agent.instrument_all(InstrumentationSettings(include_binary_content=False))` so image bytes stay
 out of spans while prompts, tool calls, and replies remain traced. Isolated vision extraction in
 `importers/vision.py` still sets `agent.instrument = False`. See
 [`observability.md`](../operations/observability.md) for tracing setup and span attributes, and
-[`cost-tracking.md`](cost-tracking.md) for pricing, spend ceilings, `MeteredModel`, and cost replay.
+[`cost-tracking.md`](cost-tracking.md) for the usage log and the daily spend cap.

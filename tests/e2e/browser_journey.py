@@ -660,9 +660,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         _seed_notification()
     os.environ.update(server_env(args.port))
     if args.dry_run:
-        os.environ.update(
-            CHAT_FALLBACK_BASE_URL="", CHAT_FALLBACK_MODEL="", BATCH_MODEL="", ARNO_JOBS_ENABLED="0"
-        )
+        os.environ.update(CHAT_FALLBACK_BASE_URL="", CHAT_FALLBACK_MODEL="", ARNO_JOBS_ENABLED="0")
         for role in ("CHAT", "PARSE", "VISION", "STT"):
             os.environ.update(
                 {
@@ -670,7 +668,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     f"{role}_BASE_URL": "http://127.0.0.1:9/v1",
                     f"{role}_API_KEY": "dry-run",
                     f"{role}_MODEL": "dry-run",
-                    f"{role}_BILLING_MODE": "local",
                 }
             )
     _require_free_port(args.port)

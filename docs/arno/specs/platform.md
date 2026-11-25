@@ -15,15 +15,15 @@ The following tree shows the repository structure:
 ```text
 src/arno/
   agent/       PydanticAI chat agent, instructions, capabilities, parser & categorizer agents,
-               pricing, metering, cost journal, ChatGPT auth, redaction, number check
+               usage log and daily cap, redaction, number check
   api/         FastAPI app, middleware, routers, SSE chat stream, wake turns, run view
   auth/        WebAuthn passkeys, opaque sessions, single-use enrollment links
-  capture/     Isolated receipt/UPI photo vision extraction and metered STT client
+  capture/     Isolated receipt/UPI photo vision extraction and STT client
   db/          Connection cache, numbered SQL migrations, role bootstrap, vendored pgledger
   demo/        Synthetic demo persona seeder and template database helpers
   engine/      Pure scenario projection kernel, affordability, patterns, and money math
   importers/   File readers, Monty sandbox, verification checks, gate, reconciliation,
-               commit/undo, seed rules, and batch categorization jobs
+               commit/undo, seed rules, and categorization jobs
   india/       Default Indian categories, bank holiday calendar, ₹ formatting, prompt notes
   jobs/        Postgres job queue loop, RRULE schedules, briefing, reminders, risk, patterns,
                backup check, recaps, scheduled questions
@@ -131,7 +131,6 @@ The following table lists every job kind, its schedule or trigger, and its timeo
 
 | Job kind | Trigger or schedule (IST) | Timeout (`DEFAULT_TIMEOUTS`) |
 |---|---|---|
-| `cost_replay` | Checked every 5 minutes (`FREQ=MINUTELY;INTERVAL=5`); a job is created only when a finalized call is waiting to export | Runner default (no model calls; OTLP replay only) |
 | `weekly_briefing` | Weekly on `weekly_briefing_dow` at `notification_time` (engine numbers, LLM prose with template fallback) | `None` (unbounded) |
 | `reminders` | Daily at `notification_time` (N days before obligations, EMIs, and card due dates) | `60` s |
 | `recaps` | Daily at `notification_time` (announces new daily, weekly, and monthly recaps) | Runner default |
@@ -139,9 +138,8 @@ The following table lists every job kind, its schedule or trigger, and its timeo
 | `pattern_detection` | Nightly at 02:15 and after imports (new recurring items, missed bills, and amount steps) | `120` s |
 | `recompute_baselines` | Nightly at 02:30 and on import commit | `120` s |
 | `backup_check` | Nightly at 03:00 (alerts if no backup succeeded in 48 hours after install grace) | `30` s |
-| `scheduled_question` | User-defined RRULE; read-only agent with per-question spend limit (default `$1`), answering to inbox (`ceiling: true` if stopped by a limit) | `None` (unbounded) |
+| `scheduled_question` | User-defined RRULE; read-only agent with a per-run request limit, answering to inbox (`ceiling: true` if stopped by it) | `None` (unbounded) |
 | `categorize_import` | Enqueued inside import commit transaction | `None` (unbounded) |
-| `collect_batch` | Enqueued when `submit_batch` submits a provider batch | `None` (unbounded) |
 
 Key job-loop properties:
 
@@ -253,7 +251,7 @@ The following table summarizes Arno's threat model and implemented controls:
 | Agent-written code | Monty sandbox: no filesystem, environment, or network access; memory, time, and suspension limits; frozen clock and RNG seed for parser replays |
 | Credential leakage in data exports | JSON and CSV exports exclude all eight `SECRET_TABLES`: `model_credentials`, `push_subscriptions`, `sessions`, `setup_tokens`, `users`, `vapid_keys`, `webauthn_challenges`, and `webauthn_credentials` (`pg_dump` stays complete for backup/restore) |
 | Supply-chain or copyleft dependency | Locked dependency files, a manual permissive-license check when a dependency changes, and `pip-audit` + `pnpm audit` in CI |
-| Upload flood or runaway model spend | 25 MB upload limit, single-user passkey gate, usage limits, and fail-closed Postgres spend ceilings |
+| Upload flood or runaway model spend | 25 MB upload limit, single-user passkey gate, usage limits, and a fail-closed shared daily spend cap in Postgres (`llm_usage`) |
 | Telemetry data exposure | Phoenix binds to loopback with authentication enabled, stores traces in its own SQLite volume, never in the Arno database, and vision agents disable tracing (`agent.instrument = False`). See [`self-hosting.md`](../operations/self-hosting.md) for provider data-retention policies |
 
 ### Postgres roles

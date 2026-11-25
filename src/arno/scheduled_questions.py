@@ -1,21 +1,18 @@
 """The user's scheduled questions: CRUD, validation, and the next run shown in Settings.
 
 They run through the agent read-only (see `arno.jobs.questions`). The row here is only the
-schedule and the per-run spend ceiling; the answer lands in the inbox.
+schedule; the answer lands in the inbox.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, time
-from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from arno.db.conn import Connection
 from arno.jobs.schedules import INDIA, next_occurrence, sync_scheduled_questions
 from arno.ledger.audit import write_group
 from arno.ledger.errors import InvalidLedgerError, NotFoundLedgerError
-
-DEFAULT_SPEND_LIMIT_USD = Decimal("1.00")
 
 
 async def _notification_time(conn: Connection) -> time:
@@ -36,28 +33,11 @@ async def _check_rule(conn: Connection, rule: str, now: datetime | None = None) 
         raise InvalidLedgerError("That rule never runs again")
 
 
-def _spend_cents(value: Decimal | int | float | str | None) -> int | None:
-    if value is None:
-        return None
-    try:
-        cents = int((Decimal(str(value)) * 100).quantize(Decimal("1")))
-    except (InvalidOperation, ValueError) as exc:
-        raise InvalidLedgerError("The spend limit is in US dollars") from exc
-    if cents < 0:
-        raise InvalidLedgerError("A spend limit cannot be negative")
-    return cents
-
-
 def _payload(row: dict[str, Any], next_run_at: Any = None) -> dict[str, Any]:
-    cents = row.get("spend_limit_cents")
     return {
         "id": row["id"],
         "prompt": row["prompt"],
         "rule": row["rule"],
-        "spend_limit_usd": (
-            str((Decimal(cents) / 100).quantize(Decimal("0.01"))) if cents is not None else None
-        ),
-        "default_spend_limit_usd": str(DEFAULT_SPEND_LIMIT_USD),
         "last_run_at": row["last_run_at"].isoformat() if row["last_run_at"] else None,
         "next_run_at": (next_run_at.isoformat() if next_run_at and row["active"] else None),
         "active": row["active"],
@@ -103,7 +83,6 @@ async def create_question(
     *,
     prompt: str,
     rule: str,
-    spend_limit_usd: Decimal | int | float | str | None = None,
     actor: str = "user",
     message_id: str | None = None,
 ) -> dict[str, Any]:
@@ -114,12 +93,11 @@ async def create_question(
     async with write_group(conn, actor=actor, message_id=message_id) as group:
         row = await conn.fetchrow_required(
             """
-            INSERT INTO scheduled_questions (prompt, rule, spend_limit_cents)
-            VALUES ($1, $2, $3) RETURNING *
+            INSERT INTO scheduled_questions (prompt, rule)
+            VALUES ($1, $2) RETURNING *
             """,
             text,
             rule.strip(),
-            _spend_cents(spend_limit_usd),
         )
         group.record_created("scheduled_questions", row)
     await sync_scheduled_questions(conn)
@@ -132,7 +110,6 @@ async def update_question(
     *,
     prompt: str | None = None,
     rule: str | None = None,
-    spend_limit_usd: Decimal | int | float | str | None = None,
     active: bool | None = None,
     actor: str = "user",
     message_id: str | None = None,
@@ -148,8 +125,6 @@ async def update_question(
     if rule is not None:
         await _check_rule(conn, rule)
         updates["rule"] = rule.strip()
-    if spend_limit_usd is not None:
-        updates["spend_limit_cents"] = _spend_cents(spend_limit_usd)
     if active is not None:
         updates["active"] = active
     if not updates:
@@ -184,7 +159,6 @@ async def archive_question(
 
 
 __all__ = [
-    "DEFAULT_SPEND_LIMIT_USD",
     "archive_question",
     "create_question",
     "get_question",

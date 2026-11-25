@@ -1,7 +1,7 @@
 # Tool contracts
 
 This specification defines the contracts for Arno's 14 read and presentation tools, 7 direct write
-tools, 5 delegation tools, 13 parser subagent functions, and 5 categorizer functions; for data-model
+tools, 5 delegation tools, 13 parser subagent functions, and 3 categorizer functions; for data-model
 conventions, write tiers, and engine math see [data-and-engine.md](data-and-engine.md).
 
 Tool summaries in this specification track the live docstrings in `src/arno/agent/toolset.py`, which
@@ -26,7 +26,7 @@ Every tool in `src/arno/agent/toolset.py` follows the shared rules listed in the
 | Money in | Field names carry units: read tools accept `*_paise`, and write tools accept `*_rupees` (except `emi_fee_paise` and `min_due_floor_paise` in `update_setup`). Projection and money calculators accept magnitudes up to `MAX_PAISE` (`9,223,372,036,854,775,807`) |
 | Name resolution | Accounts, payees, and categories resolve by case-insensitive name; movements take IDs. Matching an archived account refuses with that account's name and the active spendable accounts |
 | Validation errors | Unknown or ambiguous names and invalid inputs raise `ModelRetry` listing valid candidates. Inside `run_code`, a nested `ModelRetry` arrives as a catchable `Exception` |
-| Unexpected errors | Unexpected tool exceptions become structured error results (`{"status": "error", "tool", "message"}`) through `ToolErrorsToModel.on_tool_execute_error`, while spend-budget stops still halt the run. Read tools carry a 60-second timeout; write tools have no timeout |
+| Unexpected errors | Unexpected tool exceptions become structured error results (`{"status": "error", "tool", "message"}`) through `ToolErrorsToModel.on_tool_execute_error`, while daily-cap stops still halt the run. Read tools carry a 60-second timeout; write tools have no timeout |
 | Uncertain commit | When a database commit's outcome is unknown (`CommitOutcomeUnknownError`), `_call_write` returns `{"status": "outcome_unknown", "committed": "unknown", "message": "..."}` instructing the model to ask the user to verify the ledger and never repeat the write |
 | Two payloads | Compact JSON for the model; cards, curves, and source IDs for the UI in `ToolReturn` metadata (`data-card` chunks). Arno emits nested card metadata from `run_code` returns |
 | Read return types | JSON-native values only (`dict`, `list`, `str`, `int`, `float`, `bool`, `None`), ISO date strings, and `as_of` dates on every balance |
@@ -695,7 +695,7 @@ following table lists the nine supported entities and their `SetupData` fields
 | `category` | `name`, `new_name`, `reducible` |
 | `payee` | `name`, `new_name`, `kind`, `upi_id`, `default_category`, `create_person_account`, `active` |
 | `settings` | `floor_rupees`, `base_currency`, `time_zone`, `default_horizon_days`, `notification_time`, `weekly_briefing_dow`, `reminder_lead_days`, `display_name` |
-| `scheduled_question` | `id`, `prompt`, `rule`, `spend_limit_usd` |
+| `scheduled_question` | `id`, `prompt`, `rule` |
 | `baseline` | `category`, `amount_per_day_rupees` |
 
 **Output:** `{"status": "saved", "undo_id": str | None, "summary": str, "result": dict}` for
@@ -855,14 +855,12 @@ commit (and again when a batch completes). It uses the chat model (or optional `
 large backfills), never interacts with the user, and has no ledger write tools other than
 `save_categories`. Rules have already labeled matching rows ([import.md](import.md)).
 
-The following table lists all 5 categorizer functions:
+The following table lists all 3 categorizer functions:
 
 | Function | Purpose | Input | Output |
 |---|---|---|---|
 | `pending_payees` | Lists payees in the import not covered by any rule (with count, total, sample narration, and direction) plus active category names | `import_id` | `{"payees": [...], "categories": [...]}` |
-| `categorize_now` | Sends payees to the labeling model concurrently in chunks of 12 (concurrency 8); host injects known rule-covered check payees to measure agreement and keeps `guess_reason` off the agent context. Refuses if a batch is pending | `keys` | `{"answers": {key: category \| null}, "agreement": {"rate", "checked"}, "failed": [key]}` |
-| `submit_batch` | Available only when `BATCH` is configured. Pre-accounts a conservative priced estimate against the shared daily budget, records durable intent, submits chunks as one batch, and queues `collect_batch` | `keys` | `{"batch_id", "requests", "status": "pending"}` |
-| `batch_results` | Reads collected answers from a completed batch in the same shape as `categorize_now` | `batch_id` | `{"answers": {key: category \| null}, "agreement": {"rate", "checked"}, "failed": []}` |
+| `categorize_now` | Sends payees to the labeling model concurrently in chunks of 12 (concurrency 8); host injects known rule-covered check payees to measure agreement and keeps `guess_reason` off the agent context.  | `keys` | `{"answers": {key: category \| null}, "agreement": {"rate", "checked"}, "failed": [key]}` |
 | `save_categories` | Writes one import-owned `write_group`: trusted answers label movements and upsert `llm` rules; keys in `distrust`, `null`, unknown categories, and `"Other"` stay uncategorized with a stored `category_hint` | `distrust` (optional list of keys) | `{"undo_id", "labeled", "uncategorized", "rules"}` |
 
 Undoing the parent import reverts the categorizer's `write_group`, rolling back both labels and

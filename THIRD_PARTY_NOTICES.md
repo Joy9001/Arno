@@ -108,16 +108,14 @@ its `.dist-info` directory. The direct dependencies below are the ones Arno choo
 | Package | License |
 |---|---|
 | `asyncpg` | Apache-2.0 |
-| `arize-phoenix-otel` | Apache-2.0 |
 | `fastapi` | MIT |
 | `holidays` | MIT |
 | `httpx` | BSD-3-Clause |
-| `httpx2` | BSD-3-Clause |
 | `genai-prices` | MIT |
 | `msoffcrypto-tool` | MIT |
 | `numpy` | BSD-3-Clause (bundled libraries below) |
 | `olefile` | BSD |
-| `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http` | Apache-2.0 |
+| `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-asyncpg` | Apache-2.0 |
 | `pydantic` | MIT |
 | `pydantic-ai`, `pydantic-ai-harness`, `pydantic-evals` | MIT |
 | `pypdfium2` | BSD-3-Clause or Apache-2.0 |

@@ -7,17 +7,12 @@ from datetime import timedelta
 
 import pytest
 from pydantic_ai.messages import (
-    ModelMessage,
     ModelRequest,
     ModelResponse,
     ToolCallPart,
     ToolReturnPart,
-    UserPromptPart,
 )
-from pydantic_ai.models import ModelRequestParameters
-from pydantic_ai.models.test import TestModel
 
-from arno.agent.models import WindowLimited
 from arno.api.run_view import build_run
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today
@@ -65,17 +60,6 @@ async def test_restoring_a_payment_whose_occurrence_is_gone_conflicts(ledger):
     }
     with pytest.raises(ConflictLedgerError):
         await validate_restored_payment(ledger, payment)
-
-
-async def test_the_window_limited_model_streams_like_the_model_it_wraps():
-    """The backup model streams: an async generator over the wrapped stream raised TypeError."""
-    model = WindowLimited(TestModel(custom_output_text="fine"), 1_000)
-    messages: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("hello")])]
-
-    async with model.request_stream(messages, None, ModelRequestParameters()) as stream:
-        events = [part async for part in stream]
-
-    assert events, "a streamed request yields the wrapped model's stream"
 
 
 def test_a_retried_script_step_reads_as_failed():

@@ -20,9 +20,7 @@ from arno.agent.capabilities import build_capabilities
 
 
 def _tiered(backup=None) -> TieredCompaction:
-    capabilities = build_capabilities(
-        primary=TestModel(), backup=backup, spend_store=None, context_window=1_000
-    )
+    capabilities = build_capabilities(primary=TestModel(), backup=backup, context_window=1_000)
     return next(item for item in capabilities if isinstance(item, TieredCompaction))
 
 

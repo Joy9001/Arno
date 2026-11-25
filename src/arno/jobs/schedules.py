@@ -23,7 +23,6 @@ logger = logging.getLogger("arno.jobs.schedules")
 
 INDIA = ZoneInfo("Asia/Kolkata")
 BUILTIN_KINDS = (
-    "cost_replay",
     "weekly_briefing",
     "reminders",
     "risk_check",
@@ -68,7 +67,6 @@ def builtin_rules(settings: dict[str, Any]) -> dict[str, str]:
     notification = _time_value(settings.get("notification_time"), time(8, 0))
     briefing_day = int(settings.get("weekly_briefing_dow") or 0)
     rules = {
-        "cost_replay": "FREQ=MINUTELY;INTERVAL=5",
         "weekly_briefing": (
             f"FREQ=WEEKLY;BYDAY={WEEKDAYS[briefing_day]};"
             f"BYHOUR={notification.hour};BYMINUTE={notification.minute}"
@@ -140,7 +138,7 @@ def period_for(kind: str, occurrence: datetime, payload: dict[str, Any] | None =
     local = occurrence.astimezone(INDIA)
     if kind == "weekly_briefing":
         return local.strftime("%G-W%V")
-    if kind in {"scheduled_question", "cost_replay"}:
+    if kind == "scheduled_question":
         return local.strftime("%Y-%m-%dT%H:%M")
     return local.strftime("%Y-%m-%d")
 
@@ -292,16 +290,6 @@ async def sync_scheduled_questions(conn: Connection, *, now: datetime | None = N
     return changed
 
 
-async def _costs_waiting_replay(conn: Connection) -> bool:
-    """Whether a finalized model call has not reached the exporter yet."""
-    return bool(
-        await conn.fetchval(
-            "SELECT EXISTS ("
-            "SELECT 1 FROM llm_calls WHERE status = 'finalized' AND exported_at IS NULL)"
-        )
-    )
-
-
 async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None) -> int:
     """Turn every due schedule into at most one job per period, then move past now."""
     now = now or datetime.now(INDIA)
@@ -328,16 +316,14 @@ async def enqueue_due_schedules(conn: Connection, *, now: datetime | None = None
                 "period": period,
                 "scheduled_for": occurrence.isoformat(),
             }
-            # An idle instance has nothing to replay, so the tick checks and adds no job.
-            if kind != "cost_replay" or await _costs_waiting_replay(conn):
-                await enqueue_job(
-                    conn,
-                    key=job_key(kind, period, payload),
-                    kind=kind,
-                    payload=job_payload,
-                    run_at=now,
-                )
-                enqueued += 1
+            await enqueue_job(
+                conn,
+                key=job_key(kind, period, payload),
+                kind=kind,
+                payload=job_payload,
+                run_at=now,
+            )
+            enqueued += 1
             following = _following_occurrence(
                 row["rule"],
                 occurrence,

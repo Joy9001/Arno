@@ -26,13 +26,12 @@ from pydantic_ai_harness.subagents import DelegationTasks
 from arno.agent.capabilities import (
     MODEL_SETTINGS,
     InferenceContext,
-    RetryTransientModelErrors,
     ToolErrorsToModel,
-    spend_limits,
 )
 from arno.agent.deps import AgentDeps
 from arno.agent.models import parse_model
 from arno.agent.redaction import redact_text
+from arno.agent.usage import usage_hooks
 from arno.db.conn import Connection, connect
 from arno.importers.checks import INPUT_REASONS, OPENING_MISSING, account_check
 from arno.importers.checks import check_statement as run_checks
@@ -1306,13 +1305,8 @@ def build_parser_agent(
     model: Any = None,
     *,
     plan_pool: Any = None,
-    spend_store: Any = None,
 ) -> Agent[AgentDeps, ParseReport]:
     """The parser subagent. It is never the main agent, and it never writes."""
-    if spend_store is None and model is None:
-        from arno.agent.spend import SharedSpendStore
-
-        spend_store = SharedSpendStore()
     toolset = FunctionToolset(
         tools=[
             open_imports,
@@ -1342,17 +1336,14 @@ def build_parser_agent(
 
     capabilities: list[Any] = [
         # Delegations can outlive the watching turn, including automatic backgrounding.
-        InferenceContext(background=True),
+        InferenceContext(),
         CodeMode(tools={"code_mode": True}),
         # The whole-plan rewrite only: the per-step tools need ids the plan reminder never shows,
         # so a call with the shown step numbers failed and cost a step every run.
         Planning(store_resolver=resolver, tools=["write_plan", "read_plan"]),
         ToolErrorsToModel(),
-        RetryTransientModelErrors(),
+        usage_hooks("parse"),
     ]
-    limits = spend_limits(spend_store)
-    if limits is not None:
-        capabilities.append(limits)
     return Agent(
         model or parse_model(),
         deps_type=AgentDeps,

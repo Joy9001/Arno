@@ -29,7 +29,6 @@ async def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_rever
         json={
             "prompt": "Every Sunday, what did I spend on food?",
             "rule": "FREQ=WEEKLY;BYDAY=SU",
-            "spend_limit_usd": 2,
         },
     )
     assert created.status_code == 201, created.text
@@ -57,14 +56,12 @@ async def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_rever
         json={
             "prompt": "Every Sunday, what did I spend on groceries?",
             "rule": "FREQ=WEEKLY;BYDAY=MO",
-            "spend_limit_usd": 3.25,
             "active": True,
         },
     )
     assert edited.status_code == 200, edited.text
     assert edited.json()["prompt"] == "Every Sunday, what did I spend on groceries?"
     assert edited.json()["rule"] == "FREQ=WEEKLY;BYDAY=MO"
-    assert edited.json()["spend_limit_usd"] == "3.25"
     assert edited.json()["active"] is True
     assert edited.json()["next_run_at"] is not None
 

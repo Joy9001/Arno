@@ -1622,7 +1622,6 @@ async def update_setup_item(
                 row["id"],
                 prompt=data.get("prompt"),
                 rule=data.get("rule"),
-                spend_limit_usd=data.get("spend_limit_usd"),
                 active=data.get("active"),
                 actor="agent",
                 message_id=message_id,
@@ -1634,7 +1633,6 @@ async def update_setup_item(
                     conn,
                     prompt=_required(data, "prompt", "a scheduled question"),
                     rule=_required(data, "rule", "a scheduled question rule"),
-                    spend_limit_usd=data.get("spend_limit_usd"),
                     actor="agent",
                     message_id=message_id,
                 )

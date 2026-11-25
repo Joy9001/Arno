@@ -1,4 +1,4 @@
-"""The user's scheduled questions: the agent, read-only, with one run's spend and request ceiling.
+"""The user's scheduled questions: the agent, read-only, with one run's request ceiling.
 
 No write tools are built. The pinned financial snapshot is the first message, exactly as in chat.
 The answer is written into the inbox, keyed by the question and its scheduled period.
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from decimal import Decimal
 from typing import Any
 
 from arno.agent.builder import build_agent
@@ -16,12 +15,9 @@ from arno.agent.capabilities import MODEL_SETTINGS, drain_events
 from arno.agent.deps import AgentDeps
 from arno.agent.history import build_snapshot_history
 from arno.agent.number_check import UNTRACED_NOTE, check_messages
-from arno.agent.spend import make_spend_store
-from arno.config import get_settings
 from arno.db.conn import Connection, connect
 from arno.jobs.schedules import INDIA, period_for
 from arno.notifications import create_notification, send_push_for_kind
-from arno.scheduled_questions import DEFAULT_SPEND_LIMIT_USD
 
 logger = logging.getLogger("arno.jobs.questions")
 
@@ -29,19 +25,11 @@ REQUEST_LIMIT = 20
 TOOL_CALL_LIMIT = 40
 
 
-def spend_budget(question: dict[str, Any]) -> Decimal:
-    cents = question.get("spend_limit_cents")
-    if cents is None:
-        return DEFAULT_SPEND_LIMIT_USD
-    return (Decimal(int(cents)) / 100).quantize(Decimal("0.01"))
-
-
-def ceiling_answer(question: dict[str, Any]) -> str:
+def ceiling_answer() -> str:
     """The plain answer one run writes when it stopped at its own ceiling."""
     return (
-        f"This scheduled question hit its per-run ceiling ({REQUEST_LIMIT} model requests "
-        f"or {spend_budget(question)} USD). It stopped early; narrow the question or raise "
-        "its spend limit in Settings."
+        f"This scheduled question hit its per-run ceiling ({REQUEST_LIMIT} model requests). It "
+        "stopped early; narrow the question."
     )
 
 
@@ -76,7 +64,7 @@ async def _answer(
         )
     except UsageLimitExceeded:
         # Named on the answer and marked on the inbox item, so it never reads as an answer.
-        return ceiling_answer(question), True
+        return ceiling_answer(), True
     answer = str(result.output or "").strip()
     answer = answer or "The question ran, but the model returned no answer."
     # A scheduled answer is plain text in the inbox, so it carries the same note a chat turn
@@ -115,7 +103,6 @@ async def record_answer(
             "question_id": question["id"],
             "prompt": question["prompt"],
             "period": period,
-            "spend_limit_usd": str(spend_budget(question)),
             "ceiling": ceiling,
         },
         dedupe_key=f"scheduled_question:{question['id']}:{period}",
@@ -133,7 +120,6 @@ async def run_scheduled_question(
     question_id: str,
     period: str | None = None,
     agent: Any = None,
-    spend_store: Any = None,
 ) -> dict[str, Any]:
     question = await conn.fetchrow(
         "SELECT * FROM scheduled_questions WHERE id = $1 AND active", question_id
@@ -154,17 +140,10 @@ async def run_scheduled_question(
         return {
             "notification_id": None,
             "period": period,
-            "spend_limit_usd": str(spend_budget(dict(question))),
             "skipped": "already answered",
         }
     if agent is None:
-        if spend_store is None:
-            raise RuntimeError("A scheduled question needs a spend store")
-        agent = build_agent(
-            read_only=True,
-            spend_store=spend_store,
-            question_budget_usd=spend_budget(dict(question)),
-        )
+        agent = build_agent(read_only=True)
     answer, ceiling = await _answer(conn, dict(question), agent=agent)
     row = await record_answer(
         conn, question=dict(question), answer=answer, period=period, ceiling=ceiling
@@ -172,7 +151,6 @@ async def run_scheduled_question(
     return {
         "notification_id": row["id"] if row else None,
         "period": period,
-        "spend_limit_usd": str(spend_budget(dict(question))),
         "ceiling": ceiling,
     }
 
@@ -181,24 +159,13 @@ async def handle_scheduled_question(payload: dict[str, Any]) -> dict[str, Any]:
     question_id = str(payload.get("scheduled_question_id") or "")
     if not question_id:
         raise ValueError("scheduled question job has no scheduled_question_id")
-    settings = get_settings()
-    store, pool = await make_spend_store(settings.database_url)
-    try:
-        if store is None:
-            raise RuntimeError("the spend store is unavailable; refusing an uncapped model run")
-        async with connect() as conn:
-            result = await run_scheduled_question(
-                conn,
-                question_id=question_id,
-                period=payload.get("period"),
-                spend_store=store,
-            )
-            if result.get("notification_id"):
-                await send_push_for_kind(conn, "scheduled_question")
-            return result
-    finally:
-        if pool is not None:
-            await pool.close()
+    async with connect() as conn:
+        result = await run_scheduled_question(
+            conn, question_id=question_id, period=payload.get("period")
+        )
+        if result.get("notification_id"):
+            await send_push_for_kind(conn, "scheduled_question")
+        return result
 
 
 __all__ = [
@@ -209,5 +176,4 @@ __all__ = [
     "handle_scheduled_question",
     "record_answer",
     "run_scheduled_question",
-    "spend_budget",
 ]

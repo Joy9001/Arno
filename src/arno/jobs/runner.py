@@ -17,9 +17,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
-from arno.agent.chatgpt_auth import background_inference
-from arno.agent.cost_journal import cost_identity
-from arno.agent.spend import COST_STOP_ERRORS
+from arno.agent.usage import COST_STOP_ERRORS
 from arno.db.conn import Connection, connect
 from arno.ledger.deletion import ERASE_LOCK_KEY
 from arno.ledger.errors import CommitOutcomeUnknownError
@@ -38,17 +36,15 @@ DEFAULT_TIMEOUTS: dict[str, float | None] = {
     "backup_check": None,
     "scheduled_question": None,
     "categorize_import": None,
-    "collect_batch": None,
 }
 
 
 def default_handlers() -> dict[str, Handler]:
     """Imported lazily, so the job module does not import the whole agent at boot."""
     from arno.importers.baselines import handle_recompute_baselines
-    from arno.importers.categorize import handle_categorize_import, handle_collect_batch
+    from arno.importers.categorize import handle_categorize_import
     from arno.jobs.backup import handle_backup_check
     from arno.jobs.briefing import handle_weekly_briefing
-    from arno.jobs.costs import handle_cost_replay
     from arno.jobs.patterns import handle_pattern_detection
     from arno.jobs.questions import handle_scheduled_question
     from arno.jobs.recaps import handle_recaps
@@ -56,7 +52,6 @@ def default_handlers() -> dict[str, Handler]:
     from arno.jobs.risk import handle_risk_check
 
     return {
-        "cost_replay": handle_cost_replay,
         "recompute_baselines": handle_recompute_baselines,
         "weekly_briefing": handle_weekly_briefing,
         "reminders": handle_reminders,
@@ -66,7 +61,6 @@ def default_handlers() -> dict[str, Handler]:
         "recaps": handle_recaps,
         "scheduled_question": handle_scheduled_question,
         "categorize_import": handle_categorize_import,
-        "collect_batch": handle_collect_batch,
     }
 
 
@@ -450,13 +444,12 @@ class JobRunner:
         timeout = self.timeouts.get(kind, 120)
         try:
             payload = dict(job.get("payload") or {})
-            with background_inference(), cost_identity(workload=f"job:{job_id}"):
-                if inspect.iscoroutinefunction(handler):
-                    result = await asyncio.wait_for(handler(payload), timeout=timeout)
-                else:
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(handler, payload), timeout=timeout
-                    )
+            if inspect.iscoroutinefunction(handler):
+                result = await asyncio.wait_for(handler(payload), timeout=timeout)
+            else:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(handler, payload), timeout=timeout
+                )
             async with connect() as conn:
                 await _finish(conn, job_id, status="done", result=result)
         except asyncio.CancelledError:

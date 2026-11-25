@@ -1,100 +1,19 @@
-"""Spend ceilings in Postgres, the backup model, and the window-limited backup."""
+"""The backup model and the turn ceilings."""
 
 from __future__ import annotations
 
-import asyncio
-import uuid
-from datetime import timedelta
-from decimal import Decimal
-
-import pytest
-from pydantic_ai.exceptions import ModelAPIError, ModelContextWindowExceededError
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.messages import (
-    ModelMessage,
-    ModelRequest,
     ModelResponse,
     TextPart,
     ToolCallPart,
-    UserPromptPart,
 )
-from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai_harness.spend import SpendEntry
 
 from arno.agent.builder import build_agent
 from arno.agent.capabilities import MODEL_SETTINGS, STALL_SECONDS, turn_limits
 from arno.agent.deps import AgentDeps
-from arno.agent.models import WindowLimited
-from arno.agent.spend import _SingleConnectionPool, make_spend_store
-from arno.config import get_settings
 from tests.agent_helpers import streaming_model
-
-
-async def test_the_daily_ceiling_survives_a_new_pool(db):
-    settings = get_settings(refresh=True)
-    store, pool = await make_spend_store(settings.database_url)
-    assert store is not None
-    key = f"day:{uuid.uuid4()}"
-    await store.add_many(
-        [
-            SpendEntry(
-                key=key,
-                usd=Decimal("3.25"),
-                tokens=100,
-                requests=1,
-                unpriced=0,
-                ttl=timedelta(days=1),
-            )
-        ]
-    )
-    await pool.close()
-
-    store2, pool2 = await make_spend_store(settings.database_url)
-    assert store2 is not None
-    spent = (await store2.get_many([key]))[key]
-    assert spent.usd == Decimal("3.25")
-    await pool2.close()
-
-
-class _FakeConnection:
-    def __init__(self) -> None:
-        self.terminated = 0
-        self._closed = False
-
-    def is_closed(self) -> bool:
-        return self._closed
-
-    def terminate(self) -> None:
-        self.terminated += 1
-        self._closed = True
-
-
-def test_the_cli_connection_is_replaced_across_loops_and_closed_explicitly(monkeypatch):
-    created: list[_FakeConnection] = []
-
-    async def connect(dsn, **kwargs):
-        del dsn, kwargs
-        connection = _FakeConnection()
-        created.append(connection)
-        return connection
-
-    monkeypatch.setattr("arno.agent.spend.asyncpg.connect", connect)
-    pool = _SingleConnectionPool("postgresql://unused")
-
-    async def use():
-        async with pool.acquire() as connection:
-            return connection
-
-    first = asyncio.run(use())
-    second = asyncio.run(use())
-    assert len(created) == 2
-    assert first.terminated == 1
-    assert second.terminated == 0
-
-    pool.close()
-    assert second.terminated == 1
-    pool.close()
-    assert second.terminated == 1
 
 
 async def test_the_backup_model_takes_over_without_sticking(demo_ledger):
@@ -116,31 +35,6 @@ async def test_the_backup_model_takes_over_without_sticking(demo_ledger):
     result = await agent.run("hi", deps=AgentDeps(conversation_id="cnv_backup"))
     assert result.output == "from the primary"
     assert calls == {"primary": 2, "backup": 1}, calls
-
-
-def test_a_backup_too_small_refuses_before_sending():
-    from pydantic_ai.models.function import FunctionModel as FM
-
-    def never(messages, info):  # pragma: no cover - should be refused first
-        raise AssertionError("the wrapped model was called")
-
-    limited = WindowLimited(FM(never), 10)
-    messages: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("word " * 1000)])]
-    with pytest.raises(ModelContextWindowExceededError):
-        asyncio.run(limited.request(messages, None, ModelRequestParameters()))
-
-
-def test_a_history_that_fits_the_backup_window_is_sent():
-    seen: list[list[ModelMessage]] = []
-
-    def succeed(messages, info):
-        seen.append(messages)
-        return ModelResponse(parts=[TextPart("ok")])
-
-    limited = WindowLimited(FunctionModel(succeed), 100_000)
-    messages: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("hi")])]
-    asyncio.run(limited.request(messages, None, ModelRequestParameters()))
-    assert seen == [messages]
 
 
 def test_the_turn_ceilings_are_wide_but_finite():
@@ -179,33 +73,3 @@ async def test_a_backup_reply_carries_a_badge_and_records_the_error(session_clie
     assert any(part.get("type") == "data-model-badge" for part in parts)
     row = await demo_ledger.fetchrow("SELECT last_model_error_type FROM settings WHERE id = 1")
     assert row["last_model_error_type"]
-
-
-async def test_a_transient_provider_error_is_asked_again_and_a_lasting_one_is_not():
-    import pytest as _pytest
-    from pydantic_ai import Agent as _Agent
-    from pydantic_ai.exceptions import ModelHTTPError, ModelServerError
-    from pydantic_ai.messages import ModelResponse as _Response
-    from pydantic_ai.messages import TextPart as _Text
-    from pydantic_ai.models.function import FunctionModel as _Function
-
-    from arno.agent.capabilities import RetryTransientModelErrors
-
-    calls: list[int] = []
-
-    def flaky(messages, info):
-        calls.append(1)
-        if len(calls) == 1:
-            raise ModelServerError("m", "Streaming response failed: [502]", in_stream=True)
-        return _Response(parts=[_Text("ok")])
-
-    agent = _Agent(_Function(flaky), capabilities=[RetryTransientModelErrors(base_delay=0)])
-    assert (await agent.run("hi")).output == "ok"
-    assert len(calls) == 2
-
-    def rejected(messages, info):
-        raise ModelHTTPError(400, "m", body="bad request")
-
-    strict = _Agent(_Function(rejected), capabilities=[RetryTransientModelErrors(base_delay=0)])
-    with _pytest.raises(ModelHTTPError):
-        await strict.run("hi")

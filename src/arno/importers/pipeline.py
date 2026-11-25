@@ -350,7 +350,7 @@ async def categorize_state(conn: Connection, import_id: str) -> dict[str, Any] |
     rows = await conn.fetch(
         """
         SELECT * FROM jobs
-        WHERE kind IN ('categorize_import', 'collect_batch')
+        WHERE kind = 'categorize_import'
           AND payload ->> 'import_id' = $1
         ORDER BY created_at DESC, id DESC
         LIMIT 10
@@ -382,14 +382,6 @@ async def categorize_state(conn: Connection, import_id: str) -> dict[str, Any] |
         view.update(overrides)
         return view
 
-    if job["kind"] == "collect_batch":
-        if status == "failed":
-            return state(state="failed", error=job["last_error"])
-        return state(
-            state="waiting_on_batch",
-            next_run_at=_moment(job["run_at"]) if status == "pending" else None,
-        )
-
     if status == "pending":
         retrying = attempts > 0
         return state(
@@ -408,22 +400,6 @@ async def categorize_state(conn: Connection, import_id: str) -> dict[str, Any] |
         "uncategorized": result.get("uncategorized"),
         "failed_payees": result.get("failed_payees"),
     }
-    if outcome == "batch_submitted":
-        run_id = str(result.get("run_id") or result.get("batch_id") or "")
-        pending = next(
-            (
-                row
-                for row in rows
-                if row["kind"] == "collect_batch"
-                and row["status"] == "pending"
-                and str((row["payload"] or {}).get("run_id")) == run_id
-            ),
-            None,
-        )
-        return state(
-            state="waiting_on_batch",
-            next_run_at=_moment(pending["run_at"]) if pending is not None else None,
-        )
     if outcome == "partial":
         return state(state="partial", **counts)
     if outcome is not None:

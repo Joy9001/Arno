@@ -74,7 +74,7 @@ docker compose logs api   # prints a one-time enrollment link and a QR code
 
 Tracing is off by default. To turn it on, start the optional Phoenix service with
 `docker compose --profile obs up -d`, fill in the four `PHOENIX_*` secrets in `.env`, and set
-`PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006/v1/traces`.
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006`.
 
 Open <http://localhost:8000>, follow the link, and create a passkey. Tell Arno your balances,
 salary day, and card dues, and it can answer from the first conversation. To try it on sample data

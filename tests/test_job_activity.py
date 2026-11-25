@@ -291,45 +291,6 @@ async def test_categorize_state_done_partial_and_legacy(db):
     assert state["finished_at"] is not None
 
 
-async def test_categorize_state_waits_on_a_batch(db):
-    import_id = await _committed_import(db, "imp_batch")
-    pending = await _insert_job(
-        db,
-        key="collect_batch:cat_run:1",
-        kind="collect_batch",
-        status="pending",
-        import_id=import_id,
-        extra={"run_id": "cat_run"},
-    )
-    await _insert_job(
-        db,
-        key="categorize_import:imp_batch",
-        kind="categorize_import",
-        status="done",
-        import_id=import_id,
-        finished=True,
-        result={"status": "batch_submitted", "batch_id": "cat_run", "run_id": "cat_run"},
-    )
-
-    # The finished run points at the collector it queued.
-    state = (await import_payload(db, import_id))["categorize"]
-    assert state["state"] == "waiting_on_batch"
-    assert state["next_run_at"] == pending["run_at"].isoformat()
-
-    # Once the collector is the newest job, it says the same thing.
-    await db.execute("UPDATE jobs SET created_at = now() WHERE key = 'collect_batch:cat_run:1'")
-    state = (await import_payload(db, import_id))["categorize"]
-    assert state["state"] == "waiting_on_batch"
-    assert state["job_id"] == pending["id"]
-
-    await db.execute(
-        "UPDATE jobs SET status = 'failed', last_error = 'dead' WHERE id = $1", pending["id"]
-    )
-    state = (await import_payload(db, import_id))["categorize"]
-    assert state["state"] == "failed"
-    assert state["error"] == "dead"
-
-
 async def test_a_retried_job_that_fails_again_raises_a_fresh_alert(session_client, db):
     from arno.jobs.runner import JobGaveUp, JobRunner
 
