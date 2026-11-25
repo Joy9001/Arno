@@ -33,6 +33,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanContext, SpanKind, TraceFlags
 from phoenix.otel import BatchSpanProcessor, HTTPSpanExporter, register
 from pydantic_ai import Agent
+from pydantic_ai.models.instrumented import InstrumentationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,8 @@ def bootstrap_observability() -> Any:
             span_exporter=UsageOnceExporter(HTTPSpanExporter(endpoint=endpoint, headers=_headers()))
         )
     )
-    Agent.instrument_all()
+    # Keep binary payloads (images) out of Phoenix OTel spans while tracing everything else.
+    Agent.instrument_all(InstrumentationSettings(include_binary_content=False))
     return _provider
 
 

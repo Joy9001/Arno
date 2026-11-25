@@ -32,9 +32,10 @@ class AgentDeps:
     # Server-set: statement attachment IDs uploaded with this turn. Filenames stay out: they are
     # outside text and these go into the instructions. No import starts here.
     statement_attachments: tuple[str, ...] = ()
-    # Server-set: one host-written sentence per photo this turn's message carried, saying whether
-    # it was logged. Photos never reach the parser, so this is how the model knows what happened.
-    photo_outcomes: tuple[str, ...] = ()
+    # Server-set: photo attachment IDs carried by this turn's user message. `saw_images` becomes
+    # True when ImageAttachments hydrates any attached image onto a request (including follow-ups).
+    image_attachments: tuple[str, ...] = ()
+    saw_images: bool = False
     # Server-set: parser tasks in this thread that stopped on their step budget and can continue.
     paused_parser_tasks: tuple[str, ...] = ()
     # Server-set on a turn the server started with no message: the background tasks whose

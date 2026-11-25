@@ -913,6 +913,14 @@
   background: color-mix(in srgb, var(--sun) 4%, var(--bg));
 }
 
+.act-uncat-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
 .act-uncat-head h3 {
   margin: 0;
   font-size: 15px;
@@ -978,6 +986,73 @@
 
 .act-uncat-more {
   margin-top: 10px;
+}
+
+.act-cat-dialog {
+  max-width: 440px;
+}
+
+.act-cat-dialog > .muted {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.act-cat-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.act-cat-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.act-cat-field label {
+  margin: 0;
+}
+
+.act-cat-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.act-cat-check input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  margin: 3px 0 0;
+  padding: 0;
+  accent-color: var(--lime);
+}
+
+.act-cat-check label {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.act-cat-check label .fine {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+}
+
+.act-cat-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.act-cat-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 @media (max-width: 620px) {

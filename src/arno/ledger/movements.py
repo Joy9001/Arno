@@ -422,6 +422,7 @@ async def record_income(
     capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("Income must be positive")
@@ -431,7 +432,7 @@ async def record_income(
         raise InvalidLedgerError("Income arrives in a real account, not a system account")
     await _validated_label(conn, None, payee_id)
     income = await system_account(conn, "income")
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         transfer = TransferSpec(
             from_account_id=income["id"],
             to_account_id=account_id,
@@ -465,8 +466,10 @@ async def record_transfer(
     date: date | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("A transfer must be positive")
@@ -486,7 +489,7 @@ async def record_transfer(
             )
             category_id = row["id"] if row else None
             description = description or f"Contribution to {goal['name']}"
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         transfer = TransferSpec(
             from_account_id=from_account_id,
             to_account_id=to_account_id,
@@ -503,6 +506,7 @@ async def record_transfer(
             kind="transfer",
             transfers=[transfer],
             idempotency_key=idempotency_key,
+            capture=capture,
             accounts={from_account["id"]: from_account, to_account["id"]: to_account},
         )
     return await _finish_movement(conn, group, record)
@@ -525,6 +529,7 @@ async def record_split(
     capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if my_share_paise < 0:
         raise InvalidLedgerError("Your share cannot be negative")
@@ -543,7 +548,7 @@ async def record_split(
         spending["id"]: spending,
     }
 
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         resolution = await _resolve_label_category(
             conn,
             group,
@@ -666,8 +671,10 @@ async def record_settlement(
     date: date | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("A settlement must be positive")
@@ -675,7 +682,7 @@ async def record_settlement(
         raise InvalidLedgerError("direction is they_paid or i_paid")
     when = _movement_date(date)
     account = await resolve_account(conn, account_id)
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         person_account = await ensure_person_account(conn, payee_id, group)
         if direction == "they_paid":
             transfer = TransferSpec(
@@ -705,6 +712,7 @@ async def record_settlement(
             kind="settlement",
             transfers=[transfer],
             idempotency_key=idempotency_key,
+            capture=capture,
             accounts={account["id"]: account, person_account["id"]: person_account},
         )
     return await _finish_movement(conn, group, record)
@@ -721,8 +729,10 @@ async def record_refund(
     date: date | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("A refund must be positive")
@@ -730,7 +740,7 @@ async def record_refund(
     account = await resolve_account(conn, account_id)
     category_id, payee_id = await _validated_label(conn, category_id, payee_id)
     spending = await system_account(conn, "spending")
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         transfer = TransferSpec(
             from_account_id=spending["id"],
             to_account_id=account_id,
@@ -747,6 +757,7 @@ async def record_refund(
             kind="refund",
             transfers=[transfer],
             idempotency_key=idempotency_key,
+            capture=capture,
             accounts={spending["id"]: spending, account["id"]: account},
         )
     return await _finish_movement(conn, group, record)
@@ -765,8 +776,10 @@ async def record_loan_payment(
     date: date | None = None,
     note: str | None = None,
     idempotency_key: str | None = None,
+    capture: dict[str, Any] | None = None,
     actor: str = "user",
     message_id: str | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if amount_paise <= 0:
         raise InvalidLedgerError("A loan payment must be positive")
@@ -818,7 +831,7 @@ async def record_loan_payment(
                 note=note,
             )
         )
-    async with write_group(conn, actor=actor, message_id=message_id) as group:
+    async with write_group(conn, actor=actor, message_id=message_id, group_id=group_id) as group:
         record = await create_movement_in_group(
             conn,
             group,
@@ -827,6 +840,7 @@ async def record_loan_payment(
             kind="loan",
             transfers=transfers,
             idempotency_key=idempotency_key,
+            capture=capture,
             accounts={account["id"]: account, loan["id"]: loan, spending["id"]: spending},
         )
     return await _finish_movement(conn, group, record)

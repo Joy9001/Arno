@@ -28,10 +28,51 @@ RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
     from pydantic_ai.messages import ModelMessagesTypeAdapter
 
-    dumped: list[dict[str, Any]] = json.loads(
-        ModelMessagesTypeAdapter.dump_json(_latest_instructions_only(messages))
-    )
+    cleaned = _strip_binary_content(_latest_instructions_only(messages))
+    dumped: list[dict[str, Any]] = json.loads(ModelMessagesTypeAdapter.dump_json(cleaned))
     return dumped
+
+
+def _without_binary(content: Any, placeholder: str) -> Any | None:
+    from pydantic_ai.messages import BinaryContent
+
+    if not isinstance(content, (list, tuple)):
+        return None
+    if not any(isinstance(item, BinaryContent) for item in content):
+        return None
+    replaced = [placeholder if isinstance(item, BinaryContent) else item for item in content]
+    return tuple(replaced) if isinstance(content, tuple) else replaced
+
+
+def _strip_binary_content(messages: list[Any]) -> list[Any]:
+    """Never persist raw image bytes or base64 blobs inside `conversations.model_history`."""
+    from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
+
+    placeholder = "[Image omitted from stored history]"
+    out: list[Any] = []
+    for message in messages:
+        if not isinstance(message, ModelRequest):
+            out.append(message)
+            continue
+        changed = False
+        parts: list[Any] = []
+        for part in message.parts:
+            if (
+                isinstance(part, UserPromptPart)
+                and (cleaned := _without_binary(part.content, placeholder)) is not None
+            ):
+                parts.append(replace(part, content=cleaned))
+                changed = True
+            elif (
+                isinstance(part, ToolReturnPart)
+                and (cleaned := _without_binary(part.content, placeholder)) is not None
+            ):
+                parts.append(replace(part, content=cleaned))
+                changed = True
+            else:
+                parts.append(part)
+        out.append(replace(message, parts=parts) if changed else message)
+    return out
 
 
 def _latest_instructions_only(messages: list[Any]) -> list[Any]:
@@ -156,42 +197,6 @@ async def ensure_history(conn: Connection, thread: dict[str, Any]) -> tuple[list
         )
         thread.update(row)
     return history, outside
-
-
-async def append_outside_entry(
-    conn: Connection,
-    thread: dict[str, Any],
-    marked_text: str,
-    *,
-    reply: str = "Photo logged.",
-) -> list[Any]:
-    """Append a marked photo extraction to the model's history and set the flag.
-
-    This is server code because the client must not be able to skip either step. The entry is a
-    user-shaped exchange with the fields already wrapped by `mark()`, so the next turn sees them
-    as data. `outside_text_at` is set in the same statement, never cleared.
-    """
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
-
-    history, _ = await ensure_history(conn, thread)
-    history = [
-        *history,
-        ModelRequest(parts=[UserPromptPart(content=marked_text)]),
-        ModelResponse(parts=[TextPart(reply)]),
-    ]
-    row = await conn.fetchrow_required(
-        """
-        UPDATE conversations
-        SET model_history = $1,
-            outside_text_at = coalesce(outside_text_at, now()),
-            updated_at = now()
-        WHERE id = $2 RETURNING *
-        """,
-        _dump(history),
-        thread["id"],
-    )
-    thread.update(row)
-    return history
 
 
 async def record_user_message(
@@ -627,7 +632,6 @@ async def recover_crashed_runs(conn: Connection) -> list[dict[str, Any]]:
 
 
 __all__ = [
-    "append_outside_entry",
     "build_snapshot_history",
     "create_thread",
     "ensure_history",

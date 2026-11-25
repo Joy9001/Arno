@@ -318,19 +318,24 @@ an undo waits and exits cleanly with nothing left to label.
 
 ## Photos and voice
 
-### Receipt and UPI screenshots
+### Images and screenshots
 
-Uploading a photo (`POST /api/chat/{thread_id}/photo`) saves the image first so a failed vision
-call produces a retry card (`POST /api/chat/{thread_id}/photo/{attachment_id}`). On Android, the
-installed PWA registers as a share target for GPay, PhonePe, and Paytm screenshots.
+Images upload to `POST /api/attachments` with `purpose="photo"`, either from the chat composer or
+from the Android PWA share target, which opens a chat turn immediately. Each turn stores
+`{type: "data-photo", data: {attachment_id, filename}}` in the UI message and taints the
+conversation (`conversations.outside_text_at`) before the model runs so untrusted image text cannot
+drive silent lasting writes.
 
-`src/arno/capture/photo.py` runs an isolated, tool-less `VISION` call returning `PaymentPhoto`
-(five bounded fields: `merchant`, `amount_paise`, `date`, `method`, and `upi_ref`; no line items).
-The agent sets `agent.instrument = False` so images never enter traces, and redacts `merchant` and
-`upi_ref` with `redact_text` (dropping `upi_ref` if redaction modified it). The endpoint logs one
-undoable expense immediately, attaches the image, marks the extracted fields with `<outside>` in
-the thread's `model_history` (guarded by `captures.history_at` so retries append the note once),
-and sets `outside_text_at`.
+The main agent reads attached images natively via `ImageAttachments` (`src/arno/agent/images.py`):
+
+1. **Wire-only hydration:** Only compact `[Attached image: ...]` markers persist in
+   `model_history`; `ImageAttachments.before_model_request` fetches attached images in one batched
+   query and attaches raw `BinaryContent` onto the outgoing request for all uncompacted image turns
+   in history (naturally evicted by `TieredCompaction`) while preserving prompt cache prefixes and
+   omitting binary bytes from OTel spans.
+2. **Atomic batch logging:** Single entries use `record_movement` and multi-row screenshots use
+   `record_movements` (1–50 movements in one `write_group` with one undo button), linking each
+   movement back to its `attachment_id`.
 
 ### Voice notes
 

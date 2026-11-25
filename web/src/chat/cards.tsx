@@ -382,6 +382,80 @@ export function Card({
     );
   }
 
+  if (card === "movements_batch") {
+    const title = displayText(String(data.title ?? "Logged movements"));
+    const outflow =
+      data.total_outflow && typeof data.total_outflow === "object"
+        ? String((data.total_outflow as Record<string, unknown>).text ?? "")
+        : "";
+    const inflow =
+      data.total_inflow && typeof data.total_inflow === "object"
+        ? String((data.total_inflow as Record<string, unknown>).text ?? "")
+        : "";
+    const rawItems = Array.isArray(data.items)
+      ? (data.items as Array<Record<string, unknown>>)
+      : [];
+
+    return (
+      <div className="chat-card">
+        <div className="chat-card-head">
+          <strong>{title}</strong>
+          {outflow && !inflow && <span className="money">{outflow}</span>}
+          {!outflow && inflow && <span className="money">{inflow}</span>}
+        </div>
+        {outflow && inflow && (
+          <div className="batch-movements-totals">
+            <span>Spent {outflow}</span>
+            <span>Received {inflow}</span>
+          </div>
+        )}
+        {rawItems.length > 0 && (
+          <ul className="batch-movements-list">
+            {rawItems.map((item, index) => {
+              const itemId =
+                typeof item.movement_id === "string" ? item.movement_id : String(index);
+              const kind = typeof item.kind === "string" ? item.kind : "expense";
+              const labelRaw =
+                (typeof item.payee === "string" && item.payee) ||
+                (typeof item.description === "string" && item.description) ||
+                (typeof item.summary === "string" && item.summary) ||
+                kind;
+              const label = displayText(labelRaw);
+              const amountText =
+                item.amount && typeof item.amount === "object"
+                  ? String((item.amount as Record<string, unknown>).text ?? "")
+                  : "";
+              const metaParts = [
+                typeof item.date === "string" ? item.date : "",
+                typeof item.account === "string" && item.account ? displayText(item.account) : "",
+                typeof item.category === "string" && item.category
+                  ? displayText(item.category)
+                  : "",
+              ].filter(Boolean);
+              return (
+                <li key={itemId} className="batch-movements-row">
+                  <div className="batch-movements-main">
+                    <div className="batch-movements-primary">
+                      <strong>{label}</strong>
+                      {kind !== "expense" && (
+                        <span className="batch-movements-kind">{displayText(kind)}</span>
+                      )}
+                    </div>
+                    {metaParts.length > 0 && (
+                      <span className="batch-movements-meta">{metaParts.join(" · ")}</span>
+                    )}
+                  </div>
+                  {amountText && <span className="money">{amountText}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <UndoButton undoId={data.undo_id as string | undefined} />
+      </div>
+    );
+  }
+
   if (card === "movement" || card === "correction" || card === "undo") {
     const title = displayText(String(data.title ?? "Logged"));
     const summary = data.summary ? displayText(String(data.summary)) : "";

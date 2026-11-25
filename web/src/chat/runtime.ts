@@ -48,15 +48,18 @@ function attachmentPrompt(messages: ChatMessage[]): ChatMessage[] {
   const last = messages.at(-1);
   if (!last || last.role !== "user") return messages;
   const hasStatement = last.parts.some((part) => part.type === "data-statement");
-  const hasPhoto = last.parts.some((part) => part.type === "data-photo");
+  const photoCount = last.parts.filter((part) => part.type === "data-photo").length;
   const hasText = last.parts.some((part) => part.type === "text" && part.text.trim());
-  if ((!hasStatement && !hasPhoto) || hasText) return messages;
+  if ((!hasStatement && photoCount === 0) || hasText) return messages;
+  const imagePhrase = photoCount === 1 ? "the attached image" : "the attached images";
   const text =
-    hasStatement && hasPhoto
-      ? "Import the attached statement and log the attached receipt or payment photo."
+    hasStatement && photoCount > 0
+      ? `Import the attached statement and examine ${imagePhrase}.`
       : hasStatement
         ? "Import the attached statement."
-        : "Log the attached receipt or payment photo.";
+        : photoCount === 1
+          ? "See the attached image."
+          : "See the attached images.";
   return [...messages.slice(0, -1), { ...last, parts: [{ type: "text", text }, ...last.parts] }];
 }
 

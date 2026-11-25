@@ -19,13 +19,13 @@ type Uploaded = {
 };
 
 function validationError(file: File): string | null {
-  if (file.size === 0) return "That image is empty. Choose a receipt or payment photo.";
-  if (file.size > MAX_BYTES) return "That image is over the 25 MB photo limit.";
+  if (file.size === 0) return "That image is empty. Choose an image to attach.";
+  if (file.size > MAX_BYTES) return "That image is over the 25 MB image limit.";
   const name = file.name.toLowerCase();
   const supported =
     EXTENSIONS.some((extension) => name.endsWith(extension)) ||
     MIME_TYPES.has(file.type.split(";", 1)[0].trim().toLowerCase());
-  if (!supported) return "Choose a PNG, JPEG, WebP, or GIF receipt or payment photo.";
+  if (!supported) return "Choose a PNG, JPEG, WebP, or GIF image.";
   return null;
 }
 
@@ -45,8 +45,7 @@ function pending(file: File): PendingAttachment {
 }
 
 /**
- * Stages the image only when the composer sends. The chat turn then runs the
- * one server capture path and returns the receipt card, exactly once.
+ * Stages the image only when the composer sends so the chat turn can read it natively.
  */
 export const photoAttachmentAdapter: AttachmentAdapter = {
   accept: PHOTO_ACCEPT,

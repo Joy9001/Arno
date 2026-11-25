@@ -135,19 +135,6 @@ Paused statement import
   `delegate_task("parser", "Continue reading the statement.", resume="<task_id>",
   background=True)` and end your turn. Each resume has a fresh step budget.
 """
-    photos = getattr(deps, "photo_outcomes", ())
-    if photos and not read_only:
-        listed = "\n".join(f"  - Photo {index}: {note}" for index, note in enumerate(photos, 1))
-        text += f"""
-
-Photos with this message
-- The message you are answering carried {len(photos)} photo(s). The host already read each one
-  and showed its card to the user:
-{listed}
-- A photo is not a statement: never hand it to the parser, and never say it did not arrive. A
-  screenshot listing many transactions cannot be logged from a photo; say so, and ask for the
-  statement or export instead.
-"""
     if woken and not read_only:
         text += WOKEN_TEXT
         if getattr(deps, "may_retry", False) and attachments:

@@ -95,9 +95,11 @@ function liveThreadId(aui: AssistantClient): string | null {
   return state.remoteId ?? state.id ?? null;
 }
 
-type CaptureResult =
-  | { status: "logged"; attachment_id: string; card: CaptureCard }
-  | { status: "failed"; attachment_id: string; note: string; card: CaptureCard };
+type UploadedPhoto = {
+  id: string;
+  filename: string;
+  kind: string;
+};
 
 /** A retry replaced its own standalone card; a chat turn keeps its text and tools. */
 function standaloneCaptureFailure(aui: AssistantClient, messageId: string): boolean {
@@ -963,27 +965,42 @@ function ChatShell({
         }
       }
       setSurfaceError(remoteId, null);
-      setCapture(remoteId, { kind: "uploading", message: "Reading the photo…" });
+      setCapture(remoteId, { kind: "uploading", message: "Attaching image…" });
       const form = new FormData();
       form.append("file", file, file.name || "photo.png");
+      form.append("purpose", "photo");
       try {
-        const result = await api<CaptureResult>(
-          `/api/chat/${encodeURIComponent(remoteId)}/photo`,
-          { method: "POST", body: form },
-        );
-        if (result.status === "logged") {
-          appendCard(remoteId, result.card, `photo_${result.attachment_id}`);
-        } else {
-          appendCard(remoteId, result.card, `capture_retry_${result.attachment_id}`);
+        const uploaded = await api<UploadedPhoto>("/api/attachments", {
+          method: "POST",
+          body: form,
+        });
+        if (uploaded.kind !== "photo") {
+          throw new Error("That file is not a readable PNG, JPEG, WebP, or GIF image.");
         }
         setCapture(remoteId, null);
+        if (aui.threadListItem.getState().remoteId !== remoteId) {
+          staleThreads.current.add(originId);
+          void aui.threads.reload().catch(() => {});
+          return;
+        }
+        aui.thread.append({
+          role: "user",
+          content: [
+            {
+              type: "data",
+              name: "photo",
+              data: { attachment_id: uploaded.id, filename: uploaded.filename },
+            },
+          ],
+          startRun: true,
+        });
       } catch (caught) {
         const message = errorMessage(caught);
         setSurfaceError(remoteId, message);
         setCapture(remoteId, { kind: "error", message });
       }
     },
-    [appendCard, aui, running, setCapture, setSurfaceError],
+    [aui, running, setCapture, setSurfaceError],
   );
 
   const uploadPhotoRef = useRef(uploadPhoto);
@@ -1020,24 +1037,20 @@ function ChatShell({
       setSurfaceError(remoteId, null);
       try {
         if (kind === "photo") {
-          const result = await api<CaptureResult>(
-            `/api/chat/${encodeURIComponent(remoteId)}/photo/${encodeURIComponent(attachmentId)}`,
-            { method: "POST" },
-          );
-          if (liveThreadId(aui) !== originId) {
-            staleThreads.current.add(originId);
-            void aui.threads.reload().catch(() => {});
-            return;
+          if (standaloneCaptureFailure(aui, messageId)) {
+            aui.thread.deleteMessage(messageId);
           }
-          if (result.status === "logged") {
-            if (standaloneCaptureFailure(aui, messageId)) {
-              aui.thread.deleteMessage(messageId);
-            }
-            appendCard(remoteId, result.card, `photo_${attachmentId}`);
-          } else {
-            setSurfaceError(remoteId, result.note);
-            setCapture(remoteId, { kind: "error", message: result.note });
-          }
+          aui.thread.append({
+            role: "user",
+            content: [
+              {
+                type: "data",
+                name: "photo",
+                data: { attachment_id: attachmentId, filename: "image" },
+              },
+            ],
+            startRun: true,
+          });
           return;
         }
         const result = await api<TranscribeResult>(
@@ -1066,7 +1079,7 @@ function ChatShell({
         setCapture(remoteId, { kind: "error", message });
       }
     },
-    [appendCard, aui, running, setCapture, setSurfaceError, voice],
+    [aui, running, setCapture, setSurfaceError, voice],
   );
 
   const onStop = useCallback(

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
 import {
@@ -62,6 +62,7 @@ import { DeletionPreviewNote, DeletionScope } from "./DeletionScope";
 import { HistoryPanel } from "./History";
 import type {
   BackupStatus,
+  Category,
   CategoryTree,
   DeletionPreview,
   JobStatus,
@@ -587,6 +588,15 @@ function CategoriesSection({ tree }: { tree: ApiState<CategoryTree> }) {
 }
 
 function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: () => void }) {
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [newCategoryReducible, setNewCategoryReducible] = useState(false);
+  const [newCategoryError, setNewCategoryError] = useState<string | null>(null);
+  const [newCategoryNotice, setNewCategoryNotice] = useState<string | null>(null);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const newCategoryInputRef = useRef<HTMLInputElement | null>(null);
+  const addNameId = useId();
+  const addReducibleId = useId();
+  const addErrorId = useId();
   const [merchant, setMerchant] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [ruleQuery, setRuleQuery] = useState("");
@@ -623,6 +633,48 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
     currentPage * RULE_PAGE_SIZE,
     (currentPage + 1) * RULE_PAGE_SIZE,
   );
+
+  async function createCategory(event: FormEvent) {
+    event.preventDefault();
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) {
+      setNewCategoryError("Enter a category name.");
+      newCategoryInputRef.current?.focus();
+      return;
+    }
+    const existing = tree.categories.find(
+      (item) => item.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) {
+      setNewCategoryError(
+        existing.active
+          ? `“${existing.name}” already exists.`
+          : `“${existing.name}” is archived below. Restore it to use it again.`,
+      );
+      newCategoryInputRef.current?.focus();
+      return;
+    }
+    setCreatingCategory(true);
+    setNewCategoryError(null);
+    setNewCategoryNotice(null);
+    setError(null);
+    setMessage(null);
+    try {
+      const created = await api<Category & { undo_id?: string | null }>("/api/categories", {
+        method: "POST",
+        body: JSON.stringify({ name: trimmed, reducible: newCategoryReducible }),
+      });
+      setNewCategoryName("");
+      setNewCategoryReducible(false);
+      setNewCategoryNotice(`Added “${created.name}”.`);
+      onChanged();
+    } catch (caught) {
+      setNewCategoryError(errorMessage(caught));
+      newCategoryInputRef.current?.focus();
+    } finally {
+      setCreatingCategory(false);
+    }
+  }
 
   async function toggleReducible(category: CategoryTree["categories"][number]) {
     setBusyCategoryId(category.id);
@@ -855,6 +907,69 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
         })}
       </div>
 
+      <form
+        className="stg-inline stg-category-add"
+        aria-label="Add category"
+        noValidate
+        onSubmit={(event) => void createCategory(event)}
+      >
+        <div className="stg-inline-field">
+          <label htmlFor={addNameId}>New category</label>
+          <input
+            ref={newCategoryInputRef}
+            id={addNameId}
+            name="category_name"
+            type="text"
+            value={newCategoryName}
+            maxLength={100}
+            placeholder="Household Help"
+            enterKeyHint="done"
+            required
+            aria-invalid={newCategoryError ? "true" : "false"}
+            aria-describedby={newCategoryError ? addErrorId : undefined}
+            onChange={(event) => {
+              setNewCategoryName(event.target.value);
+              if (newCategoryError) setNewCategoryError(null);
+            }}
+          />
+          {newCategoryError && (
+            <span id={addErrorId} className="error" role="alert">
+              {newCategoryError}
+            </span>
+          )}
+        </div>
+        <div className="stg-check">
+          <input
+            id={addReducibleId}
+            name="category_reducible"
+            type="checkbox"
+            checked={newCategoryReducible}
+            onChange={(event) => setNewCategoryReducible(event.target.checked)}
+          />
+          <label htmlFor={addReducibleId}>Reducible in tradeoffs</label>
+        </div>
+        <button type="submit" disabled={creatingCategory}>
+          {creatingCategory ? (
+            <>
+              <Busy />
+              Adding…
+            </>
+          ) : (
+            <>
+              <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
+              Add category
+            </>
+          )}
+        </button>
+      </form>
+
+      {newCategoryNotice && (
+        <div className="stg-notice stg-category-add-notice" role="status">
+          <CircleCheck size={16} strokeWidth={1.8} aria-hidden="true" />
+          <p>{newCategoryNotice}</p>
+        </div>
+      )}
+
       {archivedCategories.length > 0 && (
         <>
           <div className="stg-subhead">
@@ -1032,7 +1147,11 @@ function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: ()
         </>
       )}
 
-      <form className="stg-inline" onSubmit={(event) => void addRule(event)}>
+      <form
+        className="stg-inline"
+        aria-label="Add merchant rule"
+        onSubmit={(event) => void addRule(event)}
+      >
         <label>
           Merchant
           <input

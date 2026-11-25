@@ -23,6 +23,16 @@ class _MovementBase(WriteModel):
     note: str | None = None
     description: str | None = None
     upi_id: str | None = None
+    upi_ref: str | None = Field(
+        default=None,
+        max_length=40,
+        description="UPI reference number or UTR if visible on a receipt or screenshot.",
+    )
+    attachment_id: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Photo attachment ID (att_...) this movement came from, if any.",
+    )
 
 
 class Expense(_MovementBase):

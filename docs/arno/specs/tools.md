@@ -1,8 +1,8 @@
 # Tool contracts
 
-This specification defines the contracts for Arno's 14 read and presentation tools, 6 direct write
-tools, 5 delegation tools, 13 parser subagent functions, and 5 categorizer functions; for
-data-model conventions, write tiers, and engine math see [data-and-engine.md](data-and-engine.md).
+This specification defines the contracts for Arno's 14 read and presentation tools, 7 direct write
+tools, 5 delegation tools, 13 parser subagent functions, and 5 categorizer functions; for data-model
+conventions, write tiers, and engine math see [data-and-engine.md](data-and-engine.md).
 
 Tool summaries in this specification track the live docstrings in `src/arno/agent/toolset.py`, which
 is the source of truth for exact model-facing wording. Tool names and field names are part of the
@@ -532,7 +532,7 @@ strips internal `<outside>` and `</outside>` markers without rewriting stored re
 
 ## Write tools
 
-All 6 write tools are direct model calls outside `run_code`.
+All 7 write tools are direct model calls outside `run_code`.
 
 ### `record_movement`
 
@@ -550,7 +550,7 @@ record_movement(
     movement: Expense | Income | Transfer | Split | LoanPayment | Refund | Settlement,
     not_duplicate: bool = False,
 )
-# Shared optional fields: date, note, description, upi_id
+# Shared optional fields: date, note, description, upi_id, upi_ref, attachment_id
 # Expense:     amount_rupees, payee=None, account=None, category=None, category_guess=None
 # Income:      amount_rupees, payee=None, account=None
 # Transfer:    amount_rupees, from_account, to_account
@@ -583,8 +583,48 @@ record_movement(
 transfers on retry), resolves account (stated → payee's usual → sole liquid → busiest everyday
 liquid), checks 10-minute duplicates before creating any payee, applies category precedence (stated
 → user rule → llm rule → `category_guess` saved as llm rule → none), splits loan EMIs via
-`loan_payment_parts`, writes balanced transfers and capture inside one `write_group`, and queues a
-risk check.
+`loan_payment_parts`, writes balanced transfers and capture (including redacted `upi_ref` and any
+validated `attachment_id` link) inside one `write_group`, and queues a risk check.
+
+### `record_movements`
+
+**Tier:** Always instant, with one inline `movements_batch` undo card covering the entire batch.
+
+**Purpose:** Atomically logs 1–50 movements from one message or multi-row screenshot inside a single
+`write_group` so one Undo reverses all movements and newly created payees together. Reuses the same
+seven movement variants as `record_movement`.
+
+**Input:**
+
+```python
+record_movements(
+    movements: list[Movement],
+    attachment_id: str | None = None,
+    not_duplicate: bool = False,
+)
+```
+
+**Output:**
+
+```python
+{
+  "status": "recorded",
+  "count": int,
+  "undo_id": str,
+  "total_outflow": {"paise": int, "text": str} | None,
+  "total_inflow": {"paise": int, "text": str} | None,
+  "movements": [...],
+}
+# The movements_batch card is emitted to tool metadata with title, totals, items, and undo_id.
+# Or on suspected duplicate against an earlier ledger row (no writes performed):
+{"status": "possible_duplicate", "duplicates": [{"index": int, "existing": {"movement_id", "date", "summary"}}]}
+```
+
+**Logic:** Pre-checks every batch entry inside the `write_group` transaction against pre-existing
+effective movements (so two legitimately identical small transactions inside the same batch are both
+preserved when `not_duplicate` is false, while any match against prior ledger state exits cleanly
+without writing any rows). Executes each entry through `_record_one_in_group`, producing one
+`movements_batch` card with per-row summaries, totals, and one undo button.
 
 ### `correct_movement`
 

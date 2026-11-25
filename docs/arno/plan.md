@@ -67,9 +67,9 @@ daily capture missed.
 1. **Chat:** Text in English, Hindi, or Hinglish. Initial setup also runs through chat, walking
    through accounts, income, obligations, goals, and the floor.
 2. **Voice notes:** Push-to-talk audio sent through speech-to-text into the chat path.
-3. **Photos:** Receipts or UPI payment screenshots extracted by an isolated vision call into one
-   undoable transaction with the image kept as an attachment. On Android, the installed PWA acts as
-   a share target.
+3. **Photos:** Receipts, UPI payment screenshots, bank-app transaction lists, bills, or charts
+   attach directly to chat turns for the main agent to read natively. On Android, the installed PWA
+   acts as a share target.
 4. **Statement imports:** PDF, spreadsheet, or text statements (including password-protected files)
    parsed by a background parser subagent that saves and replays one parser for each bank layout.
    Imports reconcile against logged rows and commit only after user review
@@ -184,7 +184,7 @@ The following table records the build-versus-buy decision for each component:
 | Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
 | Statement layout parsing | Build: agent-written Monty parsers saved per layout | Avoids maintaining bank-specific scrapers ([`specs/import.md`](specs/import.md)) |
 | Speech-to-text | Buy: OpenAI-compatible STT endpoint | Local `whisper.cpp` server (`local-stt` profile) or cloud API |
-| Photo and textless-page vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role, local or cloud |
+| Textless-page PDF vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role for scanned PDF pages during statement imports |
 | Passkeys and web push | Buy: `py_webauthn`, `pywebpush` | Standard cryptographic and WebAuthn protocols |
 | Private HTTPS access | Buy: Tailscale (`tailscale serve`) | End-to-end encrypted tailnet access with zero public exposure |
 | Off-site backups | Buy: restic (with rclone) | Encrypted, deduplicated backups to S3-compatible or cloud targets |
@@ -253,10 +253,10 @@ Code must never violate these four rules:
    progress require a live tool result from that turn. A post-reply check (`agent/number_check.py`)
    flags untraced amounts. Affordability verdicts come only from the tested engine.
 2. **Untrusted text never makes a lasting change unseen.** Statements run in a parser subagent with
-   no write or ledger tools; photos run in an isolated tool-less vision call. Statement-derived text
-   and parser reports mark the conversation as tainted. Everyday undoable writes stay instant;
-   lasting or wide writes (memories, setup changes, bulk category rules) require an explicit confirm
-   card tap in any tainted conversation.
+   no write or ledger tools. Statement-derived text, parser reports, and attached user images mark
+   the conversation as tainted (`conversations.outside_text_at`). Everyday undoable writes stay
+   instant; lasting or wide writes (memories, setup changes, bulk category rules) require an
+   explicit confirm card tap in any tainted conversation.
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, REST API, and
    any future MCP server wrap the same functions in `src/arno/tools/` and `src/arno/ledger/`.
    Framework adapters belong strictly in `src/arno/agent/`.

@@ -68,9 +68,10 @@ The following table lists the capabilities active in Arno and where each is conf
 | `ToolErrorsToModel` | Converts unexpected tool failures into structured error payloads while propagating `JobGaveUp` and `COST_STOP_ERRORS` unchanged, even across Monty boundaries | `src/arno/agent/capabilities.py` |
 | `OutsideTextTaint` | Persists `conversations.outside_text_at` whenever any tool return (including nested Code Mode returns), tool retry error, or parser report or question carries outside text | `src/arno/agent/capabilities.py`, `src/arno/tools/mark.py` |
 | `CodeModeHints` | Appends the allowed helper and module lists when `run_code` fails with `Type error in code:` or `Runtime error:` | `src/arno/agent/capabilities.py` |
+| `ImageAttachments` | Hydrates raw `BinaryContent` from `attachments` onto outgoing requests for uncompacted image turns without storing base64 in `model_history` | `src/arno/agent/capabilities.py`, `src/arno/agent/images.py` |
 | `SubAgents` with `TaskControl` | Delegates statement imports to the `parser` subagent (`can_ask_questions=True`, `resumable=True`, `forward_usage=False`, `contain_errors=True`, `auto_background_after=15.0`) backed by `DelegationTasks` and `PostgresStepStore` | `src/arno/agent/builder.py`, `src/arno/api/tasks.py` |
 | `Planning` | Keeps multi-step statement parses on track using `PostgresPlanStore` keyed by task ID (parser subagent only) | `src/arno/agent/parser.py` |
-| `RetryTransientModelErrors` | Asks the same model again (three attempts, growing wait) on a provider 5xx, an overload, a dropped connection, a rate limit, or a stream that fails before its first event; each attempt is metered, then the last error goes to `ModelFallback` or the run. The parser, categorizer, briefing, and photo agents carry it too | `src/arno/agent/capabilities.py` |
+| `RetryTransientModelErrors` | Asks the same model again (three attempts, growing wait) on a provider 5xx, an overload, a dropped connection, a rate limit, or a stream that fails before its first event; each attempt is metered, then the last error goes to `ModelFallback` or the run. The parser, categorizer, and briefing agents carry it too | `src/arno/agent/capabilities.py` |
 | `ModelFallback` and `WindowLimited` | Falls back to the configured backup model (`sticky=False`) and rejects histories exceeding `CHAT_FALLBACK_CONTEXT_WINDOW` before dispatch; omitted when no backup is set and refused on ChatGPT primaries | `src/arno/agent/capabilities.py`, `src/arno/agent/models.py` |
 | `SpendLimits` | Enforces per-run, scheduled-question, and shared UTC-day USD ceilings through one `spend_limits()` factory over `PostgresSpendStore` | `src/arno/agent/spend.py` |
 | `BatchModelRequests` | Submits and collects provider batch categorization jobs when a `BATCH` model is configured (`max_resubmissions=0`, 30 s flush wait) | `src/arno/agent/categorizer.py`, `src/arno/importers/categorize.py` |
@@ -122,14 +123,14 @@ running, the task payload sets `follow_up` to `replying` and the thread attaches
 ## Tool surface design
 
 Arno keeps the tool surface small and wide rather than exposing dozens of narrow tools. The main
-agent exposes 20 Arno tools plus 5 delegation tools (25 tools in total; full contracts live in
-[`tools.md`](tools.md)):
+agent exposes 21 always-on Arno tools plus 5 delegation tools (26 tools total; full contracts live
+in [`tools.md`](tools.md)):
 
 - **14 read and presentation tools inside `run_code`:** `amortize`, `card_payoff`,
   `compare_offers`, `compound`, `get_financial_context`, `present`, `project`, `query_movements`,
   `recap`, `rupees`, `run_query`, `show_chart`, `show_table`, and `summarize_spending`.
-- **6 direct write tools:** `record_movement`, `correct_movement`, `update_setup`,
-  `schedule_payment`, `preference`, and `undo`.
+- **7 direct write tools:** `record_movement`, `record_movements`, `correct_movement`,
+  `update_setup`, `schedule_payment`, `preference`, and `undo`.
 - **5 delegation tools:** provided by `SubAgents` and `TaskControl` for starting, inspecting,
   answering, steering, and stopping background `parser` tasks.
 
@@ -163,11 +164,11 @@ The prompt assembly splits across two modules:
   `INDIA_NOTES` (rupee formatting, Hinglish mirroring, UPI ID preservation), and conditional blocks
   for uploaded or carried `statement_attachments`, `paused_parser_tasks`, wake-turn guidance
   (`WOKEN_TEXT`, plus `WOKEN_RETRY` when the wake turn carries the failed imports' files or
-  `WOKEN_NO_RETRY` otherwise), a host-written line per photo the message carried
-  (`photo_outcomes`), and scheduled-question `READ_ONLY_SUFFIX`. A wake turn's one automatic
-  retry gets the attachments of the imports the reported task failed on, because a parser reads
-  only its own turn's files; `ParserNeedsFiles` vetoes any new parser task in a turn with no
-  statement file.
+  `WOKEN_NO_RETRY` otherwise), and scheduled-question `READ_ONLY_SUFFIX`. A wake turn's one
+  automatic retry gets the attachments of the imports the reported task failed on, because a parser
+  reads only its own turn's files; `ParserNeedsFiles` vetoes any new parser task in a turn with no
+  statement file. Attached images ride on the user message via `with_photos` and `ImageAttachments`
+  rather than modifying system instructions, keeping prompt caches stable.
 
 Active user preferences arrive through the pinned thread-start snapshot rather than the static
 prompt, preserving prompt-cache stability across turns. Behavioral invariants that must never fail
@@ -286,8 +287,9 @@ Key harness properties in `evals/runner.py`:
 ### Tracing and spend accounting
 
 Tracing is opt-in through `PHOENIX_COLLECTOR_ENDPOINT` (`src/arno/observability.py`); when set,
-`bootstrap_observability()` registers Phoenix OTLP export and calls `Agent.instrument_all()`, while
-vision agents (`importers/vision.py` and `capture/photo.py`) explicitly set
-`agent.instrument = False` so images never enter traces. See
+`bootstrap_observability()` registers Phoenix OTLP export and calls
+`Agent.instrument_all(InstrumentationSettings(include_binary_content=False))` so image bytes stay
+out of spans while prompts, tool calls, and replies remain traced. Isolated vision extraction in
+`importers/vision.py` still sets `agent.instrument = False`. See
 [`observability.md`](../operations/observability.md) for tracing setup and span attributes, and
 [`cost-tracking.md`](cost-tracking.md) for pricing, spend ceilings, `MeteredModel`, and cost replay.

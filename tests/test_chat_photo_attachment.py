@@ -1,48 +1,50 @@
-"""Receipt photos attached in chat use the one staging and capture path."""
+"""Images attached in chat run natively through ImageAttachments without persisting binary blobs."""
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
-import threading
-from datetime import date
+from typing import Any
 
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo
 
-from arno.capture.photo import PaymentPhoto
-from arno.ledger.audit import new_id
+from arno.api import chat as chat_mod
 from tests.agent_helpers import streaming_model
 from tests.fixtures.chat_server import first_text_delta, live_server, wait_until
 from tests.import_fixtures import sbi_csv
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"test-image"
+PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
 
 
-async def _fake_extraction(*_args, **_kwargs) -> PaymentPhoto:
-    return PaymentPhoto(
-        merchant="Swiggy",
-        amount_paise=45_000,
-        date=date(2026, 10, 31),
-        method="upi",
-        upi_ref="412345678901",
-    )
-
-
-async def _failed_extraction(*_args, **_kwargs) -> PaymentPhoto:
-    raise RuntimeError("vision endpoint down")
-
-
-def _upload(client, *, name: str = "receipt.png", data: bytes = PNG, purpose: str = "photo"):
+def _upload(
+    client: Any,
+    *,
+    name: str = "receipt.png",
+    data: bytes | None = None,
+    purpose: str = "photo",
+) -> Any:
+    payload = PNG if data is None else data
     return client.post(
         "/api/attachments",
-        files={"file": (name, data, "image/png")},
+        files={"file": (name, payload, "image/png")},
         data={"purpose": purpose},
     )
 
 
-def _upload_photo(client, name: str = "receipt.png") -> dict:
-    response = _upload(client, name=name)
+def _upload_photo(
+    client: Any, name: str = "receipt.png", *, data: bytes | None = None
+) -> dict[str, Any]:
+    response = _upload(client, name=name, data=data)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -51,11 +53,11 @@ def _body(
     message_id: str,
     *,
     text: str | None = None,
-    photos: list[dict] | None = None,
-    statements: list[dict] | None = None,
+    photos: list[dict[str, Any]] | None = None,
+    statements: list[dict[str, Any]] | None = None,
     thread: str = "thread_photo",
-) -> dict:
-    parts: list[dict] = []
+) -> dict[str, Any]:
+    parts: list[dict[str, Any]] = []
     if text is not None:
         parts.append({"type": "text", "text": text})
     for statement in statements or []:
@@ -87,19 +89,7 @@ def _body(
     }
 
 
-def _model(text: str = "The receipt is logged.", *, photo_context: bool = False):
-    def script(messages, info: AgentInfo) -> ModelResponse:
-        del info
-        if photo_context:
-            assert "Swiggy" in str(messages)
-            assert "One movement was logged" in str(messages)
-            assert "<outside" in str(messages)
-        return ModelResponse(parts=[TextPart(text)])
-
-    return streaming_model(script)
-
-
-def _events(response) -> list[dict]:
+def _events(response: Any) -> list[dict[str, Any]]:
     return [
         json.loads(line.removeprefix("data: "))
         for line in response.text.splitlines()
@@ -107,7 +97,7 @@ def _events(response) -> list[dict]:
     ]
 
 
-def _cards(thread: dict) -> list[dict]:
+def _cards(thread: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         part
         for message in thread["messages"]
@@ -116,94 +106,234 @@ def _cards(thread: dict) -> list[dict]:
     ]
 
 
-def _capture_cards(thread: dict) -> list[dict]:
-    return [card for card in _cards(thread) if card["data"].get("card") == "capture"]
+def _has_tool_return(messages: list[Any], name: str) -> bool:
+    return any(
+        getattr(part, "tool_name", None) == name
+        for msg in messages
+        for part in getattr(msg, "parts", [])
+        if getattr(part, "part_kind", "") == "tool-return"
+    )
 
 
-async def test_image_only_is_staged_then_logged_once(session_client, demo_ledger, monkeypatch):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
-    photo = _upload_photo(session_client)
+def _last_user_binary_parts(messages: list[Any]) -> tuple[list[str], list[BinaryContent]]:
+    for msg in reversed(messages):
+        for part in getattr(msg, "parts", []):
+            if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
+                texts = [item for item in part.content if isinstance(item, str)]
+                bins = [item for item in part.content if isinstance(item, BinaryContent)]
+                if bins:
+                    return texts, bins
+    return [], []
+
+
+async def test_image_only_hydrates_binary_taints_and_skips_number_flags(
+    session_client, demo_ledger
+):
+    photo = _upload_photo(session_client, data=PNG)
     body = _body("client_photo_only", photos=[photo])
+    seen_images: list[int] = []
 
-    with session_client.app.state.agent.override(model=_model(photo_context=True)):
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del info
+        texts, bins = _last_user_binary_parts(messages)
+        seen_images.append(len(bins))
+        joined = "\n".join(texts)
+        assert "See the attached image." in joined
+        assert f"[Attached image: {photo['id']}" in joined
+        assert bins[0].data == PNG
+        assert bins[0].media_type == "image/png"
+        return ModelResponse(parts=[TextPart("Paid ₹450 to Swiggy.")])
+
+    with session_client.app.state.agent.override(model=streaming_model(script)):
         response = session_client.post("/api/chat", json=body)
         replay = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
+    assert seen_images == [1]
     events = _events(response)
     assert sum(event["type"] == "start" for event in events) == 1
     assert sum(event["type"] == "finish" for event in events) == 1
-    assert sum(event["type"] == "data-card" for event in events) == 1
+    assert not any(event["type"] == "data-number-flags" for event in events)
     assert (
         "".join(event["delta"] for event in events if event["type"] == "text-delta")
-        == "The receipt is logged."
+        == "Paid ₹450 to Swiggy."
     )
     assert replay.status_code == 200
-    assert sum(event["type"] == "data-card" for event in _events(replay)) == 1
-
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
-    assert await demo_ledger.fetchval("SELECT count(*) FROM attachments") == 1
+    assert sum(event["type"] == "start" for event in _events(replay)) == 1
     assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 2
 
     thread = session_client.get("/api/threads/thread_photo/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert [part["type"] for part in user["parts"]] == ["text", "data-photo"]
-    assert "Log the attached receipt" in user["parts"][0]["text"]
-    cards = _cards(thread)
-    assert len(cards) == 1
-    assert cards[0]["data"]["card"] == "capture"
-    assert cards[0]["data"]["attachment_id"] == photo["id"]
-    assert cards[0]["data"]["url"] == f"/api/attachments/{photo['id']}"
-    assert "The user shared a receipt" in str(
-        await demo_ledger.fetchrow(
-            "SELECT model_history FROM conversations WHERE id = 'thread_photo'"
-        )
+    assert user["parts"][0]["text"] == "See the attached image."
+
+    row = await demo_ledger.fetchrow_required(
+        "SELECT outside_text_at, model_history FROM conversations WHERE id = 'thread_photo'"
     )
-    outside = await demo_ledger.fetchrow(
-        "SELECT outside_text_at FROM conversations WHERE id = 'thread_photo'"
-    )
-    assert outside["outside_text_at"] is not None
+    assert row["outside_text_at"] is not None
+    history_json = json.dumps(row["model_history"])
+    assert f"[Attached image: {photo['id']}" in history_json
+    assert "iVBOR" not in history_json
+    assert '"binary"' not in history_json
 
 
-async def test_image_and_text_keeps_caption_and_single_receipt(
-    session_client, demo_ledger, monkeypatch
+async def test_multi_row_screenshot_batch_logs_all_items_and_undoes_atomically(
+    session_client, demo_ledger
 ):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
-    photo = _upload_photo(session_client)
-    body = _body("client_photo_text", text="Log this Swiggy receipt", photos=[photo])
+    photo = _upload_photo(session_client, name="unbilled.png", data=PNG)
+    body = _body(
+        "client_batch_photo",
+        text="Log all transactions from this screenshot",
+        photos=[photo],
+        thread="thread_photo_batch",
+    )
+    saw_images: list[int] = []
 
-    with session_client.app.state.agent.override(model=_model()):
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del info
+        if _has_tool_return(messages, "record_movements"):
+            return ModelResponse(
+                parts=[TextPart("Logged 3 transactions totaling ₹991 from your screenshot.")]
+            )
+        _texts, bins = _last_user_binary_parts(messages)
+        saw_images.append(len(bins))
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "record_movements",
+                    {
+                        "attachment_id": photo["id"],
+                        "movements": [
+                            {
+                                "kind": "expense",
+                                "amount_rupees": 2,
+                                "payee": "Google",
+                                "date": "2026-11-01",
+                            },
+                            {
+                                "kind": "expense",
+                                "amount_rupees": 2,
+                                "payee": "Google",
+                                "date": "2026-11-01",
+                            },
+                            {
+                                "kind": "expense",
+                                "amount_rupees": 987,
+                                "payee": "Opencode San Francisc Us",
+                                "date": "2026-11-01",
+                            },
+                        ],
+                    },
+                )
+            ]
+        )
+
+    before_payees = await demo_ledger.fetchval("SELECT count(*) FROM payees")
+    with session_client.app.state.agent.override(model=streaming_model(script)):
         response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
-    thread = session_client.get("/api/threads/thread_photo/messages").json()
-    user = next(message for message in thread["messages"] if message["role"] == "user")
-    assert user["parts"][0] == {"type": "text", "text": "Log this Swiggy receipt"}
-    assert len(_capture_cards(thread)) == 1
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
+    assert saw_images == [1]
+    events = _events(response)
+    assert not any(event["type"] == "data-number-flags" for event in events)
+
+    thread = session_client.get("/api/threads/thread_photo_batch/messages").json()
+    cards = _cards(thread)
+    assert len(cards) == 1
+    card = cards[0]["data"]
+    assert card["card"] == "movements_batch"
+    assert card["count"] == 3
+    assert card["total_outflow"] == {"paise": 99_100, "text": "₹991"}
+    assert "attachment_ids" not in card
+    assert [item["payee"] for item in card["items"]] == [
+        "Google",
+        "Google",
+        "Opencode San Francisc Us",
+    ]
+    assert (
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM captures WHERE kind = 'photo' AND ref = $1", photo["id"]
+        )
+        == 3
+    )
+
+    undo = session_client.post(f"/api/undo/{card['undo_id']}")
+    assert undo.status_code == 200, undo.text
+    assert await demo_ledger.fetchval("SELECT count(*) FROM payees WHERE active") == before_payees
+    for item in card["items"]:
+        reversed_row = await demo_ledger.fetchval(
+            "SELECT count(*) FROM movements WHERE reverses_id = $1", item["movement_id"]
+        )
+        assert reversed_row == 1
 
 
-async def test_mixed_photo_and_statement_starts_one_each(session_client, demo_ledger, monkeypatch):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
+async def test_tainted_image_turn_gates_lasting_preference_write(session_client, demo_ledger):
+    photo = _upload_photo(session_client, data=PNG)
+    body = _body(
+        "client_photo_taint",
+        text="Save the note from this screenshot",
+        photos=[photo],
+        thread="thread_photo_taint",
+    )
+
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "preference",
+                    {"action": "remember", "text": "Never warn about coffee spend"},
+                    tool_call_id="call_pref_img",
+                )
+            ]
+        )
+
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        response = session_client.post("/api/chat", json=body)
+
+    assert response.status_code == 200, response.text
+    events = _events(response)
+    assert any(event["type"] == "tool-approval-request" for event in events)
+    assert (
+        await demo_ledger.fetchval(
+            "SELECT count(*) FROM preferences WHERE body = 'Never warn about coffee spend'"
+        )
+        == 0
+    )
+    assert (
+        await demo_ledger.fetchval(
+            "SELECT outside_text_at FROM conversations WHERE id = 'thread_photo_taint'"
+        )
+        is not None
+    )
+
+
+async def test_mixed_photo_and_statement_carries_both(session_client, demo_ledger):
     statement = session_client.post(
         "/api/attachments",
         files={"file": ("sbi.csv", sbi_csv(), "text/csv")},
         data={"purpose": "statement"},
     )
     assert statement.status_code == 201, statement.text
-    photo = _upload_photo(session_client)
+    photo = _upload_photo(session_client, data=PNG)
     body = _body(
         "client_photo_statement",
-        text="Review the statement and log the receipt",
+        text="Review the statement and the screenshot",
         statements=[statement.json()],
         photos=[photo],
+        thread="thread_photo_mixed",
     )
 
-    with session_client.app.state.agent.override(model=_model()):
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del info
+        _texts, bins = _last_user_binary_parts(messages)
+        assert len(bins) == 1
+        return ModelResponse(parts=[TextPart("I see both the statement and the image.")])
+
+    with session_client.app.state.agent.override(model=streaming_model(script)):
         response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
-    # The statement is handed to the parser subagent; no import starts in this turn.
     assert (
         await demo_ledger.fetchval(
             "SELECT count(*) FROM imports WHERE attachment_id = $1",
@@ -211,65 +341,32 @@ async def test_mixed_photo_and_statement_starts_one_each(session_client, demo_le
         )
         == 0
     )
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
-    thread = session_client.get("/api/threads/thread_photo/messages").json()
+    thread = session_client.get("/api/threads/thread_photo_mixed/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")
     assert [part["type"] for part in user["parts"]] == [
         "text",
         "data-statement",
         "data-photo",
     ]
-    cards = _cards(thread)
-    # The photo logs at once; the statement waits for the parser subagent's card.
-    assert sorted(card["data"]["card"] for card in cards) == ["capture"]
 
 
-async def test_a_missing_photo_ref_is_refused_before_any_capture(
-    session_client, demo_ledger, monkeypatch
-):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
+async def test_a_missing_photo_ref_is_refused_before_any_turn(session_client, demo_ledger):
     body = _body(
         "client_photo_missing",
         text="Log this receipt",
         photos=[{"id": "att_missing", "filename": "receipt.png"}],
     )
 
-    with session_client.app.state.agent.override(model=_model()):
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        del messages, info
+        return ModelResponse(parts=[TextPart("Should never run")])
+
+    with session_client.app.state.agent.override(model=streaming_model(script)):
         response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 422
     assert "no longer available" in response.json()["detail"]
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
     assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 0
-
-
-async def test_a_failed_photo_leaves_a_retry_card_and_retry_logs_once(
-    session_client, demo_ledger, monkeypatch
-):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _failed_extraction)
-    photo = _upload_photo(session_client)
-    body = _body("client_photo_fail", text="Log this receipt", photos=[photo])
-
-    with session_client.app.state.agent.override(model=_model()):
-        response = session_client.post("/api/chat", json=body)
-
-    assert response.status_code == 200, response.text
-    thread = session_client.get("/api/threads/thread_photo/messages").json()
-    cards = _cards(thread)
-    assert len(cards) == 1
-    assert cards[0]["data"]["card"] == "capture-retry"
-    assert cards[0]["data"]["kind"] == "photo"
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
-
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
-    retried = session_client.post(f"/api/chat/thread_photo/photo/{photo['id']}")
-    assert retried.status_code == 200, retried.text
-    assert retried.json()["status"] == "logged"
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
-    assert (
-        await demo_ledger.fetchval("SELECT count(*) FROM attachments WHERE id = $1", photo["id"])
-        == 1
-    )
 
 
 async def test_photo_upload_refuses_a_non_image_and_the_size_limit(session_client, monkeypatch):
@@ -298,17 +395,19 @@ async def test_legacy_statement_upload_still_accepts_html(session_client):
 
 
 async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_ledger, monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    orig_validated_photos = chat_mod._validated_photos
 
-    async def slow_extraction(*_args, **_kwargs) -> PaymentPhoto:
-        started.set()
-        while not release.is_set():
-            await asyncio.sleep(0.01)
-        return await _fake_extraction()
+    async def slow_validate(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+        if refs:
+            started.set()
+            await release.wait()
+        return await orig_validated_photos(conn, refs)
 
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", slow_extraction)
-    async with live_server(app, monkeypatch, _model()) as client:
+    monkeypatch.setattr("arno.api.chat._validated_photos", slow_validate)
+    model = streaming_model(lambda messages, info: ModelResponse(parts=[TextPart("Done.")]))
+    async with live_server(app, monkeypatch, model) as client:
         upload = await client.post(
             "/api/attachments",
             files={"file": ("receipt.png", PNG, "image/png")},
@@ -319,7 +418,7 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
 
         first = asyncio.create_task(client.post("/api/chat", json=body))
         try:
-            assert await wait_until(started.is_set), "the photo extraction never started"
+            await asyncio.wait_for(started.wait(), timeout=5.0)
 
             blocked = await client.post(
                 "/api/chat",
@@ -334,7 +433,6 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
                 )
                 == 0
             )
-            assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 0
 
             other = await client.post(
                 "/api/chat",
@@ -349,13 +447,8 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
 
         assert response.status_code == 200, response.text
         assert sum(event["type"] == "finish" for event in _events(response)) == 1
-        assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
         assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 4
-        history = await demo_ledger.fetchval(
-            "SELECT model_history FROM conversations WHERE id = 'thread_prepare'"
-        )
-        assert str(history).count("The user shared a receipt") == 1
-        row = await demo_ledger.fetchrow(
+        row = await demo_ledger.fetchrow_required(
             "SELECT run_started_at, active_run_id, outside_text_at FROM conversations "
             "WHERE id = 'thread_prepare'"
         )
@@ -365,7 +458,7 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
 
         replay = await client.post("/api/chat", json=body)
         assert replay.status_code == 200
-        assert sum(event["type"] == "data-card" for event in _events(replay)) == 1
+        assert sum(event["type"] == "start" for event in _events(replay)) == 1
         assert await wait_until(lambda: not app.state.turns._preparing)
 
 
@@ -389,24 +482,9 @@ async def test_a_replay_during_streaming_is_not_blocked(app, demo_ledger, monkey
     assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 2
 
 
-async def test_stop_after_a_photo_send_keeps_one_receipt(app, demo_ledger, monkeypatch):
-    monkeypatch.setattr("arno.api.capture.extract_payment_photo", _fake_extraction)
-
-    attachment_id = await new_id(demo_ledger, "att")
-    await demo_ledger.execute(
-        """
-        INSERT INTO attachments (id, kind, filename, content_type, size_bytes, sha256, data)
-        VALUES ($1, 'photo', 'receipt.png', 'image/png', $2, 'photo-stop', $3)
-        """,
-        attachment_id,
-        len(PNG),
-        PNG,
-    )
-    body = _body(
-        "client_photo_stop",
-        text="Log this receipt",
-        photos=[{"id": attachment_id, "filename": "receipt.png"}],
-    )
+async def test_stop_after_a_photo_send_persists_clean_history(app, demo_ledger, monkeypatch):
+    upload = PNG
+    attachment_response = None
     model = streaming_model(
         lambda messages, info: ModelResponse(parts=[TextPart("slow " * 40)]),
         text_chunks=40,
@@ -414,13 +492,24 @@ async def test_stop_after_a_photo_send_keeps_one_receipt(app, demo_ledger, monke
     )
 
     async with live_server(app, monkeypatch, model) as client:
+        attachment_response = await client.post(
+            "/api/attachments",
+            files={"file": ("receipt.png", upload, "image/png")},
+            data={"purpose": "photo"},
+        )
+        assert attachment_response.status_code == 201, attachment_response.text
+        photo = attachment_response.json()
+        body = _body("client_photo_stop", text="Log this receipt", photos=[photo])
+
         async with client.stream("POST", "/api/chat", json=body) as response:
             assert response.status_code == 200
             await first_text_delta(response)
             stopped = await client.post("/api/chat/thread_photo/stop")
             assert stopped.json()["stopped"] is True
         await wait_until(lambda: app.state.turns.get("thread_photo") is None)
-        thread = (await client.get("/api/threads/thread_photo/messages")).json()
 
-    assert await demo_ledger.fetchval("SELECT count(*) FROM captures") == 1
-    assert len(_capture_cards(thread)) == 1
+    row = await demo_ledger.fetchrow_required(
+        "SELECT outside_text_at, model_history FROM conversations WHERE id = 'thread_photo'"
+    )
+    assert row["outside_text_at"] is not None
+    assert "iVBOR" not in json.dumps(row["model_history"])

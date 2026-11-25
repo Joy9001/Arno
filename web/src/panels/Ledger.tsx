@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { FormEvent } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Skeleton } from "@radix-ui/themes";
 import {
@@ -7,6 +8,7 @@ import {
   ChevronRight,
   FileSearch,
   MessageCircle,
+  Plus,
   RefreshCw,
   Undo2,
   X,
@@ -18,6 +20,7 @@ import { Busy } from "../Loading";
 import { movementLabel, movementNote, humanizeKind } from "../movement";
 import type {
   AccountSummary,
+  Category,
   CategoryTree,
   Movement,
   MovementList,
@@ -252,6 +255,7 @@ function LedgerSkeleton() {
 
 // The queue can run to hundreds of payees; the ledger below must stay in reach.
 const UNCATEGORIZED_PREVIEW = 4;
+const NEW_CATEGORY_VALUE = "__new_category__";
 
 function UncategorizedSection({
   onAnswered,
@@ -263,12 +267,100 @@ function UncategorizedSection({
   const list = useApi<UncategorizedList>(`/api/uncategorized?v=${version}`);
   const [expanded, setExpanded] = useState(false);
   const tree = useApi<CategoryTree>("/api/categories");
+  const [addedCategories, setAddedCategories] = useState<Category[]>([]);
   const [choice, setChoice] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [undoId, setUndoId] = useState<string | null>(null);
-  const activeCategories = (tree.data?.categories ?? []).filter((item) => item.active);
+  const [lastUndoCategoryId, setLastUndoCategoryId] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [pendingGroupKey, setPendingGroupKey] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newReducible, setNewReducible] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const newNameRef = useRef<HTMLInputElement | null>(null);
+  const newNameId = useId();
+  const newReducibleId = useId();
+  const newErrorId = useId();
+  const createDescId = useId();
+
+  const serverCategories = tree.data?.categories ?? [];
+  const knownIds = new Set(serverCategories.map((item) => item.id));
+  const allCategories = [
+    ...serverCategories,
+    ...addedCategories.filter((item) => !knownIds.has(item.id)),
+  ];
+  const activeCategories = allCategories
+    .filter((item) => item.active)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  function openCreateDialog(groupKey: string | null) {
+    setPendingGroupKey(groupKey);
+    setNewName("");
+    setNewReducible(false);
+    setCreateError(null);
+    setCreateOpen(true);
+  }
+
+  async function createCategory(event: FormEvent) {
+    event.preventDefault();
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      setCreateError("Enter a category name.");
+      newNameRef.current?.focus();
+      return;
+    }
+    const existing = allCategories.find(
+      (item) => item.name.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) {
+      setCreateError(
+        existing.active
+          ? `“${existing.name}” already exists.`
+          : `“${existing.name}” is archived. Restore it in Settings → Categories to use it again.`,
+      );
+      newNameRef.current?.focus();
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const created = await api<Category & { undo_id?: string | null }>("/api/categories", {
+        method: "POST",
+        body: JSON.stringify({ name: trimmed, reducible: newReducible }),
+      });
+      const entry: Category = {
+        id: created.id,
+        name: created.name,
+        reducible: created.reducible,
+        active: created.active,
+      };
+      setAddedCategories((current) => [
+        ...current.filter((item) => item.id !== entry.id),
+        entry,
+      ]);
+      if (pendingGroupKey) {
+        setChoice((current) => ({ ...current, [pendingGroupKey]: entry.id }));
+      }
+      setError(null);
+      setUndoId(created.undo_id ?? null);
+      setLastUndoCategoryId(created.id);
+      setMessage(
+        pendingGroupKey
+          ? `Added category “${created.name}” and selected it for ${pendingGroupKey.toUpperCase()}.`
+          : `Added category “${created.name}”.`,
+      );
+      setCreateOpen(false);
+      tree.reload();
+    } catch (caught) {
+      setCreateError(errorMessage(caught));
+      newNameRef.current?.focus();
+    } finally {
+      setCreating(false);
+    }
+  }
 
   async function answer(group: UncategorizedGroup) {
     const categoryId = choice[group.key];
@@ -277,6 +369,7 @@ function UncategorizedSection({
     setError(null);
     setMessage(null);
     setUndoId(null);
+    setLastUndoCategoryId(null);
     try {
       const result = await api<{ labeled: number; undo_id: string }>(
         "/api/uncategorized/answer",
@@ -304,8 +397,22 @@ function UncategorizedSection({
     setError(null);
     try {
       await api(`/api/undo/${undoId}`, { method: "POST" });
+      if (lastUndoCategoryId) {
+        const undoneId = lastUndoCategoryId;
+        setAddedCategories((current) => current.filter((item) => item.id !== undoneId));
+        setChoice((current) => {
+          const next: Record<string, string> = {};
+          for (const [groupKey, categoryId] of Object.entries(current)) {
+            if (categoryId !== undoneId) next[groupKey] = categoryId;
+          }
+          return next;
+        });
+        setLastUndoCategoryId(null);
+        setMessage("The new category was undone.");
+      } else {
+        setMessage("The answer was undone.");
+      }
       setUndoId(null);
-      setMessage("The answer was undone.");
       list.reload();
       tree.reload();
       onAnswered();
@@ -318,6 +425,10 @@ function UncategorizedSection({
     <section className="act-uncat" aria-labelledby="uncat-title">
       <div className="act-uncat-head">
         <h3 id="uncat-title">Uncategorized ({list.data?.total ?? 0})</h3>
+        <button type="button" className="ghost small" onClick={() => openCreateDialog(null)}>
+          <Plus size={14} strokeWidth={1.8} aria-hidden="true" />
+          New category
+        </button>
       </div>
       <p className="muted">
         Rows the rules and the agent were not sure about. Answer a payee once and its future rows
@@ -372,6 +483,10 @@ function UncategorizedSection({
                   value={choice[group.key] ?? ""}
                   onChange={(event) => {
                     const value = event.target.value;
+                    if (value === NEW_CATEGORY_VALUE) {
+                      openCreateDialog(group.key);
+                      return;
+                    }
                     setChoice((current) => ({ ...current, [group.key]: value }));
                   }}
                 >
@@ -381,6 +496,7 @@ function UncategorizedSection({
                       {category.name}
                     </option>
                   ))}
+                  <option value={NEW_CATEGORY_VALUE}>+ New category…</option>
                 </select>
                 <button
                   type="button"
@@ -405,6 +521,110 @@ function UncategorizedSection({
           {expanded ? "Show fewer" : `Show all ${list.data?.groups.length} payees`}
         </button>
       )}
+      <Dialog.Root
+        open={createOpen}
+        onOpenChange={(open) => {
+          if (!creating) setCreateOpen(open);
+        }}
+      >
+        <Dialog.Portal>
+          <Dialog.Overlay className="dialog-overlay" />
+          <Dialog.Content
+            className="movement-dialog act-cat-dialog"
+            aria-describedby={createDescId}
+          >
+            <div className="queue-head">
+              <Dialog.Title>New category</Dialog.Title>
+              <Dialog.Close asChild>
+                <button
+                  type="button"
+                  className="ghost small icon-only"
+                  aria-label="Close new category dialog"
+                  title="Close new category dialog"
+                  disabled={creating}
+                >
+                  <X size={15} strokeWidth={1.8} aria-hidden="true" />
+                </button>
+              </Dialog.Close>
+            </div>
+            <Dialog.Description id={createDescId} className="muted">
+              {pendingGroupKey
+                ? `Create a custom spending category and select it for ${pendingGroupKey.toUpperCase()}.`
+                : "Create a custom spending category for future movements and rules."}
+            </Dialog.Description>
+            <form
+              className="act-cat-form"
+              aria-label="New category"
+              noValidate
+              onSubmit={(event) => void createCategory(event)}
+            >
+              <div className="act-cat-field">
+                <label htmlFor={newNameId}>Category name</label>
+                <input
+                  ref={newNameRef}
+                  id={newNameId}
+                  name="category_name"
+                  type="text"
+                  value={newName}
+                  maxLength={100}
+                  placeholder="Household Help"
+                  enterKeyHint="done"
+                  required
+                  aria-invalid={createError ? "true" : "false"}
+                  aria-describedby={createError ? newErrorId : undefined}
+                  onChange={(event) => {
+                    setNewName(event.target.value);
+                    if (createError) setCreateError(null);
+                  }}
+                />
+                {createError && (
+                  <p id={newErrorId} className="act-field-error" role="alert">
+                    {createError}
+                  </p>
+                )}
+              </div>
+              <div className="act-cat-check">
+                <input
+                  id={newReducibleId}
+                  name="category_reducible"
+                  type="checkbox"
+                  checked={newReducible}
+                  onChange={(event) => setNewReducible(event.target.checked)}
+                />
+                <label htmlFor={newReducibleId}>
+                  Reducible in affordability tradeoffs
+                  <span className="fine">
+                    Allow affordability plans to suggest cutting this category.
+                  </span>
+                </label>
+              </div>
+              <div className="act-cat-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  disabled={creating}
+                  onClick={() => setCreateOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" disabled={creating}>
+                  {creating ? (
+                    <>
+                      <Busy />
+                      Creating…
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
+                      Create category
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 }

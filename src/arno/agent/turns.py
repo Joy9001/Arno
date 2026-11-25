@@ -486,8 +486,14 @@ class TurnManager:
         # (system-design step 9), so a day or a list size never earns a "couldn't trace" note.
         # Trace against what the model could see, history included: a pinned snapshot carries
         # figures the current turn never repeats. Old assistant replies are not sources.
+        # Images carry numbers in pixels rather than request text, so skip the text-source check
+        # when the turn carried user-attached images.
         context = all_messages or [*turn.history, *messages]
-        flags = check_messages(reply, context, kinds=("money", "percent")) if reply else []
+        flags = (
+            []
+            if (turn.deps.image_attachments or turn.deps.saw_images)
+            else (check_messages(reply, context, kinds=("money", "percent")) if reply else [])
+        )
         badge = None
         primary = getattr(getattr(self.agent, "model", None), "model_name", None)
         if failed_attempts or (primary and model_name and model_name != primary):

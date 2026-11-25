@@ -900,7 +900,8 @@ async def record_movement(
     ISO, omit for today, never a future date. `account` is optional; code uses the payee's usual
     account, or the busiest/default one. Pass `category` only if the user named one; otherwise
     pass `category_guess`. Amounts are rupees in `amount_rupees`, never paise. Pass `payee` only
-    when they name a merchant or a person, never a placeholder like "Unknown shop".
+    when they name a merchant or a person, never a placeholder like "Unknown shop". Include
+    `attachment_id` and `upi_ref` when logging from an image if visible.
     Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
     "category": "Food & Dining"}."""
     payload_movement = movement.model_dump(exclude_none=True, mode="python")
@@ -918,6 +919,39 @@ async def record_movement(
             not_duplicate=not_duplicate,
             capture_kind=ctx.deps.capture_kind,
             capture_ref=ctx.deps.capture_ref,
+        )
+    )
+    return _write_return(payload)
+
+
+async def record_movements(
+    ctx: RunContext[AgentDeps],
+    movements: list[Movement],
+    attachment_id: str | None = None,
+    not_duplicate: bool = False,
+) -> ToolReturn:
+    """Atomically log 1 to 50 movements in one transaction with a single Undo card.
+
+    Use this when logging multiple transactions from a multi-row screenshot or message instead of
+    calling `record_movement` in a loop. Identical entries within the same list are all logged
+    together; duplicates against pre-existing ledger entries are surfaced before writing anything.
+    Pass `attachment_id` when all rows came from one uploaded image (or per movement).
+    """
+    payload_movements = [m.model_dump(exclude_none=True, mode="python") for m in movements]
+    flagged = await _conversation_flagged(ctx)
+    payload = await _call_write(
+        lambda conn: write_tools.record_movements(
+            conn,
+            movements=payload_movements,
+            message_id=ctx.deps.message_id,
+            conversation_id=ctx.deps.conversation_id,
+            flagged=flagged,
+            user_texts=ctx.deps.user_texts,
+            not_duplicate=not_duplicate,
+            capture_kind=ctx.deps.capture_kind,
+            capture_ref=ctx.deps.capture_ref,
+            attachment_id=attachment_id,
+            tool_call_id=ctx.tool_call_id,
         )
     )
     return _write_return(payload)
@@ -1080,6 +1114,7 @@ def build_write_toolset() -> FunctionToolset[AgentDeps]:
     return FunctionToolset(
         tools=[
             record_movement,
+            record_movements,
             correct_movement,
             update_setup,
             schedule_payment,

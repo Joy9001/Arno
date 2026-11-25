@@ -18,16 +18,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from arno.agent import history as history_mod
 from arno.agent.cards import cards_for_transcript, data_part
 from arno.agent.deps import AgentDeps
+from arno.agent.images import with_photos
 from arno.agent.presentation import keep_last_answer
 from arno.agent.quote import QuoteError, quote_from_messages, resolve_quote, with_quote
 from arno.agent.turns import TurnBusy, encode_saved_turn, pending_approvals
-from arno.api.capture import log_photo
 from arno.api.deps import Database, PreparationDep, Session, current_session
 from arno.api.wake import paused_parser_tasks
 from arno.db.conn import connect
 from arno.ledger.common import today as ledger_today
 from arno.tools import read as read_tools
 from arno.tools import write as write_tools
+from arno.tools.mark import flag_outside_text
 
 router = APIRouter(
     prefix="/api",
@@ -194,14 +195,6 @@ async def _unread_statements(conn: Any, thread_id: str) -> list[dict[str, str]]:
     ]
 
 
-def _photo_outcome(result: dict[str, Any]) -> str:
-    """One host-written sentence about a photo, for the model. No text read from the image."""
-    if result.get("status") == "logged":
-        return "logged as one movement; its card has Undo"
-    note = str(result.get("note") or "it could not be read")
-    return f"not logged: {note}"
-
-
 def _photo_refs(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     """App-owned receipt photo refs from the last user turn, never file URLs."""
     for message in reversed(messages):
@@ -307,12 +300,13 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
     except QuoteError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not text.strip():
+        image_noun = "image" if len(photo_refs) == 1 else "images"
         if statement_refs and photo_refs:
-            text = "Import the attached statement and log the attached receipt or payment photo."
+            text = f"Import the attached statement and see the attached {image_noun}."
         elif statement_refs:
             text = "Import the attached statement."
         elif photo_refs:
-            text = "Log the attached receipt or payment photo."
+            text = f"See the attached {image_noun}."
 
     async with connect() as conn:
         thread = None
@@ -374,21 +368,11 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
                 text = "Import the attached statement."
         initial_cards: list[dict[str, Any]] = []
         statement_attachments = tuple(statement["attachment_id"] for statement in statements)
-        photo_outcomes: list[str] = []
-
-        for photo in photos:
-            row = await conn.fetchrow(
-                "SELECT * FROM attachments WHERE id = $1 AND kind = 'photo'",
-                photo["attachment_id"],
-            )
-            if row is None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="A photo attachment is no longer available. Attach the file again.",
-                )
-            result = await log_photo(conn, thread, dict(row), record_history=False)
-            initial_cards.append(result["card"])
-            photo_outcomes.append(_photo_outcome(result))
+        image_attachments = tuple(photo["attachment_id"] for photo in photos)
+        photo_tainted = False
+        if photos and thread.get("outside_text_at") is None:
+            await flag_outside_text(conn, thread_id)
+            photo_tainted = True
 
         history, outside = await history_mod.ensure_history(conn, thread)
         answered: set[str] = set()
@@ -465,7 +449,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         if capture_ref is None and photos:
             capture_ref = photos[0]["attachment_id"]
             capture_kind = "photo"
-        flagged = thread.get("outside_text_at") is not None or outside
+        flagged = thread.get("outside_text_at") is not None or outside or photo_tainted
 
     from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
@@ -478,7 +462,7 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
         capture_kind=capture_kind,
         capture_ref=capture_ref,
         statement_attachments=statement_attachments,
-        photo_outcomes=tuple(photo_outcomes),
+        image_attachments=image_attachments,
         paused_parser_tasks=paused_parser_tasks(getattr(app.state, "tasks", None), thread_id),
     )
     adapter = await VercelAIAdapter.from_request(
@@ -491,6 +475,13 @@ async def post_chat(request: Request, session: Session, preparation: Preparation
     if quote is not None:
         # The quote is context on this turn only; the client's own message stays untouched.
         adapter = replace(adapter, run_input=with_quote(adapter.run_input, quote))
+    if photos:
+        # Markers ride on the model request so InputGuardrail sees plain text while
+        # ImageAttachments hydrates BinaryContent right before dispatch.
+        adapter = replace(
+            adapter,
+            run_input=with_photos(adapter.run_input, photos, fallback_text=text),
+        )
     # The streamed reply carries the id it is saved under, so the browser can quote it at once.
     reply_id = f"msg_{uuid.uuid4().hex}"
     adapter = replace(adapter, server_message_id=reply_id)

@@ -1758,6 +1758,65 @@ button.chip.reducible {
   font-size: 13px;
 }
 
+.batch-movements-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--sub);
+}
+
+.batch-movements-list {
+  list-style: none;
+  margin: 10px 0 6px;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+
+.batch-movements-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.batch-movements-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.batch-movements-primary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batch-movements-kind {
+  font-size: 11px;
+  color: var(--sub);
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  text-transform: lowercase;
+}
+
+.batch-movements-meta {
+  font-size: 12px;
+  color: var(--sub);
+}
+
+.batch-movements-row .money {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Inbox, imports, projection ------------------------------------------------------------- */
 
 .inbox-list {

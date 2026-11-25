@@ -5,7 +5,12 @@ FROM node:24-alpine AS web
 WORKDIR /web
 RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 COPY web/package.json web/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm_config_fetch_timeout=600000 \
+    pnpm_config_fetch_retries=5 \
+    pnpm_config_fetch_retry_mintimeout=10000 \
+    pnpm_config_fetch_retry_maxtimeout=60000 \
+    pnpm_config_network_concurrency=8 \
+    pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 

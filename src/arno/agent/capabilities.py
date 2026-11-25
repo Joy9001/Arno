@@ -56,6 +56,7 @@ from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
 from arno.agent.chatgpt_auth import background_inference
 from arno.agent.cost_journal import cost_identity, current_cost_identity
 from arno.agent.deps import AgentDeps
+from arno.agent.images import ImageAttachments
 from arno.agent.metering import TRANSIENT_MODEL_ERRORS
 from arno.agent.models import DEFAULT_CONTEXT_WINDOW
 from arno.agent.redaction import redact_text, redaction_detectors
@@ -77,6 +78,7 @@ RUN_CODE_TOOL = "run_code"
 WRITE_TOOLS = frozenset(
     {
         "record_movement",
+        "record_movements",
         "correct_movement",
         "update_setup",
         "schedule_payment",
@@ -542,6 +544,7 @@ def build_capabilities(
         ToolErrorsToModel(),
         OutsideTextTaint(),
         CodeModeHints(),
+        ImageAttachments(),
     ]
     if subagents is not None:
         capabilities.append(subagents)

@@ -642,6 +642,34 @@ async def _group_phrase(conn: Connection, group_id: str, entries: list[dict[str,
     imported = await _import_phrase(conn, group_id)
     if imported:
         return imported
+    created_movements = [
+        entry
+        for entry in entries
+        if entry["table_name"] == "movements"
+        and entry["before"] is None
+        and (entry.get("after") or {}).get("kind") != "reversal"
+    ]
+    if len(created_movements) > 1:
+        labels: list[str] = []
+        for entry in created_movements:
+            movement_id = str(entry["row_id"])
+            detail = await _movement_detail(conn, movement_id)
+            after = entry.get("after") or {}
+            label = str(
+                detail.get("payee_name")
+                or after.get("description")
+                or detail.get("description")
+                or ""
+            ).strip()
+            if label and label.casefold() not in _GENERIC_DESCRIPTIONS and label not in labels:
+                labels.append(label)
+                if len(labels) == 4:
+                    break
+        suffix = ""
+        if labels:
+            shown = ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
+            suffix = f" · {shown}"
+        return f"Logged {len(created_movements)} movements{suffix}"
     # A capture writes its payee before the expense; the money names the group, not the payee.
     ordered = [entry for entry in entries if entry["table_name"] == "movements"]
     ordered += [entry for entry in entries if entry["table_name"] != "movements"]

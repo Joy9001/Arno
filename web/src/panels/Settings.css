@@ -168,6 +168,58 @@
   min-width: 170px;
 }
 
+.stg-category-add {
+  align-items: flex-start;
+}
+
+.stg-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.stg-inline-field label {
+  margin: 0;
+}
+
+.stg-inline-field .error {
+  margin-top: 2px;
+}
+
+.stg-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin-top: 22px;
+}
+
+.stg-check input[type="checkbox"] {
+  flex: none;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--lime);
+}
+
+.stg-check label {
+  display: inline-block;
+  margin: 0;
+  color: var(--sub);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.stg-category-add > button[type="submit"] {
+  margin-top: 22px;
+}
+
+.stg-category-add-notice {
+  margin-top: 12px;
+}
+
 .stg-actions {
   display: flex;
   flex-wrap: wrap;
@@ -177,6 +229,7 @@
 }
 
 .stg-actions button,
+.stg-inline button,
 .stg-export-row button,
 .stg-list-actions button,
 .stg-pager button,
@@ -989,6 +1042,22 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
     justify-content: center;
     min-height: 40px;
     margin-top: 12px;
+  }
+
+  .stg-inline .stg-check {
+    display: flex;
+    align-items: center;
+    min-height: 0;
+    margin-top: 12px;
+  }
+
+  .stg-inline .stg-check label {
+    margin-top: 0;
+  }
+
+  .stg-inline .stg-check input[type="checkbox"] {
+    width: auto;
+    min-width: 0;
   }
 
   .stg-actions button,
