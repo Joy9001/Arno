@@ -65,6 +65,8 @@ Forward-looking scope boundaries and unbuilt proposals.
 |---|---|
 | [`arno/planning/parked.md`](arno/planning/parked.md) | Features kept deliberately out of scope, each with its rationale, future shape, and revisit trigger |
 | [`arno/planning/capability-catalog.md`](arno/planning/capability-catalog.md) | Unbuilt capability proposals (Tiers 2–4), priority order, external-capability rules, and external tool lookup |
+| [`arno/planning/complexity-audit.md`](arno/planning/complexity-audit.md) | Whole-repo complexity and over-engineering audit, target simplifications, and Grounded GenUI blueprint |
+| [`arno/planning/simplification-plan.md`](arno/planning/simplification-plan.md) | Step-by-step execution plan (Phases 0–5) implementing the locked-in simplified architecture |
 
 ### Diagrams (`arno/diagrams/`)
 

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UI rendering pipeline · Architecture delta</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f5f5f5;
+      --color-ink: #2d3142;
+      --color-muted: #4f5d75;
+      --color-accent: #bf4520;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); color: var(--color-ink); background: var(--color-paper); min-height: 100vh; padding: 3rem 2rem; display: flex; align-items: center; justify-content: center; }
+    .frame { width: 100%; max-width: 1200px; min-width: 0; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.75rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 3vw + 1rem, 2rem); line-height: 1.1; font-weight: 400; letter-spacing: -0.02em; margin-bottom: 1.75rem; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 1100px; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="frame">
+    <p class="eyebrow">Architecture delta · Diagram Design</p>
+    <h1>Chat UI, from rigid presentation VM to Grounded GenUI</h1>
+
+    <div class="diagram-container" role="region" aria-label="Before, changes, and after UI rendering architecture" tabindex="0">
+      <svg viewBox="0 0 1200 680" xmlns="http://www.w3.org/2000/svg" data-diagram="architecture-delta" role="img" aria-labelledby="audit-genui-delta-title audit-genui-delta-desc">
+        <title id="audit-genui-delta-title">Chat UI, from rigid presentation VM to Grounded GenUI</title>
+        <desc id="audit-genui-delta-desc">Replaces the 1,628-LOC presentation AST VM, 16 static cards, six duplicate projection views, and four CSS systems with Grounded Generative UI over ten interactive animated widgets.</desc>
+        <defs>
+          <marker id="audit-genui-delta-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+        <rect width="1200" height="680" fill="#f5f5f5"/>
+
+        <text x="24" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Before</text>
+        <text x="24" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">9 layers · 16 static cards</text>
+        <text x="424" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Changes</text>
+        <text x="424" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">5 components · 2 relationships</text>
+        <text x="840" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">After</text>
+        <text x="840" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">3 layers · Grounded GenUI</text>
+        <path d="M 392 8 V 576 M 808 8 V 576" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+        <!-- BEFORE SNAPSHOT -->
+        <g data-snapshot="before" transform="translate(24 96)" data-grid="336 480 4">
+          <path data-kind="relationship" data-object-id="r1" data-status="rewired" data-signature="tool-to-ui" data-from="tools" data-to="vm" d="M 168 64 V 108" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r2" data-status="rewired" data-signature="ui-payload" data-from="vm" data-to="cards" d="M 168 172 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r3" data-status="unchanged" data-signature="tokens" data-from="css" data-to="cards" d="M 72 344 V 320 Q 72 312 80 312 H 132 Q 140 312 140 304 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r4" data-status="unchanged" data-signature="identity" data-from="soul" data-to="cards" d="M 264 344 V 320 Q 264 312 256 312 H 204 Q 196 312 196 304 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-genui-delta-arrow)"/>
+
+          <g data-kind="component" data-object-id="tools" data-status="changed" data-signature="tools:codemode-registry">
+            <rect data-role="bounds" x="96" y="0" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 12 V 52" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="15" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ tools · CHANGED</text>
+            <text x="108" y="36" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">18 Tools + VM</text>
+            <text x="108" y="53" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">UUID ResultRegistry</text>
+          </g>
+          <g data-kind="component" data-object-id="vm" data-status="removed" data-signature="vm:6node-uuid-dedup">
+            <rect data-role="bounds" x="96" y="108" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4 4"/>
+            <text x="108" y="123" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">− vm · REMOVED</text>
+            <text x="108" y="144" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">present() AST VM</text>
+            <text x="108" y="161" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">cards.py · 4 Zod layers</text>
+          </g>
+          <g data-kind="component" data-object-id="cards" data-status="changed" data-signature="ui:static-flowview-run">
+            <rect data-role="bounds" x="96" y="216" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 228 V 268" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="231" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ cards · CHANGED</text>
+            <text x="108" y="252" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">16 Static Cards</text>
+            <text x="108" y="269" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">6 proj views + FlowView</text>
+          </g>
+          <g data-kind="component" data-object-id="css" data-status="changed" data-signature="css:4systems-10files">
+            <rect data-role="bounds" x="0" y="344" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 1 356 V 396" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="12" y="359" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ css · CHANGED</text>
+            <text x="12" y="380" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">4 CSS Systems</text>
+            <text x="12" y="397" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">11.9k CSS · 10 files</text>
+          </g>
+          <g data-kind="component" data-object-id="soul" data-status="unchanged" data-signature="soul:design-md-identity">
+            <rect data-role="bounds" x="192" y="344" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <text x="204" y="359" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">= soul · UNCHANGED</text>
+            <text x="204" y="380" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Visual Soul</text>
+            <text x="204" y="397" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">Orb · Recaps · Timeline</text>
+          </g>
+        </g>
+
+        <!-- CENTER CHANGE LEDGER -->
+        <text x="424" y="110" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">01</text>
+        <text x="456" y="108" data-change="CHANGED" data-target="tools" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · tools<tspan x="456" y="131" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">6 direct tools return computed data</tspan></text>
+        <path d="M 456 148 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="170" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">02</text>
+        <text x="456" y="168" data-change="REMOVED" data-target="vm" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REMOVED · vm<tspan x="456" y="191" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Drop presentation.py, cards.py, Zod glue</tspan></text>
+        <path d="M 456 208 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="230" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">03</text>
+        <text x="456" y="228" data-change="ADDED" data-target="composer" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ADDED · composer<tspan x="456" y="251" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">LLM composes interactive GenUI spec</tspan></text>
+        <path d="M 456 268 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="290" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">04</text>
+        <text x="456" y="288" data-change="CHANGED" data-target="cards" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · cards<tspan x="456" y="311" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">10 animated interactive GenUI widgets</tspan></text>
+        <path d="M 456 328 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="350" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">05</text>
+        <text x="456" y="348" data-change="CHANGED" data-target="css" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · css<tspan x="456" y="371" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Single Tailwind v4 + DESIGN.md tokens</tspan></text>
+        <path d="M 456 388 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="410" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">06</text>
+        <text x="456" y="408" data-change="REWIRED" data-target="r1" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REWIRED · r1<tspan x="456" y="431" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Tool data binds directly to UI spec</tspan></text>
+        <path d="M 456 448 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="470" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">07</text>
+        <text x="456" y="468" data-change="REWIRED" data-target="r2" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REWIRED · r2<tspan x="456" y="491" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">GenUI spec renders live React widgets</tspan></text>
+
+        <text x="424" y="544" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">PRESERVED</text>
+        <text x="424" y="564" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">Orb · Recaps · Timeline · DESIGN.md · r3 · r4</text>
+
+        <!-- AFTER SNAPSHOT -->
+        <g data-snapshot="after" transform="translate(840 96)" data-grid="336 480 4">
+          <path data-kind="relationship" data-object-id="r1" data-status="rewired" data-signature="tool-to-ui" data-from="tools" data-to="composer" d="M 168 64 V 108" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r2" data-status="rewired" data-signature="ui-payload" data-from="composer" data-to="cards" d="M 168 172 V 216" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r3" data-status="unchanged" data-signature="tokens" data-from="css" data-to="cards" d="M 72 344 V 320 Q 72 312 80 312 H 132 Q 140 312 140 304 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-genui-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r4" data-status="unchanged" data-signature="identity" data-from="soul" data-to="cards" d="M 264 344 V 320 Q 264 312 256 312 H 204 Q 196 312 196 304 V 280" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-genui-delta-arrow)"/>
+
+          <g data-kind="component" data-object-id="tools" data-status="changed" data-signature="tools:direct-structured">
+            <rect data-role="bounds" x="96" y="0" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 12 V 52" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="15" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ tools · CHANGED</text>
+            <text x="108" y="36" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">6 Tools + SQL</text>
+            <text x="108" y="53" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">computed JSON data</text>
+          </g>
+          <g data-kind="component" data-object-id="composer" data-status="added" data-signature="genui:grounded-spec">
+            <rect data-role="bounds" x="96" y="108" width="144" height="64" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
+            <rect x="100" y="112" width="136" height="56" rx="4" fill="none" stroke="#bf4520" stroke-width="0.8"/>
+            <text x="108" y="123" fill="#bf4520" font-size="7.5" font-family="'Geist Mono', monospace">+ composer · ADDED</text>
+            <text x="108" y="144" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">GenUI Layout</text>
+            <text x="108" y="161" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">layout + live data</text>
+          </g>
+          <g data-kind="component" data-object-id="cards" data-status="changed" data-signature="ui:genui-motion-lab">
+            <rect data-role="bounds" x="96" y="216" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 228 V 268" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="231" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ cards · CHANGED</text>
+            <text x="108" y="252" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">10 GenUI Widgets</text>
+            <text x="108" y="269" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">motion · sliders · lab</text>
+          </g>
+          <g data-kind="component" data-object-id="css" data-status="changed" data-signature="css:single-token-system">
+            <rect data-role="bounds" x="0" y="344" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 1 356 V 396" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="12" y="359" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ css · CHANGED</text>
+            <text x="12" y="380" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Tailwind v4 Only</text>
+            <text x="12" y="397" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">~2k CSS · DESIGN.md</text>
+          </g>
+          <g data-kind="component" data-object-id="soul" data-status="unchanged" data-signature="soul:design-md-identity">
+            <rect data-role="bounds" x="192" y="344" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <text x="204" y="359" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">= soul · UNCHANGED</text>
+            <text x="204" y="380" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Visual Soul</text>
+            <text x="204" y="397" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">Orb · Recaps · Timeline</text>
+          </g>
+        </g>
+
+        <!-- Bottom Legend -->
+        <path d="M 24 608 H 1176" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <rect x="24" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1"/>
+        <text x="56" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">= Unchanged</text>
+        <rect x="200" y="624" width="20" height="16" rx="3" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <rect x="204" y="628" width="12" height="8" rx="1" fill="none" stroke="#bf4520" stroke-width="0.8"/>
+        <text x="232" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">+ Added (focal)</text>
+        <rect x="396" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="428" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">− Removed</text>
+        <rect x="572" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1"/>
+        <path d="M 573 628 V 636" stroke="#4f5d75" stroke-width="3"/>
+        <text x="604" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">~ Changed</text>
+        <path d="M 748 632 H 776" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3"/>
+        <text x="788" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">Rewired</text>
+      </svg>
+    </div>
+  </main>
+</body>
+</html>

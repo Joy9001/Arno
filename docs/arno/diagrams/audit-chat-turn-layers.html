@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat turn layers · Complexity stack</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f5f5f5;
+      --color-ink: #2d3142;
+      --color-muted: #4f5d75;
+      --color-accent: #bf4520;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; min-width: 0; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · Diagram Design</p>
+    <h1>How one chat turn drags six layers of machinery</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="audit-chat-turn-layers-title audit-chat-turn-layers-desc">
+        <title id="audit-chat-turn-layers-title">How one chat turn drags six layers of machinery</title>
+        <desc id="audit-chat-turn-layers-desc">Six-layer stack showing how distrusting the LLM in L4 cascades complexity into web rendering, API shims, metering, tools, and Postgres.</desc>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Left direction indicator -->
+        <text x="56" y="52" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.16em">USER TURN</text>
+        <line x1="80" y1="64" x2="80" y2="424" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
+        <polygon points="76,416 84,416 80,424" fill="#4f5d75"/>
+        <text x="58" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.16em">DATABASE</text>
+
+        <!-- Outer hairlines -->
+        <line x1="120" y1="64" x2="960" y2="64" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <line x1="120" y1="424" x2="960" y2="424" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+        <!-- L6 -->
+        <rect x="120" y="64" width="840" height="60" fill="#ffffff"/>
+        <line x1="120" y1="124" x2="960" y2="124" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <text x="140" y="98" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L6</text>
+        <text x="200" y="100" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">Web chat &amp; static cards</text>
+        <text x="940" y="98" fill="#4f5d75" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">9 render layers · 16 if/else cards · 4 CSS systems</text>
+
+        <!-- L5 -->
+        <rect x="120" y="124" width="840" height="60" fill="#f5f5f5"/>
+        <line x1="120" y1="184" x2="960" y2="184" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <text x="140" y="158" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L5</text>
+        <text x="200" y="160" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">API entry &amp; ghost turns</text>
+        <text x="940" y="158" fill="#4f5d75" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">3x JSON parse · /tmp TaskOwner · wake.py · run_view</text>
+
+        <!-- L4 FOCAL -->
+        <rect x="120" y="184" width="840" height="60" fill="rgba(191,69,32,0.08)"/>
+        <rect x="120" y="184" width="840" height="60" fill="none" stroke="#bf4520" stroke-width="1.2"/>
+        <text x="140" y="218" fill="#bf4520" font-size="8" font-weight="600" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L4</text>
+        <text x="200" y="220" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">Distrust &amp; presentation VM</text>
+        <text x="940" y="218" fill="#bf4520" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">21 caps · CodeMode Monty · present() · number_check · taint</text>
+
+        <!-- L3 -->
+        <rect x="120" y="244" width="840" height="60" fill="#f5f5f5"/>
+        <line x1="120" y1="304" x2="960" y2="304" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <text x="140" y="278" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L3</text>
+        <text x="200" y="280" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">Metering, spend &amp; Phoenix</text>
+        <text x="940" y="278" fill="#4f5d75" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">2x observe_cost/step · SSE sniffer · 5-min OTLP cron</text>
+
+        <!-- L2 -->
+        <rect x="120" y="304" width="840" height="60" fill="#ececec"/>
+        <line x1="120" y1="364" x2="960" y2="364" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <text x="140" y="338" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L2</text>
+        <text x="200" y="340" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">Tools &amp; adapter shims</text>
+        <text x="940" y="338" fill="#4f5d75" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">18 tools · 401-LOC validator · rupee/paise shims</text>
+
+        <!-- L1 -->
+        <rect x="120" y="364" width="840" height="60" fill="#ececec"/>
+        <text x="140" y="398" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">L1</text>
+        <text x="200" y="400" fill="#2d3142" font-size="15" font-weight="600" font-family="'Geist', sans-serif">Ledger &amp; Postgres</text>
+        <text x="940" y="398" fill="#4f5d75" font-size="9.5" font-family="'Geist Mono', monospace" text-anchor="end">21 SQL hops for ₹500 · pgledger + reversal CTE · 47 tables</text>
+
+        <!-- Caption -->
+        <text x="120" y="476" fill="#bf4520" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.18em">ROOT CAUSE (L4)</text>
+        <text x="240" y="476" fill="#4f5d75" font-size="10.5" font-family="'Geist', sans-serif" font-style="italic">Distrusting the frontier model in L4 forced Monty sandboxing, UUID card indirection, and thread tainting—cascading bloat into L1–L6.</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LOC audit · Today vs. simple target</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f5f5f5;
+      --color-ink: #2d3142;
+      --color-muted: #4f5d75;
+      --color-accent: #bf4520;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; min-width: 0; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 1000px; display: block; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Dumbbell chart · Diagram Design</p>
+    <h1>Codebase footprint, today versus simple target</h1>
+    <div class="diagram-container">
+      <svg viewBox="0 0 1000 520" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="audit-loc-dumbbell-title audit-loc-dumbbell-desc">
+        <title id="audit-loc-dumbbell-title">Codebase footprint, today versus simple target</title>
+        <desc id="audit-loc-dumbbell-desc">Horizontal dumbbell chart comparing current lines of code against the simplified target across eight subsystems, dropping from 112,477 to about 30,850 total lines.</desc>
+        <rect width="100%" height="100%" fill="#f5f5f5"/>
+
+        <!-- Vertical gridlines (x = 200 + (v / 50000) * 760) -->
+        <line x1="200" y1="40" x2="200" y2="420" stroke="rgba(45,49,66,0.25)" stroke-width="1"/>
+        <line x1="352" y1="56" x2="352" y2="408" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="504" y1="56" x2="504" y2="408" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="656" y1="56" x2="656" y2="408" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="808" y1="56" x2="808" y2="408" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+        <line x1="960" y1="56" x2="960" y2="408" stroke="rgba(45,49,66,0.08)" stroke-width="0.8"/>
+
+        <!-- X-axis ticks & title -->
+        <text x="200" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">0</text>
+        <text x="352" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">10k</text>
+        <text x="504" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">20k</text>
+        <text x="656" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">30k</text>
+        <text x="808" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">40k</text>
+        <text x="960" y="440" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">50k</text>
+        <text x="580" y="458" fill="#4f5d75" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">LINES OF CODE (LOC)</text>
+
+        <!-- Row 1: Web frontend (14,000 -> x=413, 42,828 -> x=851) -->
+        <line x1="413" y1="68" x2="851" y2="68" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="851" cy="68" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="413" cy="68" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="401" y="72" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">14.0k</text>
+        <text x="863" y="72" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">42.8k</text>
+        <text x="188" y="72" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Web frontend (web/src)</text>
+
+        <!-- Row 2: Engine (3,200 -> x=249, 12,734 -> x=394) -->
+        <line x1="249" y1="116" x2="394" y2="116" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="394" cy="116" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="249" cy="116" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="237" y="120" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">3.2k</text>
+        <text x="406" y="120" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">12.7k</text>
+        <text x="188" y="120" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Engine (engine/)</text>
+
+        <!-- Row 3: Agent harness (2,200 -> x=233, 11,521 -> x=375) -->
+        <line x1="233" y1="164" x2="375" y2="164" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="375" cy="164" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="233" cy="164" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="233" y="154" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2.2k</text>
+        <text x="387" y="168" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">11.5k</text>
+        <text x="188" y="168" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Agent harness (agent/)</text>
+
+        <!-- Row 4: Ledger & DB (2,800 -> x=243, 10,574 -> x=361) -->
+        <line x1="243" y1="212" x2="361" y2="212" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="361" cy="212" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="243" cy="212" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="243" y="202" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2.8k</text>
+        <text x="373" y="216" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">10.6k</text>
+        <text x="188" y="216" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Ledger &amp; DB</text>
+
+        <!-- Row 5: Tools & API (3,500 -> x=253, 11,175 -> x=370) -->
+        <line x1="253" y1="260" x2="370" y2="260" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="370" cy="260" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="253" cy="260" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="241" y="264" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">3.5k</text>
+        <text x="382" y="264" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">11.2k</text>
+        <text x="188" y="264" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Tools &amp; API</text>
+
+        <!-- Row 6: Jobs, auth, Phoenix & deploy (900 -> x=214, 8,039 -> x=322) -->
+        <line x1="214" y1="308" x2="322" y2="308" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="322" cy="308" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="214" cy="308" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="214" y="298" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">0.9k</text>
+        <text x="334" y="312" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">8.0k</text>
+        <text x="188" y="312" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Jobs, auth, Phoenix &amp; deploy</text>
+
+        <!-- Row 7: Importers & capture (1,900 -> x=229, 8,530 -> x=330) -->
+        <line x1="229" y1="356" x2="330" y2="356" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="330" cy="356" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="229" cy="356" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="229" y="346" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1.9k</text>
+        <text x="342" y="360" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">8.5k</text>
+        <text x="188" y="360" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Importers &amp; capture</text>
+
+        <!-- Row 8: Evals, CLI & scripts (1,250 -> x=219, 5,887 -> x=289) -->
+        <line x1="219" y1="404" x2="289" y2="404" stroke="rgba(45,49,66,0.55)" stroke-width="1"/>
+        <circle cx="289" cy="404" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <circle cx="219" cy="404" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="219" y="394" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1.3k</text>
+        <text x="301" y="408" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace">5.9k</text>
+        <text x="188" y="408" fill="#2d3142" font-size="11" font-weight="600" font-family="'Geist', sans-serif" text-anchor="end">Evals, CLI &amp; scripts</text>
+
+        <!-- Bottom legend strip -->
+        <line x1="24" y1="472" x2="976" y2="472" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <circle cx="206" cy="493" r="6" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.5"/>
+        <text x="220" y="497" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">Today (112,477 LOC)</text>
+        <circle cx="380" cy="493" r="6" fill="#bf4520" stroke="#2d3142" stroke-width="1"/>
+        <text x="394" y="497" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">Target (~30,850 LOC · −73%)</text>
+        <text x="960" y="497" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" text-anchor="end">ORDERED BY LOC REMOVED · INDIA + DEMO (1.2K) KEPT</text>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

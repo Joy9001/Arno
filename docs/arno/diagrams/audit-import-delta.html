@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Statement import pipeline · Architecture delta</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper: #f5f5f5;
+      --color-ink: #2d3142;
+      --color-muted: #4f5d75;
+      --color-accent: #bf4520;
+      --font-sans: 'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+    body { font-family: var(--font-sans); color: var(--color-ink); background: var(--color-paper); min-height: 100vh; padding: 3rem 2rem; display: flex; align-items: center; justify-content: center; }
+    .frame { width: 100%; max-width: 1200px; min-width: 0; margin: 0 auto; }
+    .eyebrow { font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--color-muted); margin-bottom: 0.75rem; }
+    h1 { font-family: var(--font-serif); font-size: clamp(1.75rem, 3vw + 1rem, 2rem); line-height: 1.1; font-weight: 400; letter-spacing: -0.02em; margin-bottom: 1.75rem; }
+    .diagram-container { width: 100%; overflow-x: auto; }
+    svg { display: block; width: 100%; min-width: 1100px; }
+    @media print {
+      .diagram-container { overflow-x: visible; }
+      svg { min-width: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="frame">
+    <p class="eyebrow">Architecture delta · Diagram Design</p>
+    <h1>Statement import, from parser VM to direct extraction</h1>
+
+    <div class="diagram-container" role="region" aria-label="Before, changes, and after statement import pipeline" tabindex="0">
+      <svg viewBox="0 0 1200 680" xmlns="http://www.w3.org/2000/svg" data-diagram="architecture-delta" role="img" aria-labelledby="audit-import-delta-title audit-import-delta-desc">
+        <title id="audit-import-delta-title">Statement import, from parser VM to direct extraction</title>
+        <desc id="audit-import-delta-desc">Replaces the chat-delegated Monty code-gen subagent, 10-minute password poll, and 10-phase batch categorizer with synchronous decryption, direct frontier LLM extraction, and the preserved math gate.</desc>
+        <defs>
+          <marker id="audit-import-delta-arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
+        </defs>
+        <rect width="1200" height="680" fill="#f5f5f5"/>
+
+        <text x="24" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Before</text>
+        <text x="24" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">10.6k LOC · 2 subagents + Monty VM</text>
+        <text x="424" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">Changes</text>
+        <text x="424" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">5 components · 2 relationships</text>
+        <text x="840" y="28" fill="#2d3142" font-size="14" font-family="'Geist', sans-serif" font-weight="600">After</text>
+        <text x="840" y="52" fill="#4f5d75" font-size="10" font-family="'Geist', sans-serif">~1.9k LOC · direct extraction</text>
+        <path d="M 392 8 V 576 M 808 8 V 576" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+
+        <!-- BEFORE SNAPSHOT -->
+        <g data-snapshot="before" transform="translate(24 96)" data-grid="336 480 4">
+          <path data-kind="relationship" data-object-id="r1" data-status="rewired" data-signature="dispatch-parse" data-from="upload" data-to="monty" d="M 168 64 V 104" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r2" data-status="rewired" data-signature="parsed-rows" data-from="monty" data-to="gate" d="M 168 168 V 208" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r3" data-status="unchanged" data-signature="review-commit" data-from="gate" data-to="commit" d="M 168 272 V 312" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r4" data-status="unchanged" data-signature="post-commit" data-from="commit" data-to="cat" d="M 168 376 V 416" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-import-delta-arrow)"/>
+
+          <g data-kind="component" data-object-id="upload" data-status="changed" data-signature="upload:chat-delegate-10m-poll">
+            <rect data-role="bounds" x="96" y="0" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 12 V 52" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="15" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ upload · CHANGED</text>
+            <text x="108" y="36" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Chat Delegate</text>
+            <text x="108" y="53" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">10m pw poll · wake</text>
+          </g>
+          <g data-kind="component" data-object-id="monty" data-status="removed" data-signature="parse:monty-19fmt-replay">
+            <rect data-role="bounds" x="96" y="104" width="144" height="64" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2" stroke-dasharray="4 4"/>
+            <text x="108" y="119" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">− monty · REMOVED</text>
+            <text x="108" y="140" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Parser Subagent</text>
+            <text x="108" y="157" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">Monty + replay + 19 fmt</text>
+          </g>
+          <g data-kind="component" data-object-id="gate" data-status="unchanged" data-signature="gate:paise-balance-chain">
+            <rect data-role="bounds" x="96" y="208" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <text x="108" y="223" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">= gate · UNCHANGED</text>
+            <text x="108" y="244" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Math Gate</text>
+            <text x="108" y="261" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">checks.py · chain</text>
+          </g>
+          <g data-kind="component" data-object-id="commit" data-status="changed" data-signature="commit:n1-duped-balance">
+            <rect data-role="bounds" x="96" y="312" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 324 V 364" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="327" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ commit · CHANGED</text>
+            <text x="108" y="348" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Reconcile + Commit</text>
+            <text x="108" y="365" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">N+1 SQL · duped math</text>
+          </g>
+          <g data-kind="component" data-object-id="cat" data-status="changed" data-signature="cat:2agent-10phase-batch">
+            <rect data-role="bounds" x="96" y="416" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 428 V 468" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="431" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ cat · CHANGED</text>
+            <text x="108" y="452" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">2-Agent Labeler</text>
+            <text x="108" y="469" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">10-phase Batch API</text>
+          </g>
+        </g>
+
+        <!-- CENTER CHANGE LEDGER -->
+        <text x="424" y="110" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">01</text>
+        <text x="456" y="108" data-change="CHANGED" data-target="upload" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · upload<tspan x="456" y="131" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Sync API decrypt · drop /tmp + wake</tspan></text>
+        <path d="M 456 148 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="170" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">02</text>
+        <text x="456" y="168" data-change="REMOVED" data-target="monty" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REMOVED · monty<tspan x="456" y="191" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Drop Monty code-gen, replay &amp; layouts</tspan></text>
+        <path d="M 456 208 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="230" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">03</text>
+        <text x="456" y="228" data-change="ADDED" data-target="direct" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">ADDED · direct<tspan x="456" y="251" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Direct PDF LLM + CSV/XLSX parser</tspan></text>
+        <path d="M 456 268 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="290" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">04</text>
+        <text x="456" y="288" data-change="CHANGED" data-target="commit" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · commit<tspan x="456" y="311" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Bulk reconcile · single balance plan</tspan></text>
+        <path d="M 456 328 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="350" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">05</text>
+        <text x="456" y="348" data-change="CHANGED" data-target="cat" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">CHANGED · cat<tspan x="456" y="371" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Rules + 1 parallel LLM chunk call</tspan></text>
+        <path d="M 456 388 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="410" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">06</text>
+        <text x="456" y="408" data-change="REWIRED" data-target="r1" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REWIRED · r1<tspan x="456" y="431" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Upload calls direct extraction job</tspan></text>
+        <path d="M 456 448 H 776" stroke="rgba(45,49,66,0.12)" stroke-width="0.8"/>
+
+        <text x="424" y="470" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">07</text>
+        <text x="456" y="468" data-change="REWIRED" data-target="r2" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.06em">REWIRED · r2<tspan x="456" y="491" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" letter-spacing="0">Extracted JSON feeds Math Gate</tspan></text>
+
+        <text x="424" y="544" fill="#4f5d75" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">PRESERVED</text>
+        <text x="424" y="564" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">Math Gate (checks.py) · human review · r3 · r4</text>
+
+        <!-- AFTER SNAPSHOT -->
+        <g data-snapshot="after" transform="translate(840 96)" data-grid="336 480 4">
+          <path data-kind="relationship" data-object-id="r1" data-status="rewired" data-signature="dispatch-parse" data-from="upload" data-to="direct" d="M 168 64 V 104" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r2" data-status="rewired" data-signature="parsed-rows" data-from="direct" data-to="gate" d="M 168 168 V 208" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r3" data-status="unchanged" data-signature="review-commit" data-from="gate" data-to="commit" d="M 168 272 V 312" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-import-delta-arrow)"/>
+          <path data-kind="relationship" data-object-id="r4" data-status="unchanged" data-signature="post-commit" data-from="commit" data-to="cat" d="M 168 376 V 416" fill="none" stroke="#4f5d75" stroke-width="1.2" marker-end="url(#audit-import-delta-arrow)"/>
+
+          <g data-kind="component" data-object-id="upload" data-status="changed" data-signature="upload:sync-decrypt-api">
+            <rect data-role="bounds" x="96" y="0" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 12 V 52" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="15" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ upload · CHANGED</text>
+            <text x="108" y="36" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Upload + Decrypt</text>
+            <text x="108" y="53" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">sync PDF/OOXML unlock</text>
+          </g>
+          <g data-kind="component" data-object-id="direct" data-status="added" data-signature="parse:direct-multimodal">
+            <rect data-role="bounds" x="96" y="104" width="144" height="64" rx="6" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1.2"/>
+            <rect x="100" y="108" width="136" height="56" rx="4" fill="none" stroke="#bf4520" stroke-width="0.8"/>
+            <text x="108" y="119" fill="#bf4520" font-size="7.5" font-family="'Geist Mono', monospace">+ direct · ADDED</text>
+            <text x="108" y="140" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Direct Extraction</text>
+            <text x="108" y="157" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">CSV/XLSX + frontier PDF</text>
+          </g>
+          <g data-kind="component" data-object-id="gate" data-status="unchanged" data-signature="gate:paise-balance-chain">
+            <rect data-role="bounds" x="96" y="208" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <text x="108" y="223" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">= gate · UNCHANGED</text>
+            <text x="108" y="244" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Math Gate</text>
+            <text x="108" y="261" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">checks.py · chain</text>
+          </g>
+          <g data-kind="component" data-object-id="commit" data-status="changed" data-signature="commit:bulk-single-plan">
+            <rect data-role="bounds" x="96" y="312" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 324 V 364" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="327" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ commit · CHANGED</text>
+            <text x="108" y="348" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Reconcile + Commit</text>
+            <text x="108" y="365" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">bulk SQL · 1 plan fn</text>
+          </g>
+          <g data-kind="component" data-object-id="cat" data-status="changed" data-signature="cat:rules-direct-llm">
+            <rect data-role="bounds" x="96" y="416" width="144" height="64" rx="6" fill="#ffffff" stroke="#4f5d75" stroke-width="1.2"/>
+            <path d="M 97 428 V 468" fill="none" stroke="#4f5d75" stroke-width="3"/>
+            <text x="108" y="431" fill="#4f5d75" font-size="7.5" font-family="'Geist Mono', monospace">~ cat · CHANGED</text>
+            <text x="108" y="452" fill="#2d3142" font-size="12" font-family="'Geist', sans-serif" font-weight="600">Rules + 1-Call LLM</text>
+            <text x="108" y="469" fill="#4f5d75" font-size="9" font-family="'Geist Mono', monospace">1 structured call</text>
+          </g>
+        </g>
+
+        <!-- Bottom Legend -->
+        <path d="M 24 608 H 1176" stroke="rgba(45,49,66,0.12)" stroke-width="1"/>
+        <rect x="24" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1"/>
+        <text x="56" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">= Unchanged</text>
+        <rect x="200" y="624" width="20" height="16" rx="3" fill="rgba(191,69,32,0.08)" stroke="#bf4520" stroke-width="1"/>
+        <rect x="204" y="628" width="12" height="8" rx="1" fill="none" stroke="#bf4520" stroke-width="0.8"/>
+        <text x="232" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">+ Added (focal)</text>
+        <rect x="396" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="428" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">− Removed</text>
+        <rect x="572" y="624" width="20" height="16" rx="3" fill="none" stroke="#4f5d75" stroke-width="1"/>
+        <path d="M 573 628 V 636" stroke="#4f5d75" stroke-width="3"/>
+        <text x="604" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">~ Changed</text>
+        <path d="M 748 632 H 776" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="8 3 2 3"/>
+        <text x="788" y="636" fill="#4f5d75" font-size="11" font-family="'Geist', sans-serif">Rewired</text>
+      </svg>
+    </div>
+  </main>
+</body>
+</html>
