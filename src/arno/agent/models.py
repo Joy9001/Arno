@@ -7,6 +7,7 @@ Local (Ollama) and cloud endpoints take the same path: both are OpenAI-compatibl
 from __future__ import annotations
 
 import os
+import uuid
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
@@ -89,6 +90,11 @@ def build_model(config: RoleConfig) -> Model:
     from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    default_headers = (
+        {"x-opencode-session": os.environ.get("OPENCODE_SESSION_ID") or f"arno-{uuid.uuid4()}"}
+        if "opencode.ai" in config.base_url
+        else None
+    )
     name = config.provider.strip().lower()
     if name == "anthropic":
         from anthropic import AsyncAnthropic
@@ -98,6 +104,7 @@ def build_model(config: RoleConfig) -> Model:
         client = AsyncAnthropic(
             api_key=config.api_key,
             base_url=None if config.base_url == CLOSED_URL else config.base_url,
+            default_headers=default_headers,
             max_retries=SDK_RETRIES,
         )
         return cast(
@@ -108,6 +115,7 @@ def build_model(config: RoleConfig) -> Model:
         if name == "openrouter" and config.base_url == CLOSED_URL
         else config.base_url,
         api_key=config.api_key,
+        default_headers=default_headers,
         max_retries=SDK_RETRIES,
     )
     provider: Any

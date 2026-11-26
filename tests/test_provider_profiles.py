@@ -130,3 +130,16 @@ def test_an_alternate_fallback_does_not_inherit_the_primary_provider(monkeypatch
     monkeypatch.delenv("CHAT_FALLBACK_PROVIDER", raising=False)
 
     assert chat_config(fallback=True).provider == "cohere"
+
+
+def test_opencode_endpoints_include_session_header(monkeypatch):
+    monkeypatch.setenv("OPENCODE_SESSION_ID", "ses-fixed")
+    opencode = build_model(RoleConfig("https://opencode.ai/zen/v1", "key", "big-pickle", 1000))
+    assert isinstance(opencode, OpenAIChatModel)
+    assert opencode.provider is not None
+    assert opencode.provider.client.default_headers.get("x-opencode-session") == "ses-fixed"
+
+    plain = build_model(RoleConfig("https://api.openai.com/v1", "key", "gpt-5", 1000))
+    assert isinstance(plain, OpenAIChatModel)
+    assert plain.provider is not None
+    assert "x-opencode-session" not in plain.provider.client.default_headers
